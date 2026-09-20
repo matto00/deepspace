@@ -543,7 +543,7 @@ git commit -m "feat: add FShipPowerState with automation tests"
 
 ---
 
-### Task 5: `UShipModuleDataAsset` and `UShipSubsystem`
+### Task 5: `UShipModuleDataAsset` and `UShipSubsystem` — CODE DONE 2026-09-20 (Step 6 pending, editor-only)
 
 **Files:**
 - Create: `Source/DeepSpace/Ship/ShipModuleDataAsset.h/.cpp`, `Source/DeepSpace/Ship/ShipSubsystem.h/.cpp`
@@ -561,7 +561,7 @@ git commit -m "feat: add FShipPowerState with automation tests"
   - `float GetReactorOutput() const`
   - `bool IsPowerOverloaded() const`
 
-- [ ] **Step 1: Write the data asset header**
+- [x] **Step 1: Write the data asset header**
 
 Create `Source/DeepSpace/Ship/ShipModuleDataAsset.h`:
 
@@ -599,7 +599,7 @@ public:
 };
 ```
 
-- [ ] **Step 2: Write the data asset source**
+- [x] **Step 2: Write the data asset source**
 
 Create `Source/DeepSpace/Ship/ShipModuleDataAsset.cpp`:
 
@@ -609,7 +609,7 @@ Create `Source/DeepSpace/Ship/ShipModuleDataAsset.cpp`:
 
 The class is pure data; no implementation is needed beyond the translation unit.
 
-- [ ] **Step 3: Write the subsystem header**
+- [x] **Step 3: Write the subsystem header**
 
 Create `Source/DeepSpace/Ship/ShipSubsystem.h`:
 
@@ -673,7 +673,7 @@ private:
 };
 ```
 
-- [ ] **Step 4: Write the subsystem source**
+- [x] **Step 4: Write the subsystem source**
 
 Create `Source/DeepSpace/Ship/ShipSubsystem.cpp`:
 
@@ -748,12 +748,12 @@ bool UShipSubsystem::IsPowerOverloaded() const
 }
 ```
 
-- [ ] **Step 5: Build**
+- [x] **Step 5: Build**
 
 Run: `./build.sh`
 Expected: success.
 
-- [ ] **Step 6: Create three module data assets in the editor**
+- [ ] **Step 6: Create three module data assets in the editor** — BLOCKED: requires the editor GUI
 
 In the Content Browser, create a `Content/Ship/Modules/` folder. Right-click → **Miscellaneous → Data Asset** → choose `ShipModuleDataAsset`, three times:
 
@@ -765,7 +765,7 @@ In the Content Browser, create a `Content/Ship/Modules/` folder. Right-click →
 
 Leave `Mesh` unset — nothing reads it in milestone 1.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Source/DeepSpace/Ship/ Content/Ship/
@@ -774,7 +774,7 @@ git commit -m "feat: add ship module data assets and UShipSubsystem"
 
 ---
 
-### Task 6: `UInteractableComponent`
+### Task 6: `UInteractableComponent` — DONE 2026-09-20
 
 **Files:**
 - Create: `Source/DeepSpace/Ship/InteractableComponent.h/.cpp`
@@ -788,7 +788,7 @@ git commit -m "feat: add ship module data assets and UShipSubsystem"
   - `bool CanInteract() const`
   - `void Interact(AActor* Instigator)`
 
-- [ ] **Step 1: Write the header**
+- [x] **Step 1: Write the header**
 
 Create `Source/DeepSpace/Ship/InteractableComponent.h`:
 
@@ -842,7 +842,7 @@ public:
 };
 ```
 
-- [ ] **Step 2: Write the source**
+- [x] **Step 2: Write the source**
 
 Create `Source/DeepSpace/Ship/InteractableComponent.cpp`:
 
@@ -879,12 +879,12 @@ void UInteractableComponent::Interact(AActor* Instigator)
 
 Ticking is disabled because this component is purely reactive; leaving tick on for every interactable in the ship is wasted work.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `./build.sh`
 Expected: success.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Source/DeepSpace/Ship/InteractableComponent.h Source/DeepSpace/Ship/InteractableComponent.cpp
