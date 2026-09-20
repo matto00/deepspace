@@ -8,6 +8,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class UInteractableComponent;
+class UUserWidget;
 struct FInputActionValue;
 
 /**
@@ -58,6 +59,13 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> InteractAction;
 
+    /**
+     * Widget shown for the whole session; it reads GetCurrentPrompt() itself
+     * rather than being pushed text, so there is one source of truth.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "UI")
+    TSubclassOf<UUserWidget> HUDWidgetClass;
+
 private:
     void Move(const FInputActionValue& Value);
     void Look(const FInputActionValue& Value);
@@ -68,4 +76,7 @@ private:
 
     UPROPERTY()
     TObjectPtr<UInteractableComponent> FocusedInteractable;
+
+    UPROPERTY()
+    TObjectPtr<UUserWidget> HUDWidget;
 };

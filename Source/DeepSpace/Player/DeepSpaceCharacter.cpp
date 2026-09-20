@@ -6,6 +6,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Blueprint/UserWidget.h"
 #include "Ship/InteractableComponent.h"
 
 ADeepSpaceCharacter::ADeepSpaceCharacter()
@@ -26,7 +27,8 @@ void ADeepSpaceCharacter::BeginPlay()
 {
     Super::BeginPlay();
 
-    if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+    APlayerController* PC = Cast<APlayerController>(GetController());
+    if (PC)
     {
         if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
                 ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
@@ -34,6 +36,15 @@ void ADeepSpaceCharacter::BeginPlay()
             if (DefaultMappingContext)
             {
                 Subsystem->AddMappingContext(DefaultMappingContext, 0);
+            }
+        }
+
+        if (HUDWidgetClass)
+        {
+            HUDWidget = CreateWidget<UUserWidget>(PC, HUDWidgetClass);
+            if (HUDWidget)
+            {
+                HUDWidget->AddToViewport();
             }
         }
     }

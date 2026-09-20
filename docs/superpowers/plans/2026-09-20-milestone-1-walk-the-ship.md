@@ -1410,10 +1410,25 @@ git commit -m "feat: add ship console reading live power state"
 This is the task with the most editor work and the least code. It is where milestone 1 becomes real.
 
 **Files:**
-- Create: `Content/Maps/L_Hauler.umap`, `docs/playtest-checklist.md`
+- Create: `Content/Maps/L_Hauler.umap`, `Content/UI/WBP_HUD.uasset`, `docs/playtest-checklist.md`
+- Modify: `Source/DeepSpace/Player/DeepSpaceCharacter.h/.cpp`, `Source/DeepSpace/DeepSpace.Build.cs`
 
 **Interfaces:**
 - Consumes: everything from Tasks 5–8.
+
+- [x] **Step 0: Display the interaction prompt** — ADDED 2026-09-20
+
+The plan as originally written never displayed `GetCurrentPrompt()`. The trace
+worked and the text was correct, but nothing drew it, so four items in the
+Step 6 checklist could not pass. Closed by adding a HUD widget:
+
+- `"UMG"` added to `PublicDependencyModuleNames` in `DeepSpace.Build.cs`.
+- `ADeepSpaceCharacter` gains `TSubclassOf<UUserWidget> HUDWidgetClass`
+  (`EditDefaultsOnly`, so the Blueprint assigns it) and creates it on
+  `BeginPlay`, adding it to the viewport.
+
+The widget *pulls* from `GetCurrentPrompt()` via a binding rather than being
+pushed text. Same discipline as `AShipConsole`: consumers ask, never store.
 
 - [ ] **Step 1: Create the level**
 
@@ -1502,7 +1517,7 @@ Play in Editor and work through every item. **Record actual results, including f
 Editor → **Tools → Session Frontend → Automation** → run `DeepSpace.Ship.PowerState`.
 Expected: PASS.
 
-- [x] **Step 9: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add Content/Maps/ docs/playtest-checklist.md
