@@ -1185,23 +1185,48 @@ The first attempt failed: `Character.h` only forward-declares `UCapsuleComponent
 so `SetupAttachment(GetCapsuleComponent())` cannot convert it to `USceneComponent*`.
 `#include "Components/CapsuleComponent.h"` is required and has been added above.
 
-- [ ] **Step 7: Create the Enhanced Input assets in the editor** — BLOCKED: requires the editor GUI
+- [x] **Step 7: Enhanced Input assets** — REVISED 2026-09-20
 
-In `Content/Input/`, create:
-- Input Actions (right-click → **Input → Input Action**): `IA_Move` (Value Type: Axis2D), `IA_Look` (Axis2D), `IA_Jump` (Digital Bool), `IA_Interact` (Digital Bool)
-- An Input Mapping Context `IMC_Default` binding:
-  - `IA_Move` → W/A/S/D, with modifiers: W plain; S with *Negate*; A with *Swizzle Axis (YXZ)* + *Negate*; D with *Swizzle Axis (YXZ)*
-  - `IA_Look` → Mouse XY 2D-Axis, with *Negate* on the Y component
-  - `IA_Jump` → Space Bar
-  - `IA_Interact` → E
+This step was written assuming `Content/Input/` was empty. It is not: the First
+Person template already ships a complete, correctly-typed input setup —
+`Content/Input/Actions/IA_Move` (Axis2D), `IA_Look` (Axis2D), `IA_Jump` (Bool),
+plus `Content/Input/IMC_Default` binding all three with the WASD Swizzle/Negate
+modifiers this step described authoring by hand.
+
+So the template's assets are reused, and the only genuinely new action is
+`IA_Interact` (Digital Bool), which the template has no equivalent of. It lives
+at `Content/Input/IA_Interact.uasset`.
+
+Duplicates of `IA_Move`/`IA_Look`/`IA_Jump` were briefly authored at the
+`Content/Input/` root and have been deleted — nothing referenced them, and the
+hand-made `IA_Look` was left at the default `Boolean` value type, which would
+have silently broken mouse look against `Value.Get<FVector2D>()`.
+
+- [ ] **Step 7b: Bind IA_Interact to E** — BLOCKED: requires the editor GUI
+
+Open `Content/Input/IMC_Default`, add a mapping for `IA_Interact` → **E**, and
+save. No modifiers. Optionally drag `IA_Interact` into `Content/Input/Actions/`
+to sit with the others — do that in the Content Browser, never with `mv`, so the
+package path inside the asset is fixed up.
 
 - [ ] **Step 8: Create the Blueprint wrappers** — BLOCKED: requires the editor GUI
 
-In `Content/Blueprints/`, create `BP_DeepSpaceCharacter` subclassing `DeepSpaceCharacter`, and set its `DefaultMappingContext`, `MoveAction`, `LookAction`, `JumpAction`, and `InteractAction` to the assets from Step 7.
+In `Content/Blueprints/`, create `BP_DeepSpaceCharacter` subclassing
+`DeepSpaceCharacter`, and set:
 
-Create `BP_DeepSpaceGameMode` subclassing `DeepSpaceGameMode` and set **Default Pawn Class** to `BP_DeepSpaceCharacter`.
+| Property | Asset |
+|---|---|
+| `DefaultMappingContext` | `IMC_Default` |
+| `MoveAction` | `Actions/IA_Move` |
+| `LookAction` | `Actions/IA_Look` |
+| `JumpAction` | `Actions/IA_Jump` |
+| `InteractAction` | `IA_Interact` |
 
-This is exactly the intended division: the Blueprints carry asset references, not logic.
+Create `BP_DeepSpaceGameMode` subclassing `DeepSpaceGameMode` and set **Default
+Pawn Class** to `BP_DeepSpaceCharacter`.
+
+This is exactly the intended division: the Blueprints carry asset references,
+not logic.
 
 - [ ] **Step 9: Commit**
 
