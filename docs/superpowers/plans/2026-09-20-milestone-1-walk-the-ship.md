@@ -149,7 +149,13 @@ git commit -m "docs: record engine acquisition and toolchain decisions"
 **Interfaces:**
 - Produces: a buildable Unreal C++ project rooted at `~/Development/deepspace`, and `./build.sh` as the canonical compile check used by every later task.
 
-- [ ] **Step 1: Create the project in the editor**
+- [x] **Step 1: Create the project in the editor** — DONE 2026-09-20
+
+**Deviation:** Starter Content was NOT enabled at creation. `Content/` is empty.
+It must be added before Task 9's blockout, via Content Browser → **Add** →
+**Add Feature or Content Pack** → **Content Packs** → **Starter Content**.
+
+Original instructions:
 
 In the Project Browser: **Games → Blank**, then set **Project Defaults → C++** (not Blueprint), **Starter Content: enabled** (it supplies placeholder meshes and materials for the blockout), and **Raytracing: disabled** for now.
 
@@ -243,66 +249,59 @@ git commit -m "feat: scaffold DeepSpace UE5 C++ project with LFS and build scrip
 
 ---
 
-### Task 3: Neovim + clangd code intelligence
+### Task 3: VSCode code intelligence — DONE 2026-09-20
 
-Without this, navigating Unreal's headers is impractical and every later task is harder.
+**Changed from the original plan.** The spec specified Neovim + clangd; the
+developer chose VSCode instead. Both are fed by the same generated files, so
+Neovim/clangd remains available later without redoing anything.
 
-**Files:**
-- Create: `.clangd`
-- Modify: `.gitignore` (already excludes `compile_commands.json`)
+**Important:** the MS C/C++ extension and clangd **conflict** if both are active
+in VSCode — you get duplicate, contradictory diagnostics. C/C++ is primary here
+because it is what Unreal's own integration generates for. Do not add the clangd
+extension to VSCode.
 
-**Interfaces:**
-- Consumes: the buildable project from Task 2.
-- Produces: working completion and go-to-definition over Unreal's API in Neovim.
+- [x] **Step 1: Install VSCode** — `yay -S visual-studio-code-bin` (1.138.0)
 
-- [ ] **Step 1: Generate the compilation database**
+- [x] **Step 2: Regenerate project files**
 
 ```bash
+cd ~/Development/deepspace
+rm -rf .vscode DeepSpace.code-workspace
 ~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
     -project="$PWD/DeepSpace.uproject" -game -vscode
 ```
 
-Note the path: there is **no root-level `GenerateProjectFiles.sh`** in the
-precompiled binary (that exists only in source builds). Verified 2026-09-20.
+Required after the project was moved out of its nested directory: the generated
+files hold absolute paths and all six pointed at the old location.
 
-The `-vscode` flag is what produces `compile_commands.json`; clangd consumes it regardless of the fact that the flag is named for VS Code.
+Produces `.vscode/` (with `c_cpp_properties.json` and `compileCommands_*.json`)
+and `DeepSpace.code-workspace`. All are gitignored — they are regenerated, not
+authored.
 
-- [ ] **Step 2: Confirm it exists and is non-trivial**
-
-```bash
-test -f compile_commands.json && wc -c compile_commands.json
-```
-
-Expected: the file exists and is large (megabytes).
-
-- [ ] **Step 3: Write `.clangd`**
-
-Unreal's macros confuse clangd into flooding the buffer with false diagnostics. Suppress the noisiest.
-
-```yaml
-CompileFlags:
-  Add:
-    - "-std=c++20"
-    - "-Wno-unknown-attributes"
-    - "-Wno-ignored-attributes"
-Diagnostics:
-  Suppress:
-    - "pp_including_mainfile_in_preamble"
-    - "unknown_attribute"
-```
-
-- [ ] **Step 4: Verify in Neovim**
-
-Open `Source/DeepSpace/DeepSpace.cpp`, place the cursor on an Unreal type such as `FString`, and confirm go-to-definition jumps into the engine headers and that completion offers Unreal symbols.
-
-If clangd reports it cannot find `compile_commands.json`, confirm Neovim's working directory is the project root.
-
-- [ ] **Step 5: Commit**
+- [x] **Step 3: Install extensions**
 
 ```bash
-git add .clangd
-git commit -m "chore: configure clangd for Unreal headers"
+code --install-extension ms-vscode.cpptools      # C++ (v1.34.4)
+code --install-extension ms-dotnettools.csharp   # for .Build.cs / .Target.cs (v2.160.4)
 ```
+
+The C# extension is easy to overlook: Unreal's build files (`DeepSpace.Build.cs`,
+`*.Target.cs`) are C# and get no support at all without it.
+
+- [ ] **Step 4: Point Unreal at VSCode** (manual, in the editor)
+
+Editor Preferences → General → **Source Code** → Source Code Editor →
+**Visual Studio Code**. Makes double-clicking a C++ class in the Content Browser
+open the right editor.
+
+- [ ] **Step 5: Verify**
+
+Open the workspace: `code ~/Development/deepspace/DeepSpace.code-workspace`
+
+Open `Source/DeepSpace/DeepSpace.cpp`, put the cursor on an Unreal type, and
+confirm go-to-definition jumps into the engine headers. First load makes
+IntelliSense parse a very large header set — expect a minute or two of high CPU
+before it settles.
 
 ---
 
