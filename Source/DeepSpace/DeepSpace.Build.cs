@@ -7,7 +7,13 @@ public class DeepSpace : ModuleRules
 	public DeepSpace(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-	
+
+		// This module uses a flat layout (Ship/, Player/, Core/) rather than the
+		// Public/Private convention UBT auto-adds include paths for, so the
+		// module root must be declared explicitly. Without this, headers in
+		// subdirectories cannot be included as "Ship/Foo.h".
+		PublicIncludePaths.Add(ModuleDirectory);
+
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
