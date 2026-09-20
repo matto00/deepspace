@@ -893,7 +893,7 @@ git commit -m "feat: add UInteractableComponent"
 
 ---
 
-### Task 7: `ADeepSpaceCharacter` — first-person pawn with interaction trace
+### Task 7: `ADeepSpaceCharacter` — first-person pawn with interaction trace — CODE DONE 2026-09-20 (Steps 7–8 pending, editor-only)
 
 **Files:**
 - Create: `Source/DeepSpace/Player/DeepSpaceCharacter.h/.cpp`, `Source/DeepSpace/Core/DeepSpaceGameMode.h/.cpp`
@@ -907,11 +907,11 @@ git commit -m "feat: add UInteractableComponent"
   - `FText GetCurrentPrompt() const` — empty when nothing is focused
   - `ADeepSpaceGameMode : AGameModeBase`
 
-- [ ] **Step 1: Add the Enhanced Input dependency**
+- [x] **Step 1: Add the Enhanced Input dependency** — already present in `DeepSpace.Build.cs`
 
 In `Source/DeepSpace/DeepSpace.Build.cs`, add `"EnhancedInput"` to `PublicDependencyModuleNames`.
 
-- [ ] **Step 2: Write the character header**
+- [x] **Step 2: Write the character header**
 
 Create `Source/DeepSpace/Player/DeepSpaceCharacter.h`:
 
@@ -989,7 +989,7 @@ private:
 };
 ```
 
-- [ ] **Step 3: Write the character source**
+- [x] **Step 3: Write the character source**
 
 Create `Source/DeepSpace/Player/DeepSpaceCharacter.cpp`:
 
@@ -997,6 +997,7 @@ Create `Source/DeepSpace/Player/DeepSpaceCharacter.cpp`:
 #include "Player/DeepSpaceCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -1139,7 +1140,7 @@ FText ADeepSpaceCharacter::GetCurrentPrompt() const
 
 The trace runs every tick. That is fine for one player and a handful of interactables; if it ever shows up in a profile, the fix is to trace on an interval rather than to restructure.
 
-- [ ] **Step 4: Write the game mode header**
+- [x] **Step 4: Write the game mode header**
 
 Create `Source/DeepSpace/Core/DeepSpaceGameMode.h`:
 
@@ -1160,7 +1161,7 @@ public:
 };
 ```
 
-- [ ] **Step 5: Write the game mode source**
+- [x] **Step 5: Write the game mode source**
 
 Create `Source/DeepSpace/Core/DeepSpaceGameMode.cpp`:
 
@@ -1175,12 +1176,16 @@ ADeepSpaceGameMode::ADeepSpaceGameMode()
 }
 ```
 
-- [ ] **Step 6: Build**
+- [x] **Step 6: Build**
 
 Run: `./build.sh`
 Expected: success.
 
-- [ ] **Step 7: Create the Enhanced Input assets in the editor**
+The first attempt failed: `Character.h` only forward-declares `UCapsuleComponent`,
+so `SetupAttachment(GetCapsuleComponent())` cannot convert it to `USceneComponent*`.
+`#include "Components/CapsuleComponent.h"` is required and has been added above.
+
+- [ ] **Step 7: Create the Enhanced Input assets in the editor** — BLOCKED: requires the editor GUI
 
 In `Content/Input/`, create:
 - Input Actions (right-click → **Input → Input Action**): `IA_Move` (Value Type: Axis2D), `IA_Look` (Axis2D), `IA_Jump` (Digital Bool), `IA_Interact` (Digital Bool)
@@ -1190,7 +1195,7 @@ In `Content/Input/`, create:
   - `IA_Jump` → Space Bar
   - `IA_Interact` → E
 
-- [ ] **Step 8: Create the Blueprint wrappers**
+- [ ] **Step 8: Create the Blueprint wrappers** — BLOCKED: requires the editor GUI
 
 In `Content/Blueprints/`, create `BP_DeepSpaceCharacter` subclassing `DeepSpaceCharacter`, and set its `DefaultMappingContext`, `MoveAction`, `LookAction`, `JumpAction`, and `InteractAction` to the assets from Step 7.
 
