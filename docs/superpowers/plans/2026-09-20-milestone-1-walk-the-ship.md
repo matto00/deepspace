@@ -1251,7 +1251,7 @@ git commit -m "feat: add first-person character with interaction trace and game 
 
 ---
 
-### Task 8: `AShipConsole` — the first real consumer of ship state — CODE DONE 2026-09-20 (Step 4 pending, editor-only)
+### Task 8: `AShipConsole` — the first real consumer of ship state — DONE 2026-09-20
 
 **Files:**
 - Create: `Source/DeepSpace/Ship/ShipConsole.h/.cpp`
@@ -1392,11 +1392,11 @@ would merely warn. Verified by building both spellings. `UInteractableComponent`
 keeps the name in its delegate signature because `UActorComponent` has no such
 member.
 
-- [ ] **Step 4: Create the console Blueprint** — BLOCKED: requires the editor GUI
+- [x] **Step 4: Create the console Blueprint** — DONE 2026-09-20 (mesh: `SM_Cube` from `LevelPrototyping`, not Starter Content, which this project does not have)
 
 In `Content/Blueprints/`, create `BP_ShipConsole` subclassing `ShipConsole`. Assign a Starter Content mesh to `Mesh` (a small cube scaled into a panel is fine). Add a Text Render component or a screen plane, and implement the `OnReadoutChanged` event to set its text from `GetReadout()`. Also call `GetReadout()` on Begin Play so it shows `OFFLINE` initially.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Source/DeepSpace/Ship/ShipConsole.h Source/DeepSpace/Ship/ShipConsole.cpp Content/Blueprints/
@@ -1447,6 +1447,10 @@ In the Level Blueprint, on Begin Play, get the Ship Subsystem and call `InstallM
 This is the one acceptable use of the Level Blueprint in milestone 1 — it is scene setup, not gameplay logic. When a real ship-configuration system arrives it replaces this, and that replacement is the point of the data-asset seam.
 
 Expected readout when powered: `DRAW 620 W / 1000 W` and `HEADROOM 380 W`.
+
+Also confirm here that the console reads `OFFLINE` *before* first interaction.
+That verifies `BP_ShipConsole`'s Begin Play refreshes the text; it could not be
+confirmed by inspecting the asset.
 
 - [ ] **Step 6: Write the playtest checklist**
 
