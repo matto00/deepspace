@@ -48,7 +48,7 @@ This task is mostly manual and gated on browser steps only the developer can per
 **Files:**
 - Create: `docs/decisions/0001-engine-and-toolchain.md`
 
-- [ ] **Step 1: Install system prerequisites**
+- [x] **Step 1: Install system prerequisites** — DONE 2026-09-20 (git-lfs 3.7.1; vulkan-tools and vulkan-icd-loader 1.4.357.0 already present)
 
 ```bash
 sudo pacman -S --needed git-lfs vulkan-tools vulkan-icd-loader
@@ -82,19 +82,16 @@ cd ~/UnrealEngine/UE_5.8
 ./Engine/Build/BatchFiles/Linux/SetupToolchain.sh
 ```
 
-- [ ] **Step 5: Raise the file descriptor limit**
+- [x] **Step 5: File descriptor limit — VERIFIED, NO ACTION NEEDED**
 
-Unreal opens a very large number of files during shader compilation and will fail in confusing ways at the default limit.
+Unreal opens a very large number of files during shader compilation and fails in
+confusing ways at a low limit. The common advice is to raise it via
+`/etc/security/limits.d/`.
 
-```bash
-ulimit -n            # check current, often 1024
-sudo tee /etc/security/limits.d/99-unreal.conf > /dev/null <<'EOF'
-*  soft  nofile  65536
-*  hard  nofile  65536
-EOF
-```
-
-Log out and back in, then confirm `ulimit -n` reports 65536.
+Checked on this machine 2026-09-20: `ulimit -n` reports **524288** (systemd's
+default on Arch), far above the 65536 typically recommended. No change required,
+and no logout/login cycle. Also confirmed **glibc 2.44**, past the 2.35 Epic
+recommends for startup performance.
 
 - [ ] **Step 6: VERIFICATION CHECKPOINT — launch the editor**
 
