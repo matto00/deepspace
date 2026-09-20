@@ -67,6 +67,11 @@ directly brings the blur back.
 A desktop entry at `~/.local/share/applications/unreal-editor.desktop` wraps the
 same script and registers the `application/x-uproject` MIME type.
 
+**Its `Exec=` must use the absolute path** `/home/matt/.local/bin/unreal-editor`.
+A bare `Exec=unreal-editor` works from a shell but fails silently when launched
+from the application launcher, because the compositor starts desktop entries
+with a minimal environment that does not include `~/.local/bin` on `PATH`.
+
 ### No file descriptor limit change needed
 
 The common advice is to raise `nofile` via `/etc/security/limits.d/`. Arch's
