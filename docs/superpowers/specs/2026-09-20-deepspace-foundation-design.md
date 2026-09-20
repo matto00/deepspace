@@ -125,13 +125,27 @@ is a manual and error-prone process. The shipping title may differ freely.
 
 ## Core architecture
 
-Four components, each with one responsibility.
+Five components, each with one responsibility.
+
+### `FShipPowerState` (plain C++ struct)
+
+The power arithmetic: reactor output, per-module draw, total draw, headroom,
+overload. Not a `UObject`, not tied to a `UWorld`, using no Unreal types beyond
+containers.
+
+Split out from `UShipSubsystem` because a `UWorldSubsystem` requires a live
+`UWorld`, which makes headless unit testing awkward. This keeps the layer that
+will accumulate the most complexity as the layer that is trivially testable.
+
+Overload is represented, not prevented — whether an overloaded ship browns out
+is a gameplay decision for a later milestone, and the data layer should not
+quietly decide it.
 
 ### `UShipSubsystem` (UWorldSubsystem)
 
-Authoritative ship state: available power, fuel, hull integrity, installed
-modules and their condition. Knows nothing about meshes, rooms, or the player.
-Everything visible reads from it.
+Authoritative ship state. Owns an `FShipPowerState` and exposes it to gameplay,
+alongside fuel, hull integrity, and installed modules. Knows nothing about
+meshes, rooms, or the player. Everything visible reads from it.
 
 Chosen as a subsystem rather than an actor because it is created and destroyed
 with the world automatically, is globally reachable without a singleton, and
@@ -197,9 +211,10 @@ long-term vision; the goal is that the loop exists, not that it looks finished.
 
 Unreal's testing story is weaker than a typical application codebase. The plan:
 
-- **Automation Spec tests** for pure C++ — `UShipSubsystem` power math, module
+- **Automation Spec tests** for pure C++ — `FShipPowerState` power math, module
   install and removal. These run headless and are worth writing, because this
-  layer accumulates complexity.
+  layer accumulates complexity. Testability is why the arithmetic is a plain
+  struct rather than living inside the subsystem.
 - **A manual playtest checklist** for embodied behavior: collision, navigation,
   interaction reach. There is no good substitute, and running these is part of
   the developer's engine-fluency goal.
