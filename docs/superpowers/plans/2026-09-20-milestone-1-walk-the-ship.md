@@ -305,7 +305,7 @@ before it settles.
 
 ---
 
-### Task 4: `FShipPowerState` — the power arithmetic, test-first
+### Task 4: `FShipPowerState` — the power arithmetic, test-first — DONE 2026-09-20
 
 This is the only genuinely unit-testable layer in milestone 1, and the layer that will grow most. It is written test-first.
 
@@ -325,16 +325,23 @@ This is the only genuinely unit-testable layer in milestone 1, and the layer tha
   - `float GetHeadroom() const` — reactor output minus total draw; may be negative
   - `bool IsOverloaded() const` — true when headroom is negative
 
-- [ ] **Step 1: Enable automation tests in the build config**
+- [x] **Step 1: Build config**
 
-In `Source/DeepSpace/DeepSpace.Build.cs`, confirm `PublicDependencyModuleNames` includes `"Core"`, `"CoreUObject"`, `"Engine"`, and `"InputCore"`. Add the automation dependency:
+**Deviation:** the planned `FunctionalTesting` dependency proved unnecessary —
+`IMPLEMENT_SIMPLE_AUTOMATION_TEST` and `FAutomationTestBase` live in `Core`,
+which is already a dependency. Not added (YAGNI).
+
+**What was actually needed instead**, and was not in the plan:
 
 ```csharp
-if (Target.Configuration != UnrealTargetConfiguration.Shipping)
-{
-    PrivateDependencyModuleNames.Add("FunctionalTesting");
-}
+// UBT auto-adds include paths only for the Public/Private layout. This module
+// uses a flat one (Ship/, Player/, Core/), so the module root must be declared
+// or subdirectory headers cannot be included as "Ship/Foo.h".
+PublicIncludePaths.Add(ModuleDirectory);
 ```
+
+`EnhancedInput` was already present in the template's dependencies, so Task 7
+Step 1 is pre-satisfied.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -514,9 +521,17 @@ bool FShipPowerState::IsOverloaded() const
 ./build.sh
 ```
 
-Then launch the editor, open **Tools → Session Frontend → Automation**, filter for `DeepSpace`, check `DeepSpace.Ship.PowerState`, and click **Start Tests**.
+Then run headlessly — better than the Session Frontend, and what was actually used:
 
-Expected: PASS.
+```bash
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
+    "$PWD/DeepSpace.uproject" \
+    -ExecCmds="Automation RunTests DeepSpace.Ship.PowerState; Quit" \
+    -unattended -nopause -nullrhi -nosplash -NoLiveCoding
+grep "Test Completed" Saved/Logs/DeepSpace.log | tail -1
+```
+
+Expected: `Result={Success}`. Achieved 2026-09-20.
 
 - [ ] **Step 7: Commit**
 
