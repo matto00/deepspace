@@ -1251,7 +1251,7 @@ git commit -m "feat: add first-person character with interaction trace and game 
 
 ---
 
-### Task 8: `AShipConsole` — the first real consumer of ship state
+### Task 8: `AShipConsole` — the first real consumer of ship state — CODE DONE 2026-09-20 (Step 4 pending, editor-only)
 
 **Files:**
 - Create: `Source/DeepSpace/Ship/ShipConsole.h/.cpp`
@@ -1264,7 +1264,7 @@ git commit -m "feat: add first-person character with interaction trace and game 
   - `bool bIsPowered`
   - Blueprint event `OnReadoutChanged()` for the Blueprint to refresh its display
 
-- [ ] **Step 1: Write the header**
+- [x] **Step 1: Write the header**
 
 Create `Source/DeepSpace/Ship/ShipConsole.h`:
 
@@ -1313,11 +1313,11 @@ protected:
 
 private:
     UFUNCTION()
-    void HandleInteracted(AActor* Instigator);
+    void HandleInteracted(AActor* InteractInstigator);
 };
 ```
 
-- [ ] **Step 2: Write the source**
+- [x] **Step 2: Write the source**
 
 Create `Source/DeepSpace/Ship/ShipConsole.cpp`:
 
@@ -1346,7 +1346,7 @@ void AShipConsole::BeginPlay()
     Interactable->OnInteracted.AddDynamic(this, &AShipConsole::HandleInteracted);
 }
 
-void AShipConsole::HandleInteracted(AActor* Instigator)
+void AShipConsole::HandleInteracted(AActor* InteractInstigator)
 {
     bIsPowered = !bIsPowered;
 
@@ -1378,12 +1378,21 @@ FText AShipConsole::GetReadout() const
 }
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `./build.sh`
 Expected: success.
 
-- [ ] **Step 4: Create the console Blueprint**
+The handler's parameter was renamed `Instigator` → `InteractInstigator`. UHT
+rejects the original outright: *"Function parameter: 'Instigator' cannot be
+defined in 'HandleInteracted' as it is already defined in scope 'AActor'
+(shadowing is not allowed)"*. `AActor` has an `Instigator` member, and UHT
+forbids shadowing it in any `UFUNCTION` — a stricter rule than C++'s own, which
+would merely warn. Verified by building both spellings. `UInteractableComponent`
+keeps the name in its delegate signature because `UActorComponent` has no such
+member.
+
+- [ ] **Step 4: Create the console Blueprint** — BLOCKED: requires the editor GUI
 
 In `Content/Blueprints/`, create `BP_ShipConsole` subclassing `ShipConsole`. Assign a Starter Content mesh to `Mesh` (a small cube scaled into a panel is fine). Add a Text Render component or a screen plane, and implement the `OnReadoutChanged` event to set its text from `GetReadout()`. Also call `GetReadout()` on Begin Play so it shows `OFFLINE` initially.
 
