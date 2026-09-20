@@ -893,7 +893,7 @@ git commit -m "feat: add UInteractableComponent"
 
 ---
 
-### Task 7: `ADeepSpaceCharacter` — first-person pawn with interaction trace — CODE DONE 2026-09-20 (Steps 7–8 pending, editor-only)
+### Task 7: `ADeepSpaceCharacter` — first-person pawn with interaction trace — DONE 2026-09-20
 
 **Files:**
 - Create: `Source/DeepSpace/Player/DeepSpaceCharacter.h/.cpp`, `Source/DeepSpace/Core/DeepSpaceGameMode.h/.cpp`
@@ -1202,14 +1202,14 @@ Duplicates of `IA_Move`/`IA_Look`/`IA_Jump` were briefly authored at the
 hand-made `IA_Look` was left at the default `Boolean` value type, which would
 have silently broken mouse look against `Value.Get<FVector2D>()`.
 
-- [ ] **Step 7b: Bind IA_Interact to E** — BLOCKED: requires the editor GUI
+- [x] **Step 7b: Bind IA_Interact to E** — DONE 2026-09-20 (asset also moved to `Content/Input/Actions/`)
 
 Open `Content/Input/IMC_Default`, add a mapping for `IA_Interact` → **E**, and
 save. No modifiers. Optionally drag `IA_Interact` into `Content/Input/Actions/`
 to sit with the others — do that in the Content Browser, never with `mv`, so the
 package path inside the asset is fixed up.
 
-- [ ] **Step 8: Create the Blueprint wrappers** — BLOCKED: requires the editor GUI
+- [x] **Step 8: Create the Blueprint wrappers** — DONE 2026-09-20
 
 In `Content/Blueprints/`, create `BP_DeepSpaceCharacter` subclassing
 `DeepSpaceCharacter`, and set:
@@ -1228,7 +1228,21 @@ Pawn Class** to `BP_DeepSpaceCharacter`.
 This is exactly the intended division: the Blueprints carry asset references,
 not logic.
 
-- [ ] **Step 9: Commit**
+Two traps hit on the first attempt, both worth knowing:
+
+- The "Pick Parent Class" dialog offers **Character** and **Game Mode Base** as
+  prominent buttons; those are the *engine* classes. The project's C++ classes
+  are only reachable by expanding **All Classes** and searching. Parenting to
+  the engine class is silent — the Blueprint simply has none of the `Input`,
+  `Interaction` or `Camera` properties, because those are declared on the C++
+  class. Their appearance in the Details panel is the signal the parent is right.
+- **Default Pawn Class** already displays `DeepSpaceCharacter`, inherited from
+  the C++ constructor, so it looks set. It must be overridden to
+  `BP_DeepSpaceCharacter`: the C++ class has null input assets, so leaving the
+  inherited value spawns a pawn that ignores all input, with no error or warning.
+  The yellow revert-arrow beside the field confirms the override took.
+
+- [x] **Step 9: Commit**
 
 ```bash
 git add Source/DeepSpace/Player/ Source/DeepSpace/Core/ Source/DeepSpace/DeepSpace.Build.cs Content/Input/ Content/Blueprints/
@@ -1475,7 +1489,7 @@ Play in Editor and work through every item. **Record actual results, including f
 Editor → **Tools → Session Frontend → Automation** → run `DeepSpace.Ship.PowerState`.
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Content/Maps/ docs/playtest-checklist.md
