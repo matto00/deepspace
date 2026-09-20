@@ -543,7 +543,7 @@ git commit -m "feat: add FShipPowerState with automation tests"
 
 ---
 
-### Task 5: `UShipModuleDataAsset` and `UShipSubsystem` — CODE DONE 2026-09-20 (Step 6 pending, editor-only)
+### Task 5: `UShipModuleDataAsset` and `UShipSubsystem` — DONE 2026-09-20
 
 **Files:**
 - Create: `Source/DeepSpace/Ship/ShipModuleDataAsset.h/.cpp`, `Source/DeepSpace/Ship/ShipSubsystem.h/.cpp`
@@ -753,7 +753,7 @@ bool UShipSubsystem::IsPowerOverloaded() const
 Run: `./build.sh`
 Expected: success.
 
-- [ ] **Step 6: Create three module data assets in the editor** — BLOCKED: requires the editor GUI
+- [x] **Step 6: Create three module data assets in the editor** — DONE 2026-09-20
 
 In the Content Browser, create a `Content/Ship/Modules/` folder. Right-click → **Miscellaneous → Data Asset** → choose `ShipModuleDataAsset`, three times:
 
