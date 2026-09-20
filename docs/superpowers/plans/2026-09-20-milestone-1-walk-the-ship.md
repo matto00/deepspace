@@ -16,7 +16,7 @@
 - Module name is **`DeepSpace`** and must not change — renaming an Unreal module after creation is manual and error-prone.
 - Minimum NVIDIA driver for UE5 Linux: **570**. This machine has **610.43.03**. Satisfied.
 - Minimum Vulkan: NVIDIA proprietary. This machine reports **Vulkan 1.4.341**. Satisfied.
-- Disk: ~25 GB download, ~43 GB extracted, plus project and derived data cache. Budget **~80 GB**. This machine has 241 GB free.
+- Disk: **39.8 GB** download, **73 GB** extracted (measured for 5.8.2 — Epic's ~43 GB figure is stale), plus project and derived data cache. Budget **~120 GB**. After verification the zip can be deleted to reclaim 39.8 GB.
 - Compiler: Unreal's **bundled clang toolchain** via `SetupToolchain.sh`. Never the system clang (22.1.8) or gcc (16.1.1) — Epic targets clang 18.1.0 and mismatches produce opaque link errors.
 - **No gameplay logic in `Content/`.** Blueprints assign assets and expose tunable values only. Logic appearing in `Content/` means the plan has been abandoned.
 - Every `.uasset` and `.umap` goes through Git LFS from the first commit.
@@ -64,22 +64,39 @@ Manual, in a browser — Claude cannot do this:
 2. Go to the Unreal Engine for Linux page via https://www.unrealengine.com/download
 3. Download `Linux_Unreal_Engine_5.8.x.zip` (~25 GB)
 
-- [ ] **Step 3: Extract the engine**
+- [x] **Step 3: Extract the engine** — DONE 2026-09-20
 
 ```bash
 mkdir -p ~/UnrealEngine
 cd ~/UnrealEngine
 unzip ~/Downloads/Linux_Unreal_Engine_5.8.*.zip -d UE_5.8
-du -sh ~/UnrealEngine/UE_5.8   # expect ~43G
+du -sh ~/UnrealEngine/UE_5.8   # 5.8.2 actual: 73G, NOT the ~43G Epic's docs claim
 ```
 
 Extracted to `~/UnrealEngine/` rather than into the project, so the engine is shared and never enters git.
 
-- [ ] **Step 4: Install the bundled clang toolchain**
+- [x] **Step 4: Toolchain — ALREADY BUNDLED, DO NOT RUN Setup.sh**
+
+Epic's Linux quickstart tells you to run `SetupToolchain.sh`. **That is a
+source-build instruction and does not apply to the precompiled binary.**
+Verified on 5.8.2, 2026-09-20:
+
+- `Engine/Build/BatchFiles/Linux/SetupToolchain.sh` does not exist.
+- The toolchain is already present at
+  `Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/v26_clang-20.1.8-rockylinux8/`
+- `Setup.sh` (which does exist) is Debian-specific — it drives `dpkg-query` and
+  `apt-get` — and then calls both `SetupToolchain.sh` and `BuildThirdParty.sh`,
+  neither of which ships in the binary distribution. Under `set -e` it would
+  fail partway. **Do not run it on Arch.**
+
+Note the bundled clang is **20.1.8**, not the 18.1.0 Epic's system-requirements
+page lists. The system clang (22.1.8) and gcc (16.1.1) remain irrelevant: the
+build scripts use the bundled toolchain.
+
+Verify with:
 
 ```bash
-cd ~/UnrealEngine/UE_5.8
-./Engine/Build/BatchFiles/Linux/SetupToolchain.sh
+ls -d ~/UnrealEngine/UE_5.8/Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/*/
 ```
 
 - [x] **Step 5: File descriptor limit — VERIFIED, NO ACTION NEEDED**
@@ -241,8 +258,12 @@ Without this, navigating Unreal's headers is impractical and every later task is
 - [ ] **Step 1: Generate the compilation database**
 
 ```bash
-~/UnrealEngine/UE_5.8/GenerateProjectFiles.sh -project="$PWD/DeepSpace.uproject" -game -vscode
+~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
+    -project="$PWD/DeepSpace.uproject" -game -vscode
 ```
+
+Note the path: there is **no root-level `GenerateProjectFiles.sh`** in the
+precompiled binary (that exists only in source builds). Verified 2026-09-20.
 
 The `-vscode` flag is what produces `compile_commands.json`; clangd consumes it regardless of the fact that the flag is named for VS Code.
 
