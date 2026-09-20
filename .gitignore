@@ -1,0 +1,20 @@
+# Unreal generated — never commit
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Generated project files
+Makefile
+*.code-workspace
+.vscode/
+.ignore
+.vs/
+*.VC.db
+*.sln
+*.suo
+
+# clangd
+.cache/
+compile_commands.json
