@@ -13,6 +13,7 @@ relative to that room's minimum corner.
 No `unreal` import: `python3 Tools/validate_hauler.py` runs in about a second.
 """
 
+import json
 import os
 import sys
 from collections import namedtuple
@@ -24,13 +25,16 @@ from placement import (Mount, Place, Region, resolve_lights, resolve_mount,
                        resolve_point, resolve_props)
 
 # -- The contract with the character -------------------------------------
-# The ship is built for these. The character's standing capsule must be
-# shorter than STAND_CLEARANCE, and its crouched capsule shorter than
-# CROUCH_CLEARANCE and than the crawlway's doors, or the crawlway becomes
-# impassable while this layout validates as fine.
-STAND_CLEARANCE = 180
-CROUCH_CLEARANCE = 90
-CAPSULE_RADIUS = 34     # the default character capsule; the 10 cm grid rounds it to 3 cells
+# The ship is built for these, and the character is built to fit them. They
+# live in movement_contract.json because both sides read them: this file, and
+# the C++ test DeepSpace.Player.MovementContract, which fails if the
+# character's capsules stop fitting. Change them there, never here.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "movement_contract.json")) as _f:
+    _CONTRACT = json.load(_f)
+STAND_CLEARANCE = _CONTRACT["stand_clearance"]
+CROUCH_CLEARANCE = _CONTRACT["crouch_clearance"]
+CAPSULE_RADIUS = _CONTRACT["capsule_radius"]   # the 10 cm grid rounds 34 to 3 cells
 
 KEEP_CLEAR = 100        # cm in front of every door, both sides, and the console
 SLIDE_RUN = 1200        # cm of clear straight corridor, for sliding
@@ -43,7 +47,9 @@ ROOMS = [
     Room("cargo_bay",   -810, -400, 800,  900, 500),
     Room("engineering", 400,  80,   400,  400, 250),
     Room("galley",      810,  80,   490,  400, 250),
-    Room("crawlway",    0,    390,  390,  90,  110),
+    # 140 cm: the retargeted crouch-walk clip carries the head bone to 118 cm,
+    # and the camera rides it, so a lower ceiling would be seen through.
+    Room("crawlway",    0,    390,  390,  90,  140),
     Room("airlock",     100,  -340, 250,  250, 250),
     Room("bunk",        600,  -390, 400,  300, 250),
 ]
@@ -58,9 +64,9 @@ DOORS = [
     # Off-centre, so the suit lockers on the airlock's aft wall stay clear of it.
     Door("corridor", "airlock", 120, 220, centre=260),
     Door("corridor", "bunk", 120, 220),
-    # The crawlway's full 90 cm width: the open end of a service duct.
-    Door("cargo_bay", "crawlway", 90, 100),
-    Door("crawlway", "engineering", 90, 100),
+    # The crawlway's full width and height: the open end of a service duct.
+    Door("cargo_bay", "crawlway", 90, 140),
+    Door("crawlway", "engineering", 90, 140),
 ]
 
 WINDOWS = [

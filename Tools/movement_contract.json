@@ -1,0 +1,6 @@
+{
+    "_comment": "The ship and the character must agree on these. Read by Tools/hauler_layout.py and by the C++ test DeepSpace.Player.MovementContract. Centimetres.",
+    "stand_clearance": 180,
+    "crouch_clearance": 140,
+    "capsule_radius": 34
+}
