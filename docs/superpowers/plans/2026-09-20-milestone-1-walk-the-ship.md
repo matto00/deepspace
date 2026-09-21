@@ -1430,30 +1430,31 @@ Step 6 checklist could not pass. Closed by adding a HUD widget:
 The widget *pulls* from `GetCurrentPrompt()` via a binding rather than being
 pushed text. Same discipline as `AShipConsole`: consumers ask, never store.
 
-- [ ] **Step 1: Create the level**
+- [x] **Steps 1–4: Level, blockout, stars, game mode** — GENERATED, not hand-placed — 2026-09-20
 
-New Level → **Empty Open World** is unnecessary here; use **Basic**, then delete the floor and default sky if they conflict with an enclosed interior.
+Replaced by `Tools/build_hauler.py`, run against the editor's bundled Python
+(`PythonScriptPlugin`, enabled in `DeepSpace.uproject`). The `.umap` is binary
+and opaque to git and to review; the script that generates it is not. The level
+is therefore a derived artifact — change a corridor width in the script and
+re-run rather than nudging actors.
 
-- [ ] **Step 2: Block out the hauler**
+```bash
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
+    "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/build_hauler.py" \
+    -unattended -nopause -nosplash -NoLiveCoding
+```
 
-Using Starter Content geometry or BSP boxes, build four connected spaces with a walkable path between them:
+The script is idempotent: every actor it owns is prefixed `hauler_` and is
+destroyed and rebuilt on each run. It also strips the Basic template's
+`SkyAtmosphere`, `VolumetricCloud`, `ExponentialHeightFog`, sky sphere and
+floor, since none of them belong in space, and generates `M_Star` — an unlit
+emissive material — for 160 stars scattered on a golden-angle spiral, which
+spreads them evenly where uniform random would clump.
 
-| Space | Approximate size | Contains |
-|---|---|---|
-| Cockpit | 3 m × 3 m | A forward window opening |
-| Corridor | 1.5 m wide × 8 m | Connects everything |
-| Engineering | 3 m × 4 m | `BP_ShipConsole` on a wall |
-| Bunk | 2.5 m × 3 m | A bed-sized block |
-
-Unreal's default unit is centimetres, so 3 m is 300 units. Keep ceilings at least 2.5 m or the first-person camera will feel oppressive. Doorways should be at least 100 units wide — narrower reads as realistic but plays badly.
-
-- [ ] **Step 3: Add stars outside the window**
-
-Place a Sky Sphere or a large inverted sphere with an emissive starfield material, or simply a black background with a few emissive points. Milestone 1 requires only that looking out the window does not show void or the default blue sky.
-
-- [ ] **Step 4: Set the game mode and player start**
-
-Place a Player Start in the corridor. In **World Settings**, set **GameMode Override** to `BP_DeepSpaceGameMode`.
+Blender was considered and rejected for the blockout: it would require authoring
+collision geometry that `SM_Cube` provides free, and an FBX round trip for every
+change. It earns its place later, for props and hull exteriors.
 
 - [ ] **Step 5: Install modules at startup so the console shows real numbers**
 
