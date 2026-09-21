@@ -1,100 +1,186 @@
 """
-Geometry of the hauler interior, as plain data.
+The hauler, as a floor plan.
 
-Deliberately free of any `unreal` import so that validation can run in a bare
-python3 in about a second, instead of paying a 30-second editor startup. The
-builder (`build_hauler.py`) consumes this inside the editor; the validator
-(`validate_hauler.py`) consumes it outside.
+This is the source of truth for the ship. Rooms are the design; walls, floors,
+ceilings, lintels, lights and lamp panels are derived from them by
+`floorplan.py` and `placement.py`. Change a room here and re-run; never nudge
+built actors in the editor.
 
-Conventions: Unreal units are centimetres; X is forward, Y right, Z up.
-SM_Cube is 100 units on a side with a centred pivot, so scale * 100 is the
-size in cm and a slab's centre sits half its thickness off the surface.
+Conventions: centimetres; X fore, Y starboard, Z up; floor at Z = 0. Rooms are
+(x, y) minimum corner plus (w, d) size. Everything placed in a room is given
+relative to that room's minimum corner.
+
+No `unreal` import: `python3 Tools/validate_hauler.py` runs in about a second.
 """
 
-WALL = 0.1    # 10 cm thick
-HEIGHT = 2.5  # 250 cm interior
-MID = 125     # centre height of a full-height wall
+import os
+import sys
+from collections import namedtuple
 
-# (label, centre, scale)
-BOXES = [
-    # --- Corridor: 150 wide, 800 long, running +X from the aft bulkhead.
-    ("corridor_floor",      (400, 0, -5),      (8, 1.5, WALL)),
-    ("corridor_ceiling",    (400, 0, 255),     (8, 1.5, WALL)),
-    ("corridor_aft_wall",   (-5, 0, MID),      (WALL, 1.5, HEIGHT)),
-    # Side walls double as each room's near wall; the gaps are the doorways.
-    ("corridor_wall_r_1",   (150, 80, MID),    (3, WALL, HEIGHT)),
-    ("corridor_wall_r_2",   (610, 80, MID),    (3.8, WALL, HEIGHT)),
-    ("corridor_wall_l_1",   (140, -80, MID),   (2.8, WALL, HEIGHT)),
-    ("corridor_wall_l_2",   (600, -80, MID),   (4, WALL, HEIGHT)),
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-    # --- Engineering: 300 x 400, off the corridor to starboard.
-    ("eng_floor",           (350, 275, -5),    (3, 4, WALL)),
-    ("eng_ceiling",         (350, 275, 255),   (3, 4, WALL)),
-    ("eng_wall_aft",        (195, 275, MID),   (WALL, 4, HEIGHT)),
-    ("eng_wall_fore",       (505, 275, MID),   (WALL, 4, HEIGHT)),
-    ("eng_wall_far",        (350, 480, MID),   (3, WALL, HEIGHT)),
+from floorplan import Door, FloorPlan, Room, Seal, Window, CELL
+from placement import (Mount, Place, Region, resolve_lights, resolve_mount,
+                       resolve_point, resolve_props)
 
-    # --- Bunk: 250 x 300, to port.
-    ("bunk_floor",          (325, -225, -5),   (2.5, 3, WALL)),
-    ("bunk_ceiling",        (325, -225, 255),  (2.5, 3, WALL)),
-    ("bunk_wall_aft",       (195, -225, MID),  (WALL, 3, HEIGHT)),
-    ("bunk_wall_fore",      (455, -225, MID),  (WALL, 3, HEIGHT)),
-    ("bunk_wall_far",       (325, -380, MID),  (2.5, WALL, HEIGHT)),
-    ("bunk_bed",            (250, -250, 25),   (0.9, 2, 0.5)),
+# -- The contract with the character -------------------------------------
+# The ship is built for these. The character's standing capsule must be
+# shorter than STAND_CLEARANCE, and its crouched capsule shorter than
+# CROUCH_CLEARANCE and than the crawlway's doors, or the crawlway becomes
+# impassable while this layout validates as fine.
+STAND_CLEARANCE = 180
+CROUCH_CLEARANCE = 90
+CAPSULE_RADIUS = 30     # approximates the default 34 cm capsule on a 10 cm grid
 
-    # --- Cockpit: 300 x 300 at the fore end.
-    ("cockpit_floor",       (950, 0, -5),      (3, 3, WALL)),
-    ("cockpit_ceiling",     (950, 0, 255),     (3, 3, WALL)),
-    ("cockpit_wall_port",   (950, -155, MID),  (3, WALL, HEIGHT)),
-    ("cockpit_wall_stbd",   (950, 155, MID),   (3, WALL, HEIGHT)),
-    ("cockpit_wall_aft_p",  (795, -112, MID),  (WALL, 0.75, HEIGHT)),
-    ("cockpit_wall_aft_s",  (795, 112, MID),   (WALL, 0.75, HEIGHT)),
-    # Window is the Z=100..180 gap between these two.
-    ("cockpit_wall_lower",  (1105, 0, 50),     (WALL, 3, 1.0)),
-    ("cockpit_wall_upper",  (1105, 0, 215),    (WALL, 3, 0.7)),
-    # Glass. Without it the hull is open to space, which the validator is
-    # right to reject: a window is a hole until something fills it.
-    ("cockpit_window",      (1105, 0, 140),    (WALL, 3, 0.8)),
+KEEP_CLEAR = 100        # cm in front of every door, both sides, and the console
+SLIDE_RUN = 1200        # cm of clear straight corridor, for sliding
+
+# Every value is a multiple of the 10 cm grid. Rooms that share a wall sit
+# exactly one cell apart: the corridor ends at y = 70, engineering starts at 80.
+ROOMS = [
+    Room("corridor",    0,    -80,  1400, 150, 250),
+    Room("cockpit",     1410, -200, 350,  400, 250),
+    Room("cargo_bay",   -810, -400, 800,  900, 500),
+    Room("engineering", 400,  80,   400,  400, 250),
+    Room("galley",      810,  80,   490,  400, 250),
+    Room("crawlway",    0,    390,  390,  90,  110),
+    Room("airlock",     100,  -340, 250,  250, 250),
+    Room("bunk",        600,  -390, 400,  300, 250),
 ]
 
-# Interior lighting. The blockout has no windows but the one, so without these
-# the ship is simply black inside. (x, y, z, intensity, radius)
-LIGHTS = [
-    (150, 0, 220, 6.0, 500),
-    (450, 0, 220, 6.0, 500),
-    (700, 0, 220, 6.0, 500),
-    (350, 250, 220, 8.0, 700),
-    (325, -250, 220, 5.0, 600),
-    (950, 0, 220, 5.0, 700),
+DOORS = [
+    Door("corridor", "cockpit", 150, 220),
+    # The corridor and cargo bay share only the corridor's 150 cm of wall, so
+    # the cargo door is the corridor's full width.
+    Door("corridor", "cargo_bay", 150, 240),
+    Door("corridor", "engineering", 120, 220),
+    Door("corridor", "galley", 150, 220),
+    # Off-centre, so the suit lockers on the airlock's aft wall stay clear of it.
+    Door("corridor", "airlock", 120, 220, centre=260),
+    Door("corridor", "bunk", 120, 220),
+    # The crawlway's full 90 cm width: the open end of a service duct.
+    Door("cargo_bay", "crawlway", 90, 100),
+    Door("crawlway", "engineering", 90, 100),
 ]
 
-CONSOLE_LOC = (350, 470, 120)
-# The panel's thin axis is X and its face points -X; yaw 90 turns it to -Y,
-# so it faces into engineering from the far wall.
-CONSOLE_ROT = (0, 0, 90)
-PLAYER_START_LOC = (100, 0, 90)
+WINDOWS = [
+    Window("cockpit", "fore", 300, 100, 180),
+    Window("galley", "starboard", 200, 100, 170),
+]
 
-# Places a player must be able to stand and walk between. Validation failures
-# here mean rooms are sealed off or the doorways do not line up.
-REGIONS = {
-    "corridor_aft": (100, 0),
-    "corridor_fore": (700, 0),
-    "engineering": (350, 275),
-    "console_front": (350, 420),
-    "bunk": (325, -300),
-    "cockpit": (950, 0),
-}
+SEALS = [
+    Seal("airlock", "port", 120, 220),
+]
 
-# A standing player needs this much clear height, and the window should be
-# somewhere near eye level.
-PLAYER_HEIGHT = 180
-EYE_HEIGHT = 64
+PLACEMENTS = [
+    # Cockpit: pilots face fore, toward the window.
+    Place("cockpit_desk",   "cockpit", (285, 200)),
+    Place("pilot_seat",     "cockpit", (175, 130)),
+    Place("pilot_seat",     "cockpit", (175, 270)),
+    Place("overhead_panel", "cockpit", (175, 200), elevation=228),
+
+    # Cargo bay: containers along port and starboard, some two high.
+    Place("container_large", "cargo_bay", (150, 100)),
+    Place("container_large", "cargo_bay", (150, 100), level=1),
+    Place("container_large", "cargo_bay", (150, 250)),
+    Place("container_small", "cargo_bay", (450, 100)),
+    Place("container_small", "cargo_bay", (450, 100), level=1),
+    Place("container_large", "cargo_bay", (150, 750)),
+    Place("container_large", "cargo_bay", (150, 750), level=1),
+    Place("container_small", "cargo_bay", (400, 800)),
+    Place("wall_rack",       "cargo_bay", (650, 25), facing=90),
+
+    # Engineering: the reactor at the centre, work along the walls.
+    Place("reactor",   "engineering", (200, 200)),
+    Place("pipe_run",  "engineering", (0, 60)),
+    Place("workbench", "engineering", (360, 100), facing=180),
+
+    # Galley.
+    Place("counter",      "galley", (30, 200)),
+    Place("galley_table", "galley", (300, 230), facing=90),
+    Place("bench",        "galley", (300, 160), facing=90),
+    Place("bench",        "galley", (300, 300), facing=90),
+
+    # Bunk.
+    Place("bed",    "bunk", (130, 60)),
+    Place("locker", "bunk", (360, 40), facing=90),
+    Place("desk",   "bunk", (330, 230), facing=180),
+
+    # Airlock.
+    Place("suit_locker",   "airlock", (35, 45)),
+    Place("suit_locker",   "airlock", (35, 125)),
+    Place("airlock_bench", "airlock", (230, 70)),
+
+    # Corridor: only conduit, high on the starboard wall.
+    Place("conduit", "corridor", (0, 146)),
+]
+
+REGIONS = [
+    Region("corridor_aft",  "corridor",    (100, 75),  "stand"),
+    Region("corridor_fore", "corridor",    (1300, 75), "stand"),
+    Region("cockpit",       "cockpit",     (60, 200),  "stand"),
+    Region("cargo_bay",     "cargo_bay",   (500, 400), "stand"),
+    Region("engineering",   "engineering", (80, 150),  "stand"),
+    Region("console_front", "engineering", (200, 340), "stand"),
+    Region("galley",        "galley",      (420, 120), "stand"),
+    Region("bunk",          "bunk",        (200, 180), "stand"),
+    Region("airlock",       "airlock",     (125, 60),  "stand"),
+    Region("crawlway",      "crawlway",    (195, 45),  "crouch"),
+]
+
+CONSOLE = Mount("engineering", "starboard", 120)
+CONSOLE_WIDTH = 100
+
+# The game opens with waking aboard your ship.
+PLAYER_START = ("bunk", (200, 150), 100)
+
+SLIDE_ROOM = "corridor"
 
 
-def bounds(centre, scale):
-    """Axis-aligned (min, max) corners in cm."""
-    half = [s * 100.0 / 2.0 for s in scale]
-    return (
-        tuple(centre[i] - half[i] for i in range(3)),
-        tuple(centre[i] + half[i] for i in range(3)),
-    )
+Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
+                          "player_start regions keep_clear")
+
+
+def generate():
+    """The whole ship, resolved: every box, light and fixed point in world
+    space. Raises floorplan.PlanError if the plan is not self-consistent."""
+    plan = FloorPlan(ROOMS, DOORS, WINDOWS, SEALS)
+    lights, lamps = resolve_lights(plan)
+    boxes = plan.boxes() + lamps + resolve_props(plan, PLACEMENTS)
+
+    console_location, console_yaw = resolve_mount(plan, CONSOLE)
+    room, at, z = PLAYER_START
+    player_start = resolve_point(plan, room, at, z)
+
+    regions = [(r.name, resolve_point(plan, r.room, r.at), r.posture) for r in REGIONS]
+
+    # Keep-clear zones: world-space (lo, hi) boxes no prop may enter.
+    keep_clear = []
+    for kind, cells, z0, z1 in plan.openings:
+        if kind != "door":
+            continue
+        i_values = {c[0] for c in cells}
+        j_values = {c[1] for c in cells}
+        x0, x1 = min(i_values) * CELL, (max(i_values) + 1) * CELL
+        y0, y1 = min(j_values) * CELL, (max(j_values) + 1) * CELL
+        if len(i_values) == 1:              # wall runs along Y: clear in X
+            x0, x1 = x0 - KEEP_CLEAR, x1 + KEEP_CLEAR
+        else:                               # wall runs along X: clear in Y
+            y0, y1 = y0 - KEEP_CLEAR, y1 + KEEP_CLEAR
+        keep_clear.append(("door at (%d, %d)" % ((x0 + x1) / 2, (y0 + y1) / 2),
+                           (x0, y0, z0), (x1, y1, z1)))
+
+    cx, cy, _ = console_location
+    half = CONSOLE_WIDTH / 2.0
+    if console_yaw in (90, 270):
+        dy = -KEEP_CLEAR if console_yaw == 90 else KEEP_CLEAR
+        lo = (cx - half, min(cy, cy + dy), 0)
+        hi = (cx + half, max(cy, cy + dy), STAND_CLEARANCE)
+    else:
+        dx = -KEEP_CLEAR if console_yaw == 0 else KEEP_CLEAR
+        lo = (min(cx, cx + dx), cy - half, 0)
+        hi = (max(cx, cx + dx), cy + half, STAND_CLEARANCE)
+    keep_clear.append(("console", lo, hi))
+
+    return Ship(plan, boxes, lights, console_location, console_yaw,
+                player_start, regions, keep_clear)
