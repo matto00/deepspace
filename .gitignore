@@ -18,3 +18,7 @@ Makefile
 # clangd
 .cache/
 compile_commands.json
+
+# Python bytecode from the Tools/ scripts
+__pycache__/
+*.pyc
