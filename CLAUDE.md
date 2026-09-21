@@ -147,9 +147,11 @@ the layout. Keep both: the validator checks the layout is sound, the verifier
 checks the level matches it. An early build placed every box half its own size
 off because `SM_Cube`'s pivot is at its minimum corner rather than its centre,
 and the layout validated perfectly throughout — only measuring built actors
-catches that. **Meshes do not agree on pivot placement** (`SM_Cube` is corner-
-origin, Engine `Sphere` is centre-origin), so never assume one; read the
-bounding box.
+catches that. **Meshes do not agree on pivot placement** — `SM_Cube` is corner-origin,
+`SM_ChamferCube` centre-origin, `SM_Cylinder` base-centre, and the engine
+`Sphere` used for stars is centre-origin — so never assume one; read the
+bounding box. `build_hauler.py` scales and offsets every mesh from its
+measured bounds for exactly this reason.
 
 `unreal.log` output does not reach stdout under the commandlet; these scripts
 write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.
