@@ -8,14 +8,14 @@ not something to quietly fix and re-declare passing — note it, fix it, and
 re-run the affected section.
 
 ## Movement and collision
-- [ ] Spawn in the bunk, standing, camera at plausible eye height
-- [ ] Walk every room: bunk, corridor, cockpit, galley, engineering, airlock, cargo bay
-- [ ] The crawlway is too low to enter standing (crouch arrives in the movement sub-project)
-- [ ] No falling through floors anywhere, including across every door threshold
-- [ ] No getting stuck on doorframes, wall seams, or furniture
-- [ ] Cannot walk through walls, furniture, or the airlock's outer door
-- [ ] Cannot escape the ship interior
-- [ ] Jump does not clip through any ceiling
+- [x] Spawn in the bunk, standing, camera at plausible eye height
+- [x] Walk every room: bunk, corridor, cockpit, galley, engineering, airlock, cargo bay
+- [x] The crawlway is too low to enter standing (crouch arrives in the movement sub-project)
+- [x] No falling through floors anywhere, including across every door threshold
+- [x] No getting stuck on doorframes, wall seams, or furniture
+- [x] Cannot walk through walls, furniture, or the airlock's outer door
+- [x] Cannot escape the ship interior
+- [x] Jump does not clip through any ceiling
 
 ## Camera
 - [x] Mouse look is smooth, correct direction on both axes
@@ -23,17 +23,17 @@ re-run the affected section.
 - [x] Camera never clips inside geometry while walking
 
 ## View
-- [ ] Cockpit window shows stars
-- [ ] Galley viewport shows stars
-- [ ] The cargo bay reads as two storeys tall
+- [x] Cockpit window shows stars
+- [x] Galley viewport shows stars
+- [x] The cargo bay reads as two storeys tall
 
 ## Interaction
-- [ ] Approaching the engineering console within reach shows a prompt
-- [ ] Prompt disappears when looking away, and when too far
-- [ ] Pressing E toggles the console
-- [ ] Powered console reads DRAW 620 W / 1000 W, HEADROOM 380 W
-- [ ] Console reads OFFLINE on spawn
-- [ ] No furniture produces a prompt
+- [x] Approaching the engineering console within reach shows a prompt
+- [x] Prompt disappears when looking away, and when too far
+- [x] Pressing E toggles the console
+- [x] Powered console reads DRAW 620 W / 1000 W, HEADROOM 380 W
+- [x] Console reads OFFLINE on spawn
+- [x] No furniture produces a prompt
 
 ## Stability
 - [x] Play for two minutes continuously without a crash or hitch
@@ -56,7 +56,10 @@ Two failures found on the *way* to this pass, both fixed before it:
   `IMC_MouseLook` context driving `IA_MouseLook`; `IMC_Default` binds look to the
   gamepad right stick only. The character now adds both contexts.
 
-## Result — ship expansion
+## Result — ship expansion, 2026-09-20
 
-Not yet run. To be recorded after the expansion playtest.
+**PASS.** Every item above, played in the generated eight-room `L_Hauler`,
+spawning in the bunk. The crawlway's crouch-only property is confirmed only
+in the sense that it cannot be entered standing; crouch itself arrives in the
+movement sub-project.
 

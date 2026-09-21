@@ -1,7 +1,7 @@
 # DeepSpace — Ship Expansion Design
 
 **Date:** 2026-09-20
-**Status:** Implemented — awaiting playtest
+**Status:** Implemented — playtest passed 2026-09-20
 **Follows:** Milestone 1 — walk the ship (complete)
 **Foundation:** `2026-09-20-deepspace-foundation-design.md`
 
