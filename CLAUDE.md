@@ -94,3 +94,28 @@ asset existed. Never hand-edit them.
 - `docs/superpowers/plans/` — implementation plans, updated in place as reality
   contradicts them
 - `docs/decisions/` — short ADRs
+
+## Generated level geometry
+
+`Content/Maps/L_Hauler.umap` is **generated, not hand-edited**. The readable
+source of truth is `Tools/hauler_layout.py`; `Tools/build_hauler.py` realises it
+in the editor via the bundled Python (`PythonScriptPlugin`). Actors the script
+owns are prefixed `hauler_` and are destroyed and rebuilt on every run, so
+hand-placed changes to them are lost. Edit the layout and re-run.
+
+```bash
+python3 Tools/validate_hauler.py        # no editor needed, ~1s
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
+    "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/build_hauler.py" \
+    -unattended -nopause -nosplash -NoLiveCoding
+```
+
+`validate_hauler.py` voxelises the layout at 10 cm and checks that the hull is
+sealed, that every named region can be walked to from the Player Start with
+180 cm of headroom, and that the geometry forms one connected component. Ships
+will eventually be procedurally generated, so these are properties to assert,
+not to eyeball. It exits non-zero and can gate a build.
+
+`unreal.log` output does not reach stdout under the commandlet; the build writes
+its summary to `Saved/hauler_build.txt`.
