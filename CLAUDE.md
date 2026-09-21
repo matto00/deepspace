@@ -39,7 +39,8 @@ Run automation tests headlessly (preferred — no UI clicking, works over SSH):
 ```bash
 ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
     "$PWD/DeepSpace.uproject" \
-    -ExecCmds="Automation RunTests DeepSpace; Quit" \
+    -ExecCmds="Automation RunTests DeepSpace" \
+    -TestExit="Automation Test Queue Empty" \
     -unattended -nopause -nullrhi -nosplash -NoLiveCoding
 
 # The verdict lands in the log, not on stdout:
@@ -47,7 +48,9 @@ grep "Test Completed" Saved/Logs/DeepSpace.log | tail
 ```
 
 `-nullrhi` skips the renderer entirely, which is why this works without a
-display. Tests can also be run from the editor via **Tools → Session Frontend →
+display. Use `-TestExit`, not `; Quit` — tests run asynchronously, so `Quit`
+exits before the queue drains and the run reports nothing at all rather than
+failing visibly. Tests can also be run from the editor via **Tools → Session Frontend →
 Automation**, filter `DeepSpace`.
 
 ## The rule that matters most

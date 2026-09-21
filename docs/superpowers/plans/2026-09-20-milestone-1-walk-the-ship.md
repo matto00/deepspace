@@ -1530,10 +1530,13 @@ substitute for embodied behavior.
 
 Play in Editor and work through every item. **Record actual results, including failures.** A failed item is information, not something to quietly fix and re-declare passing — note it, fix it, and re-run the affected section.
 
-- [ ] **Step 8: Run the automation tests one more time**
+- [x] **Step 8: Run the automation tests one more time** — PASS 2026-09-20
 
-Editor → **Tools → Session Frontend → Automation** → run `DeepSpace.Ship.PowerState`.
-Expected: PASS.
+`Test Completed. Result={Success} Name={PowerState} Path={DeepSpace.Ship.PowerState}`
+
+Run headlessly; note the corrected invocation now in `CLAUDE.md`. The previously
+documented `; Quit` exits before the async test queue drains and reports no
+results at all, which reads as silence rather than as failure.
 
 - [ ] **Step 9: Commit**
 
