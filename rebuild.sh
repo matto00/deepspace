@@ -11,15 +11,30 @@
 # out of date, and tells you to rebuild manually -- which then produces yet
 # another numbered library. Closing the editor first is the whole fix.
 #
-#   ./rebuild.sh          refuse to run if the editor is open
-#   ./rebuild.sh --force  kill any running editor first
+# There is no way around the restart for most C++ changes on Linux. Live Coding,
+# Unreal's in-place patcher, is Windows-only (its build rule is gated on Win64).
+# Linux has only the older Hot Reload, which copes with changes inside function
+# bodies but not with reflection changes -- new UPROPERTYs, UFUNCTIONs,
+# components or classes -- since Blueprints are built against the old layout.
+# So the goal here is making the restart one command, not avoiding it.
+#
+#   ./rebuild.sh                   refuse to run if the editor is open
+#   ./rebuild.sh --force           close any running editor first
+#   ./rebuild.sh --force --launch  close, rebuild, and reopen the editor
 #
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 FORCE=0
-[[ "${1:-}" == "--force" ]] && FORCE=1
+LAUNCH=0
+for arg in "$@"; do
+    case "$arg" in
+        --force)  FORCE=1 ;;
+        --launch) LAUNCH=1 ;;
+        *) echo "Unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
 mapfile -t EDITORS < <(pgrep -f "Binaries/Linux/UnrealEditor.*DeepSpace.uproject" || true)
 
@@ -77,5 +92,15 @@ if (( STRAY > 0 )); then
 fi
 
 echo "    OK: $LIB, no stray hot-reload libraries."
-echo
-echo "Ready. Launch with: unreal-editor DeepSpace.uproject"
+
+if (( LAUNCH )); then
+    echo
+    echo "==> Launching the editor"
+    # Detached, so this script returns and the editor outlives the terminal.
+    # unreal-editor, not the raw binary: it forces XWayland for HiDPI.
+    setsid unreal-editor "$PWD/DeepSpace.uproject" >/dev/null 2>&1 < /dev/null &
+    echo "    Started. First load takes a while; the window appears when ready."
+else
+    echo
+    echo "Ready. Launch with: unreal-editor DeepSpace.uproject"
+fi

@@ -28,6 +28,7 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 ```bash
 ./build.sh          # canonical compile check — run after EVERY C++ change
 ./rebuild.sh        # clean rebuild; use when the editor says the module is stale
+./rebuild.sh --force --launch   # close the editor, rebuild, reopen it
 unreal-editor DeepSpace.uproject    # open the project
 
 # Regenerate IDE project files (after moving files or adding modules)
@@ -43,6 +44,13 @@ loads the stale library and asks for a manual rebuild — which produces yet
 another numbered copy. `./rebuild.sh` refuses to run while the editor is open
 (`--force` kills it), clears the stray libraries, builds, and verifies the
 manifest names a library newer than the newest source.
+
+**The restart cannot be avoided on Linux for most C++ changes.** Live Coding,
+Unreal's in-place patcher, is Windows-only — its build rule is gated on `Win64`
+and no Linux binary ships. Linux has only the older Hot Reload, which handles
+edits *inside function bodies* but not reflection changes: a new `UPROPERTY`,
+`UFUNCTION`, component or class changes a layout that Blueprints were already
+built against. Treat any header change as needing `./rebuild.sh --force --launch`.
 
 Run automation tests headlessly (preferred — no UI clicking, works over SSH):
 
