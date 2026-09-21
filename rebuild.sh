@@ -76,18 +76,19 @@ if [[ ! -f "$LIB" ]]; then
     exit 1
 fi
 
-NEWEST_SOURCE=$(find Source -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' \) \
-                -printf '%T@\n' | sort -n | tail -1)
-LIB_TIME=$(stat -c %Y "$LIB")
-
-if (( $(echo "$LIB_TIME < $NEWEST_SOURCE" | bc -l) )); then
+# find -newer, not arithmetic on timestamps: no dependency on bc, which is
+# not installed here -- an earlier version used it, and failed after every
+# successful build, which made launch.sh refuse to open the editor.
+if [[ -n $(find Source -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' \) \
+               -newer "$LIB" -print -quit) ]]; then
     echo "!!! $LIB is older than the newest source file." >&2
     exit 1
 fi
 
-STRAY=$(ls Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.so 2>/dev/null | wc -l)
-if (( STRAY > 0 )); then
-    echo "!!! $STRAY hot-reload libraries reappeared; something held the module open." >&2
+# compgen, not ls | wc: ls exits non-zero when nothing matches -- the normal
+# case -- and under pipefail that silently killed this script.
+if compgen -G "Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.so" >/dev/null; then
+    echo "!!! hot-reload libraries reappeared; something held the module open." >&2
     exit 1
 fi
 
