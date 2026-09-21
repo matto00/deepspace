@@ -29,6 +29,7 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 ./build.sh          # canonical compile check — run after EVERY C++ change
 ./rebuild.sh        # clean rebuild; use when the editor says the module is stale
 ./rebuild.sh --force --launch   # close the editor, rebuild, reopen it
+./launch.sh         # open DeepSpace: rebuilds first only if C++ is stale; focuses an open editor
 unreal-editor DeepSpace.uproject    # open the project
 
 # Regenerate IDE project files (after moving files or adding modules)
