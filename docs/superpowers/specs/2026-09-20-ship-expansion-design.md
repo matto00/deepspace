@@ -313,13 +313,14 @@ wrong, at their source:
 
 ## The movement contract
 
-The ship now encodes two numbers the character must honour:
+The ship now encodes three numbers the character must honour:
 
 - **standing clearance: 180 cm**
 - **crouched clearance: 90 cm**
+- **capsule radius: 34 cm** — the validator's reachability uses a capsule this wide, and the 90 cm crawlway admits a capsule no wider than 90 cm
 
 They live as constants in `hauler_layout.py`. Sub-project 2 must keep the
-crouched capsule under 90 cm and under the crawlway's 100 cm doors, or the
+crouched capsule under 90 cm and under the crawlway's 100 cm-high doors, or the
 crawlway becomes impassable while the validator reports the ship as fine. This is
 a contract across Python and C++. Sub-project 2 should check it mechanically
 where it can rather than rely on this document.

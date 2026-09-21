@@ -152,6 +152,10 @@ def standable(grid, clearance, radius):
                 run = run + 1 if not solid[col + k] else 0
                 if run >= tall and solid[col + k - 1]:
                     base[col + k] = 1
+
+    # Assumes a flat floor across the capsule's footprint: every neighbour is
+    # checked at the same level k. True for a single-deck ship; a stepped or
+    # multi-level floor needs each neighbour tested at its own floor height.
     r = int(radius // CELL)
     out = bytearray(len(solid))
     for idx in range(len(base)):

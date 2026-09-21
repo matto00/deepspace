@@ -50,6 +50,21 @@ def test_placement_is_relative_to_the_room_corner():
         del P.PROPS["_probe"]
 
 
+def test_prop_parts_are_labelled_by_prop_instance_and_part():
+    # build_hauler.py and verify_level.py find actors by these labels, so the
+    # format is the join between them.
+    P.PROPS["_probe"] = [P.Part("cube", (0, 0, 10), (20, 20, 20), "furniture"),
+                         P.Part("cube", (0, 0, 30), (20, 20, 20), "furniture")]
+    try:
+        boxes = resolve_props(PLAN, [Place("_probe", "r", (100, 50)),
+                                     Place("_probe", "r", (200, 50))])
+        assert [b.label for b in boxes] == ["prop__probe_0_0", "prop__probe_0_1",
+                                            "prop__probe_1_0", "prop__probe_1_1"], \
+            [b.label for b in boxes]
+    finally:
+        del P.PROPS["_probe"]
+
+
 def test_level_stacks_by_the_props_own_height():
     P.PROPS["_probe"] = [P.Part("cube", (0, 0, 30), (20, 20, 60), "furniture")]
     try:

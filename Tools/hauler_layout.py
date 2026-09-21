@@ -30,7 +30,7 @@ from placement import (Mount, Place, Region, resolve_lights, resolve_mount,
 # impassable while this layout validates as fine.
 STAND_CLEARANCE = 180
 CROUCH_CLEARANCE = 90
-CAPSULE_RADIUS = 30     # approximates the default 34 cm capsule on a 10 cm grid
+CAPSULE_RADIUS = 34     # the default character capsule; the 10 cm grid rounds it to 3 cells
 
 KEEP_CLEAR = 100        # cm in front of every door, both sides, and the console
 SLIDE_RUN = 1200        # cm of clear straight corridor, for sliding
