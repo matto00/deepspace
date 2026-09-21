@@ -1405,7 +1405,7 @@ git commit -m "feat: add ship console reading live power state"
 
 ---
 
-### Task 9: The hauler interior and the playtest gate
+### Task 9: The hauler interior and the playtest gate — DONE 2026-09-20
 
 This is the task with the most editor work and the least code. It is where milestone 1 becomes real.
 
@@ -1526,7 +1526,7 @@ substitute for embodied behavior.
 - [ ] Play for two minutes continuously without a crash or hitch
 ```
 
-- [ ] **Step 7: Run the checklist**
+- [x] **Step 7: Run the checklist** — PASS 2026-09-20, results recorded in `docs/playtest-checklist.md`
 
 Play in Editor and work through every item. **Record actual results, including failures.** A failed item is information, not something to quietly fix and re-declare passing — note it, fix it, and re-run the affected section.
 
@@ -1538,7 +1538,7 @@ Run headlessly; note the corrected invocation now in `CLAUDE.md`. The previously
 documented `; Quit` exits before the async test queue drains and reports no
 results at all, which reads as silence rather than as failure.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Content/Maps/ docs/playtest-checklist.md
@@ -1547,28 +1547,31 @@ git commit -m "feat: add hauler interior level and playtest checklist"
 
 ---
 
-### Task 10: Project documentation
+### Task 10: Project documentation — DONE 2026-09-20
 
 **Files:**
-- Create: `CLAUDE.md`, `docs/decisions/0002-cpp-first-blueprints-as-wrappers.md`, `docs/decisions/0003-ship-state-as-subsystem.md`, `README.md`
+- Create: `CLAUDE.md`, `docs/decisions/0002-cpp-first-blueprints-as-wrappers.md`, `docs/decisions/0003-ship-state-as-subsystem.md`, `docs/decisions/0004-generated-level-geometry.md`, `README.md`
 
-- [ ] **Step 1: Write `CLAUDE.md`**
+- [x] **Step 1: Write `CLAUDE.md`** — written incrementally through the milestone
 
 Cover: what the project is; that the engine lives at `~/UnrealEngine/UE_5.8` and is not in the repo; that `./build.sh` is the canonical compile check after every C++ change; the C++-vs-Blueprint rule and its drift signal; that `.uasset`/`.umap` are LFS and must never be hand-edited; where the spec and plans live; and that the developer is learning Unreal, so Unreal-specific concepts should be explained rather than assumed.
 
-- [ ] **Step 2: Write ADR 0002**
+- [x] **Step 2: Write ADR 0002**
 
 Why C++ holds logic and Blueprints only assign assets: Blueprints are binary, undiffable, unmergeable, and unreadable to Claude; Blueprint-heavy projects hit performance walls. Record the drift signal.
 
-- [ ] **Step 3: Write ADR 0003**
+- [x] **Step 3: Write ADR 0003**
 
 Why ship state is a `UWorldSubsystem` wrapping a plain struct: lifetime managed with the world, globally reachable without a singleton, cannot become a god-actor; and the arithmetic lives in `FShipPowerState` so it is testable without a live `UWorld`.
 
-- [ ] **Step 4: Write `README.md`**
+- [x] **Step 4: Write `README.md`**
 
 Short: what the project is, prerequisites, how to get set up pointing at ADR 0001, how to build, how to run tests, how to play.
 
-- [ ] **Step 5: Commit**
+ADR 0004 was added beyond the original plan: generating the level from a script
+(Task 9) was an architectural decision made mid-milestone and deserved a record.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md README.md docs/decisions/
@@ -1577,8 +1580,18 @@ git commit -m "docs: add project instructions, README, and architecture decision
 
 ---
 
-## Milestone 1 Complete
+## Milestone 1 Complete — 2026-09-20
 
 Done when: the playtest checklist passes end to end, `./build.sh` succeeds from clean, and `DeepSpace.Ship.PowerState` passes.
+
+- Playtest checklist: **PASS** (`docs/playtest-checklist.md`)
+- Build: **PASS**, via `./rebuild.sh`, which clears hot-reload artifacts and verifies the manifest
+- `DeepSpace.Ship.PowerState`: **PASS**
+
+The plan was followed in shape but diverged in several places, each recorded in
+the relevant task: the level became generated rather than hand-built, module
+installation moved from the Level Blueprint into the game mode, a HUD widget was
+added because the plan never displayed the prompt, and mouse look needed a
+second mapping context.
 
 The next design pass covers ship systems with real consequence — giving the player a reason to care what the console says. That gets its own brainstorming and spec before any code.
