@@ -47,11 +47,24 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputMappingContext> DefaultMappingContext;
 
+    /**
+     * Mouse look ships as a second context in the First Person template:
+     * IMC_Default binds IA_Look to Gamepad_Right2D only, and Mouse2D lives in
+     * IMC_MouseLook driving its own action. Both must be added or the mouse
+     * does nothing while a gamepad works fine.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputMappingContext> MouseLookMappingContext;
+
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> MoveAction;
 
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> LookAction;
+
+    /** Mouse equivalent of LookAction; both drive the same handler. */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> MouseLookAction;
 
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> JumpAction;

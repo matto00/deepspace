@@ -33,9 +33,13 @@ void ADeepSpaceCharacter::BeginPlay()
         if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
                 ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
         {
-            if (DefaultMappingContext)
+            for (UInputMappingContext* Context : {DefaultMappingContext.Get(),
+                                                  MouseLookMappingContext.Get()})
             {
-                Subsystem->AddMappingContext(DefaultMappingContext, 0);
+                if (Context)
+                {
+                    Subsystem->AddMappingContext(Context, 0);
+                }
             }
         }
 
@@ -73,6 +77,10 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
     if (LookAction)
     {
         Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::Look);
+    }
+    if (MouseLookAction)
+    {
+        Input->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::Look);
     }
     if (JumpAction)
     {

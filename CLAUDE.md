@@ -27,12 +27,22 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 
 ```bash
 ./build.sh          # canonical compile check — run after EVERY C++ change
+./rebuild.sh        # clean rebuild; use when the editor says the module is stale
 unreal-editor DeepSpace.uproject    # open the project
 
 # Regenerate IDE project files (after moving files or adding modules)
 ~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
     -project="$PWD/DeepSpace.uproject" -game -vscode
 ```
+
+**`./build.sh` is only fully effective with the editor closed.** While the
+editor runs it holds `libUnrealEditor-DeepSpace.so` mapped, so UBT emits
+numbered hot-reload copies (`-0001`, `-0002`, …) and leaves
+`Binaries/Linux/UnrealEditor.modules` pointing at the original. The editor then
+loads the stale library and asks for a manual rebuild — which produces yet
+another numbered copy. `./rebuild.sh` refuses to run while the editor is open
+(`--force` kills it), clears the stray libraries, builds, and verifies the
+manifest names a library newer than the newest source.
 
 Run automation tests headlessly (preferred — no UI clicking, works over SSH):
 
