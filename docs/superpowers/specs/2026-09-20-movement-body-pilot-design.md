@@ -1,7 +1,7 @@
 # DeepSpace — Movement, Body, and the Pilot Seat
 
 **Date:** 2026-09-20
-**Status:** Draft, awaiting review
+**Status:** Approved — plan pending the Mixamo retarget prototype
 **Follows:** Ship expansion (complete, playtest passed)
 **Foundation:** `2026-09-20-deepspace-foundation-design.md`
 
