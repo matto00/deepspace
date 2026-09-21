@@ -1,6 +1,8 @@
 #include "Ship/ShipConsole.h"
 
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Ship/InteractableComponent.h"
 #include "Ship/ShipSubsystem.h"
 
@@ -8,17 +10,44 @@ AShipConsole::AShipConsole()
 {
     PrimaryActorTick.bCanEverTick = false;
 
+    Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    RootComponent = Root;
+
     Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
-    RootComponent = Mesh;
+    Mesh->SetupAttachment(Root);
 
     Interactable = CreateDefaultSubobject<UInteractableComponent>(TEXT("Interactable"));
     Interactable->DisplayName = NSLOCTEXT("DeepSpace", "EngConsole", "Engineering Console");
     Interactable->InteractionVerb = NSLOCTEXT("DeepSpace", "PowerOn", "Power on");
 }
 
+void AShipConsole::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+    CentreMesh();
+}
+
+void AShipConsole::CentreMesh()
+{
+    if (!Mesh)
+    {
+        return;
+    }
+
+    const UStaticMesh* Asset = Mesh->GetStaticMesh();
+    if (!Asset)
+    {
+        return;
+    }
+
+    const FVector Centre = Asset->GetBoundingBox().GetCenter();
+    Mesh->SetRelativeLocation(-Centre * Mesh->GetRelativeScale3D());
+}
+
 void AShipConsole::BeginPlay()
 {
     Super::BeginPlay();
+    CentreMesh();
     Interactable->OnInteracted.AddDynamic(this, &AShipConsole::HandleInteracted);
 }
 

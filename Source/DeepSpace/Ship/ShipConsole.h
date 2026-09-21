@@ -5,6 +5,7 @@
 #include "ShipConsole.generated.h"
 
 class UInteractableComponent;
+class USceneComponent;
 class UStaticMeshComponent;
 
 /**
@@ -33,6 +34,15 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void OnConstruction(const FTransform& Transform) override;
+
+    /**
+     * A bare root so Mesh can be repositioned without moving the actor. The
+     * mesh cannot be the root: offsetting a root component *is* moving the
+     * actor.
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Console")
+    TObjectPtr<USceneComponent> Root;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Console")
     TObjectPtr<UStaticMeshComponent> Mesh;
@@ -41,6 +51,16 @@ protected:
     TObjectPtr<UInteractableComponent> Interactable;
 
 private:
+    /**
+     * Shifts Mesh so the panel is centred on the actor's origin.
+     *
+     * Static meshes disagree about where their pivot sits — SM_Cube's is at
+     * its minimum corner — so without this the panel hangs off to one side of
+     * wherever the console is placed, and the screen text lands on a corner.
+     * Measuring the mesh keeps placement predictable whatever is assigned.
+     */
+    void CentreMesh();
+
     UFUNCTION()
     void HandleInteracted(AActor* InteractInstigator);
 };

@@ -117,5 +117,14 @@ sealed, that every named region can be walked to from the Player Start with
 will eventually be procedurally generated, so these are properties to assert,
 not to eyeball. It exits non-zero and can gate a build.
 
-`unreal.log` output does not reach stdout under the commandlet; the build writes
-its summary to `Saved/hauler_build.txt`.
+`Tools/verify_level.py` then measures the *built* actors and compares them to
+the layout. Keep both: the validator checks the layout is sound, the verifier
+checks the level matches it. An early build placed every box half its own size
+off because `SM_Cube`'s pivot is at its minimum corner rather than its centre,
+and the layout validated perfectly throughout — only measuring built actors
+catches that. **Meshes do not agree on pivot placement** (`SM_Cube` is corner-
+origin, Engine `Sphere` is centre-origin), so never assume one; read the
+bounding box.
+
+`unreal.log` output does not reach stdout under the commandlet; these scripts
+write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.

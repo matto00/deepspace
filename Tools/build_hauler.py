@@ -116,9 +116,27 @@ def tame_sky_light(actor_sub):
     return tamed
 
 
+def pivot_offset(mesh):
+    """Local-space centre of a mesh's bounds.
+
+    Meshes do not agree on where their origin sits: SM_Cube's is at its
+    minimum corner (0,0,0 to 100,100,100) while Engine Sphere's is centred
+    (-50 to +50). The layout speaks in centres, so the builder measures each
+    mesh and compensates rather than assuming either convention.
+    """
+    box = mesh.get_bounding_box()
+    return ((box.min.x + box.max.x) / 2.0,
+            (box.min.y + box.max.y) / 2.0,
+            (box.min.z + box.max.z) / 2.0)
+
+
 def spawn_mesh(actor_sub, mesh, label, loc, scale, material=None):
+    off = pivot_offset(mesh)
+    placed = unreal.Vector(loc[0] - off[0] * scale[0],
+                           loc[1] - off[1] * scale[1],
+                           loc[2] - off[2] * scale[2])
     actor = actor_sub.spawn_actor_from_class(
-        unreal.StaticMeshActor, unreal.Vector(*loc), unreal.Rotator(0, 0, 0))
+        unreal.StaticMeshActor, placed, unreal.Rotator(0, 0, 0))
     actor.set_actor_label(label)
     actor.set_actor_scale3d(unreal.Vector(*scale))
     actor.static_mesh_component.set_static_mesh(mesh)
