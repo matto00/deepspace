@@ -57,15 +57,16 @@ entry point of sub-project 3 (pilot mode), and adds the body.
   — so it is unit-testable without a world. "Roughly forward" means the move
   input's forward component dominates and is positive.
 - **Crouch is a toggle**, not a hold: the crawlway is four metres long.
-- Crouched capsule: **half-height 44 cm** (88 cm tall). Radius unchanged at the
-  engine default **34 cm**.
+- Crouched capsule: **half-height 65 cm** (130 cm tall). Radius unchanged at the
+  engine default **34 cm**. Sized from the measured crouch-walk clip — see
+  *Amendments* below.
 - New input actions `IA_Sprint` and `IA_Crouch` (digital), bound in
   `IMC_Default`, assigned in `BP_DeepSpaceCharacter`.
 
 ## The movement contract, checked on both sides
 
 The ship and the character share three numbers: **standing clearance 180 cm**,
-**crouched clearance 90 cm**, **capsule radius 34 cm**. Today they are Python
+**crouched clearance 140 cm**, **capsule radius 34 cm**. Today they are Python
 constants in `hauler_layout.py` and prose in the expansion spec. They move into
 one file, **`Tools/movement_contract.json`**:
 
@@ -215,3 +216,56 @@ is the seam the flight sub-project builds on.
   look out of the window, stand up.
 - The movement no longer feels like a floating camera. That is a human
   judgement, and the point of the sub-project.
+
+## Amendments after the retarget prototype
+
+The Mixamo import and retarget was prototyped headlessly against the downloaded
+clips before planning, on a scratch folder. It works end to end from Python:
+both IK rigs are auto-generated (the retargeter recognises the Mixamo and
+mannequin skeletons), chains auto-map, the T-pose-to-A-pose difference is
+auto-aligned, and every clip batch-retargets onto `SK_Mannequin` with its length
+intact. **The scripted route is confirmed; no guided fallback is needed.**
+
+Measuring the retargeted clips — bone heights sampled across each clip, against
+Epic's native idle as a reference — confirmed correct scale and grounded feet,
+and changed three things.
+
+**Clips chosen.**
+
+| Role | Clip | Head bone |
+|---|---|---|
+| Standing run | `running` | 150–161 cm (native walk: 150–158) |
+| Crouch idle | `crouching_idle` | 82 cm |
+| Crouch walk | `crouch_walk` | **102–118 cm** |
+| Seated loop | `sitting_idle` | 119 cm |
+| Sit / stand | `stand_to_sit`, `sit_to_stand` | chain exactly into and out of `sitting_idle` at 119 cm |
+
+`seated_idle` was also downloaded but sits 7 cm higher than the transitions
+end, so would pop; `sitting_idle` is used. `typing` and the two
+`pilot_flips_switches` clips are imported but unused this round — natural
+seated "busy at the helm" variations for the flight sub-project.
+
+**The crouch is taller than designed.** The crouch-walk clip is a high sneak,
+peaking at 118 cm, well above the 110 cm crawlway ceiling; with the camera on
+the head bone, the view would have passed through the ceiling on every step.
+The developer chose to keep the clip and size the ship to it:
+
+- **Crouched capsule 130 cm** (half-height 65), up from 88.
+- **Crawlway 140 cm tall, with 140 cm doors**, up from 110 and 100.
+- **Contract crouched clearance 140 cm**, up from 90. Standing (176 cm capsule)
+  still cannot enter, so the crawlway remains crouch-only; validated, including
+  a negative control that raising it to 190 cm fails as no longer crouch-only.
+
+Accepted cost: crouch idle (82 cm) and crouch walk (102–118 cm) differ enough
+that starting and stopping a crouched walk visibly changes height.
+
+**A new rule: the camera stays inside the capsule.** The engine guarantees the
+capsule fits wherever the player is, so a camera that never rises above the
+capsule's top cannot see through any ceiling. Checked by the anim-height test
+below rather than by clamping.
+
+**Added test: `Tools/check_anim_heights.py`**, run in the editor like
+`verify_level.py`: for every clip in each posture, the head bone's peak height
+must be below that posture's capsule height (standing 176, crouched 130). This
+turns the measurement above into a guard — a future, taller clip fails it.
+
