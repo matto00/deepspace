@@ -1,7 +1,7 @@
 # DeepSpace — Ship Expansion Design
 
 **Date:** 2026-09-20
-**Status:** Draft, awaiting review
+**Status:** Implemented — awaiting playtest
 **Follows:** Milestone 1 — walk the ship (complete)
 **Foundation:** `2026-09-20-deepspace-foundation-design.md`
 
@@ -349,3 +349,19 @@ where it can rather than rely on this document.
   through the cockpit window and the galley viewport; read the console.
 - The ship reads as a coherent clean retro-future interior, not as grey boxes.
 - The milestone 1 playtest checklist is updated for the new layout and passes.
+
+## Amendments during planning
+
+Prototyping every file before writing the plan found the following; the plan's
+*Deviations from the spec* table has the reasoning.
+
+- Room coordinates shifted onto the 10 cm grid (the table above broke its own
+  rule): corridor y −80, engineering and galley y 80, crawlway y 390, airlock
+  y −340, bunk y −390. Sizes and adjacency unchanged.
+- Cargo door 150 cm, the corridor's width; crawlway doors 90 cm, its width.
+- Reactor 220 cm, clear of the derived lamps.
+- Panelled materials instance the template's world-aligned `M_PrototypeGrid`
+  rather than a hand-built graph; ceiling lamps are geometry.
+- The validator models capsule width, and bounds reachability to room floors
+  after finding that milestone 1's could walk across the roof.
+- An explicit `centre` is accepted whenever the opening's edges land on the grid; the plan's code also demanded an even number of cells, which rejected valid openings. Fixed during implementation.

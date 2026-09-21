@@ -69,3 +69,18 @@ cockpit window was an unglazed hole in the hull, and the interior had no lights.
   properties.
 - `unreal.log` output does not reach stdout under the commandlet; the scripts
   write their results to `Saved/`.
+
+## Amendment — ship expansion (2026-09-20)
+
+The box list was replaced by a floor plan: rooms, doors, windows, seals.
+Walls are derived by rasterising the plan onto the 10 cm grid, where a wall is
+any cell bordering an interior that is not itself interior. The generator now
+rejects inconsistent plans before any geometry exists — and on its first run
+rejected the expansion spec's own room table, whose coordinates were off the
+grid the same spec required.
+
+Three meshes, three pivots: `SM_Cube` is corner-origin, `SM_ChamferCube`
+centre-origin, `SM_Cylinder` base-centre. With the pivot bug deliberately
+reintroduced, the verifier reported 393 failures — every one on an `SM_Cube`
+box. The centred furniture passed. A builder that assumed "centred" would have
+looked half right.

@@ -8,13 +8,14 @@ not something to quietly fix and re-declare passing — note it, fix it, and
 re-run the affected section.
 
 ## Movement and collision
-- [x] Spawn in the corridor, standing, camera at plausible eye height
-- [x] Walk the full ship: corridor → cockpit → corridor → engineering → bunk
-- [x] No falling through floors anywhere
-- [x] No getting stuck on doorframes or wall seams
-- [x] Cannot walk through walls
-- [x] Cannot escape the ship interior
-- [x] Jump does not clip through the ceiling
+- [ ] Spawn in the bunk, standing, camera at plausible eye height
+- [ ] Walk every room: bunk, corridor, cockpit, galley, engineering, airlock, cargo bay
+- [ ] The crawlway is too low to enter standing (crouch arrives in the movement sub-project)
+- [ ] No falling through floors anywhere, including across every door threshold
+- [ ] No getting stuck on doorframes, wall seams, or furniture
+- [ ] Cannot walk through walls, furniture, or the airlock's outer door
+- [ ] Cannot escape the ship interior
+- [ ] Jump does not clip through any ceiling
 
 ## Camera
 - [x] Mouse look is smooth, correct direction on both axes
@@ -22,23 +23,22 @@ re-run the affected section.
 - [x] Camera never clips inside geometry while walking
 
 ## View
-- [x] Cockpit window shows stars, not void or default sky
+- [ ] Cockpit window shows stars
+- [ ] Galley viewport shows stars
+- [ ] The cargo bay reads as two storeys tall
 
 ## Interaction
-- [x] Approaching the console within reach shows a prompt
-- [x] Prompt disappears when looking away
-- [x] Prompt disappears when standing too far away
-- [x] Pressing E toggles the console
-- [x] Powered console reads DRAW 620 W / 1000 W, HEADROOM 380 W
-- [x] Unpowered console reads OFFLINE
-- [x] Console reads OFFLINE on spawn, before any interaction
-- [x] Verb changes between "Power on" and "Power off"
-- [x] No other surface in the ship produces a prompt
+- [ ] Approaching the engineering console within reach shows a prompt
+- [ ] Prompt disappears when looking away, and when too far
+- [ ] Pressing E toggles the console
+- [ ] Powered console reads DRAW 620 W / 1000 W, HEADROOM 380 W
+- [ ] Console reads OFFLINE on spawn
+- [ ] No furniture produces a prompt
 
 ## Stability
 - [x] Play for two minutes continuously without a crash or hitch
 
-## Result — 2026-09-20
+## Result — milestone 1, 2026-09-20
 
 **PASS.** Every item above, played in `L_Hauler`.
 
@@ -55,4 +55,8 @@ Two failures found on the *way* to this pass, both fixed before it:
 - **Mouse look did nothing.** The template puts `Mouse2D` in a separate
   `IMC_MouseLook` context driving `IA_MouseLook`; `IMC_Default` binds look to the
   gamepad right stick only. The character now adds both contexts.
+
+## Result — ship expansion
+
+Not yet run. To be recorded after the expansion playtest.
 

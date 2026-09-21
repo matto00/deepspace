@@ -115,13 +115,17 @@ asset existed. Never hand-edit them.
 
 ## Generated level geometry
 
-`Content/Maps/L_Hauler.umap` is **generated, not hand-edited**. The readable
-source of truth is `Tools/hauler_layout.py`; `Tools/build_hauler.py` realises it
-in the editor via the bundled Python (`PythonScriptPlugin`). Actors the script
-owns are prefixed `hauler_` and are destroyed and rebuilt on every run, so
-hand-placed changes to them are lost. Edit the layout and re-run.
+`Content/Maps/L_Hauler.umap` is **generated, not hand-edited**. The source of
+truth is `Tools/hauler_layout.py`: a floor plan of rooms, doors, windows and
+seals, plus furniture placements. `Tools/floorplan.py` derives the walls,
+`Tools/props.py` holds the furniture templates, `Tools/placement.py` resolves
+everything room-relative into world space, and `Tools/build_hauler.py`
+realises it in the editor. Actors the script owns are prefixed `hauler_` and
+are rebuilt on every run, so hand-placed changes to them are lost. Materials
+are rebuilt too: tune them in `build_hauler.py`, not in the editor.
 
 ```bash
+python3 Tools/test_floorplan.py && python3 Tools/test_placement.py
 python3 Tools/validate_hauler.py        # no editor needed, ~1s
 ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
     "$PWD/DeepSpace.uproject" \
@@ -129,11 +133,14 @@ python3 Tools/validate_hauler.py        # no editor needed, ~1s
     -unattended -nopause -nosplash -NoLiveCoding
 ```
 
-`validate_hauler.py` voxelises the layout at 10 cm and checks that the hull is
-sealed, that every named region can be walked to from the Player Start with
-180 cm of headroom, and that the geometry forms one connected component. Ships
-will eventually be procedurally generated, so these are properties to assert,
-not to eyeball. It exits non-zero and can gate a build.
+`validate_hauler.py` voxelises the ship at 10 cm and checks soundness — the
+plan is self-consistent, the hull is sealed, everything is one connected piece
+— and **intent**: every region is reachable in its posture by a capsule with
+width, the crawlway can *only* be entered crouching, the corridor keeps a 12 m
+clear run for sliding, and no furniture blocks a door or the console. A ship
+can be perfectly playable and still fail on intent; that is the point.
+Reachability is bounded to each room's floor, because roofs are standable and
+connected — the milestone 1 validator could reach rooms across the roof.
 
 `Tools/verify_level.py` then measures the *built* actors and compares them to
 the layout. Keep both: the validator checks the layout is sound, the verifier
