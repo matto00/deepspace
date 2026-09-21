@@ -1,15 +1,14 @@
 """
-Compares the built level against Tools/hauler_layout.py.
+Checks the built level matches the layout.
 
-`validate_hauler.py` checks the layout is *sound*; this checks the level
-actually *matches* it. The distinction is not academic: SM_Cube's pivot sits
-at its minimum corner rather than its centre, so an early build placed every
-box half its own size away from where the layout said, while the layout itself
-validated perfectly. Only measuring the built actors catches that class of bug.
+`validate_hauler.py` asks whether the design is sound. This asks whether the
+level *is* the design. Keep both: during milestone 1 every box was placed half
+its own size off, because SM_Cube's pivot is at a corner, and the layout
+validated perfectly throughout. Only measuring the built actors catches that.
 
-    ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
-        "$PWD/DeepSpace.uproject" \
-        -run=pythonscript -script="$PWD/Tools/verify_level.py" \
+    ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \\
+        "$PWD/DeepSpace.uproject" \\
+        -run=pythonscript -script="$PWD/Tools/verify_level.py" \\
         -unattended -nopause -nosplash -NoLiveCoding
     cat Saved/verify_level.txt
 """
@@ -27,69 +26,56 @@ TAG = "hauler_"
 TOLERANCE = 1.0  # cm
 
 
-def report(lines):
-    path = os.path.join(unreal.Paths.project_saved_dir(), "verify_level.txt")
-    with open(path, "w") as handle:
-        handle.write("\n".join(lines) + "\n")
-
-
 def main():
+    ship = L.generate()
     unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(MAP_PATH)
-    actor_sub = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-
-    actors = {a.get_actor_label(): a for a in actor_sub.get_all_level_actors()}
+    actors = {a.get_actor_label(): a for a in
+              unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()}
     failures = []
-    checked = 0
 
-    for label, centre, scale in L.BOXES:
-        actor = actors.get(TAG + label)
+    for box in ship.boxes:
+        actor = actors.get(TAG + box.label)
         if actor is None:
-            failures.append("MISSING %s" % label)
+            failures.append("MISSING %s" % box.label)
             continue
-
         origin, extent = actor.get_actor_bounds(False)
-        want_extent = [s * 100.0 / 2.0 for s in scale]
-        got_centre = (origin.x, origin.y, origin.z)
-        got_extent = (extent.x, extent.y, extent.z)
+        got_c = (origin.x, origin.y, origin.z)
+        got_e = (extent.x, extent.y, extent.z)
+        for a, axis in enumerate("xyz"):
+            if abs(got_c[a] - box.centre[a]) > TOLERANCE:
+                failures.append("%s centre.%s is %.1f, layout says %.1f"
+                                % (box.label, axis, got_c[a], box.centre[a]))
+            if abs(got_e[a] - box.size[a] / 2.0) > TOLERANCE:
+                failures.append("%s half-size.%s is %.1f, layout says %.1f"
+                                % (box.label, axis, got_e[a], box.size[a] / 2.0))
 
-        for axis, name in enumerate("xyz"):
-            if abs(got_centre[axis] - centre[axis]) > TOLERANCE:
-                failures.append(
-                    "%s centre.%s = %.1f, layout says %.1f (off by %.1f)"
-                    % (label, name, got_centre[axis], centre[axis],
-                       got_centre[axis] - centre[axis]))
-            if abs(got_extent[axis] - want_extent[axis]) > TOLERANCE:
-                failures.append(
-                    "%s half-size.%s = %.1f, layout says %.1f"
-                    % (label, name, got_extent[axis], want_extent[axis]))
-        checked += 1
-
-    for label, loc in (("console", L.CONSOLE_LOC), ("player_start", L.PLAYER_START_LOC)):
+    for label, want in (("console", ship.console_location),
+                        ("player_start", ship.player_start)):
         actor = actors.get(TAG + label)
         if actor is None:
-            failures.append("MISSING %s" % label)
+            failures.append("MISSING " + label)
             continue
-        pos = actor.get_actor_location()
-        for axis, name in enumerate("xyz"):
-            if abs((pos.x, pos.y, pos.z)[axis] - loc[axis]) > TOLERANCE:
-                failures.append("%s.%s = %.1f, layout says %.1f"
-                                % (label, name, (pos.x, pos.y, pos.z)[axis], loc[axis]))
+        p = actor.get_actor_location()
+        for a, axis in enumerate("xyz"):
+            if abs((p.x, p.y, p.z)[a] - want[a]) > TOLERANCE:
+                failures.append("%s.%s is %.1f, layout says %.1f"
+                                % (label, axis, (p.x, p.y, p.z)[a], want[a]))
 
-    lights = [k for k in actors if k.startswith(TAG + "light_")]
-    if len(lights) != len(L.LIGHTS):
-        failures.append("%d lights in level, layout says %d" % (len(lights), len(L.LIGHTS)))
+    built_lights = [k for k in actors if k.startswith(TAG + "light_")]
+    if len(built_lights) != len(ship.lights):
+        failures.append("%d lights built, layout has %d" % (len(built_lights), len(ship.lights)))
 
-    lines = ["Checked %d boxes, %d lights against the layout." % (checked, len(lights))]
+    lines = ["Checked %d boxes and %d lights against the layout."
+             % (len(ship.boxes), len(ship.lights)), ""]
     if failures:
-        lines.append("")
         lines.append("FAIL (%d):" % len(failures))
-        lines.extend("  - " + f for f in failures[:40])
+        lines += ["  - " + f for f in failures[:40]]
         if len(failures) > 40:
             lines.append("  ... and %d more" % (len(failures) - 40))
     else:
-        lines.append("")
-        lines.append("PASS: built level matches the layout within %.1f cm." % TOLERANCE)
-    report(lines)
+        lines.append("PASS: the built level matches the layout within %.1f cm." % TOLERANCE)
+    with open(os.path.join(unreal.Paths.project_saved_dir(), "verify_level.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 main()

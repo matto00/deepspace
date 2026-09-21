@@ -1,25 +1,25 @@
 """
-Generates Content/Maps/L_Hauler from Tools/hauler_layout.py.
+Builds Content/Maps/L_Hauler from Tools/hauler_layout.py.
 
-The .umap is a binary asset: opaque to git and to code review. The layout
-module is the readable source of truth, so the level is a derived artifact.
-Change a number there and re-run rather than nudging actors by hand.
-
-Validate the layout first — it takes about a second and needs no editor:
+The .umap is a build output. The layout is the source of truth: change it and
+re-run, never nudge built actors by hand. Validate first -- it takes about a
+second and needs no editor:
 
     python3 Tools/validate_hauler.py
 
-Then build:
+Then build, and check the result matches the layout:
 
-    ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
-        "$PWD/DeepSpace.uproject" \
-        -run=pythonscript -script="$PWD/Tools/build_hauler.py" \
+    ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \\
+        "$PWD/DeepSpace.uproject" \\
+        -run=pythonscript -script="$PWD/Tools/build_hauler.py" \\
         -unattended -nopause -nosplash -NoLiveCoding
+    cat Saved/hauler_build.txt
 
-Note that `unreal.log` output does not reach stdout under the commandlet, so
-this writes its summary to Saved/hauler_build.txt instead.
+`unreal.log` does not reach stdout under the commandlet, so the summary is
+written to Saved/hauler_build.txt.
 """
 
+import math
 import os
 import sys
 
@@ -29,63 +29,170 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 
 MAP_PATH = "/Game/Maps/L_Hauler"
-CUBE = "/Game/LevelPrototyping/Meshes/SM_Cube"
-SPHERE = "/Engine/BasicShapes/Sphere"
+MATERIAL_DIR = "/Game/Materials"
 CONSOLE_BP = "/Game/Blueprints/BP_ShipConsole"
 GAMEMODE_BP = "/Game/Blueprints/BP_DeepSpaceGameMode"
-
-STAR_MATERIAL = "/Game/Materials/M_Star"
+GRID_MATERIAL = "/Game/LevelPrototyping/Materials/M_PrototypeGrid"
 GLASS_MATERIAL = "/Game/Materials/M_Glass"
+STAR_MATERIAL = "/Game/Materials/M_Star"
+
+MESHES = {
+    "cube": "/Game/LevelPrototyping/Meshes/SM_Cube",
+    "chamfer": "/Game/LevelPrototyping/Meshes/SM_ChamferCube",
+    "cylinder": "/Game/LevelPrototyping/Meshes/SM_Cylinder",
+}
+SPHERE = "/Engine/BasicShapes/Sphere"
+
+# Every actor the script owns carries this prefix and is rebuilt each run.
+TAG = "hauler_"
+TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
+SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
+
 STAR_COUNT = 160
 STAR_RADIUS = 12000.0
 
-# Actors the script owns. Anything with this prefix is destroyed and rebuilt on
-# each run, so the script stays idempotent and the layout module stays the truth.
-TAG = "hauler_"
+TEAL = (0.05, 0.55, 0.55)
 
-# Template leftovers with no place in a ship interior.
-TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
+# Clean retro-future. Panelled roles are instances of the template's
+# world-aligned grid material: seams are computed from world position, so they
+# stay a constant size on boxes scaled to any proportion, and line up across
+# neighbouring boxes. (surface colour, seam colour, panel size cm, roughness)
+PANELLED = {
+    "wall":      ((0.78, 0.80, 0.82), (0.60, 0.62, 0.65), 120, 0.45),
+    "floor":     ((0.52, 0.51, 0.49), (0.38, 0.37, 0.36), 100, 0.65),
+    "ceiling":   ((0.85, 0.86, 0.88), (0.70, 0.71, 0.73), 120, 0.50),
+    "furniture": ((0.70, 0.71, 0.72), (0.58, 0.59, 0.60), 60,  0.35),
+    "trim":      (TEAL,               (0.03, 0.40, 0.40), 60,  0.35),
+    "seal":      ((0.40, 0.42, 0.45), (0.05, 0.45, 0.45), 40,  0.40),
+}
+# Emissive roles: an unlit colour, brighter than 1 to read as a light source.
+EMISSIVE = {
+    "accent": (TEAL[0] * 4, TEAL[1] * 4, TEAL[2] * 4),
+    "screen": (0.02, 0.10, 0.12),
+    "lamp":   (6.0, 6.2, 6.5),
+}
+LIGHT_COLOUR = unreal.Color(r=255, g=247, b=235, a=255)   # neutral-cool white
 
-# Space has no atmosphere, clouds or haze. Removing these leaves black, which
-# is what the window should look out on.
-SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
+
+# -- materials ---------------------------------------------------------------
+
+def _asset(path):
+    return unreal.EditorAssetLibrary.load_asset(path) if \
+        unreal.EditorAssetLibrary.does_asset_exist(path) else None
 
 
-def make_material(path, name, configure):
-    if unreal.EditorAssetLibrary.does_asset_exist(path):
-        return unreal.EditorAssetLibrary.load_asset(path)
-    folder, _ = path.rsplit("/", 1)
-    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-        name, folder, unreal.Material, unreal.MaterialFactoryNew())
-    configure(mat)
+def _create(name, cls, factory):
+    return unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, MATERIAL_DIR, cls, factory)
+
+
+def _save(asset):
+    unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False)
+
+
+def panelled_instance(role, surface, seam, panel, roughness):
+    """A material instance of the template grid, (re)configured every build so
+    the numbers in PANELLED are always what is on screen."""
+    path = "%s/MI_Ship_%s" % (MATERIAL_DIR, role)
+    mi = _asset(path) or _create("MI_Ship_" + role, unreal.MaterialInstanceConstant,
+                                 unreal.MaterialInstanceConstantFactoryNew())
+    mel = unreal.MaterialEditingLibrary
+    mel.set_material_instance_parent(mi, unreal.EditorAssetLibrary.load_asset(GRID_MATERIAL))
+    colour = lambda c: unreal.LinearColor(c[0], c[1], c[2], 1.0)
+    mel.set_material_instance_vector_parameter_value(mi, "SurfaceColor", colour(surface))
+    mel.set_material_instance_vector_parameter_value(mi, "GridColor", colour(seam))
+    # Hide the template's sub-grid: one seam per panel reads as panelling,
+    # five reads as graph paper.
+    mel.set_material_instance_vector_parameter_value(mi, "SubGridColor", colour(surface))
+    mel.set_material_instance_scalar_parameter_value(mi, "Grid Size", float(panel))
+    mel.set_material_instance_scalar_parameter_value(mi, "Roughness", float(roughness))
+    mel.set_material_instance_static_switch_parameter_value(mi, "ObjectAligned", False)
+    mel.set_material_instance_static_switch_parameter_value(mi, "Grid", True)
+    mel.update_material_instance(mi)
+    _save(mi)
+    return mi
+
+
+def emissive_base():
+    """One unlit material with a colour parameter; emissive roles instance it."""
+    path = MATERIAL_DIR + "/M_ShipEmissive"
+    existing = _asset(path)
+    if existing:
+        return existing
+    mat = _create("M_ShipEmissive", unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    param = unreal.MaterialEditingLibrary.create_material_expression(
+        mat, unreal.MaterialExpressionVectorParameter, -300, 0)
+    param.set_editor_property("parameter_name", "Colour")
+    param.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    unreal.MaterialEditingLibrary.connect_material_property(
+        param, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     unreal.MaterialEditingLibrary.recompile_material(mat)
-    unreal.EditorAssetLibrary.save_loaded_asset(mat, only_if_is_dirty=False)
+    _save(mat)
     return mat
 
 
-def configure_star(mat):
-    """Unlit and brighter than white: nothing out there lights a star for us."""
-    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
-    colour = unreal.MaterialEditingLibrary.create_material_expression(
-        mat, unreal.MaterialExpressionConstant3Vector, -300, 0)
-    colour.set_editor_property("constant", unreal.LinearColor(4.0, 4.0, 4.2, 1.0))
-    unreal.MaterialEditingLibrary.connect_material_property(
-        colour, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+def emissive_instance(role, colour, base):
+    path = "%s/MI_Ship_%s" % (MATERIAL_DIR, role)
+    mi = _asset(path) or _create("MI_Ship_" + role, unreal.MaterialInstanceConstant,
+                                 unreal.MaterialInstanceConstantFactoryNew())
+    mel = unreal.MaterialEditingLibrary
+    mel.set_material_instance_parent(mi, base)
+    mel.set_material_instance_vector_parameter_value(
+        mi, "Colour", unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
+    mel.update_material_instance(mi)
+    _save(mi)
+    return mi
 
 
-def configure_glass(mat):
-    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
-    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
-    tint = unreal.MaterialEditingLibrary.create_material_expression(
-        mat, unreal.MaterialExpressionConstant3Vector, -400, 0)
-    tint.set_editor_property("constant", unreal.LinearColor(0.02, 0.03, 0.05, 1.0))
-    unreal.MaterialEditingLibrary.connect_material_property(
-        tint, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    opacity = unreal.MaterialEditingLibrary.create_material_expression(
-        mat, unreal.MaterialExpressionConstant, -400, 200)
-    opacity.set_editor_property("r", 0.08)
-    unreal.MaterialEditingLibrary.connect_material_property(
-        opacity, "", unreal.MaterialProperty.MP_OPACITY)
+def star_material():
+    existing = _asset(STAR_MATERIAL)
+    if existing:
+        return existing
+    raise RuntimeError(STAR_MATERIAL + " is missing; it is created by the milestone 1 build")
+
+
+def materials():
+    """Role name -> material. Surfaces name a role, never a material, so
+    swapping in real textures later is a change here alone."""
+    out = {role: panelled_instance(role, *spec) for role, spec in PANELLED.items()}
+    base = emissive_base()
+    out.update({role: emissive_instance(role, c, base) for role, c in EMISSIVE.items()})
+    out["glass"] = unreal.EditorAssetLibrary.load_asset(GLASS_MATERIAL)
+    return out
+
+
+# -- actors ------------------------------------------------------------------
+
+def mesh_bounds(mesh):
+    b = mesh.get_bounding_box()
+    return (b.min.x, b.min.y, b.min.z), (b.max.x, b.max.y, b.max.z)
+
+
+def spawn_box(actor_sub, box, mesh, material):
+    """Place `mesh` so it exactly fills `box`, whatever the mesh's pivot.
+
+    The three meshes disagree about their origin: SM_Cube's is at a corner,
+    SM_ChamferCube's at its centre, SM_Cylinder's at its base. So scale comes
+    from the mesh's measured extent and the offset from its measured centre;
+    no convention is assumed. No rotation is ever needed: every part has been
+    rotated into an axis-aligned size already, and a cube, chamfered cube or
+    cylinder turned 90 degrees about Z is the same shape with its X and Y sizes
+    swapped.
+    """
+    lo, hi = mesh_bounds(mesh)
+    scale = [box.size[a] / (hi[a] - lo[a]) for a in range(3)]
+    mesh_centre = [(lo[a] + hi[a]) / 2.0 for a in range(3)]
+    location = unreal.Vector(*[box.centre[a] - mesh_centre[a] * scale[a] for a in range(3)])
+    actor = actor_sub.spawn_actor_from_class(unreal.StaticMeshActor, location,
+                                             unreal.Rotator(0, 0, 0))
+    actor.set_actor_label(TAG + box.label)
+    actor.set_actor_scale3d(unreal.Vector(*scale))
+    component = actor.static_mesh_component
+    component.set_static_mesh(mesh)
+    component.set_mobility(unreal.ComponentMobility.STATIC)
+    component.set_material(0, material)
+    return actor
 
 
 def clear_previous(actor_sub):
@@ -101,113 +208,79 @@ def clear_previous(actor_sub):
 
 
 def tame_sky_light(actor_sub):
-    """With SkyAtmosphere gone, a real-time-capture SkyLight warns on every
-    load because it has nothing to capture. In space there is no sky bounce
-    to model anyway, so capture it once and leave it."""
-    tamed = 0
+    """No atmosphere to capture in space, so a real-time-capture SkyLight only
+    warns. Capture once, and keep it faint."""
     for actor in actor_sub.get_all_level_actors():
         if isinstance(actor, unreal.SkyLight):
-            component = actor.get_component_by_class(unreal.SkyLightComponent)
-            component.set_editor_property("real_time_capture", False)
-            component.set_editor_property(
-                "source_type", unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
-            component.set_editor_property("intensity", 0.05)
-            tamed += 1
-    return tamed
+            c = actor.get_component_by_class(unreal.SkyLightComponent)
+            c.set_editor_property("real_time_capture", False)
+            c.set_editor_property("source_type", unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
+            c.set_editor_property("intensity", 0.05)
 
 
-def pivot_offset(mesh):
-    """Local-space centre of a mesh's bounds.
-
-    Meshes do not agree on where their origin sits: SM_Cube's is at its
-    minimum corner (0,0,0 to 100,100,100) while Engine Sphere's is centred
-    (-50 to +50). The layout speaks in centres, so the builder measures each
-    mesh and compensates rather than assuming either convention.
-    """
-    box = mesh.get_bounding_box()
-    return ((box.min.x + box.max.x) / 2.0,
-            (box.min.y + box.max.y) / 2.0,
-            (box.min.z + box.max.z) / 2.0)
-
-
-def spawn_mesh(actor_sub, mesh, label, loc, scale, material=None):
-    off = pivot_offset(mesh)
-    placed = unreal.Vector(loc[0] - off[0] * scale[0],
-                           loc[1] - off[1] * scale[1],
-                           loc[2] - off[2] * scale[2])
-    actor = actor_sub.spawn_actor_from_class(
-        unreal.StaticMeshActor, placed, unreal.Rotator(0, 0, 0))
-    actor.set_actor_label(label)
-    actor.set_actor_scale3d(unreal.Vector(*scale))
-    actor.static_mesh_component.set_static_mesh(mesh)
-    # Blockout geometry never moves; Static lets it take baked lighting.
-    actor.static_mesh_component.set_mobility(unreal.ComponentMobility.STATIC)
-    if material is not None:
-        actor.static_mesh_component.set_material(0, material)
-    return actor
+def place_lights(actor_sub, lights):
+    for light in lights:
+        actor = actor_sub.spawn_actor_from_class(
+            unreal.PointLight, unreal.Vector(*light.location), unreal.Rotator(0, 0, 0))
+        actor.set_actor_label(TAG + light.label)
+        c = actor.get_component_by_class(unreal.PointLightComponent)
+        c.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
+        c.set_editor_property("intensity", float(light.intensity))
+        c.set_editor_property("attenuation_radius", float(light.radius))
+        c.set_editor_property("light_color", LIGHT_COLOUR)
+        # Soft, even fill: many overlapping lights, none casting shadows. Also
+        # what keeps thirty-odd lights cheap.
+        c.set_editor_property("cast_shadows", False)
 
 
 def scatter_stars(actor_sub, sphere, material):
-    """Golden-angle spiral: spreads points evenly where uniform random clumps."""
-    import math
+    """Golden-angle spiral: even coverage where uniform random clumps."""
     golden = math.pi * (3.0 - math.sqrt(5.0))
     for i in range(STAR_COUNT):
         y = 1.0 - (i / float(STAR_COUNT - 1)) * 2.0
         r = math.sqrt(max(0.0, 1.0 - y * y))
-        theta = golden * i
-        loc = (math.cos(theta) * r * STAR_RADIUS,
-               y * STAR_RADIUS,
-               math.sin(theta) * r * STAR_RADIUS + 500.0)
-        spawn_mesh(actor_sub, sphere, TAG + "star_%03d" % i, loc,
-                   (0.3, 0.3, 0.3), material)
-
-
-def place_lights(actor_sub):
-    for n, (x, y, z, intensity, radius) in enumerate(L.LIGHTS):
-        light = actor_sub.spawn_actor_from_class(
-            unreal.PointLight, unreal.Vector(x, y, z), unreal.Rotator(0, 0, 0))
-        light.set_actor_label(TAG + "light_%d" % n)
-        component = light.get_component_by_class(unreal.PointLightComponent)
-        component.set_editor_property("intensity_units",
-                                      unreal.LightUnits.CANDELAS)
-        component.set_editor_property("intensity", intensity)
-        component.set_editor_property("attenuation_radius", float(radius))
-        component.set_editor_property("light_color", unreal.Color(255, 246, 230))
+        t = golden * i
+        loc = unreal.Vector(math.cos(t) * r * STAR_RADIUS, y * STAR_RADIUS,
+                            math.sin(t) * r * STAR_RADIUS + 500.0)
+        star = actor_sub.spawn_actor_from_class(unreal.StaticMeshActor, loc,
+                                                unreal.Rotator(0, 0, 0))
+        star.set_actor_label(TAG + "star_%03d" % i)
+        star.set_actor_scale3d(unreal.Vector(0.3, 0.3, 0.3))
+        star.static_mesh_component.set_static_mesh(sphere)
+        star.static_mesh_component.set_material(0, material)
 
 
 def build():
+    ship = L.generate()                      # raises PlanError on a bad plan
+
     level_sub = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     actor_sub = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-
     if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
         level_sub.load_level(MAP_PATH)
     else:
         level_sub.new_level(MAP_PATH)
 
     removed = clear_previous(actor_sub)
-    tamed = tame_sky_light(actor_sub)
+    tame_sky_light(actor_sub)
 
-    cube = unreal.EditorAssetLibrary.load_asset(CUBE)
-    sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
-    if cube is None or sphere is None:
-        raise RuntimeError("Could not load the blockout meshes")
+    mats = materials()
+    meshes = {k: unreal.EditorAssetLibrary.load_asset(p) for k, p in MESHES.items()}
+    for box in ship.boxes:
+        spawn_box(actor_sub, box, meshes[box.mesh], mats[box.role])
 
-    glass = make_material(GLASS_MATERIAL, "M_Glass", configure_glass)
+    place_lights(actor_sub, ship.lights)
+    scatter_stars(actor_sub, unreal.EditorAssetLibrary.load_asset(SPHERE), star_material())
 
-    for label, loc, scale in L.BOXES:
-        material = glass if label == "cockpit_window" else None
-        spawn_mesh(actor_sub, cube, TAG + label, loc, scale, material)
-
-    scatter_stars(actor_sub, sphere, make_material(STAR_MATERIAL, "M_Star", configure_star))
-    place_lights(actor_sub)
-
-    console_cls = unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP)
     console = actor_sub.spawn_actor_from_class(
-        console_cls, unreal.Vector(*L.CONSOLE_LOC), unreal.Rotator(*L.CONSOLE_ROT))
+        unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP),
+        unreal.Vector(*ship.console_location), unreal.Rotator(0, 0, ship.console_yaw))
     console.set_actor_label(TAG + "console")
+    console_mesh = console.get_component_by_class(unreal.StaticMeshComponent)
+    if console_mesh:
+        console_mesh.set_material(0, mats["furniture"])
 
     start = actor_sub.spawn_actor_from_class(
-        unreal.PlayerStart, unreal.Vector(*L.PLAYER_START_LOC), unreal.Rotator(0, 0, 0))
+        unreal.PlayerStart, unreal.Vector(*ship.player_start), unreal.Rotator(0, 0, 0))
     start.set_actor_label(TAG + "player_start")
 
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
@@ -216,9 +289,8 @@ def build():
 
     level_sub.save_current_level()
 
-    summary = ("L_Hauler built: removed %d, %d boxes, %d stars, %d lights, "
-               "%d sky light(s) tamed." % (removed, len(L.BOXES), STAR_COUNT,
-                                           len(L.LIGHTS), tamed))
+    summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights, %d stars."
+               % (removed, len(ship.boxes), len(ship.lights), STAR_COUNT))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)
