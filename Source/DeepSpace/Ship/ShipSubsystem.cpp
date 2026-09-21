@@ -1,6 +1,7 @@
 #include "Ship/ShipSubsystem.h"
 
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
 #include "Ship/ShipModuleDataAsset.h"
 
 UShipSubsystem* UShipSubsystem::Get(const UObject* WorldContext)
@@ -65,4 +66,24 @@ float UShipSubsystem::GetReactorOutput() const
 bool UShipSubsystem::IsPowerOverloaded() const
 {
     return PowerState.IsOverloaded();
+}
+
+void UShipSubsystem::SetPilot(APawn* NewPilot)
+{
+    Pilot = NewPilot;
+}
+
+void UShipSubsystem::ClearPilot()
+{
+    Pilot.Reset();
+}
+
+bool UShipSubsystem::IsPiloted() const
+{
+    return Pilot.IsValid();
+}
+
+APawn* UShipSubsystem::GetPilot() const
+{
+    return Pilot.Get();
 }

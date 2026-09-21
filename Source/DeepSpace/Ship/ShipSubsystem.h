@@ -5,6 +5,7 @@
 #include "Ship/ShipPowerState.h"
 #include "ShipSubsystem.generated.h"
 
+class APawn;
 class UShipModuleDataAsset;
 
 /**
@@ -46,8 +47,28 @@ public:
     UFUNCTION(BlueprintPure, Category = "Ship")
     bool IsPowerOverloaded() const;
 
+    /**
+     * Pilot mode. The pilot seat reports who sits at the helm; anything that
+     * cares whether the ship is being flown asks here rather than reaching
+     * into the seat or the character.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Ship")
+    void SetPilot(APawn* NewPilot);
+
+    UFUNCTION(BlueprintCallable, Category = "Ship")
+    void ClearPilot();
+
+    UFUNCTION(BlueprintPure, Category = "Ship")
+    bool IsPiloted() const;
+
+    UFUNCTION(BlueprintPure, Category = "Ship")
+    APawn* GetPilot() const;
+
 private:
     FShipPowerState PowerState;
+
+    /** Weak: the subsystem must not keep a pawn alive. */
+    TWeakObjectPtr<APawn> Pilot;
 
     UPROPERTY()
     TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
