@@ -174,6 +174,15 @@ def test_explicit_centre_off_the_grid_is_rejected():
         raise AssertionError("expected PlanError")
 
 
+def test_explicit_centre_with_an_odd_cell_width_is_accepted():
+    # 50 cm is five cells: centred at 75 its edges are 50 and 100, on the grid.
+    plan = FloorPlan([Room("a", 0, 0, 100, 150, 250), Room("b", 110, 0, 100, 150, 250)],
+                     doors=[Door("a", "b", 50, 200, centre=75)])
+    door = [op for op in plan.openings if op[0] == "door"][0]
+    ys = sorted(c[1] for c in door[1])
+    assert ys[0] * CELL == 50 and (ys[-1] + 1) * CELL == 100, ys
+
+
 def test_wall_takes_the_height_of_the_taller_room():
     tall = Room("tall", 110, 0, 100, 100, 500)
     plan = FloorPlan([A, tall])

@@ -120,7 +120,7 @@ class FloorPlan:
             start = lo + ((hi - lo - width) // 2 // CELL) * CELL
         else:
             start = centre - width // 2
-            if not _on_grid(start) or width % (2 * CELL):
+            if not _on_grid(start):
                 raise PlanError("%s: width %d at centre %d puts its edges off the grid"
                                 % (what, width, centre))
         end = start + width
