@@ -1456,19 +1456,36 @@ Blender was considered and rejected for the blockout: it would require authoring
 collision geometry that `SM_Cube` provides free, and an FBX round trip for every
 change. It earns its place later, for props and hull exteriors.
 
-- [ ] **Step 5: Install modules at startup so the console shows real numbers**
+- [x] **Step 5: Install modules at startup so the console shows real numbers** — MOVED TO C++ 2026-09-20
 
-In the Level Blueprint, on Begin Play, get the Ship Subsystem and call `InstallModule` for `DA_LifeSupport`, `DA_Lights`, and `DA_Sensors`.
+Originally the Level Blueprint, described here as "the one acceptable use of
+the Level Blueprint in milestone 1". Once the level became script-generated
+(Steps 1–4) that exception was the only hand-made thing left in the map, and a
+rebuild would not have recreated it.
 
-This is the one acceptable use of the Level Blueprint in milestone 1 — it is scene setup, not gameplay logic. When a real ship-configuration system arrives it replaces this, and that replacement is the point of the data-asset seam.
+Instead `ADeepSpaceGameMode` gains:
+
+```cpp
+UPROPERTY(EditDefaultsOnly, Category = "Ship")
+TArray<TSoftObjectPtr<UShipModuleDataAsset>> StartingModules;
+```
+
+defaulted in the constructor to the three hauler modules and installed on
+`BeginPlay`. The loadout stays *data* — a Blueprint subclass can change it
+without touching C++ — which is the same seam the plan wanted, just not stored
+in a binary level. Soft pointers so the modules cost nothing until play starts.
+Failures to load or install are logged rather than silent.
+
+Verified by loading the three assets headlessly: ids `LifeSupport`, `Lights`,
+`Sensors`, draws 300 / 120 / 200, total **620 W**.
 
 Expected readout when powered: `DRAW 620 W / 1000 W` and `HEADROOM 380 W`.
 
-Also confirm here that the console reads `OFFLINE` *before* first interaction.
-That verifies `BP_ShipConsole`'s Begin Play refreshes the text; it could not be
-confirmed by inspecting the asset.
+Also confirm at playtest that the console reads `OFFLINE` *before* first
+interaction. That verifies `BP_ShipConsole`'s Begin Play refreshes the text; it
+could not be confirmed by inspecting the asset.
 
-- [ ] **Step 6: Write the playtest checklist**
+- [x] **Step 6: Write the playtest checklist** — DONE 2026-09-20, `docs/playtest-checklist.md`
 
 Create `docs/playtest-checklist.md`:
 
