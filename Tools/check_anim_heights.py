@@ -10,8 +10,11 @@ Checks the camera stays inside the capsule in every animation.
 The camera rides the body's head bone. The engine guarantees the capsule fits
 wherever the player stands, so a head that never rises above the capsule's top
 can never carry the camera through a ceiling -- in the crawlway or anywhere.
-This samples each clip and checks the head's peak against the capsule for the
-posture that plays it, read from BP_DeepSpaceCharacter itself.
+This samples every clip the body plays and checks the head's peak against the
+capsule for the posture that plays it, read from BP_DeepSpaceCharacter itself.
+Imported clips the body does not play yet (typing, seated_idle, the
+pilot_flips_switches pair) are deliberately absent: add a clip here when it is
+wired into ABP_DeepSpaceBody.
 
 It exists because the first crouch-walk clip peaked at 118 cm, above the
 original 110 cm crawlway: the view would have passed through the ceiling on
@@ -36,6 +39,9 @@ MARGIN = 5.0
 POSTURE_CLIPS = {
     "standing": [UNARMED + "/MM_Idle", UNARMED + "/Walk/MF_Unarmed_Walk_Fwd", ANIMS + "/RTG_running"],
     "crouched": [ANIMS + "/RTG_crouching_idle", ANIMS + "/RTG_crouch_walk"],
+    # Seated, the character keeps its standing capsule height; the cockpit
+    # is 250 cm, so the standing capsule is the bound.
+    "seated": [ANIMS + "/RTG_sitting_idle"],
     # Getting in and out of the seat starts and ends standing.
     "seat transitions": [ANIMS + "/RTG_stand_to_sit", ANIMS + "/RTG_sit_to_stand"],
 }
@@ -59,7 +65,8 @@ def main():
         defaults = unreal.get_default_object(bp.generated_class())
         standing = 2.0 * defaults.get_editor_property("capsule_component").get_unscaled_capsule_half_height()
         crouched = 2.0 * defaults.get_editor_property("character_movement").get_editor_property("crouched_half_height")
-        limits = {"standing": standing, "crouched": crouched, "seat transitions": standing}
+        limits = {"standing": standing, "crouched": crouched,
+                  "seated": standing, "seat transitions": standing}
         lines.append("capsule: standing %.0f cm, crouched %.0f cm; margin %.0f cm" % (standing, crouched, MARGIN))
 
         for posture, clips in POSTURE_CLIPS.items():
