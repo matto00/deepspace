@@ -15,12 +15,14 @@ struct DEEPSPACE_API FMovementRules
     static constexpr float CrouchSpeed = 150.0f;
 
     /**
-     * Crouched capsule half-height, cm: 130 cm tall. Sized so the retargeted
-     * crouch-walk clip, whose head bone peaks at 118 cm, keeps the camera
-     * inside the capsule. Must stay under the ship's crouch clearance in
-     * Tools/movement_contract.json; DeepSpace.Player.MovementContract checks.
+     * Crouched capsule half-height, cm: 144 cm tall. Sized so the retargeted
+     * crouch-walk clip ("Crouched Walking", an upright crouch), which carries
+     * the camera to 138 cm, keeps it inside the capsule with the 5 cm margin
+     * Tools/check_anim_heights.py requires. Must stay under the ship's crouch
+     * clearance in Tools/movement_contract.json;
+     * DeepSpace.Player.MovementContract checks.
      */
-    static constexpr float CrouchedHalfHeight = 65.0f;
+    static constexpr float CrouchedHalfHeight = 72.0f;
 
     /**
      * Whether the player may sprint. MoveInput is IA_Move's value: X strafes

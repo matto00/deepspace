@@ -47,9 +47,9 @@ ROOMS = [
     Room("cargo_bay",   -810, -400, 800,  900, 500),
     Room("engineering", 400,  80,   400,  400, 250),
     Room("galley",      810,  80,   490,  400, 250),
-    # 140 cm: the retargeted crouch-walk clip carries the head bone to 118 cm,
-    # and the camera rides it, so a lower ceiling would be seen through.
-    Room("crawlway",    0,    390,  390,  90,  140),
+    # 150 cm: the crouched capsule is 144 cm, sized to the crouch-walk clip,
+    # which carries the camera to 138 cm; a lower ceiling would be seen through.
+    Room("crawlway",    0,    390,  390,  90,  150),
     Room("airlock",     100,  -340, 250,  250, 250),
     Room("bunk",        600,  -390, 400,  300, 250),
 ]
@@ -65,8 +65,8 @@ DOORS = [
     Door("corridor", "airlock", 120, 220, centre=260),
     Door("corridor", "bunk", 120, 220),
     # The crawlway's full width and height: the open end of a service duct.
-    Door("cargo_bay", "crawlway", 90, 140),
-    Door("crawlway", "engineering", 90, 140),
+    Door("cargo_bay", "crawlway", 90, 150),
+    Door("crawlway", "engineering", 90, 150),
 ]
 
 WINDOWS = [
