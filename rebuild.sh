@@ -36,17 +36,24 @@ for arg in "$@"; do
     esac
 done
 
-mapfile -t EDITORS < <(pgrep -f "Binaries/Linux/UnrealEditor.*DeepSpace.uproject" || true)
+# The interactive editor only. "[U]nrealEditor": the brackets stop pgrep matching
+# any shell whose command line merely contains this pattern -- an earlier,
+# unbracketed version made --force kill its own caller. The space after it
+# excludes UnrealEditor-Cmd, so a headless test run is never mistaken for, or
+# killed as, an open editor.
+EDITOR_PATTERN="[U]nrealEditor .*DeepSpace\.uproject"
+
+mapfile -t EDITORS < <(pgrep -f "$EDITOR_PATTERN" || true)
 
 if (( ${#EDITORS[@]} > 0 )); then
     if (( FORCE )); then
         echo "==> Closing running editor (${EDITORS[*]})"
         kill "${EDITORS[@]}" 2>/dev/null || true
         for _ in {1..30}; do
-            pgrep -f "Binaries/Linux/UnrealEditor.*DeepSpace.uproject" >/dev/null || break
+            pgrep -f "$EDITOR_PATTERN" >/dev/null || break
             sleep 1
         done
-        if pgrep -f "Binaries/Linux/UnrealEditor.*DeepSpace.uproject" >/dev/null; then
+        if pgrep -f "$EDITOR_PATTERN" >/dev/null; then
             echo "!!! Editor did not exit. Close it and try again." >&2
             exit 1
         fi
