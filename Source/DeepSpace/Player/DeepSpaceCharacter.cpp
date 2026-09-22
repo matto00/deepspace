@@ -34,6 +34,11 @@ ADeepSpaceCharacter::ADeepSpaceCharacter()
     CameraArm->CameraLagSpeed = 15.0f;
     // Just forward of the head bone, so the view is not from inside the skull.
     CameraArm->SocketOffset = FVector(8.0f, 0.0f, 0.0f);
+    // The head bone is at the base of the skull; eyes are a little higher.
+    // World-space, so the raise stays straight up however the head is turned.
+    // Tools/check_anim_heights.py adds it to every clip's head height, so a
+    // bigger raise must still fit inside the crouched capsule.
+    CameraArm->TargetOffset = FVector(0.0f, 0.0f, 6.0f);
 
     FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
     FirstPersonCamera->SetupAttachment(CameraArm, USpringArmComponent::SocketName);

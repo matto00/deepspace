@@ -65,9 +65,13 @@ def main():
         defaults = unreal.get_default_object(bp.generated_class())
         standing = 2.0 * defaults.get_editor_property("capsule_component").get_unscaled_capsule_half_height()
         crouched = 2.0 * defaults.get_editor_property("character_movement").get_editor_property("crouched_half_height")
+        # The camera sits this far above the head bone (CameraArm's world-space
+        # TargetOffset), so it is the camera, not the bone, that must fit.
+        eye = defaults.get_editor_property("camera_arm").get_editor_property("target_offset").z
         limits = {"standing": standing, "crouched": crouched,
                   "seated": standing, "seat transitions": standing}
-        lines.append("capsule: standing %.0f cm, crouched %.0f cm; margin %.0f cm" % (standing, crouched, MARGIN))
+        lines.append("capsule: standing %.0f cm, crouched %.0f cm; camera %.0f cm above the head; margin %.0f cm"
+                     % (standing, crouched, eye, MARGIN))
 
         for posture, clips in POSTURE_CLIPS.items():
             limit = limits[posture] - MARGIN
@@ -77,10 +81,10 @@ def main():
                     lines.append("FAIL %-16s %s is missing" % (posture, path))
                     failed = True
                     continue
-                peak = peak_head(anim)
+                peak = peak_head(anim) + eye
                 ok = peak <= limit
                 failed |= not ok
-                lines.append("%s %-16s %-22s head peaks %.1f cm, limit %.1f" %
+                lines.append("%s %-16s %-22s camera peaks %.1f cm, limit %.1f" %
                              ("ok  " if ok else "FAIL", posture, anim.get_name(), peak, limit))
     except Exception:
         failed = True
