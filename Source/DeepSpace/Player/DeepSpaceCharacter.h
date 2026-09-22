@@ -50,6 +50,13 @@ public:
 
     bool IsSeated() const { return Seat != nullptr; }
 
+    /**
+     * Sets the body up to be seen from inside: hides the head the camera sits
+     * in. Called from BeginPlay; public so a test can exercise exactly what
+     * the game does.
+     */
+    void ConfigureFirstPersonBody();
+
 protected:
     virtual void BeginPlay() override;
 

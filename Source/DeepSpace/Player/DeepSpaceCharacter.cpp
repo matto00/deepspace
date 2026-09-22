@@ -49,10 +49,7 @@ ADeepSpaceCharacter::ADeepSpaceCharacter()
 void ADeepSpaceCharacter::BeginPlay()
 {
     Super::BeginPlay();
-
-    // The camera sits at the head; hide it so the view is not from inside it.
-    // Known stand-in: this also removes the head from the player's shadow.
-    GetMesh()->HideBoneByName(HeadBone, EPhysBodyOp::PBO_None);
+    ConfigureFirstPersonBody();
 
     APlayerController* PC = Cast<APlayerController>(GetController());
     if (PC)
@@ -79,6 +76,24 @@ void ADeepSpaceCharacter::BeginPlay()
             }
         }
     }
+}
+
+void ADeepSpaceCharacter::ConfigureFirstPersonBody()
+{
+    USkeletalMeshComponent* Body = GetMesh();
+
+    // Hiding a bone normally also stops the engine *animating* it: hidden
+    // bones are dropped from the set it evaluates
+    // (USkeletalMeshComponent::ExcludeHiddenBones). The head would freeze in
+    // its reference pose, and the camera riding it with it -- crouching, the
+    // view stayed at standing height. AlwaysTickPoseAndRefreshBones is the
+    // engine's own exemption: hidden bones keep animating, and still are not
+    // drawn. DeepSpace.Player.CameraFollowsHead checks this.
+    Body->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+
+    // The camera sits at the head; hide it so the view is not from inside it.
+    // Known stand-in: this also removes the head from the player's shadow.
+    Body->HideBoneByName(HeadBone, EPhysBodyOp::PBO_None);
 }
 
 void ADeepSpaceCharacter::Tick(float DeltaSeconds)
