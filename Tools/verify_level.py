@@ -50,7 +50,8 @@ def main():
                                 % (box.label, axis, got_e[a], box.size[a] / 2.0))
 
     for label, want in (("console", ship.console_location),
-                        ("player_start", ship.player_start)):
+                        ("player_start", ship.player_start),
+                        ("pilot_seat", ship.pilot_seat_location)):
         actor = actors.get(TAG + label)
         if actor is None:
             failures.append("MISSING " + label)

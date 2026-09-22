@@ -140,11 +140,17 @@ CONSOLE_WIDTH = 100
 # The game opens with waking aboard your ship.
 PLAYER_START = ("bunk", (200, 150), 100)
 
+# The helm: the port pilot seat. APilotSeat is placed over the decorative
+# pilot_seat prop there, at floor level, facing the way that prop faces. The
+# starboard seat stays decorative.
+PILOT_SEAT = ("cockpit", (175, 130), 0)
+
 SLIDE_ROOM = "corridor"
 
 
 Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
-                          "player_start regions keep_clear")
+                          "player_start regions keep_clear "
+                          "pilot_seat_location pilot_seat_yaw")
 
 
 def generate():
@@ -188,5 +194,9 @@ def generate():
         hi = (max(cx, cx + dx), cy + half, STAND_CLEARANCE)
     keep_clear.append(("console", lo, hi))
 
+    seat_room, seat_at, seat_yaw = PILOT_SEAT
+    pilot_seat_location = resolve_point(plan, seat_room, seat_at)
+
     return Ship(plan, boxes, lights, console_location, console_yaw,
-                player_start, regions, keep_clear)
+                player_start, regions, keep_clear,
+                pilot_seat_location, seat_yaw)

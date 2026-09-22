@@ -283,6 +283,13 @@ def build():
         unreal.PlayerStart, unreal.Vector(*ship.player_start), unreal.Rotator(0, 0, 0))
     start.set_actor_label(TAG + "player_start")
 
+    # A C++ actor with no mesh of its own: it sits over the pilot_seat prop
+    # and carries the interaction that puts the ship in pilot mode.
+    seat = actor_sub.spawn_actor_from_class(
+        unreal.PilotSeat, unreal.Vector(*ship.pilot_seat_location),
+        unreal.Rotator(0, 0, ship.pilot_seat_yaw))
+    seat.set_actor_label(TAG + "pilot_seat")
+
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     world.get_world_settings().set_editor_property(
         "default_game_mode", unreal.EditorAssetLibrary.load_blueprint_class(GAMEMODE_BP))
