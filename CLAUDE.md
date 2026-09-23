@@ -10,6 +10,14 @@ The player lives aboard a ship they walk around inside and progressively upgrade
 
 Currently at **Milestone 1 — walk the ship**. See `docs/superpowers/plans/`.
 
+**Read `docs/vision.md` before proposing any design.** It records what the game
+is *for* — the register, the principle that scale is only felt in contrast, and
+two rules that are easy to break by accident: maintenance is care rather than
+optimisation (the anti-factory principle), and company aboard a ship is shared
+presence rather than division of labour. A feature can be fun in isolation and
+still be wrong against it. If a decision contradicts the vision, change the
+vision deliberately rather than working around it.
+
 The developer knows general game development but is new to Unreal and has no
 art or modeling experience. **Explain Unreal-specific concepts rather than
 assuming them.**
@@ -109,6 +117,7 @@ asset existed. Never hand-edit them.
 
 ## Docs
 
+- `docs/vision.md` — what the game is for; the measure other docs answer to
 - `docs/superpowers/specs/` — design docs (the why)
 - `docs/superpowers/plans/` — implementation plans, updated in place as reality
   contradicts them
