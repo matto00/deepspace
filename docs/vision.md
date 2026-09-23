@@ -87,6 +87,20 @@ Two cases, both of which have already come up:
 > dealt with before you can get on with what you were doing are a nuisance,
 > however well they are simulated.
 
+> **An allocation is a trade-off you live with, not a number you tune.**
+> Splitting power between the lights, the engines and everything else is a
+> choice about how you want to live aboard the ship -- divert it from the
+> lights and you walk your ship in the dark. Every split is viable and none is
+> correct. The failure version is a readout telling you the engines are at 73%
+> of potential, because that invents an optimum and turns a way of living into
+> a puzzle with an answer.
+
+That last one is the sharpest test the principle gets, because a screen for
+distributing a finite resource across consumers is mechanically an
+optimisation interface. What keeps it on the right side of the line is the
+absence of a target: the game must never show efficiency, never indicate the
+player is under-performing, and never offer a configuration to converge on.
+
 Note what this rule does *not* say. It does not say the game must be safe, or
 gentle, or without stakes. Danger is fine. Difficulty is fine. Being thrown
 across the compartment when the ship banks hard is fine and desirable. What is
