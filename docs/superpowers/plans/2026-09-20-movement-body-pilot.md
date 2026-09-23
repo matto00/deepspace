@@ -2258,7 +2258,7 @@ The human task: the anim graph, then the playtest. Then the records.
 
 Then: `python3 Tools/check_anim_blueprints.py` → expect `ok`. If it lists a node, remove it rather than widening the allowlist.
 
-- [ ] **Step 2: Tune and play**
+- [x] **Step 2: Tune and play**
 
 Play `L_Hauler`. Tuning lives in `BP_DeepSpaceCharacter` → **Camera**:
 `EyeHeightAboveHead`, `EyeForwardOffset`, `EyeProbeRadius` (how far the eyes
@@ -2270,8 +2270,8 @@ rigid). They are defaults on the Blueprint — asset tuning, within the rules.
 as a result; see *Deviations*. Re-tune and re-play.
 
 - [x] **Step 3: Extend the playtest checklist** — written, including three
-      items for the camera regressions found in the first playtest. *Running* it
-      and recording the result is what remains.
+      items for the camera regressions found in the first playtest, and run:
+      see *Result — movement, body and pilot seat, 2026-09-22*.
 
 Add to `docs/playtest-checklist.md`, before the results sections:
 
@@ -2358,11 +2358,11 @@ python3 Tools/check_anim_blueprints.py
   references survive a re-import.
 ````
 
-- [ ] **Step 6: Update the spec's status**
+- [x] **Step 6: Update the spec's status**
 
 In `docs/superpowers/specs/2026-09-20-movement-body-pilot-design.md`, set `**Status:**` to `Implemented — playtest passed <date>` (or `…playtest failed: see checklist` if it did).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Content/Characters/DeepSpace/ABP_DeepSpaceBody.uasset Content/Blueprints docs/ CLAUDE.md
