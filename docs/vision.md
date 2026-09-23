@@ -133,6 +133,41 @@ the early game never produces violent motion at all, so the hard problem of
 bodies being thrown around a rotating interior can be solved later, against a
 ship that has earned it, rather than blocking flight from existing.
 
+## How ships wear
+
+Ships are real machines and they age. Components degrade -- but the timescale
+is the whole design, and it is deliberately lopsided:
+
+- **Early game:** degradation is visible almost immediately, because it is how
+  the ship tells you it has a history. A starter ship that never needed
+  anything would read as new. This is also how the player learns that
+  components can be improved at all.
+- **Mid game:** effectively absent. Players upgrade components long before
+  they wear out, so repair rarely comes up. This is intended, not a gap.
+- **Late game:** upgrading slows down, so wear starts to surface again on its
+  own. Here it is a mild retaining pressure -- something to come back to,
+  infrequent enough that it is never overbearing.
+
+**Combat damages components.** That is a separate path from wear and it is an
+event, which is exactly what the anti-chore principle wants.
+
+### The boundary this sits on
+
+Late-game wear is the one place the anti-chore principle is deliberately run
+close to its limit, so the limit is worth stating rather than discovering.
+
+The principle's test is whether the game tells the player they are *behind* --
+whether there is a **rate to keep up with**. Wear measured in tens of hours
+does not create a rate; it creates occasional events that happen to have a slow
+cause. Wear measured in tens of minutes creates a rate, and at that point it is
+a survival meter with a longer fuse.
+
+So: **decay may be slow enough to be an occasional event, and never fast enough
+to be a schedule.** If a design ever needs the player to check something
+periodically to avoid a consequence, it has crossed the line, however gentle
+each individual check is. A chore is not made acceptable by being rare; it is
+made acceptable by the player choosing when to do it.
+
 ## Inhabitants
 
 **The universe has people in it.** NPCs are a definite part of the game, not a
@@ -186,16 +221,13 @@ These are genuinely undecided. Do not treat silence here as a decision.
 4. **What is in-universe?** Who built these ships, why is anyone out here, what
    is being traded and to whom, and who the NPCs are. Currently blank.
 5. **How does the player stay aboard a manoeuvring ship?** The *design* half
-   is settled and is a constraint, not an open question: **the player is never
-   locked out of the interior while the ship is flying.** Being sent to a seat
-   whenever the ship turns was considered and rejected — it cuts against the
-   ship being home at exactly the moment something is happening. The player
-   should inherit the ship's motion the way a body does, so that walking
-   around during a manoeuvre feels natural rather than jumpy. The *mechanism*
-   is genuinely open: Unreal's stock character movement carries a rider's
-   rotation in yaw only and keeps gravity pointing at world -Z, so this needs
-   either a local reference frame or custom gravity with capsule alignment.
-   See the sub-project on piloting.
+   is settled and is a constraint: **the player is never locked out of the
+   interior while the ship is flying.** Being sent to a seat whenever the ship
+   turns was considered and rejected. The *frame* half is now settled too --
+   the ship is the origin and the universe moves around it, so the interior
+   never moves at all; see ADR 0005. What remains open is the feel: at what
+   point does a manoeuvre take the player off their feet, and how is losing
+   and regaining footing made legible rather than confusing.
 6. **How does a ship "scale" such that it stays single-player-safe?** The
    principle is stated above; the mechanism is not designed.
 
