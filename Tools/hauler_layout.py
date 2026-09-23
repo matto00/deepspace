@@ -47,9 +47,9 @@ ROOMS = [
     Room("cargo_bay",   -810, -400, 800,  900, 500),
     Room("engineering", 400,  80,   400,  400, 250),
     Room("galley",      810,  80,   490,  400, 250),
-    # 140 cm: the retargeted crouch-walk clip carries the head bone to 118 cm,
-    # and the camera rides it, so a lower ceiling would be seen through.
-    Room("crawlway",    0,    390,  390,  90,  140),
+    # 150 cm: the crouched capsule is 144 cm, sized to the crouch-walk clip,
+    # which carries the camera to 138 cm; a lower ceiling would be seen through.
+    Room("crawlway",    0,    390,  390,  90,  150),
     Room("airlock",     100,  -340, 250,  250, 250),
     Room("bunk",        600,  -390, 400,  300, 250),
 ]
@@ -65,8 +65,8 @@ DOORS = [
     Door("corridor", "airlock", 120, 220, centre=260),
     Door("corridor", "bunk", 120, 220),
     # The crawlway's full width and height: the open end of a service duct.
-    Door("cargo_bay", "crawlway", 90, 140),
-    Door("crawlway", "engineering", 90, 140),
+    Door("cargo_bay", "crawlway", 90, 150),
+    Door("crawlway", "engineering", 90, 150),
 ]
 
 WINDOWS = [
@@ -140,11 +140,17 @@ CONSOLE_WIDTH = 100
 # The game opens with waking aboard your ship.
 PLAYER_START = ("bunk", (200, 150), 100)
 
+# The helm: the port pilot seat. APilotSeat is placed over the decorative
+# pilot_seat prop there, at floor level, facing the way that prop faces. The
+# starboard seat stays decorative.
+PILOT_SEAT = ("cockpit", (175, 130), 0)
+
 SLIDE_ROOM = "corridor"
 
 
 Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
-                          "player_start regions keep_clear")
+                          "player_start regions keep_clear "
+                          "pilot_seat_location pilot_seat_yaw")
 
 
 def generate():
@@ -188,5 +194,9 @@ def generate():
         hi = (max(cx, cx + dx), cy + half, STAND_CLEARANCE)
     keep_clear.append(("console", lo, hi))
 
+    seat_room, seat_at, seat_yaw = PILOT_SEAT
+    pilot_seat_location = resolve_point(plan, seat_room, seat_at)
+
     return Ship(plan, boxes, lights, console_location, console_yaw,
-                player_start, regions, keep_clear)
+                player_start, regions, keep_clear,
+                pilot_seat_location, seat_yaw)

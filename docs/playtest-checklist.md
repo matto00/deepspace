@@ -38,6 +38,60 @@ re-run the affected section.
 ## Stability
 - [x] Play for two minutes continuously without a crash or hitch
 
+## Body and movement
+- [x] Looking down shows the body; no view from inside the head or neck
+- [x] Looking straight down does not show through the body, or past it behind you
+- [x] Walking keeps the arms out of view; sprinting brings them into frame
+- [x] Sprinting does not swing the body's lean into frame ahead of the camera
+- [x] Hold Left Shift: visibly faster forward; no faster strafing or backing up
+- [x] Camera bob while running is comfortable
+- [x] C crouches and lowers the view; C again stands
+- [x] Crouched hard against a wall, the view stays inside the ship
+- [x] Crouched, the crawlway can be entered and crossed, cargo bay to engineering
+- [x] Inside the crawlway, C does nothing (no room to stand)
+- [x] The view never passes through a ceiling, standing or crouched
+
+## Pilot seat
+- [x] Looking at the port cockpit seat shows "Sit in  Pilot Seat"
+- [x] E sits: the view settles at seated height, facing the window
+- [x] Seated, the view turns about ±100° and ±70° and no further
+- [x] Seated, the prompt reads "Stand up", whatever you look at
+- [x] E stands you up behind the seat, free to walk
+- [x] The starboard seat gives no prompt
+
+## Result — movement, body and pilot seat, 2026-09-22
+
+**PASS.** Played in `L_Hauler`: the body reads as a body, sprint and crouch are
+distinct, the crawlway is crouch-only, and the helm seats and releases the
+player with the ship's pilot set.
+
+Three failures found on the *way* to this pass, all fixed before it, and all
+the same root cause — the camera was attached to the `head` bone, so the
+animation decided where it went and nothing checked the result:
+
+- **The body leaned into frame while sprinting.** The spring arm's lag is
+  positional in every axis, so under the lean the head ran ahead of the
+  trailing camera.
+- **Looking down showed through the body, and out behind it.** A spring arm
+  applies `SocketOffset` in the *view's* rotation, so pitching down 90° swung
+  the 8 cm forward offset into 8 cm downward and put the camera 2 cm below the
+  head bone, inside the neck.
+- **Crouching against a wall showed the outside of the ship.** Measured: the
+  retargeted crouch idle carries the head 57 cm from the capsule's axis,
+  against a 34 cm capsule. The spring arm's own collision test would have
+  caught this, but the engine skips it when `TargetArmLength == 0`.
+
+`ADeepSpaceCharacter::PlaceCamera` replaced the spring arm;
+`DeepSpace.Player.CameraStaysInsideWalls` and
+`.CameraDoesNotDiveWhenLookingDown` pin the geometry.
+
+A fourth failure appeared only after the fix, and is the one worth remembering:
+removing the native `CameraArm` left `BP_DeepSpaceCharacter` naming a component
+its class no longer had, and its saved camera template kept the old
+`bUsePawnControlRotation = false`. The view would not turn *at all* on the
+first editor session after the change, and was fine on the next — a bug that
+appears once and then hides. See ADR 0002's second amendment.
+
 ## Result — milestone 1, 2026-09-20
 
 **PASS.** Every item above, played in `L_Hauler`.
