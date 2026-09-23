@@ -38,6 +38,27 @@ re-run the affected section.
 ## Stability
 - [x] Play for two minutes continuously without a crash or hitch
 
+## Body and movement
+- [ ] Looking down shows the body; no view from inside the head or neck
+- [ ] Looking straight down does not show through the body, or past it behind you
+- [ ] Walking keeps the arms out of view; sprinting brings them into frame
+- [ ] Sprinting does not swing the body's lean into frame ahead of the camera
+- [ ] Hold Left Shift: visibly faster forward; no faster strafing or backing up
+- [ ] Camera bob while running is comfortable
+- [ ] C crouches and lowers the view; C again stands
+- [ ] Crouched hard against a wall, the view stays inside the ship
+- [ ] Crouched, the crawlway can be entered and crossed, cargo bay to engineering
+- [ ] Inside the crawlway, C does nothing (no room to stand)
+- [ ] The view never passes through a ceiling, standing or crouched
+
+## Pilot seat
+- [ ] Looking at the port cockpit seat shows "Sit in  Pilot Seat"
+- [ ] E sits: the view settles at seated height, facing the window
+- [ ] Seated, the view turns about ±100° and ±70° and no further
+- [ ] Seated, the prompt reads "Stand up", whatever you look at
+- [ ] E stands you up behind the seat, free to walk
+- [ ] The starboard seat gives no prompt
+
 ## Result — milestone 1, 2026-09-20
 
 **PASS.** Every item above, played in `L_Hauler`.

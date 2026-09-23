@@ -2243,7 +2243,7 @@ The human task: the anim graph, then the playtest. Then the records.
 - Modify (in the editor): `Content/Characters/DeepSpace/ABP_DeepSpaceBody.uasset`
 - Modify: `docs/decisions/0002-cpp-first-blueprints-as-wrappers.md`, `CLAUDE.md`, `docs/playtest-checklist.md`, the spec
 
-- [ ] **Step 1: Wire `ABP_DeepSpaceBody` (the developer, in the editor)**
+- [x] **Step 1: Wire `ABP_DeepSpaceBody` (the developer, in the editor)**
 
 `./launch.sh`, then open `Content/Characters/DeepSpace/ABP_DeepSpaceBody`, **AnimGraph** tab:
 
@@ -2269,7 +2269,9 @@ rigid). They are defaults on the Blueprint — asset tuning, within the rules.
 **The first playtest failed on the camera, three ways.** The spring arm is gone
 as a result; see *Deviations*. Re-tune and re-play.
 
-- [ ] **Step 3: Extend the playtest checklist**
+- [x] **Step 3: Extend the playtest checklist** — written, including three
+      items for the camera regressions found in the first playtest. *Running* it
+      and recording the result is what remains.
 
 Add to `docs/playtest-checklist.md`, before the results sections:
 
@@ -2295,7 +2297,7 @@ Add to `docs/playtest-checklist.md`, before the results sections:
 
 Run the whole checklist and record the result, dated, as a new `## Result — movement, body and pilot seat` section. Record failures as failures.
 
-- [ ] **Step 4: Amend ADR 0002**
+- [x] **Step 4: Amend ADR 0002**
 
 Append to `docs/decisions/0002-cpp-first-blueprints-as-wrappers.md`:
 
@@ -2320,7 +2322,7 @@ possible: `Tools/setup_character.py` assigns the character's input actions,
 body mesh and anim class, so they are reviewable text, not clicks.
 ```
 
-- [ ] **Step 5: Record the pipeline in `CLAUDE.md`**
+- [x] **Step 5: Record the pipeline in `CLAUDE.md`**
 
 Append:
 

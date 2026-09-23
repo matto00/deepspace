@@ -47,3 +47,49 @@ Say so rather than letting it accumulate.
   it is an `EditDefaultsOnly` property with C++ defaults, not a Level Blueprint.
   The plan originally allowed a Level Blueprint for this as "the one acceptable
   exception"; generating the level (ADR 0004) removed even that.
+
+## Amendment — Animation Blueprints (2026-09-22)
+
+An Animation Blueprint is a node graph in a binary asset, which is where
+logic goes to become invisible. The rule extends to them: C++ decides, the
+graph wires. `UDeepSpaceAnimInstance` computes speed and posture;
+`ABP_DeepSpaceBody` may contain only the output pose, blend-space and
+sequence players, *Blend Poses by* nodes, variable *gets*, and the event stubs
+every Animation Blueprint is created with. No state machines, no Event Graph
+logic, no reroutes.
+
+The drift signal is now mechanical: `python3 Tools/check_anim_blueprints.py`
+reads each Animation Blueprint the project owns and fails on any other node
+type. It is an allowlist, so a node nobody anticipated fails until someone
+decides it belongs.
+
+Setting assets on a Blueprint remains allowed, and is now scripted where
+possible: `Tools/setup_character.py` assigns the character's input actions,
+body mesh and anim class, so they are reviewable text, not clicks.
+
+## Amendment — the cost of a Blueprint that inherits C++ (2026-09-22)
+
+A Blueprint deriving from a C++ class stores a template for every native
+component it inherits, with the property values those components had *when the
+Blueprint was last saved*. That makes changing the C++ component list a
+two-sided change.
+
+Removing `ADeepSpaceCharacter`'s `CameraArm` left
+`BP_DeepSpaceCharacter.uasset` naming a component its class no longer had, and
+its `FirstPersonCamera` template still carried the value the old C++ gave it,
+`bUsePawnControlRotation = false`. The first editor session after the change
+could not look around at all; the next one, having reinstanced the Blueprint
+against the new class, was fine. A bug that appears once and then hides is
+worse than one that stays.
+
+So: **after adding, removing or renaming a native component, recompile and save
+every Blueprint that inherits it**, and confirm the asset no longer names the
+old component:
+
+```bash
+strings -a Content/Blueprints/BP_DeepSpaceCharacter.uasset | grep -i CameraArm
+```
+
+This is a real consequence of the C++-first choice, not an argument against it:
+the same rule that keeps logic reviewable means the C++ and the asset must be
+kept in step by hand.

@@ -156,3 +156,71 @@ measured bounds for exactly this reason.
 
 `unreal.log` output does not reach stdout under the commandlet; these scripts
 write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.
+
+## The player's body
+
+The body's animations come from Mixamo FBX in `SourceArt/Mixamo/`, retargeted
+onto the mannequin by script. Run in this order after adding or changing a
+clip, with the editor closed:
+
+```bash
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/import_animations.py" -unattended -nopause -nosplash -NoLiveCoding
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/setup_character.py" -unattended -nopause -nosplash -NoLiveCoding
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/check_anim_heights.py" -unattended -nopause -nosplash -NoLiveCoding
+python3 Tools/check_anim_blueprints.py
+```
+
+- **Blend spaces built from Python blend nothing** unless
+  `unreal.DeepSpaceEditorScripting.rebuild_blend_space` is called: setting
+  their samples never builds the interpolation table. `import_animations.py`
+  does this; any new script that edits a blend space must too.
+- **The movement contract lives in `Tools/movement_contract.json`**, read by
+  the layout and by the `DeepSpace.Player.MovementContract` test. Change it
+  there; each side fails its own test if the other no longer fits.
+- `ABP_DeepSpaceBody` is hand-wired and may only wire (ADR 0002); the import
+  script updates its blend spaces in place, never deleting them, so its
+  references survive a re-import.
+
+### The camera is not attached to the head
+
+It looks like it is, but `ADeepSpaceCharacter::PlaceCamera` positions it every
+frame instead, because **the animation does not know about the ship**. Attached
+to the `head` bone it goes wherever the clip puts it: the retargeted crouch
+idle carries the head **57 cm** from the capsule's axis against a **34 cm**
+capsule, so crouching against a wall put the view outside the hull.
+
+`PlaceCamera` follows the head exactly sideways, damps only the vertical (bob
+is vertical; a horizontal lag lets the body lean into frame), applies the
+forward eye offset in the view's **yaw only** (swung with pitch it dives into
+the neck when you look down), and sweeps a sphere out from the capsule's axis
+so the eyes stop at a wall with more than the 10 cm near plane to spare.
+
+Two guards, and they check different things:
+
+- `check_anim_heights.py` checks every clip's peak head height against its
+  posture's capsule, so a taller clip fails there rather than in play.
+- `DeepSpace.Player.CameraStaysInsideWalls` and `.CameraDoesNotDiveWhenLookingDown`
+  check the placement itself.
+
+Sideways reach is deliberately *not* guarded per clip: heads do leave the
+capsule, and the sweep is what handles it.
+
+### Changing the character's C++ components invalidates its Blueprint
+
+`BP_DeepSpaceCharacter` stores a template for every native component it
+inherits, holding the values from when it was last saved. Add, remove or
+rename a component in C++ and the asset is stale — and the symptom can hide.
+Removing `CameraArm` left the saved camera template carrying the old
+`bUsePawnControlRotation = false`, so the *first* editor session after the
+change could not look around; the next one, reinstanced, was fine.
+
+After any such change, recompile and save the Blueprint, then check:
+
+```bash
+strings -a Content/Blueprints/BP_DeepSpaceCharacter.uasset | grep -i CameraArm
+```
+
+See ADR 0002's second amendment.
