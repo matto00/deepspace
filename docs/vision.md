@@ -58,6 +58,11 @@ Somewhere between solitude, curiosity and a light, steady precarity.
 - **The ship needs tending, but you are never fighting for your life.**
   Routine maintenance, not a survival meter. The player should feel competent
   and at home, not harried.
+- **The cruise is when you live in the ship.** Long transits are not dead
+  time because you spend them on your feet — walking the deck, tending
+  something, watching the stars go by from the galley. A cruise the player
+  can only watch from a chair is a loading screen with a chair in it. This is
+  why open question 3 is a constraint rather than a trade-off.
 
 ### The anti-factory principle
 
@@ -125,8 +130,17 @@ These are genuinely undecided. Do not treat silence here as a decision.
    but nothing has been chosen. Explore before committing.
 2. **What is in-universe?** Who built these ships, why is anyone out here, what
    is being traded and to whom. Currently blank.
-3. **Does the ship move while the player walks around inside it?** This is a
-   technical fork with a design answer; see the sub-project on piloting.
+3. **How does the player stay aboard a manoeuvring ship?** The *design* half
+   is settled and is a constraint, not an open question: **the player is never
+   locked out of the interior while the ship is flying.** Being sent to a seat
+   whenever the ship turns was considered and rejected — it cuts against the
+   ship being home at exactly the moment something is happening. The player
+   should inherit the ship's motion the way a body does, so that walking
+   around during a manoeuvre feels natural rather than jumpy. The *mechanism*
+   is genuinely open: Unreal's stock character movement carries a rider's
+   rotation in yaw only and keeps gravity pointing at world -Z, so this needs
+   either a local reference frame or custom gravity with capsule alignment.
+   See the sub-project on piloting.
 4. **How does a ship "scale" such that it stays single-player-safe?** The
    principle is stated above; the mechanism is not designed.
 
