@@ -86,3 +86,44 @@ variation only produces absurdity.
   naive placer. The real acceptance rate under a shaped prior is unmeasured,
   and the probe's untried wall-aware placement tier is the cheapest way to find
   out.
+
+## Amendment — this applies to all randomness, not just layout (2026-09-22)
+
+The rule above was written about ship layout. It generalises: **wherever this
+project draws a random value, reach for the distribution that actually
+describes the thing, rather than defaulting to uniform and correcting later.**
+
+Uniform is the right answer surprisingly rarely. It describes "any value in
+this range is equally likely", which is true of almost nothing in a world.
+Reaching for it by habit is how generated content comes to feel generated.
+
+Some defaults worth knowing, none of them exotic:
+
+| Shape of the thing | Distribution |
+|---|---|
+| Time until the next event; gaps between arrivals | **Exponential** (memoryless) |
+| How many events fall in a fixed interval | **Poisson** |
+| Component wear and failure | **Weibull** — its shape parameter *is* early-life vs random vs wear-out failure |
+| A magnitude produced by many multiplied factors — deposit sizes, settlement populations | **Log-normal** |
+| Heavy-tailed counts where a few are enormous | **Power law / Pareto** |
+| A bounded proportion, 0 to 1 — condition, purity, how worn | **Beta** |
+| A sum of many small independent effects | **Normal** |
+
+Weibull is worth calling out because it lands exactly on a decision already
+made. `docs/vision.md` describes wear as visible early, absent in the middle,
+and resurfacing late — which is the classic bathtub curve, and a Weibull shape
+parameter expresses precisely that. The fiction and the standard reliability
+model agree, so use the model.
+
+Three constraints on this:
+
+- **Determinism first.** ADR 0007 requires integer hashing and no floating
+  point in seed derivation. Sampling a shaped distribution happens *after* a
+  deterministic integer stream has been derived, never as part of deriving it.
+- **Tails need bounds.** Log-normal and power-law tails will eventually produce
+  a settlement of four million people or a corridor two kilometres long.
+  Truncate deliberately and record the truncation; an unbounded draw is a bug
+  waiting for a rare seed.
+- **Say why in the code.** A line picking Weibull over uniform should say what
+  it believes about the world. That comment is the design, and without it the
+  next person reverts it to a uniform draw because it looks simpler.

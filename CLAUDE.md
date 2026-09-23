@@ -126,6 +126,18 @@ asset existed. Never hand-edit them.
   contradicts them
 - `docs/decisions/` — short ADRs
 
+## Randomness
+
+**Reach for the distribution that describes the thing; do not default to
+uniform.** Uniform means "every value in this range is equally likely", which
+is true of almost nothing in a world, and reaching for it by habit is how
+generated content comes to feel generated. Exponential for gaps between events,
+Poisson for counts in an interval, Weibull for wear and failure, log-normal for
+magnitudes built from many factors, Beta for bounded proportions. Bound the
+tails deliberately, and say in a comment what the choice believes about the
+world. See ADR 0008, which also explains why the generator shapes its prior
+rather than sampling and rejecting.
+
 ## Generated level geometry
 
 `Content/Maps/L_Hauler.umap` is **generated, not hand-edited**. The source of
