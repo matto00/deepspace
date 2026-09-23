@@ -76,6 +76,10 @@ void UShipSubsystem::SetPilot(APawn* NewPilot)
 void UShipSubsystem::ClearPilot()
 {
     Pilot.Reset();
+
+    // A ship nobody is flying does not keep turning. The throttle stays: a
+    // cruise the player set and then walked away from is the point.
+    FlightState.ReleaseAttitude();
 }
 
 bool UShipSubsystem::IsPiloted() const
@@ -86,4 +90,58 @@ bool UShipSubsystem::IsPiloted() const
 APawn* UShipSubsystem::GetPilot() const
 {
     return Pilot.Get();
+}
+
+void UShipSubsystem::Tick(float DeltaTime)
+{
+    FlightState.Step(DeltaTime);
+}
+
+TStatId UShipSubsystem::GetStatId() const
+{
+    RETURN_QUICK_DECLARE_CYCLE_STAT(UShipSubsystem, STATGROUP_Tickables);
+}
+
+bool UShipSubsystem::SetFlightCommand(APawn* Commander, float Throttle, FVector AttitudeRate)
+{
+    if (!Commander || Commander != Pilot.Get())
+    {
+        return false;
+    }
+
+    FShipFlightCommand Command;
+    Command.Throttle = Throttle;
+    Command.AttitudeRate = AttitudeRate;
+    FlightState.SetCommand(Command);
+    return true;
+}
+
+FVector UShipSubsystem::GetShipVelocity() const
+{
+    return FlightState.GetVelocity();
+}
+
+float UShipSubsystem::GetShipSpeed() const
+{
+    return static_cast<float>(FlightState.GetSpeed());
+}
+
+FTransform UShipSubsystem::GetCounterFrameTransform() const
+{
+    return FlightState.GetCounterFrameTransform();
+}
+
+FVector UShipSubsystem::UniverseToWorld(const FUniversePosition& UniversePosition) const
+{
+    return FlightState.UniverseToWorld(UniversePosition);
+}
+
+void UShipSubsystem::PlaceShip(const FUniversePosition& NewPosition, const FQuat& NewOrientation)
+{
+    FlightState.SetUniverseTransform(NewPosition, NewOrientation);
+}
+
+const FShipFlightState& UShipSubsystem::GetFlightState() const
+{
+    return FlightState;
 }

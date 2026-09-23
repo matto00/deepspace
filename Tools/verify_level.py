@@ -66,6 +66,26 @@ def main():
     if len(built_lights) != len(ship.lights):
         failures.append("%d lights built, layout has %d" % (len(built_lights), len(ship.lights)))
 
+    # The starfield used to be 160 actors in the map. It is now generated in
+    # C++ on the counter-frame at BeginPlay, so what the level must contain is
+    # one counter-frame, at the origin and unrotated -- the rotation is applied
+    # at runtime and a built-in one would be silently composed with it.
+    stars = [k for k in actors if k.startswith(TAG + "star_")]
+    if stars:
+        failures.append("%d star actors remain; the starfield is generated in C++ now" % len(stars))
+
+    frame = actors.get(TAG + "counterframe")
+    if frame is None:
+        failures.append("MISSING counterframe")
+    else:
+        p = frame.get_actor_location()
+        if max(abs(p.x), abs(p.y), abs(p.z)) > TOLERANCE:
+            failures.append("counterframe is at (%.1f, %.1f, %.1f), not the origin" % (p.x, p.y, p.z))
+        r = frame.get_actor_rotation()
+        if max(abs(r.pitch), abs(r.yaw), abs(r.roll)) > TOLERANCE:
+            failures.append("counterframe is rotated (%.1f, %.1f, %.1f), not at identity"
+                            % (r.pitch, r.yaw, r.roll))
+
     lines = ["Checked %d boxes and %d lights against the layout."
              % (len(ship.boxes), len(ship.lights)), ""]
     if failures:

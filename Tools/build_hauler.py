@@ -48,9 +48,6 @@ TAG = "hauler_"
 TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
 SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
 
-STAR_COUNT = 160
-STAR_RADIUS = 12000.0
-
 TEAL = (0.05, 0.55, 0.55)
 
 # Clean retro-future. Panelled roles are instances of the template's
@@ -233,21 +230,24 @@ def place_lights(actor_sub, lights):
         c.set_editor_property("cast_shadows", False)
 
 
-def scatter_stars(actor_sub, sphere, material):
-    """Golden-angle spiral: even coverage where uniform random clumps."""
-    golden = math.pi * (3.0 - math.sqrt(5.0))
-    for i in range(STAR_COUNT):
-        y = 1.0 - (i / float(STAR_COUNT - 1)) * 2.0
-        r = math.sqrt(max(0.0, 1.0 - y * y))
-        t = golden * i
-        loc = unreal.Vector(math.cos(t) * r * STAR_RADIUS, y * STAR_RADIUS,
-                            math.sin(t) * r * STAR_RADIUS + 500.0)
-        star = actor_sub.spawn_actor_from_class(unreal.StaticMeshActor, loc,
-                                                unreal.Rotator(0, 0, 0))
-        star.set_actor_label(TAG + "star_%03d" % i)
-        star.set_actor_scale3d(unreal.Vector(0.3, 0.3, 0.3))
-        star.static_mesh_component.set_static_mesh(sphere)
-        star.static_mesh_component.set_material(0, material)
+def place_counter_frame(actor_sub, sphere, material):
+    """The parent of everything outside the hull (ADR 0005).
+
+    The ship never moves: the universe is drawn through the inverse of where
+    the ship is and which way it points, and this actor carries the rotation
+    half of that. Its starfield is generated in C++ at BeginPlay, so the stars
+    are runtime state belonging to the ship's frame rather than 160 rows in a
+    binary .umap. All this script does is hand it the mesh and material --
+    asset assignment only, per ADR 0002.
+    """
+    frame = actor_sub.spawn_actor_from_class(
+        unreal.ShipCounterFrame, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    frame.set_actor_label(TAG + "counterframe")
+    for layer in ("distant_stars", "near_stars"):
+        component = frame.get_editor_property(layer)
+        component.set_static_mesh(sphere)
+        component.set_material(0, material)
+    return frame
 
 
 def build():
@@ -269,7 +269,7 @@ def build():
         spawn_box(actor_sub, box, meshes[box.mesh], mats[box.role])
 
     place_lights(actor_sub, ship.lights)
-    scatter_stars(actor_sub, unreal.EditorAssetLibrary.load_asset(SPHERE), star_material())
+    place_counter_frame(actor_sub, unreal.EditorAssetLibrary.load_asset(SPHERE), star_material())
 
     console = actor_sub.spawn_actor_from_class(
         unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP),
@@ -296,8 +296,8 @@ def build():
 
     level_sub.save_current_level()
 
-    summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights, %d stars."
-               % (removed, len(ship.boxes), len(ship.lights), STAR_COUNT))
+    summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights, "
+               "one counter-frame." % (removed, len(ship.boxes), len(ship.lights)))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Ship/ShipFlightState.h"
 #include "Ship/ShipPowerState.h"
 #include "ShipSubsystem.generated.h"
 
@@ -17,7 +18,7 @@ class UShipModuleDataAsset;
  * accidentally acquire a transform and become a god-actor.
  */
 UCLASS()
-class DEEPSPACE_API UShipSubsystem : public UWorldSubsystem
+class DEEPSPACE_API UShipSubsystem : public UTickableWorldSubsystem
 {
     GENERATED_BODY()
 
@@ -26,6 +27,16 @@ public:
     static UShipSubsystem* Get(const UObject* WorldContext);
 
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+
+    /**
+     * The subsystem owns the flight state, so it owns the clock that advances
+     * it. A plain UWorldSubsystem does not tick; UTickableWorldSubsystem mixes
+     * in FTickableGameObject to get a per-frame callback, and tickable
+     * subsystems run early in the world tick, before actors -- which is what
+     * the counter-frame needs.
+     */
+    virtual void Tick(float DeltaTime) override;
+    virtual TStatId GetStatId() const override;
 
     /** Returns false if the module is null or already installed. */
     UFUNCTION(BlueprintCallable, Category = "Ship")
@@ -64,8 +75,42 @@ public:
     UFUNCTION(BlueprintPure, Category = "Ship")
     APawn* GetPilot() const;
 
+    /**
+     * Flight. Ignored unless Commander is the current pilot; returns false if
+     * refused. The gate lives here rather than in the character because this
+     * is the only place that can answer "who is flying the ship"
+     * authoritatively -- and because a named pawn commanding through one gated
+     * function is already the shape of a client-to-server RPC, should netcode
+     * ever arrive.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight")
+    bool SetFlightCommand(APawn* Commander, float Throttle, FVector AttitudeRate);
+
+    UFUNCTION(BlueprintPure, Category = "Flight")
+    FVector GetShipVelocity() const;
+
+    UFUNCTION(BlueprintPure, Category = "Flight")
+    float GetShipSpeed() const;
+
+    UFUNCTION(BlueprintPure, Category = "Flight")
+    FTransform GetCounterFrameTransform() const;
+
+    /** THE conversion, for everything outside the hull. C++ only: a universe
+     *  position is a chunked value type (ADR 0007), not a Blueprint type. */
+    FVector UniverseToWorld(const FUniversePosition& UniversePosition) const;
+
+    /** Placing the ship without flying there: level setup and tests. Not a
+     *  gameplay path -- flight goes through SetFlightCommand and the tick. */
+    void PlaceShip(const FUniversePosition& NewPosition, const FQuat& NewOrientation);
+
+    /** Read-only. There is no non-const accessor: the only write paths are
+     *  SetFlightCommand, ClearPilot and this subsystem's own tick, which is
+     *  what makes the state trustworthy. */
+    const FShipFlightState& GetFlightState() const;
+
 private:
     FShipPowerState PowerState;
+    FShipFlightState FlightState;
 
     /** Weak: the subsystem must not keep a pawn alive. */
     TWeakObjectPtr<APawn> Pilot;
