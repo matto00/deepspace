@@ -12,10 +12,13 @@ Currently at **Milestone 1 — walk the ship**. See `docs/superpowers/plans/`.
 
 **Read `docs/vision.md` before proposing any design.** It records what the game
 is *for* — the register, the principle that scale is only felt in contrast, and
-two rules that are easy to break by accident: maintenance is care rather than
-optimisation (the anti-factory principle), and company aboard a ship is shared
-presence rather than division of labour. A feature can be fun in isolation and
-still be wrong against it. If a decision contradicts the vision, change the
+two rules that are easy to break by accident. The first is the **anti-chore
+principle**: nothing may feel like a chore or a nuisance, the test being
+whether the game ever tells the player they are *behind*. It rules out
+optimisation loops and threats-on-a-timer alike, and it does **not** rule out
+danger or difficulty. The second is that company aboard a ship is shared
+presence, never division of labour. A feature can be fun in isolation and
+still be wrong against both. If a decision contradicts the vision, change the
 vision deliberately rather than working around it.
 
 The developer knows general game development but is new to Unreal and has no
