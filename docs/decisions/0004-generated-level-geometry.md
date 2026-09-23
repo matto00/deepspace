@@ -84,3 +84,15 @@ centre-origin, `SM_Cylinder` base-centre. With the pivot bug deliberately
 reintroduced, the verifier reported 393 failures — every one on an `SM_Cube`
 box. The centred furniture passed. A builder that assumed "centred" would have
 looked half right.
+
+## Amendment — generation moves into the game (2026-09-22)
+
+This ADR's reasoning stands: generate rather than hand-place, and check it in
+two layers. What has changed is *when* generation runs.
+
+ADR 0006 decides that generation is C++ running at game startup, not an editor
+commandlet producing a saved `.umap`, and that Python is for prototyping and
+testing only. The validator/verifier discipline described above is explicitly
+carried forward, with one addition — a generator property test, asserting that
+every seed yields a valid plan and that the same seed always yields the same
+plan. Read 0006 alongside this one.
