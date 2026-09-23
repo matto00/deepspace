@@ -32,8 +32,8 @@ ANIMS = "/Game/Characters/DeepSpace/Anims"
 HEAD = "head"
 SAMPLES = 40
 
-# Room between the head bone and the capsule top: the camera's near plane
-# and the lag of the spring arm holding it.
+# Room between the camera and the capsule top: the near plane, and the damping
+# with which the eye height follows the head's.
 MARGIN = 5.0
 
 POSTURE_CLIPS = {
@@ -65,9 +65,11 @@ def main():
         defaults = unreal.get_default_object(bp.generated_class())
         standing = 2.0 * defaults.get_editor_property("capsule_component").get_unscaled_capsule_half_height()
         crouched = 2.0 * defaults.get_editor_property("character_movement").get_editor_property("crouched_half_height")
-        # The camera sits this far above the head bone (CameraArm's world-space
-        # TargetOffset), so it is the camera, not the bone, that must fit.
-        eye = defaults.get_editor_property("camera_arm").get_editor_property("target_offset").z
+        # The camera sits this far above the head bone, so it is the camera,
+        # not the bone, that must fit. Sideways is not checked here: the head
+        # does leave the capsule, and ADeepSpaceCharacter::PlaceCamera sweeps
+        # out from the capsule's axis so the camera stops at the wall.
+        eye = defaults.get_editor_property("eye_height_above_head")
         limits = {"standing": standing, "crouched": crouched,
                   "seated": standing, "seat transitions": standing}
         lines.append("capsule: standing %.0f cm, crouched %.0f cm; camera %.0f cm above the head; margin %.0f cm"

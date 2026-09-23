@@ -31,6 +31,7 @@
 | `BP_DeepSpaceCharacter` assignments and the input actions by hand | Scripted: `Tools/setup_character.py` | Prototyped: Blueprint defaults set from Python persist across a fresh process. The only hand work left is the six-node anim graph. |
 | *Stand To Sit* / *Sit To Stand* play when sitting | Imported and retargeted, **unused this round**; posture changes blend over 0.25 s | Playing them needs either a state machine (forbidden) or C++-driven montages; the latter is a clean follow-up, not needed to sit. |
 | — | Seated pose is `RTG_sitting_idle`, not `seated_idle` | Measured: it chains exactly with the transitions (head 119 cm); `seated_idle` sits 7 cm higher. |
+| The camera rides the head on a zero-length spring arm with lag | `ADeepSpaceCharacter::PlaceCamera` places the camera in C++; no spring arm | The first playtest failed three ways, all from letting the animation decide where the camera is. (a) The lag is positional in every axis, so under the sprint lean the body ran ahead of the camera and came into frame. (b) A spring arm applies `SocketOffset` in the *view's* rotation, so looking straight down swung the 8 cm forward offset downwards and dropped the camera into the neck — the body was seen from the inside, and past it. (c) Nothing kept the camera in the capsule: the retargeted crouch idle carries the head **57 cm** from the axis against a **34 cm** capsule, so crouching against a wall put the view outside the hull. The arm's own collision test would have caught (c), but the engine skips it when `TargetArmLength == 0`. `PlaceCamera` is rigid sideways, damps only the vertical bob, applies the forward offset in yaw only, and sweeps out from the capsule's axis. `DeepSpace.Player.CameraStaysInsideWalls` and `.CameraDoesNotDiveWhenLookingDown` pin all three. |
 | — | `rebuild.sh` fixed before this plan | It failed after every successful build (`bc` missing; `ls` under `pipefail`), which would have made `launch.sh` refuse to open the editor after any C++ change. Committed as `02d775b`. |
 
 ## File Structure
@@ -2259,7 +2260,14 @@ Then: `python3 Tools/check_anim_blueprints.py` → expect `ok`. If it lists a no
 
 - [ ] **Step 2: Tune and play**
 
-Play `L_Hauler`. Tuning lives in `BP_DeepSpaceCharacter` → `CameraArm`: **Camera Lag Speed** (higher = tighter to the head; lower = smoother) and **Socket Offset X** (how far forward of the head bone). They are component settings on the Blueprint — asset tuning, within the rules.
+Play `L_Hauler`. Tuning lives in `BP_DeepSpaceCharacter` → **Camera**:
+`EyeHeightAboveHead`, `EyeForwardOffset`, `EyeProbeRadius` (how far the eyes
+stop short of a wall; must stay above the 10 cm near plane) and
+`EyeHeightLagSpeed` (higher = tighter to the head's bob; lower = smoother; 0 =
+rigid). They are defaults on the Blueprint — asset tuning, within the rules.
+
+**The first playtest failed on the camera, three ways.** The spring arm is gone
+as a result; see *Deviations*. Re-tune and re-play.
 
 - [ ] **Step 3: Extend the playtest checklist**
 

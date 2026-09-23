@@ -8,7 +8,6 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
-#include "GameFramework/SpringArmComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Player/MovementRules.h"
 #include "Ship/InteractableComponent.h"
@@ -25,24 +24,15 @@ ADeepSpaceCharacter::ADeepSpaceCharacter()
         FVector(0.0f, 0.0f, -GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight()),
         FRotator(0.0f, -90.0f, 0.0f));
 
-    CameraArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraArm"));
-    CameraArm->SetupAttachment(GetMesh(), HeadBone);
-    CameraArm->TargetArmLength = 0.0f;
-    CameraArm->bDoCollisionTest = false;
-    CameraArm->bUsePawnControlRotation = true;
-    CameraArm->bEnableCameraLag = true;
-    CameraArm->CameraLagSpeed = 15.0f;
-    // Just forward of the head bone, so the view is not from inside the skull.
-    CameraArm->SocketOffset = FVector(8.0f, 0.0f, 0.0f);
-    // The head bone is at the base of the skull; eyes are a little higher.
-    // World-space, so the raise stays straight up however the head is turned.
-    // Tools/check_anim_heights.py adds it to every clip's head height, so a
-    // bigger raise must still fit inside the crouched capsule.
-    CameraArm->TargetOffset = FVector(0.0f, 0.0f, 6.0f);
-
+    // The camera hangs off the capsule and is moved to the head by
+    // PlaceCamera each frame, rather than being attached to the head bone. A
+    // bone attachment puts the camera wherever the animation says, and the
+    // animation does not know about walls: the retargeted crouch idle carries
+    // the head 57 cm from the capsule's axis, against a 34 cm capsule, and
+    // crouching against a wall the view was outside the ship.
     FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
-    FirstPersonCamera->SetupAttachment(CameraArm, USpringArmComponent::SocketName);
-    FirstPersonCamera->bUsePawnControlRotation = false;
+    FirstPersonCamera->SetupAttachment(GetCapsuleComponent());
+    FirstPersonCamera->bUsePawnControlRotation = true;
 
     UCharacterMovementComponent* Movement = GetCharacterMovement();
     Movement->MaxWalkSpeed = FMovementRules::WalkSpeed;
@@ -55,6 +45,12 @@ void ADeepSpaceCharacter::BeginPlay()
 {
     Super::BeginPlay();
     ConfigureFirstPersonBody();
+
+    // PlaceCamera reads the head bone, so the pose must already be this
+    // frame's. Nothing orders an actor's tick against its mesh's by default.
+    // Set here, not in the constructor: a prerequisite added there is held on
+    // the class default object, and would name the CDO's mesh, not ours.
+    AddTickPrerequisiteComponent(GetMesh());
 
     APlayerController* PC = Cast<APlayerController>(GetController());
     if (PC)
@@ -101,10 +97,57 @@ void ADeepSpaceCharacter::ConfigureFirstPersonBody()
     Body->HideBoneByName(HeadBone, EPhysBodyOp::PBO_None);
 }
 
+void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRotation)
+{
+    const USkeletalMeshComponent* Body = GetMesh();
+    if (!Body || !FirstPersonCamera)
+    {
+        return;
+    }
+
+    const FVector Origin = GetActorLocation();
+    const FVector Head = Body->GetSocketLocation(HeadBone);
+
+    // Height: follow the head, damped. Measured from the actor rather than in
+    // world space, so walking up a ramp -- or being teleported out of the
+    // seat -- does not smear the view.
+    const float Wanted = Head.Z + EyeHeightAboveHead - Origin.Z;
+    DampedEyeHeight = (bEyeHeightSettled && EyeHeightLagSpeed > 0.0f)
+        ? FMath::FInterpTo(DampedEyeHeight, Wanted, DeltaSeconds, EyeHeightLagSpeed)
+        : Wanted;
+    bEyeHeightSettled = true;
+
+    const float EyeZ = Origin.Z + DampedEyeHeight;
+
+    // Sideways: the head exactly, plus the forward offset in the view's yaw.
+    // Yaw only -- see EyeForwardOffset.
+    const FVector Forward = FRotator(0.0f, ViewRotation.Yaw, 0.0f).Vector();
+    const FVector Wants = FVector(Head.X, Head.Y, EyeZ) + Forward * EyeForwardOffset;
+
+    // The animation can carry the head clean out of the capsule, so sweep
+    // from the capsule's axis -- which the engine guarantees is clear -- out
+    // to where the eyes want to be, and stop at whatever is in the way. This
+    // is the spring arm's collision test, which a zero-length arm skipped.
+    const FVector Axis(Origin.X, Origin.Y, EyeZ);
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(FirstPersonEye), false, this);
+    FHitResult Hit;
+    const bool bBlocked = GetWorld()->SweepSingleByChannel(
+        Hit, Axis, Wants, FQuat::Identity, ECC_Camera,
+        FCollisionShape::MakeSphere(EyeProbeRadius), Params);
+
+    FirstPersonCamera->SetWorldLocation(bBlocked ? Hit.Location : Wants);
+}
+
+FVector ADeepSpaceCharacter::GetEyeLocation() const
+{
+    return FirstPersonCamera ? FirstPersonCamera->GetComponentLocation() : GetActorLocation();
+}
+
 void ADeepSpaceCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     UpdateWalkSpeed();
+    PlaceCamera(DeltaSeconds, GetViewRotation());
     UpdateFocusedInteractable();
 }
 
@@ -319,8 +362,10 @@ void ADeepSpaceCharacter::UpdateFocusedInteractable()
         return;
     }
 
+    // The camera's own rotation is only refreshed when the view is built, so
+    // reach along the controller's rotation rather than the component's.
     const FVector Start = FirstPersonCamera->GetComponentLocation();
-    const FVector End = Start + FirstPersonCamera->GetForwardVector() * InteractionRange;
+    const FVector End = Start + GetViewRotation().Vector() * InteractionRange;
 
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(this);

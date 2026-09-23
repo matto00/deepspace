@@ -7,7 +7,6 @@
 
 class APilotSeat;
 class UCameraComponent;
-class USpringArmComponent;
 class UInputAction;
 class UInputMappingContext;
 class UInteractableComponent;
@@ -16,8 +15,9 @@ struct FInputActionValue;
 
 /**
  * First-person pawn with a body. Owns movement (walk, sprint, crouch), the
- * camera -- which rides the body's head -- the trace that finds the
- * interactable the player is looking at, and sitting in the pilot seat.
+ * camera -- which rides the body's head, kept inside the capsule -- the trace
+ * that finds the interactable the player is looking at, and sitting in the
+ * pilot seat.
  */
 UCLASS()
 class DEEPSPACE_API ADeepSpaceCharacter : public ACharacter
@@ -57,25 +57,64 @@ public:
      */
     void ConfigureFirstPersonBody();
 
+    /**
+     * Puts the camera where the eyes are, for the view rotation given. Called
+     * every frame from Tick with GetViewRotation(); the rotation is a
+     * parameter so a test can look straight down without a controller.
+     */
+    void PlaceCamera(float DeltaSeconds, const FRotator& ViewRotation);
+
+    /** Where the eyes are in the world. */
+    FVector GetEyeLocation() const;
+
 protected:
     virtual void BeginPlay() override;
 
     /**
-     * Holds the camera at the head bone. A zero-length spring arm rather than
-     * attaching the camera directly, for its lag: the camera follows the
-     * head's position through running bob, crouching and sitting, smoothed so
-     * the bob is not nauseating. Rotation stays under the mouse. Tune
-     * CameraLagSpeed and SocketOffset in the Blueprint.
+     * The view. Hangs off the capsule, not the head bone: PlaceCamera puts it
+     * at the head every frame, but only after checking the head has not
+     * carried it out of the ship. Rotation comes from the controller.
      */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
-    TObjectPtr<USpringArmComponent> CameraArm;
-
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
     TObjectPtr<UCameraComponent> FirstPersonCamera;
 
     /** Bone the camera rides, hidden from the player's own view. */
     UPROPERTY(EditDefaultsOnly, Category = "Camera")
     FName HeadBone = TEXT("head");
+
+    /**
+     * How far above the head bone the eyes sit, cm. The bone is at the base
+     * of the skull. Tools/check_anim_heights.py adds this to every clip's
+     * head height, so a bigger raise must still fit the crouched capsule.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float EyeHeightAboveHead = 6.0f;
+
+    /**
+     * How far forward of the head bone the eyes sit, cm, so the view is not
+     * from inside the skull. Applied in the view's *yaw* only: swung with
+     * pitch it would dive into the neck as the player looked down, and the
+     * body would be seen from the inside.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float EyeForwardOffset = 8.0f;
+
+    /**
+     * Radius of the sphere swept from the capsule's axis out to the eyes, cm.
+     * Bigger than the 10 cm near clip plane, so whatever the camera stops
+     * against is still drawn rather than clipped away.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float EyeProbeRadius = 12.0f;
+
+    /**
+     * How fast the eye height follows the head's, per second; 0 disables the
+     * smoothing. Running bob is vertical and raw it is nauseating, so the
+     * height is damped. The lean is horizontal and stays rigid: damping that
+     * is what let the body run ahead of the camera and come into frame.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float EyeHeightLagSpeed = 12.0f;
 
     /** How far the player can reach, in centimetres. */
     UPROPERTY(EditDefaultsOnly, Category = "Interaction")
@@ -148,6 +187,12 @@ private:
 
     /** Re-runs the reach trace and updates FocusedInteractable. */
     void UpdateFocusedInteractable();
+
+    /** Eye height above the actor's origin, damped; see EyeHeightLagSpeed. */
+    float DampedEyeHeight = 0.0f;
+
+    /** False until DampedEyeHeight has a real value to damp towards. */
+    bool bEyeHeightSettled = false;
 
     UPROPERTY()
     TObjectPtr<UInteractableComponent> FocusedInteractable;
