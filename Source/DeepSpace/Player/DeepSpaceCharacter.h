@@ -67,6 +67,13 @@ public:
     /** Where the eyes are in the world. */
     FVector GetEyeLocation() const;
 
+    /** The seam the input handlers go through, and what tests drive: held
+     *  attitude -1..1 per body axis, and throttle as a rate, not a position. */
+    void SetFlightInput(const FVector& Attitude, float ThrottleRate);
+
+    /** The lever's position, -1..1. */
+    float GetThrottle() const { return Throttle; }
+
 protected:
     virtual void BeginPlay() override;
 
@@ -156,6 +163,28 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> CrouchAction;
 
+    /**
+     * Held while piloting to turn the ship: X pitch, Y yaw, Z roll, each
+     * -1..1. Keyboard flies and the mouse keeps looking -- the pilot's head
+     * turns independently of the ship, which is what makes a turn read as the
+     * ship turning rather than the camera swinging.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> AttitudeAction;
+
+    /**
+     * Held to move the throttle, not to set it: the flight command's throttle
+     * is persistent (set and leave), so this is a rate. +1 opens, -1 closes.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> ThrottleAction;
+
+    /** How fast held throttle input sweeps the throttle, fraction per second.
+     *  Four seconds lever-stop to lever-stop: slow enough to settle on a
+     *  cruise by feel rather than by tapping. */
+    UPROPERTY(EditDefaultsOnly, Category = "Flight")
+    float ThrottleSweepRate = 0.5f;
+
     /** How far the view may turn from the seat's facing while seated, degrees. */
     UPROPERTY(EditDefaultsOnly, Category = "Seat")
     float SeatedYawLimit = 100.0f;
@@ -178,6 +207,14 @@ private:
     void StartSprinting();
     void StopSprinting();
     void ToggleCrouch();
+    void SetAttitudeInput(const FInputActionValue& Value);
+    void ClearAttitudeInput(const FInputActionValue& Value);
+    void SetThrottleInput(const FInputActionValue& Value);
+    void ClearThrottleInput(const FInputActionValue& Value);
+
+    /** Sweeps the throttle and hands the ship this frame's intent. Refused by
+     *  the subsystem unless we are the pilot, which is the only gate. */
+    void PushFlightCommand(float DeltaSeconds);
 
     /** Sets MaxWalkSpeed from the sprint request and the movement rules. */
     void UpdateWalkSpeed();
@@ -208,4 +245,14 @@ private:
     FVector2D MoveInput = FVector2D::ZeroVector;
 
     bool bWantsToSprint = false;
+
+    /** Held attitude input, -1..1 per body axis; zero when released. */
+    FVector AttitudeInput = FVector::ZeroVector;
+
+    /** Held throttle input, -1..1; a rate, see ThrottleAction. */
+    float ThrottleInput = 0.0f;
+
+    /** The lever's position, -1..1. Survives standing up: a cruise you set and
+     *  walked away from is the point (FShipFlightState::ReleaseAttitude). */
+    float Throttle = 0.0f;
 };

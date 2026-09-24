@@ -181,6 +181,27 @@ measured bounds for exactly this reason.
 `unreal.log` output does not reach stdout under the commandlet; these scripts
 write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.
 
+## Flying
+
+The helm is keyboard-only on purpose: the mouse keeps looking, so the pilot's
+head turns independently of the ship and a turn reads as *the ship* turning.
+W/S pitch, A/D yaw, Q/Z roll, Shift/Ctrl throttle. The throttle is a lever, not
+a button — input sweeps it and it stays where it is left, which is what makes a
+cruise something you set and walk away from.
+
+`IA_Attitude`, `IA_Throttle` and their `IMC_Default` bindings are built by
+`Tools/setup_flight_input.py`, not by hand; re-running it replaces its own
+mappings and leaves the rest of the context alone. Two traps it works around:
+Python has no `InputActionFactory` (a new action is a duplicate of `IA_Look`),
+and UE 5.8 keeps the real mapping list in `default_key_mappings.mappings` —
+the context's own `mappings` is the older, empty one, and `map_key` writes to
+*that*.
+
+```bash
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/setup_flight_input.py" -unattended -nopause -nosplash -NoLiveCoding
+```
+
 ## The player's body
 
 The body's animations come from Mixamo FBX in `SourceArt/Mixamo/`, retargeted

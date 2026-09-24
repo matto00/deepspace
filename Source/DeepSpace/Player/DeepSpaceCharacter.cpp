@@ -147,6 +147,7 @@ void ADeepSpaceCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     UpdateWalkSpeed();
+    PushFlightCommand(DeltaSeconds);
     PlaceCamera(DeltaSeconds, GetViewRotation());
     UpdateFocusedInteractable();
 }
@@ -192,6 +193,56 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
     {
         Input->BindAction(CrouchAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::ToggleCrouch);
     }
+    if (AttitudeAction)
+    {
+        Input->BindAction(AttitudeAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::SetAttitudeInput);
+        Input->BindAction(AttitudeAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ClearAttitudeInput);
+    }
+    if (ThrottleAction)
+    {
+        Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::SetThrottleInput);
+        Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ClearThrottleInput);
+    }
+}
+
+void ADeepSpaceCharacter::SetFlightInput(const FVector& Attitude, float ThrottleRate)
+{
+    AttitudeInput = Attitude.BoundToBox(FVector(-1.0), FVector(1.0));
+    ThrottleInput = FMath::Clamp(ThrottleRate, -1.0f, 1.0f);
+}
+
+void ADeepSpaceCharacter::SetAttitudeInput(const FInputActionValue& Value)
+{
+    SetFlightInput(Value.Get<FVector>(), ThrottleInput);
+}
+
+void ADeepSpaceCharacter::ClearAttitudeInput(const FInputActionValue& Value)
+{
+    SetFlightInput(FVector::ZeroVector, ThrottleInput);
+}
+
+void ADeepSpaceCharacter::SetThrottleInput(const FInputActionValue& Value)
+{
+    SetFlightInput(AttitudeInput, Value.Get<float>());
+}
+
+void ADeepSpaceCharacter::ClearThrottleInput(const FInputActionValue& Value)
+{
+    SetFlightInput(AttitudeInput, 0.0f);
+}
+
+void ADeepSpaceCharacter::PushFlightCommand(float DeltaSeconds)
+{
+    UShipSubsystem* Ship = UShipSubsystem::Get(this);
+    if (!Ship || Ship->GetPilot() != this)
+    {
+        return;
+    }
+
+    // The throttle is a lever, not a button: input sweeps it and it stays put.
+    Throttle = FMath::Clamp(Throttle + ThrottleInput * ThrottleSweepRate * DeltaSeconds, -1.0f, 1.0f);
+
+    Ship->SetFlightCommand(this, Throttle, AttitudeInput);
 }
 
 void ADeepSpaceCharacter::Move(const FInputActionValue& Value)
