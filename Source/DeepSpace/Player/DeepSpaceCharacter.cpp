@@ -14,6 +14,8 @@
 #include "Ship/InteractableComponent.h"
 #include "Ship/PilotSeat.h"
 #include "Ship/ShipSubsystem.h"
+#include "Engine/GameViewportClient.h"
+#include "Components/WidgetInteractionComponent.h"
 
 ADeepSpaceCharacter::ADeepSpaceCharacter()
 {
@@ -487,9 +489,48 @@ void ADeepSpaceCharacter::SetViewLimits(bool bSeated, float SeatYaw)
     }
 }
 
+/**
+ * Look diagnostics, off by default: `ds.LookDiag 1` in the console, then
+ * move the mouse. Kept because the view shake this was written for is
+ * intermittent across editor sessions and cannot be reproduced on demand.
+ *
+ * What it distinguishes: a healthy session shows same-sign deltas whose sum
+ * tracks the yaw. The broken one shows the same 0.07 quantum alternating
+ * sign every frame, so the sum stays near zero and the view never turns --
+ * which puts the fault upstream of the game, in the pointer grab, rather
+ * than anywhere in this class.
+ */
+static TAutoConsoleVariable<int32> CVarLookDiag(
+    TEXT("ds.LookDiag"), 0,
+    TEXT("Log mouse-look deltas, capture state and resulting rotation (0 off, N = frames to log)."),
+    ECVF_Default);
+
 void ADeepSpaceCharacter::Look(const FInputActionValue& Value)
 {
+    static FVector2D GLookSum = FVector2D::ZeroVector;
+    static int32 GLookCalls = 0;
+
     const FVector2D Axis = Value.Get<FVector2D>();
+
+    if (const int32 Budget = CVarLookDiag.GetValueOnGameThread(); Budget > 0 && GLookCalls < Budget)
+    {
+        ++GLookCalls;
+        GLookSum += Axis;
+        const APlayerController* PC = Cast<APlayerController>(Controller);
+        const UGameViewportClient* VP = GetWorld() ? GetWorld()->GetGameViewport() : nullptr;
+        UE_LOG(LogTemp, Warning,
+            TEXT("LOOKDIAG #%d raw=(%.4f,%.4f) sum=(%.1f,%.1f) yaw=%.3f pitch=%.3f "
+                 "capture=%d lockmode=%d cursor=%d pointerOver=%d ignoreLook=%d"),
+            GLookCalls, Axis.X, Axis.Y, GLookSum.X, GLookSum.Y,
+            PC ? PC->GetControlRotation().Yaw : -999.0f,
+            PC ? PC->GetControlRotation().Pitch : -999.0f,
+            VP ? (int32)VP->GetMouseCaptureMode() : -1,
+            VP ? (int32)VP->GetMouseLockMode() : -1,
+            PC ? (int32)PC->bShowMouseCursor : -1,
+            (Pointer && Pointer->IsOverInteractableWidget()) ? 1 : 0,
+            PC ? (int32)PC->IsLookInputIgnored() : -1);
+    }
+
     AddControllerYawInput(Axis.X);
     AddControllerPitchInput(Axis.Y);
 }

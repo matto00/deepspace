@@ -17,6 +17,11 @@ namespace
     // Negative pitch tips the lid's top toward +X, which is away from the
     // reader (the screen faces -X).
     constexpr float LidPitch = -15.0f;
+
+    // How far the screen stands off the lid's front face, cm. Small, but it
+    // must be larger than nothing: the lid blocks the Visibility channel the
+    // pointer traces on, so a screen flush with it is unreachable.
+    constexpr float ScreenClearance = 0.5f;
 }
 
 AShipLaptop::AShipLaptop()
@@ -34,10 +39,14 @@ AShipLaptop::AShipLaptop()
     Lid->SetupAttachment(Root);
     Lid->SetRelativeRotation(FRotator(LidPitch, 0.0f, 0.0f));
 
-    // The screen rides the lid, just clear of its front face, so tilting the
-    // lid tilts the screen with it.
-    Screen->SetupAttachment(Lid);
-    Screen->SetRelativeLocation(FVector(-LidSize.X * 0.5f - 0.2f, 0.0f, 0.0f));
+    // The screen stays on the unscaled root and is *placed* to match the lid
+    // (FitParts), rather than parented to it. FitBox gives the lid a heavily
+    // non-uniform scale -- roughly 0.015 x 0.30 x 0.20 -- and a child inherits
+    // it: the quad and its collision box come out squashed, and the stand-off
+    // below collapses to a fraction of a millimetre, burying the screen inside
+    // the lid where the lid blocks the trace first. The console has always
+    // hung its screen off Root for the same reason; this one did not, which
+    // is why the console could be clicked and the laptop could not.
     Screen->SetWidgetClass(UPowerAllocationWidget::StaticClass());
 
     SetPanelWidthCm(PanelWidthCm);
@@ -85,6 +94,17 @@ void AShipLaptop::FitParts()
             const FVector Offset = Lid->GetRelativeRotation().RotateVector(-Bounds.GetCenter() * Scale);
             Lid->SetRelativeLocation(LidCentre + Offset);
         }
+    }
+
+    // Place the screen where the lid's front face is, tilted with it. Done
+    // here rather than by attachment, so the lid's non-uniform scale cannot
+    // reach the panel.
+    if (Screen)
+    {
+        const FRotator Tilt(LidPitch, 0.0f, 0.0f);
+        Screen->SetRelativeRotation(Tilt);
+        Screen->SetRelativeLocation(
+            LidCentre + Tilt.RotateVector(FVector(-(LidSize.X * 0.5f + ScreenClearance), 0.0f, 0.0f)));
     }
 
     SetPanelWidthCm(PanelWidthCm);
