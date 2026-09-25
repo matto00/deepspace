@@ -29,31 +29,58 @@ namespace
             return;
         }
 
-        // The quad faces its own -X. Stand off a metre and look back at it.
-        const FVector Face = Panel->GetComponentRotation().RotateVector(FVector(-1.0, 0.0, 0.0));
-        const FVector Eye = Panel->GetComponentLocation() + Face * 100.0;
-        const FVector Target = Panel->GetComponentLocation() - Face * 5.0;
+        const FTransform Face = Panel->GetComponentTransform();
+        const FVector Normal = Face.GetUnitAxis(EAxis::X);   // a widget quad's normal
+        const FVector Right  = Face.GetUnitAxis(EAxis::Y);
+        const FVector Up     = Face.GetUnitAxis(EAxis::Z);
 
-        FCollisionQueryParams Params(SCENE_QUERY_STAT(ScreenReachable), false);
-        FHitResult Hit;
-        const bool bHit = Owner->GetWorld()->LineTraceSingleByChannel(
-            Hit, Eye, Target, ECC_Visibility, Params);
+        // Where a standing player's eyes are relative to a screen: in front
+        // of it and above it. A trace straight at the centre is not enough --
+        // a lid leaning away only occludes the upper part of its own panel,
+        // so the bug that shipped survives a single centre shot.
+        const FVector Centre = Panel->GetComponentLocation();
+        const FVector Eye = Centre + Normal * 60.0 + FVector(0.0, 0.0, 40.0);
+
+        // Sample the corners as well as the middle, inset so the very edge
+        // of the quad is not what decides the result.
+        const FVector2D Size = Panel->GetDrawSize() * Panel->GetComponentScale().X * 0.5 * 0.7;
+        const TArray<FVector> Targets = {
+            Centre,
+            Centre + Right * Size.X + Up * Size.Y,
+            Centre - Right * Size.X + Up * Size.Y,
+            Centre + Right * Size.X - Up * Size.Y,
+            Centre - Right * Size.X - Up * Size.Y,
+        };
+
+        int32 Blocked = 0;
+        FString FirstBlocker;
+        for (const FVector& Target : Targets)
+        {
+            FCollisionQueryParams Params(SCENE_QUERY_STAT(ScreenReachable), false);
+            FHitResult Hit;
+            Owner->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Target, ECC_Visibility, Params);
+            if (Hit.GetComponent() != Panel)
+            {
+                ++Blocked;
+                if (FirstBlocker.IsEmpty())
+                {
+                    FirstBlocker = GetNameSafe(Hit.GetComponent());
+                }
+            }
+        }
 
         Test.AddInfo(FString::Printf(
-            TEXT("%s: panelLoc=%s panelScale=%s eye=%s hit=%s(%s) blocking=%d"),
-            What, *Panel->GetComponentLocation().ToCompactString(),
-            *Panel->GetComponentScale().ToCompactString(),
-            *Eye.ToCompactString(),
-            *GetNameSafe(Hit.GetComponent()),
-            *GetNameSafe(Hit.GetActor()), bHit ? 1 : 0));
+            TEXT("%s: panelLoc=%s scale=%s eye=%s blocked=%d/%d firstBlocker=%s"),
+            What, *Centre.ToCompactString(), *Panel->GetComponentScale().ToCompactString(),
+            *Eye.ToCompactString(), Blocked, Targets.Num(),
+            FirstBlocker.IsEmpty() ? TEXT("-") : *FirstBlocker));
 
-        Test.TestTrue(FString::Printf(TEXT("%s: the pointer's trace hits something"), What), bHit);
         Test.TestEqual(
-            FString::Printf(TEXT("%s: what it hits first is the screen, not the casing"), What),
-            Hit.GetComponent(), static_cast<UPrimitiveComponent*>(Panel));
+            FString::Printf(TEXT("%s: every part of the screen is reachable from where a player stands"), What),
+            Blocked, 0);
 
-        // A non-uniform scale reaching the panel is the mechanism behind both
-        // failures: it squashes the quad and its collision box together.
+        // A non-uniform scale reaching the panel squashes the quad and its
+        // collision box together; that was the laptop's first failure.
         const FVector Scale = Panel->GetComponentScale();
         Test.TestTrue(
             FString::Printf(TEXT("%s: the panel's scale is uniform"), What),

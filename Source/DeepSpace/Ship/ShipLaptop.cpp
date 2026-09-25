@@ -96,18 +96,26 @@ void AShipLaptop::FitParts()
         }
     }
 
-    // Place the screen where the lid's front face is, tilted with it. Done
-    // here rather than by attachment, so the lid's non-uniform scale cannot
-    // reach the panel.
+    // Size the panel first: ConfigurePanel sets the panel's relative rotation
+    // itself, to turn the quad's +X normal round to the -X every fixture in
+    // this ship faces. Placing the screen before this call means that flip
+    // overwrites the lid's tilt -- which leaves a vertical panel inside a
+    // lid leaning 15 degrees, most of it behind a surface that blocks the
+    // channel the pointer traces on. It looked fine and could not be clicked.
+    SetPanelWidthCm(PanelWidthCm);
+
+    // Now place it: tilted with the lid, and standing off its front face.
     if (Screen)
     {
         const FRotator Tilt(LidPitch, 0.0f, 0.0f);
-        Screen->SetRelativeRotation(Tilt);
+
+        // Compose rather than replace: the flip must survive, or the screen
+        // shows its back. Quaternion order applies the flip first.
+        const FQuat Flip(FRotator(0.0f, 180.0f, 0.0f));
+        Screen->SetRelativeRotation(FQuat(Tilt) * Flip);
         Screen->SetRelativeLocation(
             LidCentre + Tilt.RotateVector(FVector(-(LidSize.X * 0.5f + ScreenClearance), 0.0f, 0.0f)));
     }
-
-    SetPanelWidthCm(PanelWidthCm);
 }
 
 void AShipLaptop::OnConstruction(const FTransform& Transform)

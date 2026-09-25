@@ -303,6 +303,20 @@ Two guards, and they check different things:
 Sideways reach is deliberately *not* guarded per clip: heads do leave the
 capsule, and the sweep is what handles it.
 
+### Changing a component's attachment does not move actors already placed
+
+`SetupAttachment` runs in the constructor, so it shapes *new* instances. An
+actor already saved into `L_Hauler` keeps the hierarchy and the component
+transforms it was serialised with. Re-parenting the laptop's screen off its
+scaled lid fixed the class and changed nothing in the level: the placed
+laptop still had its screen under the lid, still inheriting a non-uniform
+scale of `0.054 x 0.015`, and still unclickable. The C++ was right and the
+ship was wrong for another hour.
+
+**After any change to a generated actor's components, rebuild the level**
+(`Tools/build_hauler.py`) — it respawns everything prefixed `hauler_`, which
+is what actually applies the new constructor. Then `Tools/verify_level.py`.
+
 ### A Blueprint can be broken while everything else passes
 
 C++ builds, tests pass, the level validates — and the editor still refuses to
