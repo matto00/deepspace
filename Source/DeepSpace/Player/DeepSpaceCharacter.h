@@ -11,6 +11,7 @@ class UInputAction;
 class UInputMappingContext;
 class UInteractableComponent;
 class UUserWidget;
+class UWidgetInteractionComponent;
 struct FInputActionValue;
 
 /**
@@ -73,6 +74,22 @@ public:
 
     /** The lever's position, -1..1. */
     float GetThrottle() const { return Throttle; }
+
+    /**
+     * True when the pointer is live and over something on a ship screen.
+     *
+     * The pointer is the whole interaction model for screens (spec decision
+     * 1): no cursor, no fullscreen, no pause -- a virtual Slate user driven
+     * along the view, live only within reach of a screen.
+     */
+    UFUNCTION(BlueprintPure, Category = "Interaction")
+    bool IsPointingAtScreen() const;
+
+    /** Press and release, exposed so a test can click without an input stack. */
+    void PressPointer();
+    void ReleasePointer();
+
+    UWidgetInteractionComponent* GetPointer() const { return Pointer; }
 
 protected:
     virtual void BeginPlay() override;
@@ -164,6 +181,11 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> InteractAction;
 
+    /** Click, for driving a screen. Left mouse button; see
+     *  Tools/setup_pointer_input.py. */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> PointAction;
+
     /** Held to sprint. */
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> SprintAction;
@@ -233,6 +255,18 @@ private:
 
     /** Re-runs the reach trace and updates FocusedInteractable. */
     void UpdateFocusedInteractable();
+
+    /** Aims the pointer along the view and switches it off when it cannot be
+     *  used -- seated, or with no screen in reach. */
+    void UpdatePointer();
+
+    /**
+     * Drives world screens. Traces along the view out to InteractionRange, so
+     * a screen can only be operated from where the player could touch it, and
+     * runs as a virtual Slate user so no OS cursor is ever involved.
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Interaction", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UWidgetInteractionComponent> Pointer;
 
     /** Eye height above the actor's origin, damped; see EyeHeightLagSpeed. */
     float DampedEyeHeight = 0.0f;

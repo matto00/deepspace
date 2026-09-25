@@ -17,10 +17,10 @@ public class DeepSpace : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "UMG" });
 
 		// Json: the movement-contract test reads Tools/movement_contract.json.
-		PrivateDependencyModuleNames.AddRange(new string[] { "Json" });
-
-		// Uncomment if you are using Slate UI
-		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
+		// Slate/SlateCore: the ship's screens are real Slate built in C++ -- the
+		// widget trees live in Source/DeepSpace/UI, not in .uasset files, so that
+		// screen logic stays diffable and reviewable (ADR 0002).
+		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "Slate", "SlateCore" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

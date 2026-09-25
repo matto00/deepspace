@@ -45,6 +45,11 @@ SPHERE = "/Engine/BasicShapes/Sphere"
 
 # Every actor the script owns carries this prefix and is rebuilt each run.
 TAG = "hauler_"
+
+# The consumer group the ship's lights belong to. The same string is
+# ShipPower::Lights in C++: one identifier for the power consumer and for the
+# actors that answer to it.
+LIGHTS_TAG = "Power.Lights"
 TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
 SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
 
@@ -220,7 +225,15 @@ def place_lights(actor_sub, lights):
         actor = actor_sub.spawn_actor_from_class(
             unreal.PointLight, unreal.Vector(*light.location), unreal.Rotator(0, 0, 0))
         actor.set_actor_label(TAG + light.label)
+        # An actor tag, not a label: labels are for humans and indices change
+        # whenever the layout does, but a tag is a contract the generator can
+        # keep and C++ can rely on. UShipLightingSubsystem finds every light
+        # in the ship this way and nothing else.
+        actor.set_editor_property("tags", [unreal.Name(LIGHTS_TAG)])
         c = actor.get_component_by_class(unreal.PointLightComponent)
+        # Movable, because the lights dim: a Static light is baked and cannot
+        # change intensity or colour at runtime at all.
+        c.set_mobility(unreal.ComponentMobility.MOVABLE)
         c.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
         c.set_editor_property("intensity", float(light.intensity))
         c.set_editor_property("attenuation_radius", float(light.radius))
@@ -278,6 +291,19 @@ def build():
     console_mesh = console.get_component_by_class(unreal.StaticMeshComponent)
     if console_mesh:
         console_mesh.set_material(0, mats["furniture"])
+
+    # The laptop on the galley table: the allocation editor. A C++ actor with
+    # a world-space widget on it; the script only hands it meshes and a
+    # material, per ADR 0002.
+    laptop = actor_sub.spawn_actor_from_class(
+        unreal.ShipLaptop, unreal.Vector(*ship.laptop_location),
+        unreal.Rotator(0, 0, ship.laptop_yaw))
+    laptop.set_actor_label(TAG + "laptop")
+    for part in ("base", "lid"):
+        component = laptop.get_editor_property(part)
+        component.set_static_mesh(meshes["chamfer"])
+        component.set_material(0, mats["furniture"])
+    laptop.fit_parts()
 
     start = actor_sub.spawn_actor_from_class(
         unreal.PlayerStart, unreal.Vector(*ship.player_start), unreal.Rotator(0, 0, 0))

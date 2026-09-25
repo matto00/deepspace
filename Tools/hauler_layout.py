@@ -148,6 +148,13 @@ REGIONS = [
 CONSOLE = Mount("engineering", "starboard", 120)
 CONSOLE_WIDTH = 100
 
+# The laptop, on the galley table. Somewhere you sit down, not a station you
+# report to: the allocation it edits is a preference, and the ship is no worse
+# for never being asked about it (docs/vision.md, the anti-chore principle).
+# (room, (x, y) from the room's corner, z, yaw). z is the table top: the
+# galley_table prop's surface is 8 cm thick and centred at 75.
+LAPTOP = ("galley", (300, 230), 79, 90)
+
 # The game opens with waking aboard your ship.
 PLAYER_START = ("bunk", (200, 150), 100)
 
@@ -161,7 +168,8 @@ SLIDE_ROOM = "corridor"
 
 Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
                           "player_start regions keep_clear "
-                          "pilot_seat_location pilot_seat_yaw")
+                          "pilot_seat_location pilot_seat_yaw "
+                          "laptop_location laptop_yaw")
 
 
 def generate():
@@ -208,6 +216,10 @@ def generate():
     seat_room, seat_at, seat_yaw = PILOT_SEAT
     pilot_seat_location = resolve_point(plan, seat_room, seat_at)
 
+    laptop_room, laptop_at, laptop_z, laptop_yaw = LAPTOP
+    laptop_location = resolve_point(plan, laptop_room, laptop_at, laptop_z)
+
     return Ship(plan, boxes, lights, console_location, console_yaw,
                 player_start, regions, keep_clear,
-                pilot_seat_location, seat_yaw)
+                pilot_seat_location, seat_yaw,
+                laptop_location, laptop_yaw)

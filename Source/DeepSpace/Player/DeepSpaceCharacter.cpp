@@ -4,6 +4,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/WidgetInteractionComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -39,6 +40,22 @@ ADeepSpaceCharacter::ADeepSpaceCharacter()
     Movement->MaxWalkSpeedCrouched = FMovementRules::CrouchSpeed;
     Movement->NavAgentProps.bCanCrouch = true;
     Movement->SetCrouchedHalfHeight(FMovementRules::CrouchedHalfHeight);
+
+    // The pointer. It rides the capsule and is aimed by UpdatePointer rather
+    // than attached to the camera, for the same reason the camera is not
+    // attached to the head: the thing it must agree with is the *view*
+    // rotation, which is the controller's, not any component's.
+    Pointer = CreateDefaultSubobject<UWidgetInteractionComponent>(TEXT("Pointer"));
+    Pointer->SetupAttachment(GetCapsuleComponent());
+    Pointer->InteractionSource = EWidgetInteractionSource::World;
+    Pointer->TraceChannel = ECC_Visibility;
+    Pointer->InteractionDistance = InteractionRange;
+
+    // A virtual Slate user, so no OS cursor is ever created and the game's
+    // own input is untouched. Index 8 keeps clear of the real local players.
+    Pointer->VirtualUserIndex = 8;
+    Pointer->bEnableHitTesting = true;
+    Pointer->bShowDebug = false;
 }
 
 void ADeepSpaceCharacter::BeginPlay()
@@ -51,6 +68,13 @@ void ADeepSpaceCharacter::BeginPlay()
     // Set here, not in the constructor: a prerequisite added there is held on
     // the class default object, and would name the CDO's mesh, not ours.
     AddTickPrerequisiteComponent(GetMesh());
+
+    // The pointer traces from wherever UpdatePointer last put it, so it must
+    // tick after us or it aims at the previous frame's view.
+    if (Pointer)
+    {
+        Pointer->AddTickPrerequisiteActor(this);
+    }
 
     APlayerController* PC = Cast<APlayerController>(GetController());
     if (PC)
@@ -158,6 +182,59 @@ void ADeepSpaceCharacter::Tick(float DeltaSeconds)
     PushFlightCommand(DeltaSeconds);
     PlaceCamera(DeltaSeconds, GetViewRotation());
     UpdateFocusedInteractable();
+    UpdatePointer();
+}
+
+void ADeepSpaceCharacter::UpdatePointer()
+{
+    if (!Pointer)
+    {
+        return;
+    }
+
+    // Seated, the controls are the ship's and E means "stand up"; a pointer
+    // live at the helm would fight both.
+    const bool bAllowed = !IsSeated();
+    if (Pointer->IsActive() != bAllowed)
+    {
+        bAllowed ? Pointer->Activate() : Pointer->Deactivate();
+        if (!bAllowed)
+        {
+            // Never leave a button held down because the player sat down.
+            Pointer->ReleasePointerKey(EKeys::LeftMouseButton);
+        }
+    }
+    if (!bAllowed)
+    {
+        return;
+    }
+
+    // Reach is the same rule the hands obey: a screen can only be driven from
+    // where the player could touch it, so the console cannot be operated from
+    // across the room.
+    Pointer->InteractionDistance = InteractionRange;
+    Pointer->SetWorldLocationAndRotation(GetEyeLocation(), GetViewRotation());
+}
+
+bool ADeepSpaceCharacter::IsPointingAtScreen() const
+{
+    return Pointer && Pointer->IsActive() && Pointer->IsOverInteractableWidget();
+}
+
+void ADeepSpaceCharacter::PressPointer()
+{
+    if (Pointer && Pointer->IsActive())
+    {
+        Pointer->PressPointerKey(EKeys::LeftMouseButton);
+    }
+}
+
+void ADeepSpaceCharacter::ReleasePointer()
+{
+    if (Pointer)
+    {
+        Pointer->ReleasePointerKey(EKeys::LeftMouseButton);
+    }
 }
 
 void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -191,6 +268,12 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
     if (InteractAction)
     {
         Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::TryInteract);
+    }
+    if (PointAction)
+    {
+        Input->BindAction(PointAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressPointer);
+        Input->BindAction(PointAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleasePointer);
+        Input->BindAction(PointAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleasePointer);
     }
     if (SprintAction)
     {
@@ -469,5 +552,13 @@ FText ADeepSpaceCharacter::GetCurrentPrompt() const
     {
         return NSLOCTEXT("DeepSpace", "StandUp", "Stand up");
     }
-    return FocusedInteractable ? FocusedInteractable->GetPrompt() : FText::GetEmpty();
+    if (FocusedInteractable)
+    {
+        return FocusedInteractable->GetPrompt();
+    }
+    if (IsPointingAtScreen())
+    {
+        return NSLOCTEXT("DeepSpace", "UseScreen", "Click  Screen");
+    }
+    return FText::GetEmpty();
 }

@@ -24,6 +24,7 @@ import hauler_layout as L
 MAP_PATH = "/Game/Maps/L_Hauler"
 TAG = "hauler_"
 TOLERANCE = 1.0  # cm
+LIGHTS_TAG = "Power.Lights"
 
 
 def main():
@@ -51,7 +52,8 @@ def main():
 
     for label, want in (("console", ship.console_location),
                         ("player_start", ship.player_start),
-                        ("pilot_seat", ship.pilot_seat_location)):
+                        ("pilot_seat", ship.pilot_seat_location),
+                        ("laptop", ship.laptop_location)):
         actor = actors.get(TAG + label)
         if actor is None:
             failures.append("MISSING " + label)
@@ -65,6 +67,17 @@ def main():
     built_lights = [k for k in actors if k.startswith(TAG + "light_")]
     if len(built_lights) != len(ship.lights):
         failures.append("%d lights built, layout has %d" % (len(built_lights), len(ship.lights)))
+
+    # The tag is the contract C++ addresses generated actors by (never the
+    # name, never the index), so an untagged light is a light the ship cannot
+    # dim. Mobility too: a Static light is baked and cannot change at all.
+    for label in built_lights:
+        actor = actors[label]
+        if LIGHTS_TAG not in [str(t) for t in actor.get_editor_property("tags")]:
+            failures.append("%s is not tagged %s" % (label, LIGHTS_TAG))
+        component = actor.get_component_by_class(unreal.PointLightComponent)
+        if component.get_editor_property("mobility") == unreal.ComponentMobility.STATIC:
+            failures.append("%s is a Static light and can never dim" % label)
 
     # The starfield used to be 160 actors in the map. It is now generated in
     # C++ on the counter-frame at BeginPlay, so what the level must contain is
