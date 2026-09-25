@@ -29,6 +29,21 @@ const FShipFlightCommand& FShipFlightState::GetCommand() const
     return Command;
 }
 
+void FShipFlightState::ChargeJumpDrive(double DeltaSeconds, double Satisfaction)
+{
+    if (DeltaSeconds <= 0.0)
+    {
+        return;
+    }
+    const double Rate = FMath::Clamp(Satisfaction, 0.0, 1.0) / JumpChargeSeconds;
+    JumpCharge = FMath::Clamp(JumpCharge + Rate * DeltaSeconds, 0.0, 1.0);
+}
+
+double FShipFlightState::GetJumpCharge() const
+{
+    return JumpCharge;
+}
+
 void FShipFlightState::ReleaseAttitude()
 {
     Command.AttitudeRate = FVector::ZeroVector;

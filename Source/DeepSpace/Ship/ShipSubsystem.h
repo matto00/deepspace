@@ -59,6 +59,54 @@ public:
     bool IsPowerOverloaded() const;
 
     /**
+     * Power allocation. The subsystem is authoritative and every screen,
+     * light and booster *asks* -- nothing stores a copy, which is what makes
+     * two screens showing the same allocation unable to disagree.
+     */
+    UFUNCTION(BlueprintPure, Category = "Power")
+    TArray<FName> GetPowerConsumers() const;
+
+    /** The player's preference for this consumer. No scale, no correct
+     *  value: it only means anything against the other weights. */
+    UFUNCTION(BlueprintPure, Category = "Power")
+    float GetConsumerWeight(FName ConsumerId) const;
+
+    UFUNCTION(BlueprintCallable, Category = "Power")
+    void SetConsumerWeight(FName ConsumerId, float Weight);
+
+    UFUNCTION(BlueprintPure, Category = "Power")
+    float GetConsumerShare(FName ConsumerId) const;
+
+    UFUNCTION(BlueprintPure, Category = "Power")
+    float GetConsumerWant(FName ConsumerId) const;
+
+    /** 0..1. How well this consumer is fed, and therefore how well it works. */
+    UFUNCTION(BlueprintPure, Category = "Power")
+    float GetConsumerSatisfaction(FName ConsumerId) const;
+
+    /**
+     * The engineering console's switch. Lights off means the lights want
+     * nothing and take part in no split, so the power genuinely goes
+     * elsewhere -- and the ship is genuinely dark.
+     */
+    UFUNCTION(BlueprintPure, Category = "Power")
+    bool AreLightsOn() const;
+
+    UFUNCTION(BlueprintCallable, Category = "Power")
+    void SetLightsOn(bool bOn);
+
+    /** 0..1, wound up by the engine at a rate its allocation scales. */
+    UFUNCTION(BlueprintPure, Category = "Flight")
+    float GetJumpCharge() const;
+
+    /**
+     * How hard the ship pushes right now, cm/s^2. Boosters on a thin
+     * allocation push softer; they never stop pushing.
+     */
+    UFUNCTION(BlueprintPure, Category = "Flight")
+    float GetLinearAcceleration() const;
+
+    /**
      * Pilot mode. The pilot seat reports who sits at the helm; anything that
      * cares whether the ship is being flown asks here rather than reaching
      * into the seat or the character.
@@ -118,6 +166,30 @@ private:
     UPROPERTY()
     TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
 
+    /** Applies this frame's allocation to the things it drives. Lights are
+     *  the lighting subsystem's job; these are the ones that live here. */
+    void ApplyAllocation(float DeltaSeconds);
+
+    bool bLightsOn = true;
+
     /** Placeholder reactor rating for milestone 1. Becomes a module later. */
     static constexpr float DefaultReactorOutput = 1000.0f;
+
+    /**
+     * What each consumer would use given everything it asked for. They sum
+     * to more than the reactor makes, deliberately: if everything could be
+     * fed at once the split would never be a choice, and a choice with no
+     * cost is not one.
+     */
+    static constexpr float LightsWant = 300.0f;
+    static constexpr float BoostersWant = 450.0f;
+    static constexpr float EngineWant = 500.0f;
+
+    /**
+     * How hard a completely starved set of boosters still pushes, as a
+     * fraction. Not zero: a ship that cannot move is a failure state, and
+     * the whole model is that systems degrade instead of failing. A quarter
+     * thrust is unmistakably sluggish and still gets you home.
+     */
+    static constexpr float StarvedBoosterThrust = 0.25f;
 };

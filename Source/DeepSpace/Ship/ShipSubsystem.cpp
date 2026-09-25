@@ -18,6 +18,82 @@ void UShipSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
     PowerState.SetReactorOutput(DefaultReactorOutput);
+
+    // An even split to start with, which is a starting point and not a
+    // recommendation: every split is viable and none is correct.
+    PowerState.SetConsumer(ShipPower::Lights, LightsWant, 1.0f);
+    PowerState.SetConsumer(ShipPower::Boosters, BoostersWant, 1.0f);
+    PowerState.SetConsumer(ShipPower::Engine, EngineWant, 1.0f);
+}
+
+TArray<FName> UShipSubsystem::GetPowerConsumers() const
+{
+    return PowerState.GetConsumers();
+}
+
+float UShipSubsystem::GetConsumerWeight(FName ConsumerId) const
+{
+    return PowerState.GetWeight(ConsumerId);
+}
+
+void UShipSubsystem::SetConsumerWeight(FName ConsumerId, float Weight)
+{
+    PowerState.SetWeight(ConsumerId, Weight);
+}
+
+float UShipSubsystem::GetConsumerShare(FName ConsumerId) const
+{
+    return PowerState.GetShare(ConsumerId);
+}
+
+float UShipSubsystem::GetConsumerWant(FName ConsumerId) const
+{
+    return PowerState.GetWant(ConsumerId);
+}
+
+float UShipSubsystem::GetConsumerSatisfaction(FName ConsumerId) const
+{
+    return PowerState.GetSatisfaction(ConsumerId);
+}
+
+bool UShipSubsystem::AreLightsOn() const
+{
+    return bLightsOn;
+}
+
+void UShipSubsystem::SetLightsOn(bool bOn)
+{
+    bLightsOn = bOn;
+
+    // Want, not weight: the player's weight for the lights is a preference
+    // and survives them being switched off and back on.
+    PowerState.SetWant(ShipPower::Lights, bOn ? LightsWant : 0.0f);
+}
+
+float UShipSubsystem::GetJumpCharge() const
+{
+    return static_cast<float>(FlightState.GetJumpCharge());
+}
+
+float UShipSubsystem::GetLinearAcceleration() const
+{
+    return static_cast<float>(FlightState.GetLimits().LinearAcceleration);
+}
+
+void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
+{
+    // Asked for fresh every frame and never stored. A cached satisfaction is
+    // how two things that read the same allocation start disagreeing.
+    const float BoosterFeed = PowerState.GetSatisfaction(ShipPower::Boosters);
+    const float EngineFeed = PowerState.GetSatisfaction(ShipPower::Engine);
+
+    FShipFlightLimits Limits = FlightState.GetLimits();
+    const FShipFlightLimits Rated = FShipFlightLimits::Cruise();
+    Limits.LinearAcceleration = Rated.LinearAcceleration
+        * (StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed);
+    FlightState.SetLimits(Limits);
+
+    FlightState.ChargeJumpDrive(DeltaSeconds, EngineFeed);
 }
 
 bool UShipSubsystem::InstallModule(UShipModuleDataAsset* Module)
@@ -94,6 +170,7 @@ APawn* UShipSubsystem::GetPilot() const
 
 void UShipSubsystem::Tick(float DeltaTime)
 {
+    ApplyAllocation(DeltaTime);
     FlightState.Step(DeltaTime);
 }
 

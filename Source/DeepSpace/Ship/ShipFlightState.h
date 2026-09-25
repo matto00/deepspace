@@ -96,6 +96,23 @@ public:
     /** Placing the ship without flying there. Used by level setup and tests. */
     void SetUniverseTransform(const FUniversePosition& NewPosition, const FQuat& NewOrientation);
 
+    /**
+     * The jump drive winds up, 0..1, at a rate scaled by how well the engine
+     * is being fed. Power affects *time to ready* and nothing else: there is
+     * no discharge, no decay and no way to fail a charge, so an engine on a
+     * thin allocation is slow to jump and never broken.
+     *
+     * Nothing consumes the charge yet -- hyperjumps are a later milestone.
+     * It exists now because it is the engine's whole answer to being
+     * under-powered, and inventing it later would mean inventing the
+     * consumer later too.
+     */
+    void ChargeJumpDrive(double DeltaSeconds, double Satisfaction);
+    double GetJumpCharge() const;
+
+    /** Seconds from cold to ready with the engine fully fed. */
+    static constexpr double JumpChargeSeconds = 90.0;
+
 private:
     void SubStep(double FixedDelta);
 
@@ -105,6 +122,8 @@ private:
     FVector AngularVelocity = FVector::ZeroVector; // rad/s, body frame
     FVector LastAngularAcceleration = FVector::ZeroVector;
     FVector LastLinearAcceleration = FVector::ZeroVector;
+
+    double JumpCharge = 0.0;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;
