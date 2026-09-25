@@ -14,6 +14,7 @@
 #include "Ship/InteractableComponent.h"
 #include "Ship/PilotSeat.h"
 #include "Ship/ShipSubsystem.h"
+#include "UI/ShipHUDWidget.h"
 #include "Engine/GameViewportClient.h"
 #include "Components/WidgetInteractionComponent.h"
 
@@ -47,6 +48,10 @@ ADeepSpaceCharacter::ADeepSpaceCharacter()
     // than attached to the camera, for the same reason the camera is not
     // attached to the head: the thing it must agree with is the *view*
     // rotation, which is the controller's, not any component's.
+    // The HUD is C++ Slate, not a widget blueprint: it is logic that reads
+    // ship state every frame, and ADR 0002 keeps that out of Content.
+    HUDWidgetClass = UShipHUDWidget::StaticClass();
+
     Pointer = CreateDefaultSubobject<UWidgetInteractionComponent>(TEXT("Pointer"));
     Pointer->SetupAttachment(GetCapsuleComponent());
     Pointer->InteractionSource = EWidgetInteractionSource::World;

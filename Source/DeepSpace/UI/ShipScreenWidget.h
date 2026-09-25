@@ -26,6 +26,16 @@ class DEEPSPACE_API UShipScreenWidget : public UUserWidget
     GENERATED_BODY()
 
 public:
+    /**
+     * The palette every surface in the ship shares -- screens and the HUD
+     * alike -- so one change re-tints all of them. Public because the HUD is
+     * not a screen but must not invent its own colours.
+     */
+    static const FLinearColor Panel;
+    static const FLinearColor Ink;
+    static const FLinearColor Dim;
+    static const FLinearColor Accent;
+
     UShipScreenWidget(const FObjectInitializer& ObjectInitializer);
 
     /** The ship, or nullptr outside a world. Never cached. */
@@ -44,10 +54,7 @@ protected:
     // -- palette -------------------------------------------------------
     // The ship's own colours: teal accent on a near-black panel, matching
     // the emissive trim Tools/build_hauler.py paints the hull with.
-    static const FLinearColor Panel;
-    static const FLinearColor Ink;
-    static const FLinearColor Dim;
-    static const FLinearColor Accent;
+
 
     /**
      * Point sizes are chosen against the *real* panel: a 60 cm console
