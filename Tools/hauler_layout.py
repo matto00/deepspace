@@ -76,6 +76,12 @@ WINDOWS = [
     # pilot's eye line so the view carries down toward what you are
     # approaching, and the head clears the overhead panel at 228.
     Window("cockpit", "fore", 360, 70, 215),
+    # Panoramic: the glass wraps the corners and runs a third of the way down
+    # each side wall (120 of 350), hard against the fore end, at the same sill
+    # and head as the fore pane so it reads as one continuous band. A 20 cm
+    # post survives at each fore corner, which is what holds the roof up.
+    Window("cockpit", "port", 120, 70, 215, 1700),
+    Window("cockpit", "starboard", 120, 70, 215, 1700),
     Window("galley", "starboard", 200, 100, 170),
 ]
 
