@@ -66,9 +66,16 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Console")
     FVector2D DrawSizePixels = FVector2D(600.0f, 400.0f);
 
-    /** How far off the panel's face the screen sits, cm. */
+    /**
+     * How far proud of the panel's *measured* face the screen sits, cm.
+     *
+     * A clearance, not an absolute offset: the console's depth is whatever
+     * mesh and scale the Blueprint assigns, and a hard-coded offset put the
+     * screen 1.5 cm inside its own front face -- rendered, and invisible.
+     * Meshes do not agree on pivot placement, so the face is measured.
+     */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Console")
-    float ScreenStandoff = 6.0f;
+    float ScreenClearance = 1.5f;
 
 private:
     /**
@@ -86,4 +93,7 @@ private:
 
     /** Keeps the reach prompt saying what E will actually do. */
     void SyncPrompt();
+
+    /** Puts the screen just proud of the panel's measured front face. */
+    void PlaceScreen();
 };

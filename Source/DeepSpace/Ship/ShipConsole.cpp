@@ -28,7 +28,25 @@ AShipConsole::AShipConsole()
     Screen->SetupAttachment(Root);
     Screen->SetWidgetClass(UEngineeringConsoleWidget::StaticClass());
     AShipScreen::ConfigurePanel(Screen, PanelWidthCm, DrawSizePixels);
-    Screen->SetRelativeLocation(FVector(-ScreenStandoff, 0.0f, 0.0f));
+}
+
+void AShipConsole::PlaceScreen()
+{
+    if (!Screen)
+    {
+        return;
+    }
+
+    // The face is measured, never assumed: CentreMesh has already put the
+    // mesh's centre on the actor's origin, so the front face is half the
+    // scaled depth along -X, whatever mesh the Blueprint assigned.
+    float HalfDepth = 0.0f;
+    if (Mesh && Mesh->GetStaticMesh())
+    {
+        HalfDepth = static_cast<float>(Mesh->GetStaticMesh()->GetBoundingBox().GetSize().X)
+            * 0.5f * Mesh->GetRelativeScale3D().X;
+    }
+    Screen->SetRelativeLocation(FVector(-(HalfDepth + ScreenClearance), 0.0f, 0.0f));
 }
 
 void AShipConsole::OnConstruction(const FTransform& Transform)
@@ -36,7 +54,7 @@ void AShipConsole::OnConstruction(const FTransform& Transform)
     Super::OnConstruction(Transform);
     CentreMesh();
     AShipScreen::ConfigurePanel(Screen, PanelWidthCm, DrawSizePixels);
-    Screen->SetRelativeLocation(FVector(-ScreenStandoff, 0.0f, 0.0f));
+    PlaceScreen();
 }
 
 void AShipConsole::CentreMesh()
@@ -60,6 +78,7 @@ void AShipConsole::BeginPlay()
 {
     Super::BeginPlay();
     CentreMesh();
+    PlaceScreen();
     Interactable->OnInteracted.AddDynamic(this, &AShipConsole::HandleInteracted);
     SyncPrompt();
 }
