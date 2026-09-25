@@ -137,3 +137,37 @@ moves into C++ (ADR 0006).
 - **Scope.** This is the whole feature in one pass, chosen deliberately. If
   it runs long, the cut line is the laptop: the console alone with lights
   responding is a shippable, coherent slice.
+
+## Addendum, 2026-09-24: decisions taken during delivery
+
+Both were raised by the implementation rather than buried in it, and both
+were ratified by the user as built.
+
+**The console has no power gate of its own.** `BP_ShipConsole` used to carry
+`bIsPowered` and a "Power on" verb. That is a second copy of on/off state
+sitting next to an authoritative one, which decision 4 forbids; removing it
+leaves E at the console doing the same thing the screen's button does —
+toggling the ship's lights. One switch, one source of truth. A console is a
+*view*, and a view does not hold state.
+
+**The engine's share charges a jump drive.** "Engine charges slower" implied
+something to charge, and nothing existed, so `FShipFlightState` gained a 0..1
+jump charge that fills at a satisfaction-scaled rate (90 s at full feed).
+Nothing consumes it yet, which is deliberate rather than unfinished:
+hyperjump is already in `docs/vision.md`, and charge-over-time is what the
+engine's power share should mean. The consumer arrives with charts and
+navigation. Until then the engine is a consumer whose effect is a number
+climbing — visible on the laptop, doing nothing else.
+
+Two further judgments are recorded here as flagged, not ratified, because
+they can only be settled by eye:
+
+- **Satisfaction is shown as watts and an unnumbered bar** — `"180 W of
+  300 W"`, never `"60%"`, never a total, never a target, never a suggested
+  split. This is the sharpest test the anti-chore principle gets: the vision
+  forbids telling the player they are under-performing, while the spec
+  requires showing satisfaction. If the laptop ever reads as a score, it has
+  failed and the numbers go.
+- **Consumer wants are constants** (300 / 450 / 500 W against a 1000 W
+  reactor), deliberately over-subscribed so the split is always a real
+  choice. Tunable in `ShipSubsystem.h`.
