@@ -48,12 +48,16 @@ unreal-editor DeepSpace.uproject    # open the project
     -project="$PWD/DeepSpace.uproject" -game -vscode
 ```
 
-**`./build.sh` is only fully effective with the editor closed.** While the
-editor runs it holds `libUnrealEditor-DeepSpace.so` mapped, so UBT emits
-numbered hot-reload copies (`-0001`, `-0002`, …) and leaves
-`Binaries/Linux/UnrealEditor.modules` pointing at the original. The editor then
-loads the stale library and asks for a manual rebuild — which produces yet
-another numbered copy. `./rebuild.sh` refuses to run while the editor is open
+**`./build.sh` refuses to run while the editor is open**, because a build
+there is worse than useless. The editor holds `libUnrealEditor-DeepSpace.so`
+mapped, so UBT emits numbered hot-reload copies (`-0001`, `-0002`, …) and
+leaves `Binaries/Linux/UnrealEditor.modules` pointing at the original — the
+build *succeeds*, and the editor goes on running code that no longer matches
+the source. The symptom is never a build error; it is something inexplicable
+in play. An hour went into "the camera shakes when I move the mouse" before a
+stray `-0001.so` turned out to be the whole story, and the identical symptom
+a session earlier had appeared to heal itself only because the next launch
+loaded a clean library. `./rebuild.sh` refuses to run while the editor is open
 (`--force` kills it), clears the stray libraries, builds, and verifies the
 manifest names a library newer than the newest source.
 

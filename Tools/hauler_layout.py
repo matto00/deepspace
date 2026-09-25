@@ -70,7 +70,12 @@ DOORS = [
 ]
 
 WINDOWS = [
-    Window("cockpit", "fore", 300, 100, 180),
+    # The cockpit glass is what you fly through, so it is as close to the full
+    # fore wall as the structure allows: 360 of 400 cm wide, leaving a 20 cm
+    # post at each corner, and 70 to 215 cm tall. The sill sits below a seated
+    # pilot's eye line so the view carries down toward what you are
+    # approaching, and the head clears the overhead panel at 228.
+    Window("cockpit", "fore", 360, 70, 215),
     Window("galley", "starboard", 200, 100, 170),
 ]
 
