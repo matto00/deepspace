@@ -303,6 +303,27 @@ Two guards, and they check different things:
 Sideways reach is deliberately *not* guarded per clip: heads do leave the
 capsule, and the sweep is what handles it.
 
+### A Blueprint can be broken while everything else passes
+
+C++ builds, tests pass, the level validates — and the editor still refuses to
+play, because a Blueprint holds dangling references to something C++ removed.
+`BP_ShipConsole` shipped exactly like that: its graph drove a
+`TextRenderComponent` that a cleanup script deleted, and the four compile
+errors surfaced only when a human pressed Play. Worse, a Blueprint reports
+the status it was *saved* with, so reading `status` without compiling first
+says everything is fine.
+
+```bash
+~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+    -run=pythonscript -script="$PWD/Tools/check_blueprints.py" -unattended -nopause -nosplash -NoLiveCoding
+```
+
+`check_blueprints.py` compiles each one and then asks, and exits non-zero if
+any fail. **Run it after removing or renaming any C++ component, `UPROPERTY`
+or `BlueprintImplementableEvent`.** It scopes to the content this project
+authored: Epic's template variants ship 24 Blueprints that have never
+compiled against this C++, and a permanently red guard is the same as none.
+
 ### Changing the character's C++ components invalidates its Blueprint
 
 `BP_DeepSpaceCharacter` stores a template for every native component it
