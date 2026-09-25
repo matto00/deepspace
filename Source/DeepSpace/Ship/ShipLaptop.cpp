@@ -3,7 +3,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
-#include "UI/PointerTestWidget.h"
+#include "UI/PowerAllocationWidget.h"
 
 namespace
 {
@@ -38,7 +38,7 @@ AShipLaptop::AShipLaptop()
     // lid tilts the screen with it.
     Screen->SetupAttachment(Lid);
     Screen->SetRelativeLocation(FVector(-LidSize.X * 0.5f - 0.2f, 0.0f, 0.0f));
-    Screen->SetWidgetClass(UPointerTestWidget::StaticClass());
+    Screen->SetWidgetClass(UPowerAllocationWidget::StaticClass());
 
     SetPanelWidthCm(PanelWidthCm);
 }

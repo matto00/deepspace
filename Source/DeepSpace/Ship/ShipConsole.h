@@ -7,6 +7,7 @@
 class UInteractableComponent;
 class USceneComponent;
 class UStaticMeshComponent;
+class UWidgetComponent;
 
 /**
  * An engineering console. Reads power figures from UShipSubsystem on demand
@@ -25,8 +26,7 @@ public:
     UFUNCTION(BlueprintPure, Category = "Console")
     FText GetReadout() const;
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Console")
-    bool bIsPowered = false;
+    UWidgetComponent* GetScreen() const { return Screen; }
 
     /** Implemented in Blueprint to update the screen material. */
     UFUNCTION(BlueprintImplementableEvent, Category = "Console")
@@ -50,6 +50,26 @@ protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Console")
     TObjectPtr<UInteractableComponent> Interactable;
 
+    /**
+     * The console's screen. Configured exactly as any other ship panel, via
+     * AShipScreen::ConfigurePanel -- the console is not an AShipScreen, it
+     * is a console that carries one.
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Console")
+    TObjectPtr<UWidgetComponent> Screen;
+
+    /** Panel size, cm and pixels. Sized against the distance a player
+     *  actually stands at, not against the editor preview. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Console")
+    float PanelWidthCm = 58.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Console")
+    FVector2D DrawSizePixels = FVector2D(600.0f, 400.0f);
+
+    /** How far off the panel's face the screen sits, cm. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Console")
+    float ScreenStandoff = 6.0f;
+
 private:
     /**
      * Shifts Mesh so the panel is centred on the actor's origin.
@@ -63,4 +83,7 @@ private:
 
     UFUNCTION()
     void HandleInteracted(AActor* InteractInstigator);
+
+    /** Keeps the reach prompt saying what E will actually do. */
+    void SyncPrompt();
 };

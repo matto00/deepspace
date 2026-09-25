@@ -26,6 +26,17 @@ class DEEPSPACE_API AShipScreen : public AActor
 public:
     AShipScreen();
 
+    /**
+     * Sets a widget component up as a ship panel: world space, opaque, the
+     * right way round, and traceable by the pointer.
+     *
+     * Static, because the engineering console is not an AShipScreen -- it is
+     * a console that happens to carry one -- and these settings are the
+     * difference between a screen that can be used and one that is merely
+     * visible. There must be exactly one place they are written down.
+     */
+    static void ConfigurePanel(UWidgetComponent* Panel, float WidthCm, const FVector2D& DrawSizePixels);
+
     UWidgetComponent* GetScreen() const { return Screen; }
 
     /**
