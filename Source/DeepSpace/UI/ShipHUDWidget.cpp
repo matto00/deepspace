@@ -90,17 +90,14 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
         DotSlot->SetSize(FVector2D(DotIdle, DotIdle));
     }
 
-    // The prompt sits under the dot rather than at the screen's edge, so
-    // reading it does not mean looking away from the thing it describes.
+    // The prompt lives in a corner, not under the dot. The dot already says
+    // "there is something here"; what the key is belongs somewhere the eye
+    // learns to find, and text next to the thing you are looking at competes
+    // with the thing you are looking at -- at a laptop it landed squarely on
+    // top of the screen it was describing.
     Prompt = MakeReadout(FText::GetEmpty(), UShipScreenWidget::Ink, 13.0f);
     Canvas->AddChild(Prompt);
-    if (UCanvasPanelSlot* PromptSlot = Cast<UCanvasPanelSlot>(Prompt->Slot))
-    {
-        PromptSlot->SetAnchors(FAnchors(0.5f, 0.5f));
-        PromptSlot->SetAlignment(FVector2D(0.5f, 0.0f));
-        PromptSlot->SetAutoSize(true);
-        PromptSlot->SetPosition(FVector2D(0.0f, 34.0f));
-    }
+    PlaceCorner(Prompt, FVector2D(1.0f, 1.0f), FVector2D(-Margin, -Margin));
 
     // Corners: what ship, where, what it is running on, what it is doing.
     ShipLine  = MakeReadout(NSLOCTEXT("DeepSpace", "HUDShip", "HAULER"), UShipScreenWidget::Ink, 12.0f);
@@ -188,7 +185,10 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 
     if (Prompt && Character)
     {
-        Prompt->SetText(Character->GetCurrentPrompt());
+        const FText What = Character->GetCurrentPrompt();
+        Prompt->SetText(What.IsEmpty()
+            ? FText::GetEmpty()
+            : FText::Format(NSLOCTEXT("DeepSpace", "HUDPrompt", "(E)  {0}"), What));
     }
 
     if (!ShipState)

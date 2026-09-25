@@ -508,6 +508,19 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
         // is rather than where the head is.
         Pointer->InteractionSource = EWidgetInteractionSource::Mouse;
     }
+
+    if (FirstPersonCamera)
+    {
+        FirstPersonCamera->SetFieldOfView(UseFieldOfView);
+    }
+
+    // The framed camera sits in front of the face, which is behind the body's
+    // own arms: left visible they fill both sides of the screen. Nobody looks
+    // at their own shoulders while reading a laptop.
+    if (USkeletalMeshComponent* Body = GetMesh())
+    {
+        Body->SetVisibility(false, true);
+    }
 }
 
 void ADeepSpaceCharacter::StopUsingScreen()
@@ -537,6 +550,16 @@ void ADeepSpaceCharacter::StopUsingScreen()
     if (Pointer)
     {
         Pointer->InteractionSource = EWidgetInteractionSource::World;
+    }
+
+    if (FirstPersonCamera)
+    {
+        FirstPersonCamera->SetFieldOfView(FieldOfView);
+    }
+
+    if (USkeletalMeshComponent* Body = GetMesh())
+    {
+        Body->SetVisibility(true, true);
     }
 }
 

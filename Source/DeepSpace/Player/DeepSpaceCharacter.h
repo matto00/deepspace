@@ -169,6 +169,14 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Camera")
     float FieldOfView = 103.0f;
 
+    /**
+     * Field of view while sat at a screen, degrees. Narrow: the panel should
+     * fill the view the way a thing you are reading does. Framing by angle
+     * rather than by moving closer keeps the camera out of the body.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float UseFieldOfView = 52.0f;
+
     /** How far the player can reach, in centimetres. */
     UPROPERTY(EditDefaultsOnly, Category = "Interaction")
     float InteractionRange = 250.0f;

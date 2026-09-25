@@ -29,7 +29,11 @@ namespace
 AShipLaptop::AShipLaptop()
 {
     PanelWidthCm = 26.0f;
-    DrawSizePixels = FVector2D(480.0f, 320.0f);
+    // Wider than it looks like it needs: the rows read "BOOSTERS 168 W of
+    // 450 W" at 28 px, which ran off a 480 px canvas and clipped mid-number.
+    // The panel is still 26 cm wide, so this makes the text smaller on the
+    // glass rather than bigger on the screen.
+    DrawSizePixels = FVector2D(720.0f, 480.0f);
 
     // Left movable: a static child of a movable root never has its world
     // transform updated when the actor moves, which silently leaves the
