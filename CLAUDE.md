@@ -130,6 +130,52 @@ asset existed. Never hand-edit them.
   contradicts them
 - `docs/decisions/` — short ADRs
 
+## Screens, the pointer, and power
+
+Screens aboard the ship are **surfaces in the room**, not menus: a
+`UWidgetComponent` renders real Slate onto a quad and
+`ADeepSpaceCharacter`'s `UWidgetInteractionComponent` drives it along the
+view. Nothing pauses and nothing goes fullscreen.
+
+**Widget trees are built in C++**, in `Source/DeepSpace/UI/`, by overriding
+`UShipScreenWidget::BuildScreen`. There are no Widget Blueprints and there
+should not be: a screen carries gameplay-visible logic, and ADR 0002 is why
+that cannot live in a `.uasset`.
+
+Four things about `UWidgetComponent` that cost time and are easy to hit again:
+
+- **Its quad's normal is +X**, while every wall-mounted fixture in this ship
+  faces −X at yaw 0 (`placement.resolve_mount`). `AShipScreen::ConfigurePanel`
+  turns the panel round once, centrally. Mount a screen with the same yaw as
+  anything else and it will be right.
+- **A Static child of a movable root never has its world transform updated.**
+  A screen on a static sub-component draws in the right place and leaves its
+  collision body at the origin: visible, unclickable, and no warning anywhere.
+- **It builds its widget and its collision body in `BeginPlay`.** Spawn a
+  screen into an already-running world and it is never traceable. A test must
+  spawn before `World->BeginPlay()`.
+- **It cannot be hit-tested under `-nullrhi`**: the widget is created through
+  `UGameInstance`, and the Slate hit-test grid is only filled once painted.
+  `DeepSpace.Ship.ScreenPointer` therefore checks everything up to and
+  including the surface the ray lands on, and stops there. Which control the
+  ray lands on is a playtest question.
+
+Power is allocated, not merely summed. `FShipPowerState` holds installed
+module **draws** (off the top) and **consumers** that divide what is left in
+proportion to a weight the player sets, capped at each one's want with the
+surplus redistributed. Consumers degrade and never fail: lights dim and brown
+out, boosters push down to a quarter thrust, the jump drive charges slower.
+**There is deliberately no cutoff, no alarm, no timer and no failure state**,
+and nothing in the model changes on its own with time. If a change here
+introduces a rate the player must keep up with, it has broken the anti-chore
+principle -- say so rather than tuning it.
+
+Generated actors are addressed **by tag, never by name or index**.
+`Tools/build_hauler.py` tags the lights `Power.Lights`, the same string as
+`ShipPower::Lights`, and `UShipLightingSubsystem` finds them that way.
+`Tools/verify_level.py` checks the tag *and* that the lights are Movable --
+a Static light is baked and can never dim.
+
 ## Randomness
 
 **Reach for the distribution that describes the thing; do not default to
