@@ -123,6 +123,15 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Camera")
     float EyeHeightLagSpeed = 12.0f;
 
+    /**
+     * Horizontal field of view, degrees. The engine's 90 is narrow for a
+     * first-person body inside a cramped hull -- you cannot see your own
+     * hands, or the edges of a doorway you are standing in. Wider trades some
+     * edge distortion for knowing where you are.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Camera")
+    float FieldOfView = 103.0f;
+
     /** How far the player can reach, in centimetres. */
     UPROPERTY(EditDefaultsOnly, Category = "Interaction")
     float InteractionRange = 250.0f;

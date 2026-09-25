@@ -95,6 +95,14 @@ void ADeepSpaceCharacter::ConfigureFirstPersonBody()
     // The camera sits at the head; hide it so the view is not from inside it.
     // Known stand-in: this also removes the head from the player's shadow.
     Body->HideBoneByName(HeadBone, EPhysBodyOp::PBO_None);
+
+    // Set here rather than left to the Blueprint's camera template: the
+    // template holds whatever was saved last, so a value changed in C++ would
+    // silently not apply. Runtime always wins.
+    if (FirstPersonCamera)
+    {
+        FirstPersonCamera->SetFieldOfView(FieldOfView);
+    }
 }
 
 void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRotation)
