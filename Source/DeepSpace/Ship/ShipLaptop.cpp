@@ -3,6 +3,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Player/DeepSpaceCharacter.h"
+#include "Ship/InteractableComponent.h"
 #include "UI/PowerAllocationWidget.h"
 
 namespace
@@ -48,6 +50,14 @@ AShipLaptop::AShipLaptop()
     // hung its screen off Root for the same reason; this one did not, which
     // is why the console could be clicked and the laptop could not.
     Screen->SetWidgetClass(UPowerAllocationWidget::StaticClass());
+
+    // Sitting down is how this one is used: its sliders are too fine to aim
+    // at from across the galley (the spec's second addendum).
+    bUsable = true;
+
+    Interactable = CreateDefaultSubobject<UInteractableComponent>(TEXT("Interactable"));
+    Interactable->DisplayName = NSLOCTEXT("DeepSpace", "LaptopName", "Laptop");
+    Interactable->InteractionVerb = NSLOCTEXT("DeepSpace", "LaptopVerb", "Sit at");
 
     SetPanelWidthCm(PanelWidthCm);
 }
@@ -128,4 +138,17 @@ void AShipLaptop::BeginPlay()
 {
     Super::BeginPlay();
     FitParts();
+
+    if (Interactable)
+    {
+        Interactable->OnInteracted.AddDynamic(this, &AShipLaptop::HandleInteracted);
+    }
+}
+
+void AShipLaptop::HandleInteracted(AActor* InteractInstigator)
+{
+    if (ADeepSpaceCharacter* Character = Cast<ADeepSpaceCharacter>(InteractInstigator))
+    {
+        Character->UseScreen(this);
+    }
 }

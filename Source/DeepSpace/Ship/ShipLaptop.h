@@ -4,6 +4,7 @@
 #include "Ship/ShipScreen.h"
 #include "ShipLaptop.generated.h"
 
+class UInteractableComponent;
 class UStaticMeshComponent;
 
 /**
@@ -39,6 +40,11 @@ protected:
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
 
+    /** E sits the player down at it. Reach is caught by the lid and base;
+     *  the panel itself only blocks the pointer's channel. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Laptop")
+    TObjectPtr<UInteractableComponent> Interactable;
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Laptop")
     TObjectPtr<UStaticMeshComponent> Base;
 
@@ -46,6 +52,9 @@ protected:
     TObjectPtr<UStaticMeshComponent> Lid;
 
 private:
+    UFUNCTION()
+    void HandleInteracted(AActor* InteractInstigator);
+
     /**
      * Scales a box mesh to a real size and puts its centre where we asked.
      *

@@ -63,3 +63,31 @@ void AShipScreen::OnConstruction(const FTransform& Transform)
     Super::OnConstruction(Transform);
     SetPanelWidthCm(PanelWidthCm);
 }
+
+FTransform AShipScreen::GetUseTransform() const
+{
+    // A widget quad's normal is its own +X, so that is the side a reader is
+    // on. Yaw only: the body sits upright however the panel is tilted.
+    const FVector Normal = Screen ? Screen->GetComponentTransform().GetUnitAxis(EAxis::X)
+                                  : GetActorForwardVector();
+    const FVector Flat = FVector(Normal.X, Normal.Y, 0.0).GetSafeNormal();
+    const FVector Panel = Screen ? Screen->GetComponentLocation() : GetActorLocation();
+
+    // Seat height is measured from the floor, which is Z = 0 throughout the
+    // ship (Tools/hauler_layout.py).
+    const FVector Seat(Panel.X + Flat.X * UseDistanceCm,
+                       Panel.Y + Flat.Y * UseDistanceCm,
+                       SeatHeightCm);
+
+    return FTransform((-Flat).Rotation(), Seat);
+}
+
+FTransform AShipScreen::GetViewTransform() const
+{
+    const FTransform Panel = Screen ? Screen->GetComponentTransform() : GetActorTransform();
+    const FVector Normal = Panel.GetUnitAxis(EAxis::X);
+
+    // Square on to the panel, including its tilt: a laptop lid leans back, so
+    // reading it squarely means looking slightly down.
+    return FTransform((-Normal).Rotation(), Panel.GetLocation() + Normal * ViewDistanceCm);
+}

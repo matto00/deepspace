@@ -46,6 +46,24 @@ public:
      */
     void SetPanelWidthCm(float WidthCm);
 
+    /**
+     * Where a player sits to use this screen, and which way they face:
+     * square on, at seat height, in front of the panel. Derived from the
+     * panel's own transform so a screen that moves takes its seat with it.
+     */
+    FTransform GetUseTransform() const;
+
+    /**
+     * Where the camera goes while the screen is in use -- close enough that
+     * the panel fills the view and its text is legible, which at a laptop's
+     * size it is not from across a table.
+     */
+    FTransform GetViewTransform() const;
+
+    /** True if a player can sit down at this screen at all. */
+    UFUNCTION(BlueprintPure, Category = "Screen")
+    bool IsUsable() const { return bUsable; }
+
 protected:
     virtual void OnConstruction(const FTransform& Transform) override;
 
@@ -64,4 +82,21 @@ protected:
      *  width together, never against the editor preview. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
     FVector2D DrawSizePixels = FVector2D(600.0f, 400.0f);
+
+    /** Whether E sits the player down at this screen. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
+    bool bUsable = false;
+
+    /** How far in front of the panel the player sits, cm. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
+    float UseDistanceCm = 62.0f;
+
+    /** Height of the seat off the floor, cm: the galley bench. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
+    float SeatHeightCm = 45.0f;
+
+    /** How far the eyes sit from the panel while using it, cm. Close: this
+     *  is leaning in to read something, not looking across a room. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
+    float ViewDistanceCm = 38.0f;
 };

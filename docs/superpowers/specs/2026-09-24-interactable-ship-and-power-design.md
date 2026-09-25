@@ -171,3 +171,32 @@ they can only be settled by eye:
 - **Consumer wants are constants** (300 / 450 / 500 W against a 1000 W
   reactor), deliberately over-subscribed so the split is always a real
   choice. Tunable in `ShipSubsystem.h`.
+
+## Addendum, 2026-09-25: sitting down at a screen
+
+Decision 1 said every screen is a surface in the room driven by the view, and
+explicitly reserved the retreat to a fullscreen menu as the user's call. In
+play the laptop was reachable but "hard to control": aiming a head-mounted ray
+at a slider is fiddly, exactly as the risk section predicted.
+
+The retreat taken is **not** the fullscreen one. Interacting with the laptop
+now **sits the player down at it**: the body takes the galley bench, the
+camera leaves the head and frames the panel from 38 cm, and the mouse becomes
+a real cursor driving the same world widget through
+`EWidgetInteractionSource::Mouse`. The galley is still there around the
+screen, nothing pauses, and walking away is still just standing up.
+
+This keeps what decision 1 was protecting -- you are aboard somewhere, not in
+an interface -- while conceding what play disproved: that a ray along the view
+is a good way to operate a control that wants precision. A screen you *use*
+is a screen you sit at, which is also simply what a person does with a laptop
+on a table.
+
+Scope is the laptop alone. The engineering console stays as it is: it is
+wall-mounted, you stand at it, and its one control is a switch that E already
+throws well. If the console grows controls that want precision, it gets the
+same treatment.
+
+`AShipScreen::GetUseTransform` and `GetViewTransform` derive the seat and the
+framed view from the panel's own transform, so a screen that moves takes both
+with it, and `bUsable` is what decides whether E sits you down at all.

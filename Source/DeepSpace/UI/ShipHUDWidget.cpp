@@ -156,6 +156,13 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     const UShipSubsystem* ShipState = Ship();
 
     // The dot: what is under it decides how much of it there is.
+    // Sat at a screen there is a real cursor, and a crosshair behind it is
+    // just a second thing to look at.
+    const bool bCursor = Character && Character->IsUsingScreen();
+    if (Dot)
+    {
+        Dot->SetVisibility(bCursor ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+    }
     if (Character)
     {
         SetTarget(Character->GetFocusedInteractable() ? ETarget::Interactable

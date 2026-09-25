@@ -13,6 +13,7 @@
 #include "Player/MovementRules.h"
 #include "Ship/InteractableComponent.h"
 #include "Ship/PilotSeat.h"
+#include "Ship/ShipScreen.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/ShipHUDWidget.h"
 #include "Engine/GameViewportClient.h"
@@ -144,6 +145,15 @@ void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRo
         return;
     }
 
+    // Sat at a screen the camera leaves the head entirely and frames the
+    // panel. Rotation still comes from the controller, which UseScreen
+    // pointed at the screen and IgnoreLookInput now holds there.
+    if (UsedScreen)
+    {
+        FirstPersonCamera->SetWorldLocation(UsedScreen->GetViewTransform().GetLocation());
+        return;
+    }
+
     const FVector Origin = GetActorLocation();
     const FVector Head = Body->GetSocketLocation(HeadBone);
 
@@ -202,6 +212,12 @@ void ADeepSpaceCharacter::UpdatePointer()
     // Seated, the controls are the ship's and E means "stand up"; a pointer
     // live at the helm would fight both.
     const bool bAllowed = !IsSeated();
+    if (IsUsingScreen())
+    {
+        // Mouse source ignores the component's transform, so there is
+        // nothing to aim; just leave it switched on.
+        return;
+    }
     if (Pointer->IsActive() != bAllowed)
     {
         bAllowed ? Pointer->Activate() : Pointer->Deactivate();
@@ -396,7 +412,7 @@ void ADeepSpaceCharacter::UpdateWalkSpeed()
 
 EPosture ADeepSpaceCharacter::GetPosture() const
 {
-    if (IsSeated())
+    if (IsSeated() || IsUsingScreen())
     {
         return EPosture::Seated;
     }
@@ -444,6 +460,83 @@ void ADeepSpaceCharacter::SitIn(APilotSeat* NewSeat)
     if (UShipSubsystem* Ship = UShipSubsystem::Get(this))
     {
         Ship->SetPilot(this);
+    }
+}
+
+void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
+{
+    if (!Screen || !Screen->IsUsable() || IsSeated() || IsUsingScreen())
+    {
+        return;
+    }
+    if (bIsCrouched)
+    {
+        UnCrouch();
+    }
+
+    UsedScreen = Screen;
+    FocusedInteractable = nullptr;
+
+    GetCharacterMovement()->StopMovementImmediately();
+    GetCharacterMovement()->DisableMovement();
+    SetActorEnableCollision(false);
+
+    const FTransform UsePose = Screen->GetUseTransform();
+    SetActorLocationAndRotation(
+        UsePose.GetLocation() + FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
+        FRotator(0.0f, UsePose.Rotator().Yaw, 0.0f));
+    bUseControllerRotationYaw = false;
+
+    if (APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        // The view is framed and stays framed: the mouse is a cursor now, so
+        // letting it also turn the head would fight every attempt to click.
+        PC->SetControlRotation(Screen->GetViewTransform().Rotator());
+        PC->SetIgnoreLookInput(true);
+
+        PC->bShowMouseCursor = true;
+        FInputModeGameAndUI Mode;
+        Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+        Mode.SetHideCursorDuringCapture(false);
+        PC->SetInputMode(Mode);
+    }
+
+    if (Pointer)
+    {
+        // Mouse source deprojects the cursor instead of tracing along the
+        // view, which is the whole point: the pointer goes where the cursor
+        // is rather than where the head is.
+        Pointer->InteractionSource = EWidgetInteractionSource::Mouse;
+    }
+}
+
+void ADeepSpaceCharacter::StopUsingScreen()
+{
+    if (!IsUsingScreen())
+    {
+        return;
+    }
+
+    const FRotator Facing = GetActorRotation();
+    UsedScreen = nullptr;
+
+    SetActorEnableCollision(true);
+    GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+    bUseControllerRotationYaw = true;
+
+    if (APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        PC->SetIgnoreLookInput(false);
+        PC->bShowMouseCursor = false;
+        PC->SetInputMode(FInputModeGameOnly());
+        // Stand up looking where the body faces, not where the framed view
+        // was pointing, which was tilted down at a screen.
+        PC->SetControlRotation(FRotator(0.0f, Facing.Yaw, 0.0f));
+    }
+
+    if (Pointer)
+    {
+        Pointer->InteractionSource = EWidgetInteractionSource::World;
     }
 }
 
@@ -576,6 +669,12 @@ void ADeepSpaceCharacter::UpdateFocusedInteractable()
 
 void ADeepSpaceCharacter::TryInteract()
 {
+    if (IsUsingScreen())
+    {
+        StopUsingScreen();
+        return;
+    }
+
     if (IsSeated())
     {
         StandUp();
@@ -594,7 +693,7 @@ UInteractableComponent* ADeepSpaceCharacter::GetFocusedInteractable() const
 
 FText ADeepSpaceCharacter::GetCurrentPrompt() const
 {
-    if (IsSeated())
+    if (IsSeated() || IsUsingScreen())
     {
         return NSLOCTEXT("DeepSpace", "StandUp", "Stand up");
     }

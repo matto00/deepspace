@@ -6,6 +6,7 @@
 #include "DeepSpaceCharacter.generated.h"
 
 class APilotSeat;
+class AShipScreen;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
@@ -42,6 +43,25 @@ public:
     /** What the body is doing. Decided here; the animation only reads it. */
     UFUNCTION(BlueprintPure, Category = "Movement")
     EPosture GetPosture() const;
+
+    /**
+     * Sit down at a screen: the body takes a seat in front of it, the camera
+     * frames it, and the mouse becomes a cursor that drives it.
+     *
+     * This is the one place a screen stops being something you aim at. The
+     * spec's decision 1 kept every screen a surface in the room driven by the
+     * view, and in play the laptop's sliders were too fiddly to aim at; the
+     * answer was to sit the player down rather than to make it a menu. The
+     * galley stays visible around it and nothing pauses -- see the spec's
+     * second addendum.
+     */
+    void UseScreen(AShipScreen* Screen);
+
+    /** Get up from a screen. */
+    void StopUsingScreen();
+
+    UFUNCTION(BlueprintPure, Category = "Interaction")
+    bool IsUsingScreen() const { return UsedScreen != nullptr; }
 
     /** Sit at the helm: movement off, camera limited, the ship piloted. */
     void SitIn(APilotSeat* NewSeat);
@@ -279,6 +299,10 @@ private:
 
     UPROPERTY()
     TObjectPtr<UUserWidget> HUDWidget;
+
+    /** The screen we are sat at, or null. */
+    UPROPERTY()
+    TObjectPtr<AShipScreen> UsedScreen;
 
     /** The seat we are sitting in, or null. */
     UPROPERTY()
