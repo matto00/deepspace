@@ -72,6 +72,11 @@ double SkyProjection::DiscOverlapFraction(double Separation, double RadiusA, dou
     return FMath::Clamp(Lens / (UE_DOUBLE_PI * A * A), 0.0, 1.0);
 }
 
+double SkyProjection::RenderedFloor(double RadiusCm, const FSkyViewParams& Params)
+{
+    return FMath::Max(Params.MinRenderedAltitude, Params.MinRenderedAltitudeOfRadius * FMath::Max(RadiusCm, 0.0));
+}
+
 double SkyProjection::Compress(double Ratio, double Gamma)
 {
     return Ratio > 0.0 ? FMath::Pow(Ratio, Gamma) : 0.0;
@@ -113,8 +118,7 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
 
         // Below the floor the body stops growing rather than engulfing the
         // view; the direction is still the true one.
-        const double Floor = FMath::Max(Params.MinRenderedAltitude, Params.MinRenderedAltitudeOfRadius * Body.Radius);
-        Shape.RenderDistance = FMath::Max(Distance, Body.Radius + Floor);
+        Shape.RenderDistance = FMath::Max(Distance, Body.Radius + RenderedFloor(Body.Radius, Params));
         const double RenderSin = Body.Radius / Shape.RenderDistance;
         const double RenderRadius = FMath::Asin(RenderSin);
         Shape.Power = Shape.RenderDistance * Shape.RenderDistance - Body.Radius * Body.Radius;

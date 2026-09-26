@@ -486,6 +486,40 @@ bool FSkyProjectionTest::RunTest(const FString& Parameters)
         const FSkyFrame Empty = SkyProjection::Project(FSkySystem(), FUniversePosition(), Params);
         TestEqual(TEXT("an empty system projects to nothing"), Empty.Bodies.Num(), 0);
     }
+
+    // The rendered floor (flight-feel decision 6): 10 km for small bodies,
+    // 1.6e-3 R for large, and Project draws a body from exactly R + that
+    // floor whenever the ship is below it -- the one function the flight
+    // law's floor also asks.
+    {
+        TestEqual(TEXT("a moon's floor is 10 km"), SkyProjection::RenderedFloor(1.7374e8, Params), 1.0e6);
+        TestEqual(TEXT("so is anything smaller"), SkyProjection::RenderedFloor(1.0e7, Params), 1.0e6);
+        TestTrue(TEXT("an Earth's is 1.6e-3 R, 10.2 km"),
+                 RelativeError(SkyProjection::RenderedFloor(6.3781e8, Params), 1.6e-3 * 6.3781e8) < 1e-12);
+        TestTrue(TEXT("a Jupiter's is 1.6e-3 R, 112 km"),
+                 RelativeError(SkyProjection::RenderedFloor(6.9911e9, Params), 1.6e-3 * 6.9911e9) < 1e-12);
+        TestTrue(TEXT("the two agree at 6,250 km"), RelativeError(SkyProjection::RenderedFloor(6.25e8, Params), 1.0e6) < 1e-12);
+        FSkyViewParams Raised = Params;
+        Raised.MinRenderedAltitude = 5.0e6;
+        TestEqual(TEXT("it follows the params it is given"), SkyProjection::RenderedFloor(6.3781e8, Raised), 5.0e6);
+
+        for (const int32 Index : { SkyTestFixtures::HomeIndex, SkyTestFixtures::GiantIndex, SkyTestFixtures::MoonIndex })
+        {
+            const FSkyBody& Body = Fixture.Bodies[Index];
+            const double RenderedFloor = SkyProjection::RenderedFloor(Body.Radius, Params);
+            const double Drawn = Body.Radius + RenderedFloor;
+            for (const double Altitude : { 0.5 * RenderedFloor, 1.0e3, -0.5 * Body.Radius })
+            {
+                const FSkyBodyView View = SkyProjection::Project(Fixture, Body.Position + ApproachDirection() * (Body.Radius + Altitude), Params).Bodies[Index];
+                TestTrue(FString::Printf(TEXT("%s, %.3g cm below its floor: drawn from exactly R + the floor"), *Body.Id.ToString(), RenderedFloor - Altitude),
+                         RelativeError(View.ProxyLocation.Size() / View.ProxyRadius, Drawn / Body.Radius) < 1e-12
+                         && RelativeError(View.DrawnAngularRadius, FMath::Asin(Body.Radius / Drawn)) < 1e-12);
+            }
+            const FSkyBodyView Above = SkyProjection::Project(Fixture, Body.Position + ApproachDirection() * (Drawn * 1.5), Params).Bodies[Index];
+            TestTrue(FString::Printf(TEXT("%s above its floor is drawn from its true distance"), *Body.Id.ToString()),
+                     RelativeError(Above.ProxyLocation.Size() / Above.ProxyRadius, Drawn * 1.5 / Body.Radius) < 1e-9);
+        }
+    }
     return true;
 }
 
