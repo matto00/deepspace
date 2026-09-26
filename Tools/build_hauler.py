@@ -321,7 +321,7 @@ def place_counter_frame(actor_sub, sphere):
     return frame
 
 
-def place_sky(actor_sub, sphere):
+def place_sky(actor_sub):
     """Everything outside the glass that is somewhere: the local star, its
     planets, the neighbours, the one sun on the deck and the fixed exposure
     (sky spec). AShipSky builds all of it at runtime from what the ship
@@ -332,11 +332,15 @@ def place_sky(actor_sub, sphere):
     MPC_Sky is the glass veil's. It is required: a sky built without it
     writes nothing to the glass, and the veil sits at the collection's
     lit-room defaults whatever the lights do, with nothing in play to say so.
+
+    The bodies are drawn with SM_SkyBody, not the engine Sphere the
+    counter-frame's points use: a world close enough to fill the glass shows
+    the engine Sphere's polygon on its limb, and the limb is how near it is.
     """
     sky = actor_sub.spawn_actor_from_class(
         unreal.ShipSky, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     sky.set_actor_label(TAG + "sky")
-    sky.set_editor_property("body_mesh", sphere)
+    sky.set_editor_property("body_mesh", sky_asset("SM_SkyBody"))
     sky.set_editor_property("body_material", sky_asset("M_SkyBody"))
     sky.set_editor_property("star_material", sky_asset("M_SkyStar"))
     sky.set_editor_property("point_star_material", sky_asset("M_SkyStarfield"))
@@ -444,7 +448,7 @@ def build():
     place_keep_outs(actor_sub, ship)
     sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
     place_counter_frame(actor_sub, sphere)
-    place_sky(actor_sub, sphere)
+    place_sky(actor_sub)
 
     console = actor_sub.spawn_actor_from_class(
         unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP),

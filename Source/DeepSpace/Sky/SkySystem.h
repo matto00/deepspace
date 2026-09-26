@@ -62,6 +62,11 @@ struct DEEPSPACE_API FSkyBody
      *  a look, not a fact about the world, so it moves no procgen stream. */
     uint64 SurfaceSeed = 0;
 
+    /** Planets and moons, 0..1: how much of the craters that every world
+     *  is struck with its surface has kept. Bare rock keeps them all; ice
+     *  resurfaces, weather erodes, water and cloud keep none. */
+    double Cratering = 0.0;
+
     /** Giants: how many light-and-dark belt pairs it wears pole to pole,
      *  from its day (SkyLook::BeltPairs). 0 for ground. */
     double BeltPairs = 0.0;

@@ -1,10 +1,15 @@
 #include "Misc/AutomationTest.h"
+#include "Algo/Compare.h"
 #include "Dom/JsonObject.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionCameraPositionWS.h"
 #include "Materials/MaterialExpressionClamp.h"
 #include "Materials/MaterialExpressionCollectionParameter.h"
 #include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionDotProduct.h"
+#include "Materials/MaterialExpressionNormalize.h"
+#include "Materials/MaterialExpressionVectorNoise.h"
+#include "Materials/MaterialExpressionVertexNormalWS.h"
 #include "Materials/MaterialExpressionLocalPosition.h"
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionNoise.h"
@@ -55,6 +60,8 @@ namespace
             { TEXT("mottle"), SkyMaterial::Mottle, TEXT("scalar") },
             { TEXT("detail"), SkyMaterial::Detail, TEXT("scalar") },
             { TEXT("banding"), SkyMaterial::Banding, TEXT("scalar") },
+            { TEXT("relief"), SkyMaterial::Relief, TEXT("scalar") },
+            { TEXT("cratering"), SkyMaterial::Cratering, TEXT("scalar") },
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
@@ -111,9 +118,9 @@ namespace
     }
 
     /** Every expression feeding From, From included, walking back through
-     *  every input -- except that Stop, when reached, is collected but not
-     *  entered, so what lies only behind it is left out. */
-    TSet<const UMaterialExpression*> Upstream(const UMaterialExpression* From, const UMaterialExpression* Stop = nullptr)
+     *  every input -- except that a node in Stops, when reached, is collected
+     *  but not entered, so what lies only behind the stops is left out. */
+    TSet<const UMaterialExpression*> Upstream(const UMaterialExpression* From, const TSet<const UMaterialExpression*>& Stops = {})
     {
         TSet<const UMaterialExpression*> Seen;
         TArray<const UMaterialExpression*> Open;
@@ -126,7 +133,7 @@ namespace
             const UMaterialExpression* Node = Open.Pop();
             bool bAlready = false;
             Seen.Add(Node, &bAlready);
-            if (bAlready || Node == Stop)
+            if (bAlready || Stops.Contains(Node))
             {
                 continue;
             }
@@ -139,6 +146,23 @@ namespace
             }
         }
         return Seen;
+    }
+
+    /** Every node that takes Of as an input. */
+    TArray<const UMaterialExpression*> Consumers(const UMaterial& Material, const UMaterialExpression* Of)
+    {
+        TArray<const UMaterialExpression*> Found;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            for (int32 Index = 0; const FExpressionInput* Input = Expression->GetInput(Index); ++Index)
+            {
+                if (Input->Expression == Of)
+                {
+                    Found.Add(Expression.Get());
+                }
+            }
+        }
+        return Found;
     }
 
     /** The constants an input is multiplied by within Depth nodes of it:
@@ -171,32 +195,39 @@ namespace
     }
 
     /**
-     * M_SkyBody's face, as the developer asked for it: detail fixed to the
-     * body, in several bands, whose finer ones arrive as the world grows.
-     * The names above cannot see any of that, so the graph is read:
+     * M_SkyBody's face and relief, as the developer asked for them: detail
+     * fixed to the body, in several bands, whose finer ones arrive as the
+     * world grows, and ground that tilts where the light is low. The names
+     * above cannot see any of that, so the graph is read:
      *
      * - Object space and nothing else. The one position it reads is the
      *   mesh's own; a world-space, screen-space or camera-relative position
      *   anywhere in the graph is detail that swims as the proxy is moved
      *   and rescaled every frame. And no texture: nothing from outside.
-     * - One coarse band and the contract's detail bands, each at the
-     *   frequency and octave count the contract gives it, each fading by
-     *   the pixel footprint at that same frequency. A band without the fade
-     *   would sit on a distant world as shimmer instead of waiting for the
-     *   screen to hold it.
+     * - One coarse band of gradient noise, and the contract's detail bands
+     *   as simplex noise with its gradient -- one evaluation for the face and
+     *   the relief both -- each at the frequency the contract gives it, each
+     *   faded by the pixel footprint at that same frequency. A band without
+     *   the fade would sit on a distant world as shimmer instead of waiting
+     *   for the screen to hold it.
      * - Each detail band at its contract weight, the weights never falling
      *   as the bands get finer and no octave skipped between them: the
      *   approach's last decade gets detail as strong as its first.
-     * - The half-float guard. The face reaches the pixel only through the
-     *   clamp to +/- surface_max_swing, and every band and both amplitude
-     *   knobs lie behind it, so no CVar can push a pixel past it.
+     * - The contract's crater bands, as Voronoi cells, each faded like a
+     *   detail band.
+     * - The half-float guard. Everything that brightens reaches the pixel
+     *   only through the clamp to +/- surface_max_swing; the relief only
+     *   through a unit normal dotted with the light, which cannot exceed 1.
+     *   So no CVar can push a pixel past the guard.
      * - Every parameter reaches the pixel: a knob wired to nothing is the
      *   same silent no-op a misspelt name is.
      */
     void CheckSurfaceFace(FAutomationTestBase& Test, UMaterial& Material, const TSharedPtr<FJsonObject>& Constants)
     {
         int32 LocalPositions = 0;
-        TArray<const UMaterialExpressionNoise*> Bands;
+        TArray<const UMaterialExpressionNoise*> Coarse;
+        TArray<const UMaterialExpressionVectorNoise*> Details;
+        TArray<const UMaterialExpressionVectorNoise*> Craters;
         TMap<FName, const UMaterialExpression*> Parameters;
         for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
         {
@@ -204,7 +235,22 @@ namespace
             LocalPositions += Cast<UMaterialExpressionLocalPosition>(Node) ? 1 : 0;
             if (const UMaterialExpressionNoise* Noise = Cast<UMaterialExpressionNoise>(Node))
             {
-                Bands.Add(Noise);
+                Coarse.Add(Noise);
+            }
+            if (const UMaterialExpressionVectorNoise* Vector = Cast<UMaterialExpressionVectorNoise>(Node))
+            {
+                if (Vector->NoiseFunction == VNF_GradientALU)
+                {
+                    Details.Add(Vector);
+                }
+                else if (Vector->NoiseFunction == VNF_VoronoiALU)
+                {
+                    Craters.Add(Vector);
+                }
+                else
+                {
+                    Test.TestTrue(TEXT("the only other vector noise is a crater site's hash"), Vector->NoiseFunction == VNF_CellnoiseALU);
+                }
             }
             if (const UMaterialExpressionParameter* Parameter = Cast<UMaterialExpressionParameter>(Node))
             {
@@ -222,12 +268,14 @@ namespace
         // -- The contract's bands, on their own terms ---------------------------
         const TArray<TSharedPtr<FJsonValue>>& Frequencies = Constants->GetArrayField(TEXT("detail_frequencies"));
         const TArray<TSharedPtr<FJsonValue>>& Weights = Constants->GetArrayField(TEXT("detail_weights"));
+        const TArray<TSharedPtr<FJsonValue>>& CraterFrequencies = Constants->GetArrayField(TEXT("crater_frequencies"));
         const double ContinentFrequency = Constants->GetNumberField(TEXT("continent_frequency"));
         const int32 ContinentLevels = static_cast<int32>(Constants->GetNumberField(TEXT("continent_levels")));
         const int32 DetailLevels = static_cast<int32>(Constants->GetNumberField(TEXT("detail_levels")));
         const double LevelScale = Constants->GetNumberField(TEXT("level_scale"));
         Test.TestEqual(TEXT("a weight for every detail band"), Weights.Num(), Frequencies.Num());
         Test.TestTrue(TEXT("several detail bands, not one"), Frequencies.Num() >= 2);
+        Test.TestEqual(TEXT("a detail band is one octave: the vector noise has no others"), DetailLevels, 1);
         double Previous = ContinentFrequency;
         double Reach = ContinentFrequency * FMath::Pow(LevelScale, ContinentLevels);
         for (int32 Index = 0; Index < Frequencies.Num(); ++Index)
@@ -245,72 +293,109 @@ namespace
             }
         }
 
-        // -- The bands in the graph are the contract's --------------------------
-        Test.TestEqual(TEXT("M_SkyBody has the coarse band and every detail band"), Bands.Num(), 1 + Frequencies.Num());
-        TArray<double> Expected = { ContinentFrequency };
-        for (const TSharedPtr<FJsonValue>& Frequency : Frequencies)
+        // -- The coarse band -------------------------------------------------------
+        if (Test.TestEqual(TEXT("M_SkyBody has one coarse band"), Coarse.Num(), 1))
         {
-            Expected.Add(Frequency->AsNumber());
-        }
-        TArray<double> Built;
-        for (const UMaterialExpressionNoise* Noise : Bands)
-        {
+            const UMaterialExpressionNoise* Noise = Coarse[0];
             const TArray<double> Placed = ScaledBy(Noise->Position, 2);
             const TArray<double> Faded = ScaledBy(Noise->FilterWidth, 2);
-            if (!Test.TestEqual(FString::Printf(TEXT("a band's position is scaled by one frequency (%s)"), *Noise->GetName()), Placed.Num(), 1))
-            {
-                continue;
-            }
-            const double Frequency = Placed[0];
-            Built.Add(Frequency);
-            Test.TestTrue(FString::Printf(TEXT("and it fades by the footprint at that frequency (%g)"), Frequency),
-                Faded.Num() == 1 && FMath::IsNearlyEqual(Faded[0], Frequency, 1e-6 * Frequency));
-            Test.TestTrue(TEXT("every band is centred on zero, so the disc keeps its flux"),
+            Test.TestTrue(TEXT("the coarse band is at the continents' frequency"),
+                Placed.Num() == 1 && FMath::IsNearlyEqual(Placed[0], ContinentFrequency, 1e-6));
+            Test.TestTrue(TEXT("and fades by the footprint at it"),
+                Faded.Num() == 1 && FMath::IsNearlyEqual(Faded[0], ContinentFrequency, 1e-6));
+            Test.TestTrue(TEXT("it is centred on zero, so the disc keeps its flux"),
                 !Noise->bTurbulence && FMath::IsNearlyEqual(Noise->OutputMin, -Noise->OutputMax));
-            Test.TestEqual(TEXT("every band's octaves step as the contract says"), static_cast<double>(Noise->LevelScale), LevelScale);
+            Test.TestEqual(TEXT("its octaves step as the contract says"), static_cast<double>(Noise->LevelScale), LevelScale);
+            Test.TestEqual(TEXT("it has the contract's octaves"), static_cast<int32>(Noise->Levels), ContinentLevels);
             Test.TestTrue(TEXT("and the node scales nothing itself: the frequency is the graph's"), Noise->Scale == 1.0f);
+        }
 
-            const bool bCoarse = FMath::IsNearlyEqual(Frequency, ContinentFrequency, 1e-6);
-            Test.TestEqual(FString::Printf(TEXT("the band at %g has the contract's octaves"), Frequency),
-                static_cast<int32>(Noise->Levels), bCoarse ? ContinentLevels : DetailLevels);
-            const int32 Detail = Frequencies.IndexOfByPredicate([Frequency](const TSharedPtr<FJsonValue>& Value)
-            {
-                return FMath::IsNearlyEqual(Value->AsNumber(), Frequency, 1e-6 * Frequency);
-            });
-            if (bCoarse || Detail == INDEX_NONE || Detail >= Weights.Num())
+        // -- The detail bands are the contract's, one each, at their weights -------
+        const auto PlacedAt = [](const FExpressionInput& Position) -> TOptional<double>
+        {
+            const TArray<double> Placed = ScaledBy(Position, 2);
+            return Placed.Num() == 1 ? TOptional<double>(Placed[0]) : TOptional<double>();
+        };
+        TArray<double> Built;
+        for (const UMaterialExpressionVectorNoise* Noise : Details)
+        {
+            const TOptional<double> At = PlacedAt(Noise->Position);
+            if (!Test.TestTrue(FString::Printf(TEXT("a detail band's position is scaled by one frequency (%s)"), *Noise->GetName()), At.IsSet()))
             {
                 continue;
             }
-
-            // A detail band is used once, at its weight.
-            TArray<const UMaterialExpression*> Consumers;
-            for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+            Built.Add(*At);
+            const int32 Detail = Frequencies.IndexOfByPredicate([&At](const TSharedPtr<FJsonValue>& Value)
             {
-                for (int32 Index = 0; const FExpressionInput* Input = Expression->GetInput(Index); ++Index)
-                {
-                    if (Input->Expression == Noise)
-                    {
-                        Consumers.Add(Expression.Get());
-                    }
-                }
+                return FMath::IsNearlyEqual(Value->AsNumber(), *At, 1e-6 * *At);
+            });
+            if (Detail == INDEX_NONE || Detail >= Weights.Num())
+            {
+                continue;
             }
-            const UMaterialExpressionMultiply* Weighting = Consumers.Num() == 1 ? Cast<UMaterialExpressionMultiply>(Consumers[0]) : nullptr;
-            const UMaterialExpressionConstant* Weight = nullptr;
+            // Used once, times its fade and its weight: a multiply whose
+            // other side holds the band's frequency (the footprint's fade)
+            // and the contract's weight.
+            const TArray<const UMaterialExpression*> Users = Consumers(Material, Noise);
+            const UMaterialExpressionMultiply* Weighting = Users.Num() == 1 ? Cast<UMaterialExpressionMultiply>(Users[0]) : nullptr;
+            TArray<double> Scale;
             if (Weighting)
             {
-                const FExpressionInput& Other = Weighting->A.Expression == Noise ? Weighting->B : Weighting->A;
-                Weight = Cast<UMaterialExpressionConstant>(Other.Expression);
+                Scale = ScaledBy(Weighting->A.Expression == Noise ? Weighting->B : Weighting->A, 4);
             }
-            Test.TestTrue(FString::Printf(TEXT("the band at %g is weighted as the contract says (%g)"), Frequency, Weights[Detail]->AsNumber()),
-                Weight && FMath::IsNearlyEqual(static_cast<double>(Weight->R), Weights[Detail]->AsNumber(), 1e-6));
+            Test.TestTrue(FString::Printf(TEXT("the band at %g fades by the footprint at that frequency"), *At),
+                Scale.ContainsByPredicate([&At](double V) { return FMath::IsNearlyEqual(V, *At, 1e-6 * *At); }));
+            Test.TestTrue(FString::Printf(TEXT("and is weighted as the contract says (%g)"), Weights[Detail]->AsNumber()),
+                Scale.ContainsByPredicate([&](double V) { return FMath::IsNearlyEqual(V, Weights[Detail]->AsNumber(), 1e-6); }));
+        }
+        TArray<double> Expected;
+        for (const TSharedPtr<FJsonValue>& Value : Frequencies)
+        {
+            Expected.Add(Value->AsNumber());
         }
         Expected.Sort();
         Built.Sort();
-        Test.TestEqual(TEXT("the graph's bands are the contract's, one each"), Built.Num(), Expected.Num());
+        Test.TestEqual(TEXT("the graph's detail bands are the contract's, one each"), Built.Num(), Expected.Num());
         for (int32 Index = 0; Index < FMath::Min(Built.Num(), Expected.Num()); ++Index)
         {
             Test.TestTrue(FString::Printf(TEXT("a band at %g (the graph has %g)"), Expected[Index], Built[Index]),
                 FMath::IsNearlyEqual(Built[Index], Expected[Index], 1e-6 * Expected[Index]));
+        }
+
+        // -- The crater bands ----------------------------------------------------
+        TArray<double> CraterBuilt;
+        for (const UMaterialExpressionVectorNoise* Noise : Craters)
+        {
+            const TOptional<double> At = PlacedAt(Noise->Position);
+            if (!Test.TestTrue(FString::Printf(TEXT("a crater band's position is scaled by one frequency (%s)"), *Noise->GetName()), At.IsSet()))
+            {
+                continue;
+            }
+            CraterBuilt.Add(*At);
+            // Its frequency appears twice: once placing it, once fading it.
+            int32 Uses = 0;
+            for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+            {
+                if (const UMaterialExpressionConstant* Constant = Cast<UMaterialExpressionConstant>(Expression.Get()))
+                {
+                    Uses += FMath::IsNearlyEqual(static_cast<double>(Constant->R), *At, 1e-6 * *At) ? 1 : 0;
+                }
+            }
+            Test.TestTrue(FString::Printf(TEXT("the crater band at %g fades by the footprint as well"), *At), Uses >= 2);
+        }
+        TArray<double> CraterExpected;
+        for (const TSharedPtr<FJsonValue>& Value : CraterFrequencies)
+        {
+            CraterExpected.Add(Value->AsNumber());
+        }
+        CraterExpected.Sort();
+        CraterBuilt.Sort();
+        Test.TestTrue(TEXT("the graph's crater bands are the contract's, one each"), CraterBuilt.Num() == CraterExpected.Num()
+            && Algo::Compare(CraterBuilt, CraterExpected, [](double A, double B) { return FMath::IsNearlyEqual(A, B, 1e-6 * B); }));
+        for (int32 Index = 1; Index < CraterExpected.Num(); ++Index)
+        {
+            Test.TestTrue(TEXT("crater bands step by four, so the count wider than D goes as D^-2"),
+                FMath::IsNearlyEqual(CraterExpected[Index] / CraterExpected[Index - 1], 4.0, 1e-9));
         }
 
         // -- The half-float guard, and every knob reaching the pixel -------------
@@ -338,24 +423,69 @@ namespace
             return;
         }
         const UMaterialExpressionClamp* Guard = Guards[0];
-        const TSet<const UMaterialExpression*> Unguarded = Upstream(Pixel, Guard);
-        const TSet<const UMaterialExpression*> Guarded = Upstream(Guard->Input.Expression);
-        for (const UMaterialExpressionNoise* Noise : Bands)
+
+        // The light's dot products: each with a unit normal, so each is in
+        // [-1, 1] whatever feeds the normal.
+        const UMaterialExpression* const* Light = Parameters.Find(SkyMaterial::LightDirection);
+        TSet<const UMaterialExpression*> Turns;
+        for (const UMaterialExpression* Node : Reached)
         {
-            Test.TestTrue(FString::Printf(TEXT("%s lies behind the guard"), *Noise->GetName()), Guarded.Contains(Noise));
-            Test.TestFalse(FString::Printf(TEXT("and reaches the pixel by no other way (%s)"), *Noise->GetName()), Unguarded.Contains(Noise));
+            const UMaterialExpressionDotProduct* Dot = Cast<UMaterialExpressionDotProduct>(Node);
+            if (!Dot || !Light || (Dot->A.Expression != *Light && Dot->B.Expression != *Light))
+            {
+                continue;
+            }
+            const UMaterialExpression* Normal = Dot->A.Expression == *Light ? Dot->B.Expression : Dot->A.Expression;
+            Test.TestTrue(TEXT("every N.L is of a unit normal"),
+                Cast<UMaterialExpressionNormalize>(Normal) || Cast<UMaterialExpressionVertexNormalWS>(Normal));
+            Turns.Add(Dot);
         }
-        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::Banding, SkyMaterial::SurfaceSeed })
+        Test.TestTrue(TEXT("the light meets the relief's normal"), Turns.Num() >= 1);
+
+        TSet<const UMaterialExpression*> Stops = Turns;
+        Stops.Add(Guard);
+        const TSet<const UMaterialExpression*> Unguarded = Upstream(Pixel, Stops);
+        const TSet<const UMaterialExpression*> Guarded = Upstream(Guard->Input.Expression);
+        TSet<const UMaterialExpression*> Turning;
+        for (const UMaterialExpression* Dot : Turns)
+        {
+            Turning.Append(Upstream(Dot));
+        }
+        TArray<const UMaterialExpression*> Bands;
+        Bands.Append(Coarse);
+        Bands.Append(Details);
+        Bands.Append(Craters);
+        for (const UMaterialExpression* Band : Bands)
+        {
+            Test.TestTrue(FString::Printf(TEXT("%s lies behind the guard"), *Band->GetName()), Guarded.Contains(Band));
+            Test.TestFalse(FString::Printf(TEXT("and reaches the pixel by no way but it and the unit normal (%s)"), *Band->GetName()),
+                Unguarded.Contains(Band));
+        }
+        for (const UMaterialExpression* Band : Details)
+        {
+            Test.TestTrue(FString::Printf(TEXT("%s tilts the normal: the relief is the same noise as the face"), *Band->GetName()),
+                Turning.Contains(Band));
+        }
+        for (const UMaterialExpression* Band : Craters)
+        {
+            Test.TestTrue(FString::Printf(TEXT("%s tilts the normal too"), *Band->GetName()), Turning.Contains(Band));
+        }
+        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::Banding, SkyMaterial::SurfaceSeed, SkyMaterial::Cratering })
         {
             const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
             Test.TestTrue(FString::Printf(TEXT("%s shapes the face behind the guard"), *Knob.ToString()),
                 Parameter && Guarded.Contains(*Parameter));
         }
-        for (const FName Amplitude : { SkyMaterial::Mottle, SkyMaterial::Detail })
+        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::Relief, SkyMaterial::Cratering })
         {
-            const UMaterialExpression* const* Parameter = Parameters.Find(Amplitude);
-            Test.TestTrue(FString::Printf(TEXT("and %s reaches the pixel only through it"), *Amplitude.ToString()),
+            const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
+            Test.TestTrue(FString::Printf(TEXT("and %s reaches the pixel only through the guard or the unit normal"), *Knob.ToString()),
                 Parameter && !Unguarded.Contains(*Parameter));
+        }
+        for (const FName Knob : { SkyMaterial::Relief, SkyMaterial::Cratering })
+        {
+            const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
+            Test.TestTrue(FString::Printf(TEXT("%s tilts the normal"), *Knob.ToString()), Parameter && Turning.Contains(*Parameter));
         }
         for (const TPair<FName, const UMaterialExpression*>& Parameter : Parameters)
         {

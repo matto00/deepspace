@@ -230,7 +230,7 @@ def check_sky(every):
     if len(skies) != 1:
         failures.append("%d skies, want exactly one" % len(skies))
     for sky in skies[:1]:
-        for slot, want in (("body_mesh", "%s.Sphere" % PL.SPHERE),
+        for slot, want in (("body_mesh", PL.sky_asset("SM_SkyBody")),
                            ("body_material", PL.sky_asset("M_SkyBody")),
                            ("star_material", PL.sky_asset("M_SkyStar")),
                            ("point_star_material", PL.sky_asset("M_SkyStarfield"))):
