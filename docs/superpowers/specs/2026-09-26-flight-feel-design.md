@@ -1,7 +1,8 @@
 # DeepSpace — Flight Feel: Two Levers, a Soft Cap, and Speed You Can See
 
 **Date:** 2026-09-26
-**Status:** Draft, revision 2 — design only, not implemented
+**Status:** Revision 3 — amended with the developer's rulings (below), not
+implemented
 **Answers:** the developer's second playtest, notes 1, 2 and 4 and its
 "mainly" paragraph, under rulings A and B (below). Note 3, the system map, is
 a sibling spec (`2026-09-26-system-map-design.md`); the seams with it are in
@@ -14,6 +15,61 @@ subsystem), ADR 0005 (the ship is the origin)
 **Governed by:** `docs/vision.md`: *Approach takes time, and the time is the
 content*, *the anti-chore principle*, *the cruise is when you live in the
 ship*; CLAUDE.md: *Flying*, *The drive and the jump*, *The sky*
+**Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
+
+## Amendment, 2026-09-26: the developer's rulings
+
+The developer read revision 2 and the sibling map spec together and ruled on
+both sign-off lists. The rulings are binding and override anything below that
+disagrees. Every decision they change has been revised in place, and each
+superseded choice is kept beside it as a rejected alternative, as the
+revisions before this one were.
+
+1. **The drive tops out at 1 c.** Verbatim: "Top out at 1c, anything faster
+   should be a jump (we should eventually limit the amount of jumps before a
+   cooldown period. 1c already feels somewhat like quite the stretch from
+   realism. there can be an option to 'jump to planet' within a system". The
+   lever is now STOP plus eighteen notches on the 1-2-5 series, 1 km/s up to
+   and including 1 c (decision 3), a tap per notch counted from the ship's
+   present speed, eased (decisions 3 and 4). The approach tables are
+   recomputed for it (decision 5). **At 1 c, 1 AU takes 8 min 19 s and 30 AU
+   takes 4 h 9 min**; the median leg from an arrival to the innermost world
+   (0.2 AU) is 100 s, the 95th-percentile leg (2.5 AU) 21 minutes, and the
+   longest procgen makes (138 AU) 19 hours. That is why the **in-system
+   jump** exists: with a world targeted, the existing jump machinery carries
+   the ship to a standoff above it. It belongs to the sibling spec (its
+   decision 12). This spec's share is that every jump, interstellar or
+   in-system, is an all stop and arrives at rest (decision 4). The jump
+   cooldown the ruling mentions is future work and is not built; the sibling
+   spec records it as an open question, with its tension against the
+   anti-chore principle.
+2. **The soft cap as specified** (decision 5): only when the nose's ray meets
+   a floor sphere, reach-it-in-4-s, finishing on the braking curve, with the
+   floor at the sky's rendered floor (decision 6), about 10 km over an Earth,
+   which is where landing will later take over.
+3. **A live ETA.** Verbatim: "Live ETA, i don't recall ruling out a countdown
+   in this regard. This would be good." The developer is right. The
+   no-countdown rule was made for the **jump's charge**, a filling bar the
+   player waits on, and CLAUDE.md had generalised it to every screen. That
+   sentence is scoped back to the charge. The target line and the map (the
+   sibling spec's decision 6) show a live time to arrival at the present
+   speed, computed with this spec's own cap law, the new pure
+   `ShipFlight::SecondsToFloor` (Track 0). Decision 7 is revised: the
+   bottom-left corner still shows no time, because it has no destination.
+4. **Picking a target: both, and the seats change.** The sibling spec's
+   (its decisions 2, 4 and 13). This spec's share is the input action the
+   copilot's Tab needs, `IA_CycleTarget`, which Track A builds with the lever
+   actions so `BP_DeepSpaceCharacter` is recompiled once, not twice.
+5. **Everything else as recommended**: each mode keeps its lever across F; X
+   stops both; after X the lever restarts from STOP (decision 1); every jump,
+   interstellar and in-system, arrives at rest with both levers at STOP
+   (decision 4); the dust knee law, judged in play (decision 8); star surfaces
+   honest T^4 with the 8x ceiling, with `StarSurface` chosen live from frames
+   (decision 9).
+
+The build order both specs follow is
+`docs/superpowers/plans/2026-09-26-poc2-build-order.md`. This spec's Track 0
+is stage 1, Track A is stage 2, and Tracks B and C are stage 3.
 
 ### Revision 2
 
@@ -130,7 +186,8 @@ differ, the code is what is described.
 
 ## Goals
 
-- The player chooses the speed, in both modes, and the ship holds it.
+- The player chooses the speed, in both modes, and the ship holds it. The
+  drive's fastest is 1 c; anything faster is a jump (ruling 1).
 - The ship goes where the nose points, in the drive always, in cruise once
   the boosters have caught up with a turn.
 - Speeding up, slowing down and stopping are each one deliberate act, with a
@@ -146,8 +203,11 @@ differ, the code is what is described.
 
 ## Non-goals
 
-- **The jump.** Not redesigned. The only change it sees is that the fold is an
-  all stop (decision 4), one line in the existing `TransitBegan` case.
+- **The jump.** Not redesigned. The only change it sees from this spec is
+  that every fold is an all stop and every arrival is at rest (decision 4):
+  one line in the existing `TransitBegan` case and one in `JumpTo`. The
+  in-system jump (ruling 1) is the sibling spec's decision 12, and reuses
+  both unchanged.
 - **Landing.** Below the floor (decision 6) is landing's. This spec's job is
   to hand over without deciding anything landing will want to decide.
 - **The system map, the in-system target, its bracket and the prograde mark.**
@@ -188,8 +248,8 @@ left mouse button), and it is the genre's convention: Elite binds its
 zero-throttle there. It is a new `IA_Stop`, built and clash-checked by
 `Tools/setup_flight_input.py` like `IA_Drive`.
 
-**After X, the lever starts again from STOP.** Resuming the drive to 10 c
-after an all stop is a seven-second hold of Shift, watching the readout
+**After X, the lever starts again from STOP.** Resuming the drive to 1 c
+after an all stop is a six-second hold of Shift, watching the readout
 climb (decision 3). That is accepted, not an oversight. A stop is a
 deliberate act, used rarely, and it usually happens near something, where
 the next speed the pilot wants is a new choice rather than the old one; a
@@ -198,8 +258,8 @@ hold is how a lever is set, and the readout shows the speed as it goes.
 **Rejected: X stops only the live lever.** Stop, press F, and the other
 lever's speed resumes: a stop that does not stop. **Rejected: engaging the
 drive always starts it at its bottom notch.** It would make F forget, so the
-common act (drop to cruise to look, then back) would cost a seven-second hold
-every time, where X's seven seconds follow a rare, deliberate stop. The first
+common act (drop to cruise to look, then back) would cost a six-second hold
+every time, where X's six seconds follow a rare, deliberate stop. The first
 draft rejected this as "a chore", which its own X contradicted; the true
 difference is how often each happens. **Rejected: a double-tap of Shift
 after X restores the notch before the stop.** A hidden gesture, and a second
@@ -208,7 +268,8 @@ on the pawn.** A second lever would be a second copy of ship state on an
 actor, and a second pilot sitting down would bring their own.
 
 **Cost to change:** low. Which lever survives what is a few lines in the
-subsystem's sweep; the tests pin whichever is chosen.
+subsystem's sweep; the tests pin whichever is chosen. Ruled as recommended
+(ruling 5).
 
 ### 2. The cruise lever stays as it is, with a detent at zero
 
@@ -224,14 +285,18 @@ through zero stops at zero.** Going astern is a second, fresh press of Ctrl.
 A held Ctrl that carried a cruising ship through rest and into reverse is the
 lever acting past what was asked.
 
-### 3. The drive lever: a stop and 24 notches, 1 km/s to 100 c, and a tap moves the ship one notch
+### 3. The drive lever: a stop and 18 notches, 1 km/s to 1 c, and a tap moves the ship one notch
+
+*Revised by ruling 1: the lever ends at 1 c, where revision 2 ran on to
+100 c.*
 
 The drive lever is a row of notches. Position 0 is **STOP**. Positions 1 to
-24 are a 1-2-5 series, in km/s to 2,000 and in fractions of light from 0.01:
+18 are a 1-2-5 series, in km/s to 2,000 and in fractions of light from 0.01,
+up to and including light itself:
 
 ```
 STOP  1 2 5 10 20 50 100 200 500 1,000 2,000 KM/S
-      0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 C
+      0.01 0.02 0.05 0.1 0.2 0.5 1 C
 ```
 
 Every step is x2 or x2.5 (2,000 km/s to 0.01 c is x1.5), so each notch is
@@ -243,7 +308,7 @@ can come back to.
   level.** The pawn binds `Started` on the lever keys and counts presses, and
   the ship applies each one; a press and release inside one 30 Hz frame is
   still one notch. A hold repeats after 0.3 s at `ds.Drive.Sweep`, 3 notches
-  a second: STOP to 100 c is eight seconds held, and a decade of speed is one
+  a second: STOP to 1 c is six seconds held, and a decade of speed is one
   second.
 - **A tap moves the ship one notch from what it is doing, not from where the
   lever was.** Ctrl sets the lever to the notch below the ship's present
@@ -251,7 +316,7 @@ can come back to.
   notch above, if that is higher than one notch up. In steady flight the two
   are the same thing. They differ in exactly the three places where a lever
   the player cannot feel would otherwise swallow taps: under the soft cap
-  (lever at 10 c, ship held to 22 km/s: Ctrl gives 20 km/s at once, not ten
+  (lever at 1 c, ship held to 22 km/s: Ctrl gives 20 km/s at once, not twelve
   taps of nothing), while spooling up (Ctrl stops the climb where it is), and
   while spooling down after X (Shift stops the fall where it is). **Ctrl
   always slows the ship, and Shift always speeds it, from the first tap.**
@@ -264,16 +329,20 @@ can come back to.
   at which cruise would be a nuisance: 100 km at 1 km/s is a minute and a
   half. Anything slower is cruise's, and the two ranges meet with no gap the
   response cannot bridge (decision 4).
-- **The top, 100 c, is for crossing, not for arriving.** Over 10,000
-  generated systems the leg from the arrival standoff to the innermost world
-  is a median 0.2 AU (95th percentile 2.5 AU, longest 138 AU). At 100 c the
-  median leg is crossed in a second, the 95th percentile in twelve, the
-  longest in eleven and a half minutes. The approach to a world is then the
-  soft cap's (decision 5), and it takes about as long from any notch above
-  10 c, *if the nose is on the world's disc when the cap takes over*. A pilot
-  who wants to arrive rather than pass uses a lower notch, or aims well; the
-  table in decision 5 says which is which. `ds.Drive.Top` (in c, default 100)
-  removes the notches above it for a playtest that wants the lever shorter.
+- **The top, 1 c, is the developer's** (ruling 1): "anything faster should
+  be a jump", and 1 c "already feels somewhat like quite the stretch from
+  realism". Over 10,000 generated systems the leg from the arrival standoff
+  to the innermost world is a median 0.2 AU (95th percentile 2.5 AU, longest
+  138 AU). At 1 c the median leg is 100 s, the 95th percentile 21 minutes and
+  the longest 19 hours; **1 AU is 8 min 19 s, and 30 AU, a Neptune's orbit,
+  is 4 h 9 min**. So the drive is for the approach and the short leg, and the
+  long leg is the **in-system jump's** (the sibling spec's decision 12), which
+  folds the ship to a standoff above a targeted world. The approach itself is
+  the soft cap's (decision 5), and its last part takes about a minute from
+  any notch that crosses the leg in less: from 0.2 AU at 1 c the floor is
+  reached in 165 s, the last 64 of them under the cap. `ds.Drive.Top` (in c,
+  default 1, clamped to at most 1) removes the notches above a lower top for
+  a playtest that wants the lever shorter; it can never lengthen it.
 
 **Rejected: a continuous logarithmic lever.** A tap would move it by however
 long the key happened to be down, the readout would say "37.2 KM/S", and a
@@ -284,13 +353,19 @@ is then ten taps of nothing: the over-control the developer named.
 **Rejected: detecting a tap from the held level** (the first draft's
 `FNotchSweep(Input, PreviousInput)`). A press and release inside one frame
 reaches the ship as 0 and moves nothing, which at 30 Hz is a common tap.
-**Rejected: a top of 10 c.** The 95th-percentile leg becomes two minutes at
-the top and the longest four hours, and the lever stops covering what
-procgen makes. **Rejected: 1,000 c.** Nothing needs it; it adds three
-notches to sweep through.
+**Rejected: a top of 100 c** (revision 2's recommendation). It crossed the
+median leg in a second and the longest in eleven and a half minutes, so the
+drive alone covered everything procgen makes. The developer ruled it out:
+1 c is already a stretch from realism, and anything faster should be a jump.
+What it covered above 1 c is now the in-system jump's. It also made capture
+harsh (decision 5: 93 c to 2.9 c in one substep at a tenth of a degree),
+which the 1 c top mostly removes. **Rejected: a top of 10 c** (the first
+draft's alternative), for the same ruling. Revision 2's objection to it, that
+the lever would stop covering what procgen makes, is answered by the jump,
+not by the lever. **Rejected: 1,000 c.** Nothing needs it.
 
 **Cost to change:** low in code (a table in `ShipDriveLever.cpp`). What the
-player learns is the table, so it is on the sign-off list.
+player learns is the table. Ruled (ruling 1).
 
 ### 4. The ship answers the lever eased, at the lever's own pace, and never jumps up
 
@@ -304,8 +379,9 @@ linear from STOP to the first. So:
 - **R equals the hold's sweep rate**, so while Shift is held the ship
   accelerates in step with the lever, and on release it settles within a
   second;
-- all stop from 10 c (notch 21) takes about eight seconds, from 100 c about
-  nine; cruise's all stop from 200 m/s is five. The two stops feel alike;
+- all stop from 1 c (notch 18) is under cruise's top in 6.3 s and at rest in
+  about nine; from 0.1 c, 5.3 s and eight; cruise's all stop from 200 m/s is
+  five. The two stops feel alike;
 - starved boosters slow the response, not the top: a quarter thrust takes
   four times as long to reach any notch, and gets there. That replaces tau's
   stretch (sky decision 8) with the same degradation, and it never becomes a
@@ -315,7 +391,7 @@ linear from STOP to the first. So:
 ship below `SpeedAt(p)`, p is set to `PositionOf(held speed)` every substep.
 So when the cap lets go -- the nose turned off the world, or the ship
 climbed -- the speed rises from where the ship actually was, at R notches a
-second like any other change: from 25 km/s to 10 c in about four seconds,
+second like any other change: from 25 km/s to 1 c in about four seconds,
 never in one substep. **Speed never rises faster than R in notch space,
 anywhere.** It can fall faster in exactly one case, the substep in which the
 nose first meets a world the ship would reach within the cap's few seconds
@@ -337,26 +413,33 @@ its lever from there under inertia. Every case in it is pinned
 | X | both levers to STOP; the spool carries on down, and cruise then brakes to rest |
 | attitude | the velocity stays along the nose, as in the drive |
 
-From 100 c the spool takes about eight seconds and cruise's braking five more.
+From 1 c the spool takes about six seconds and cruise's braking five more.
 
 **Engaging the drive starts p at the ship's present forward speed.** Neither
 toggle has a frame in which the speed jumps.
 
-**The fold is an all stop.** On `TransitBegan` both levers go to STOP, in the
-same case that already spends the charge and releases attitude: one line,
-and the jump changes in no other. The ship eases to rest inside the six-second
+**Every fold is an all stop, and every jump arrives at rest.** On
+`TransitBegan` both levers go to STOP, in the same case that already spends
+the charge and releases attitude: one line. The ship eases down inside the
 fold, where its speed was never visible (the streaks are drawn from the
-transit's progress), and comes out at the new star at rest, with the mode it
-went in with. The first thing the pilot does in a new system is choose a
-speed. Without this, a drive lever left at 100 c would fly the ship at the
-star during the arrival -- the arrival point puts the nose on it -- and park
-it at the star's floor, where the disc fills the view: note 4 at its worst,
-and the ship moving without being asked.
+transit's progress). From 1 c that ease takes about nine seconds, longer than
+the six-second fold, so the arrival does not rely on it: **`FShipFlightState::
+JumpTo` also sets the velocity and p to zero**, the second line. The ship
+comes out at rest exactly, with the mode it went in with, and the first thing
+the pilot does after any jump is choose a speed. Both jumps take this path:
+the interstellar one, and the sibling spec's in-system jump (its decision
+12), which reuses `TransitBegan` and `JumpTo` and changes neither. Without
+it, a drive lever left at 1 c would fly the ship at the star during an
+arrival -- the arrival point puts the nose on it -- and park it at the star's
+floor, where the disc fills the view: note 4 at its worst. After an
+in-system jump it would fly the ship straight down onto the world the jump
+had just framed two degrees across: the approach, the part the player flies,
+taken from them.
 
 **Rejected: instant.** It is honest to the drive's lack of inertia and it is
 exactly what "out of control" describes: F at full lever was 200 m/s to 34 c
 in one substep. **Rejected: easing in speed rather than notches.** A time
-constant in m/s is right for one decade and wrong for the other seven.
+constant in m/s is right for one decade and wrong for the other four.
 **Rejected: letting p run on above a hold** (the first draft). The lever's
 speed returned "at once" when the cap let go: at 10 c a turn of a fraction
 of a degree jumped the speed by five orders of magnitude in one substep.
@@ -364,10 +447,14 @@ of a degree jumped the speed by five orders of magnitude in one substep.
 (the first draft). It is the dive into the star described above. **Rejected:
 the fold disengages the drive.** It changes the mode as well as the speed,
 and the cruise lever left at 200 m/s would carry the ship on after the
-arrival; STOP on both is one rule and says what it means.
+arrival; STOP on both is one rule and says what it means. **Rejected:
+relying on the ease alone to reach rest inside the fold** (revision 2, which
+said the ship "eases to rest inside the six-second fold"). It does not from
+1 c, and did not from 100 c either: the ship would come out still moving.
 
-**Cost to change:** low: two CVars and one function; the fold's line is on
-the sign-off list because it sets the first moment in every system.
+**Cost to change:** low: two CVars and one function; the fold's two lines
+set the first moment after every jump, and were ruled as recommended
+(ruling 5).
 
 ### 5. The soft cap: only when the nose is on a surface, and then the whole speed
 
@@ -414,7 +501,7 @@ nothing, there is no cap and the lever is the speed.
   case and nowhere the ship is held at a fixed speed: inside or under
   anything, it climbs out at whatever the lever asks.
 - *Capture.* When the nose first comes onto a world's disc at a speed the cap
-  does not allow -- steering onto a world at 10 c from a million kilometres
+  does not allow -- steering onto a world at 1 c from a few million kilometres
   -- the speed drops to the cap in that substep. That is the one place speed
   changes faster than R: always down, only on the pilot's own aim, and only
   as far as the rule requires. After capture p follows the cap (decision 4),
@@ -427,43 +514,65 @@ nothing, there is no cap and the lever is the speed.
 
 What it does to an approach. `python3` against the rule above, 120 Hz
 substeps, an Earth (floor 10.2 km), the lever set from STOP at t = 0 and the
-ship spooling up at R, full boosters. With the nose fixed on the world:
+ship spooling up at R, full boosters, **with the lever topped at 1 c (ruling
+1)**. Recomputed for this amendment from revision 2's own scripts with the
+notch table cut at 1 c, pure Python in one process. Neither script is a
+repo tool; Track A's `Tools/sky_probe.py`, whose drive law becomes this
+decision's (A5), is what reproduces these rows in the repo. With the nose
+fixed on the world:
 
 | From | Lever | Cap binds after | At 100 km up | Floor reached |
 |---|---|---|---|---|
-| 0.2 AU (median arrival) | 10 c | 13 s | 60 s, 22.5 km/s | **86 s** |
-| 0.2 AU | 100 c | 7 s | 58 s | 84 s |
-| 0.2 AU | 1 c | 102 s | 139 s | 165 s |
-| 2.4 AU (Sun-like arrival) | 100 c | 16 s | 72 s | **98 s** |
-| 2.4 AU | 10 c | 122 s | 170 s | 195 s |
+| 0.2 AU (median arrival) | 1 c | 102 s | 139 s, 22.5 km/s | **165 s** |
+| 0.2 AU | 0.1 c | 999 s | 1,027 s | 1,053 s |
+| 1 AU | 1 c | 501 s | 539 s | 564 s |
+| 2.4 AU (Sun-like arrival) | 1 c | 1,199 s | 1,237 s | 1,263 s |
 | 250,000 km | 1 c | 5 s | 37 s | 62 s |
 | 250,000 km | 1,000 km/s | 249 s | 264 s | 290 s |
-| 0.2 AU, a Jupiter (floor 112 km) | 10 c | 13 s | -- | 86 s |
-| 0.2 AU, quarter thrust | 10 c | 32 s | 79 s | 111 s |
+| 365,000 km: an in-system jump's arrival over an Earth, 2 degrees across | 1 c | 5 s | 38 s | **64 s** |
+| 4.0 million km: the same over a Jupiter (floor 112 km) | 1 c | 15 s | -- | 79 s |
+| 0.2 AU, a Jupiter | 1 c | 102 s | -- | 165 s |
+| 0.2 AU, quarter thrust | 1 c | 118 s | 156 s | 187 s |
+
+**The last part of every approach is the cap's, and it is about a minute**:
+from the moment the cap binds (d = vN, 1.2 million km at 1 c) to the floor is
+64 s at 1 c and 54 s at 0.1 c, whatever the leg. Everything before it is the
+lever crossing the leg at its own speed, and at 1 c that is the leg's length
+in light-seconds: 100 s for the median, 21 minutes for a Sun-like arrival.
+Revision 2's table (86 s from 0.2 AU at 10 c, 98 s from 2.4 AU at 100 c) is
+superseded; it was bought with speeds the developer ruled out. What makes
+the long legs short again is the in-system jump (the sibling spec's decision
+12), whose arrival is the two rows above that take a minute.
 
 Against today's drive from 0.2 AU: under 1 km/s at 115 km after 218 s, and
 never at the floor. The last 90 km now take 26 s, and the ship comes through
 100 km at 22 km/s rather than leaving it at 1.
 
 **With aim error**, the nose fixed off the world's centre. From 0.2 AU at
-10 c: 0.001 and 0.01 degrees reach the floor in the same 86 s as a perfect
+1 c: 0.001 and 0.01 degrees reach the floor in the same 165 s as a perfect
 aim (the ray still meets the sphere, and the ship flies to where it does);
-0.1 degrees misses the sphere and passes 47,000 km up at 10 c, untouched --
-exactly as the uncapped ship would. From 250,000 km at 1 c, anything up to a
+0.1 degrees misses the sphere and passes 46,000 km up at 1 c, untouched --
+exactly as the uncapped ship would, and 1 degree passes 516,000 km up. From 250,000 km at 1 c, anything up to a
 degree still meets the world and lands on its floor in 62 s. No case ends
 farther than it started except by missing, and none leaves at a speed the
 pilot did not set.
 
 **A pilot who keeps the bracket centred** (the nose turning toward the world
-at up to 0.2 rad/s with a steady bias): at 10 c from 0.2 AU, a bias of 0.1 or
-0.5 degrees is captured and reaches the floor in 78-84 s; 2 degrees passes
-3,200 km up. At 100 c, 0.1 degrees is captured at 3.5 million km, where the
-speed falls from 93 c to 2.9 c in one substep, and 0.5 degrees passes. The
+at up to 0.2 rad/s with a steady bias): at 1 c from 0.2 AU, **every bias up
+to 5 degrees is captured** and reaches an Earth's floor in 155-165 s. The
+capture substep drops the speed from 1 c to 0.61 c at half a degree (725,000
+km out), to 0.15 c at 2 degrees (x6.7) and to 0.035 c at 5 degrees (x29); at
+0.1 degrees there is no drop worth the name. On a Jupiter everything up to 2
+degrees is captured with no drop at all. The same holds from an in-system
+jump's arrival: every bias to 5 degrees reaches the floor in 57-67 s. The
 rule of thumb, which the pilot learns by flying: capture is smooth when the
 disc is bigger than the aim error at N seconds out, `v < R / (N x aim)`:
-for a half-degree aim, about 0.6 c on an Earth and 7 c on a Jupiter. Above
-it the pilot either aims better, drops a notch as the world grows, or goes
-past. The ship does what it was told in all three.
+for a half-degree aim, about 0.6 c on an Earth and 7 c on a Jupiter. Under a
+1 c top, a Jupiter is always under it, and an Earth is at most a factor of
+two over for a pilot within half a degree. Revision 2's 100 c dropped 32-fold
+at a tenth of a degree (93 c to 2.9 c at 3.5 million km); the ruled top
+removed most of capture's abruptness along with the speed. The ship does
+what it was told in every case.
 
 **Under cruise**, which has inertia, the same rule sets the assist's
 *target*: the target speed along the commanded direction (the nose, or aft
@@ -477,8 +586,8 @@ it is there for a turn made while drifting in. Cruise never tells the player
 anything else.
 
 **The system's edge stays a surface** (plan conflict 10), on exactly the
-same rule. From inside, every ray meets the edge's sphere; at 100 c the cap
-binds within 0.8 AU of an edge 15,800 AU out, and the ship settles 10 km
+same rule. From inside, every ray meets the edge's sphere; at 1 c the cap
+binds 1.2 million km (0.008 AU) short of an edge 15,800 AU out, and the ship settles 10 km
 inside it and stays in its system: `GetSystemAt` never goes empty under a sky
 still drawing the old one. You leave by jumping.
 
@@ -507,8 +616,8 @@ with no braking finish.** It never arrives, and "never arrives" is note 1.
 or 5 is a reasonable-person difference and a CVar; 4 s is "within a few
 seconds".
 
-**Cost to change:** low in code, but landing's approach is built on it, so it
-is on the sign-off list.
+**Cost to change:** low in code, but landing's approach is built on it.
+Ruled as specified (ruling 2).
 
 ### 6. The floor is where the sky stops being honest, and it is landing's door
 
@@ -560,9 +669,13 @@ below the floor.** It would look broken rather than low, and landing owns it.
 **Rejected: the renderer's floor over a star** (the first draft): above.
 
 **Cost to change:** the numbers are CVars. Where landing begins is the
-expensive part, and it is on the sign-off list.
+expensive part. Ruled as specified (ruling 2): this is where landing will
+later take over.
 
-### 7. What the HUD says: the speed, both levers, and why they differ -- never a time
+### 7. What the HUD says: the speed, both levers, and why they differ -- and no time in this corner
+
+*Revised by ruling 3: a live ETA exists, on the target line and the map; this
+corner still has none, because it has no destination.*
 
 The bottom-left corner already reads "how fast and how far from anything,
 together". It keeps its two lines and says more on each.
@@ -574,15 +687,15 @@ its lever's setting in ink; then, dim, the other lever's.
 142 M/S  ·  CRUISE 200 M/S                    ·  DRIVE 1 C
 80 M/S  ·  CRUISE ASTERN 100 M/S              ·  DRIVE STOP
 12.4 KM/S  ·  DRIVE 50 KM/S                   ·  CRUISE 200 M/S
-0.37 C  ·  DRIVE 10 C                         ·  CRUISE STOP
-4.2 C  ·  CRUISE 100 M/S  ·  SPOOLING DOWN    ·  DRIVE 10 C
+0.37 C  ·  DRIVE 1 C                          ·  CRUISE STOP
+0.42 C  ·  CRUISE 100 M/S  ·  SPOOLING DOWN   ·  DRIVE 1 C
 STATIONARY  ·  DRIVE STOP                     ·  CRUISE STOP
 ```
 
-The dim part is what F would do. From cruise with the drive left at 100 c,
-`· DRIVE 100 C` is on screen before F is pressed, so the toggle is never a
+The dim part is what F would do. From cruise with the drive left at 1 c,
+`· DRIVE 1 C` is on screen before F is pressed, so the toggle is never a
 surprise. The lever is always named by the speed it asks for, never as a
-notch number or a fraction of its travel: "7 / 24" is a gauge, and a gauge
+notch number or a fraction of its travel: "7 / 18" is a gauge, and a gauge
 is a thing to fill. The line is two text blocks in a horizontal box, ink and
 dim, both from one pure `MotionLine` that returns the pair.
 
@@ -612,17 +725,34 @@ nothing blinks: it is a fact about the ship, stated like the others.
 pure beside `AltitudeWords`, on its rule: each unit takes over exactly where
 the last would round up to its own threshold): whole M/S under 1 km/s; KM/S
 to a tenth under 100, whole and grouped to 0.01 c; then C to a hundredth
-under 1, a tenth under 10, whole above. Every notch reads as its label.
+under 1, and `1 C` at the top, which is as fast as the drive goes (ruling 1).
+Every notch reads as its label.
 Distance keeps `AltitudeWords` (M, KM, THOUSAND KM, AU).
 
-**No time appears anywhere: no "time to surface", no arrival time, no ETA.**
-This crosses the line CLAUDE.md draws. A number that counts down to an
-arrival is a clock to watch; it turns the approach -- "the time is the
-content" -- into a wait with a readout, and it scores the lever setting, which
-invites minimising it. Distance and speed are facts about the world. The
-sibling map spec draws the same line and argues it at length (its decision
-6), including its fallback of coarse, static words for a lever setting; one
-ruling covers both (sign-off 5).
+**No time appears in this corner.** The corner describes the ship: its
+speed, its levers, and how far it is from the nearest thing. A time to
+arrival needs a destination, and the corner has none: the nearest surface is
+often not where the pilot is going. **The live ETA the developer ruled for
+(ruling 3) belongs to the target**, and is on the target line and the map
+(the sibling spec's decision 6). It is computed with this spec's own law,
+`ShipFlight::SecondsToFloor` (Track 0), so the number the pilot reads is the
+approach the ship will fly: held at the present speed until the cap binds,
+then the cap, then the braking curve. Once the lever has settled it agrees
+with the flown approach to 0.11 s over the median leg at 1 c, and so counts
+down a second a second.
+
+**Rejected: no time anywhere** (revision 2's recommendation, its sign-off 5).
+It argued that a number counting down to an arrival is a clock to watch, and
+that it scores the lever setting and invites minimising it. The developer
+ruled otherwise: "Live ETA, i don't recall ruling out a countdown in this
+regard. This would be good." The no-countdown rule was made for the jump's
+charge, a bar the player must wait out before anything can happen, and it
+had been generalised past its reason; CLAUDE.md's sentence is scoped back to
+the charge. An ETA for an approach the player chose, at a speed they can
+change at any moment, with nothing happening at zero, is information about
+their own choice. **Rejected: a time to surface in this corner**, beside the
+altitude. The nearest surface is often not the destination, and two times on
+screen would disagree.
 
 **`DriveLine` becomes `JumpLine`.** The HUD's top-right member and
 `DriveLineText` show the jump's words. With drive words now on the HUD, a
@@ -640,13 +770,13 @@ course's.
 
 **What the dust can carry, and what it cannot.** Optic flow tells the eye
 *that* it is moving, which way, and roughly how fast within a decade or so.
-It cannot tell 10 c from 100 c at any honest scale, and above a few
+It cannot tell 0.1 c from 1 c at any honest scale, and above a few
 kilometres a second the 400 m field cannot even show the true speed: its
 motes are about 120 m apart, and past half that per frame (3.6 km/s at 60 Hz)
 they step and strobe. So the dust's job is limited, and stated: **moving,
 which way, and never slower-looking than cruise.** Which notch the ship is at,
 and whether it is closing on its destination, are read from numbers: the
-speed on the motion line, and the target's distance on the sibling spec's
+speed on the motion line, and the target's distance and live ETA on the sibling spec's
 target line, whose digits roll at a rate proportional to speed and so change
 visibly at every notch. That is the navigation cue for note 2's "very
 confusing", and the dust does not pretend to be it.
@@ -658,14 +788,15 @@ speed**:
 seen(v) = v                                            v <= K          (honest)
 seen(v) = K x (DustTop / K) ^ (ln(v / K) / ln(Top / K))   above
           K = ds.Sky.DustKnee = 2 km/s,  DustTop = ds.Sky.DustTop = 3 km/s
+          Top = the drive's top, 1 c (ruling 1; 5.2 decades above the knee)
 ```
 
 Honest up to 2 km/s: cruise exactly as today, and the drive's first two
 notches at their true 1 and 2 km/s, **five and ten times cruise's top**, which
 is the whole of note 2's fix -- the drive now looks faster than cruise from
 its first notch, where today the dust is gone. Above the knee the seen speed
-climbs slowly to 3 km/s at the top (50 m a frame at 60 Hz, under the strobe
-limit), and each mote stretches along the velocity from 1 at the knee to
+climbs slowly to 3 km/s at the top, 1 c (50 m a frame at 60 Hz, under the
+strobe limit), and each mote stretches along the velocity from 1 at the knee to
 `ds.Sky.DustStretch` = 8 times its width at the top, on the same log scale.
 Past the knee the dust says "faster still", by decades, and no more.
 
@@ -709,7 +840,8 @@ kilometres out: behind every planet proxy and past the dome. **Rejected:
 keeping the fade and relying on the planets' parallax.** That is today, and
 note 2.
 
-**Cost to change:** low: three CVars and one pure function.
+**Cost to change:** low: three CVars and one pure function. Ruled as
+recommended (ruling 5): the knee law, judged in play.
 
 ### 9. The local star: honest warmth, a ceiling, and the developer's eyes
 
@@ -786,13 +918,16 @@ orchestrator judges the frames** (the first draft). "Dialed back slightly" is
 the developer's taste.
 
 **Cost to change:** one line and one number. The look of three suns in four
-changes, which is why it is on the sign-off list.
+changes. Ruled as recommended (ruling 5): honest T^4 with the 8x ceiling,
+`StarSurface` chosen live from the frames.
 
 ## Seams with the system map
 
 The sibling spec owns the middle cockpit screen, the in-system target, its
-bracket through the glass, the prograde mark, and the target line on the HUD.
-This spec owns the bottom-left corner and the words for speed and distance.
+bracket through the glass, the prograde mark, the target line on the HUD and
+its live ETA, the seats, and the in-system jump. This spec owns the
+bottom-left corner, the words for speed and distance, and the flight law the
+ETA is computed with.
 
 - **Words, committed.** `SpeedWords` and `AltitudeWords` are public and pure
   on `UShipHUDWidget`, owned by this spec's Track B, and nothing moves to
@@ -801,15 +936,24 @@ This spec owns the bottom-left corner and the words for speed and distance.
   moves"); the reviewer's premise that the map moved it behind
   `NavText::SurfaceDistance` described that spec's first draft. One home,
   stated identically in both specs, is what removes the merge conflict.
-- **Landing order across the two specs.** This spec's Track 0 first, alone;
-  then A; then B and C in either order. The map's pure words and marker
-  arithmetic (its track 2, less `ShipSky.*` and `sky_probe.py`), its map
-  widget (3) and its level Python (6) can run alongside from the start. Its
-  target state (1) and helm pointer (4) land after A; its HUD (5) after B; its
-  `ShipSky.*` edit after C and its `sky_probe.py` edit after A. The map spec
-  states the same order in its *Build tracks*.
-- **No time.** Decision 7's ruling covers any arrival time the map might
-  show; one ruling for both (sign-off 5).
+- **Build order.** Both specs follow one staged order,
+  `docs/superpowers/plans/2026-09-26-poc2-build-order.md`, which replaces
+  revision 2's landing order here. This spec's Track 0 is stage 1, alongside
+  the map widget and the level scripts; Track A is stage 2, alongside the
+  map's words and marker arithmetic; Tracks B and C are stage 3, alongside the
+  map's target state and in-system jump; the map's seats and HUD overlay are
+  stage 4. Two items of this spec move: Track 0's 0.3 (the flight state's new
+  surface) goes into Track A, and Track A builds the map spec's
+  `IA_CycleTarget` with its own input actions.
+- **Time.** Ruled (ruling 3): a live ETA on the target line and the map,
+  computed by this spec's `ShipFlight::SecondsToFloor` and `RayToFloor`, and
+  no time in this spec's corner (decision 7).
+- **The in-system jump.** The map spec's decision 12. It reuses this spec's
+  all stop on `TransitBegan` and its at-rest `JumpTo` (decision 4) and changes
+  neither; its arrival standoff, two degrees across the world, is far outside
+  every floor `FloorFor` returns, and it asks `FloorFor` for the guard. From
+  that arrival the drive at 1 c reaches an Earth's floor in 64 s and a
+  Jupiter's in 79 s (decision 5's table).
 - **The drive does not steer, and does not read the target.** The target is a
   bracket and a bearing; the player aims. The cap reads every surface the
   nose is on, never the chosen one. The map spec's recommendation -- bind the
@@ -824,22 +968,24 @@ This spec owns the bottom-left corner and the words for speed and distance.
   recommendation to the map spec: take it, and say something only when the
   nose would meet the world (for example `on the world` in place of `dead
   ahead`), so the words tell the pilot when the drive will bring them down.
-  That is the map spec's call.
+  **Taken, through the ETA**: the target line shows a time only when the
+  velocity's ray meets the target's floor sphere, and `PASSING ... UP` when
+  it closes on a path that misses (the map spec's decision 6).
 - **The prograde mark.** Under the drive the velocity is now always along the
   nose, so the mark and the caret coincide; they part only in cruise's slide
   after a turn, at under 200 m/s, which the dust already shows. So the mark
-  need not show always: with a target only, as the map spec has it. That is
-  the map spec's sign-off 6 answered from this side, and it is cheap to
-  change.
-- **Numbers the map quotes.** The map spec cites the first draft's approach
-  times (76 s from 0.2 AU at 10 c; 55-190 s over the notches). Revision 2's
-  are 86 s and 62-195 s from STOP (decision 5's table).
+  need not show always: with a target only, as the map spec has it. Ruled
+  (ruling 5): the prograde mark shows with a target.
+- **Numbers the map quotes.** This amendment's, from decision 5's table:
+  165 s from 0.2 AU at 1 c, 62 s from 250,000 km, 64 s (an Earth) and 79 s (a
+  Jupiter) from an in-system jump's arrival. Revision 2's 86 s from 0.2 AU at
+  10 c, and the first draft's 76 s, are superseded.
 
 ## The anti-chore audit
 
 | The way it becomes a chore | Where it is ruled out |
 |---|---|
-| A countdown to an arrival | No time on any readout, HUD or map (decision 7) |
+| A countdown the player must wait out | The jump's charge is still a word, never a bar or a countdown (CLAUDE.md, scoped to the charge by ruling 3). The live ETA the developer ruled for counts down an approach the player chose and can change at any moment, and nothing happens at zero (the map spec's decision 6); this corner shows none (decision 7) |
 | A lever that must be ridden | Levers stay where left, in both modes, across F and standing up (decision 1) |
 | Taps that do nothing | A tap always moves the ship one notch from what it is doing (decision 3) |
 | A cap that nags | One dim word, only while it is holding the ship off; no alarm, no colour (decisions 5, 7) |
@@ -848,8 +994,9 @@ This spec owns the bottom-left corner and the words for speed and distance.
 | Lost potential on a thin split | Starved boosters slow the response, never the top, and nothing shows the difference (decision 4) |
 | A failure state near a world | Nothing can cross a surface at any speed; at or under a floor the ship holds and may always climb (decisions 5, 6) |
 | Being kept from the ground | The floor is the sky's, one function, and landing's to lower (decision 6) |
-| A surprise on arrival | The fold is an all stop; the pilot chooses the first speed in every system (decision 4) |
-| A wait with a chair in it | The approach is the lever's choice, 62-195 s from STOP at the notches a player will use, and the lever holds while they walk away |
+| A surprise on arrival | Every fold is an all stop and every jump arrives at rest; the pilot chooses the first speed after every jump (decision 4) |
+| A wait with a chair in it | The approach's last part is the cap's, about a minute at 1 c; a leg that would take longer than the player wants at 1 c is the in-system jump's (the map spec's decision 12); and the lever holds while they walk away |
+| A crossing that is only waiting | At 1 c, 30 AU is four hours, so the drive is not the only way across: the in-system jump folds to a targeted world, and nothing makes the player use it or scores whether they did |
 
 ## Deliberate fakes, and what they cost later
 
@@ -868,13 +1015,15 @@ This spec owns the bottom-left corner and the words for speed and distance.
 
 ## Implementation outline
 
-**Estimate: about 14 hours**, in four tracks with disjoint files. Track 0
-lands first, alone, because it fixes the shared surface the others compile
-against. Tracks A, B and C then run in parallel worktrees; A merges first
-(it makes the flight state's queries real), then B and C in either order.
-Every C++ change in a track is written first; the track then runs one
-`./rebuild.sh --force`, the commandlets it names, and its tests, through the
-lock, never alongside another editor process.
+**Estimate: about 14 hours**, in four tracks with disjoint files, staged by
+`docs/superpowers/plans/2026-09-26-poc2-build-order.md` together with the map
+spec's work: **Track 0 is stage 1, Track A stage 2, Tracks B and C stage 3.**
+Revision 2 had Track 0 declare the flight state's new surface with trivial
+bodies so that B and C could compile before A landed; with B and C now a
+whole stage after A, that is not needed, and 0.3 moves into A (below). Every
+C++ change in a track is written first; the track then runs its build, the
+commandlets it names, and its tests, through the lock, never alongside
+another editor process.
 
 ### Track 0: the seams (serial, ~2 h)
 
@@ -891,7 +1040,9 @@ lock, never alongside another editor process.
       and every step is x1.5 to x2.5
     - `SpeedAt(PositionOf(v)) == v` to 1e-9 across the range, and `SpeedAt`
       is continuous and monotonic, linear below notch 1
-    - `NotchCount` at 100 c is 25 positions and drops notches above a lower top
+    - `NotchCount` at 1 c is 19 positions (STOP and 18 notches), drops
+      notches above a lower top, and never adds one above 1 c whatever top
+      it is given
     - `TapDown` from a lever ten notches above p lands one notch below p;
       from steady flight it is one notch down; at STOP it stays; `TapUp`
       mirrors it and stops at the top
@@ -914,8 +1065,20 @@ lock, never alongside another editor process.
     above and below its horizon, from under it, from inside the edge; the
     edge's far root; `MaySpeed` continuous and monotonic in D, equal to D / N
     far out, to the braking curve near in, and never more than D / step.
-0.3 **`FShipFlightState`'s new public surface**, declared with trivial
-    bodies so B and C compile before A lands: `FShipFlightLimits` loses
+    **`ShipFlight::SecondsToFloor(double D, double Speed, double
+    BrakingAccel, double HoldSeconds)`** (ruling 3), the live ETA's law: the
+    ship holds `Speed` until `MaySpeed(d)` falls to it (d1 = Speed x N, or
+    Speed^2 / (1.6 a) below the braking knee), then d falls by e every N
+    seconds to the knee (d2 = 1.6 a N^2, 1,024 m at full boosters), then it
+    brakes, 2N seconds from the knee: `(D - d1) / Speed + N ln(d1 / d2) + 2N`.
+    Infinite at rest. `DeepSpace.Ship.FlightSurface` gains: it agrees with a
+    small integrator of `MaySpeed` at 120 Hz to 0.5 s from every second of a
+    settled approach, for 0.2 AU and 250,000 km at 1 c (the amendment's
+    simulation gives 0.11 s); it is monotonic in D and in Speed; it is
+    infinite at zero speed.
+0.3 **Moved to Track A (stage 2)** by the build order: nothing compiles
+    against it before A makes it real, so it is declared and implemented
+    there, in one pass. It is **`FShipFlightState`'s new public surface**: `FShipFlightLimits` loses
     `DriveTau` and `DriveFloor`, and gains `HoldSeconds`, `DriveTop`,
     `DriveResponse`; `FShipFlightCommand` gains `int32 DriveNotch`;
     `SetDriveRoom` becomes `SetSurfaces(TArray<FFlightSurface>)`,
@@ -926,15 +1089,17 @@ lock, never alongside another editor process.
     astern), `GetOtherLeverSpeed()`, `GetDrivePosition()` (p).
     `ShipDrive::AwayFromSurface` is deleted with its test cases.
 0.4 **`SkyProjection::RenderedFloor(double RadiusCm, const FSkyViewParams&)`**,
-    extracted from `Project`, which calls it. `DeepSpace.Sky.Projection`
+    extracted from `Project`, which calls it. Stays in Track 0 (stage 1):
+    Track C edits `SkyProjection.cpp` again in stage 3, a stage later. `DeepSpace.Sky.Projection`
     gains: 10 km for small bodies, 1.6e-3 R for large, and `Project` draws a
     body at exactly `R + RenderedFloor` when the ship is below it.
 
-### Track A: flight, the levers and the input (~6 h)
+### Track A: flight, the levers and the input (~6 h; stage 2)
 
 Owns `Ship/ShipFlightState.*`, `Ship/ShipSubsystem.*`,
 `Player/DeepSpaceCharacter.*`, `Ship/ShipHumComponent.cpp`,
-`Tools/setup_flight_input.py`, `Tools/sky_probe.py`, and the tests listed.
+`Tools/setup_flight_input.py`, `Tools/sky_probe.py`, the new input action
+assets, and the tests listed. It does 0.3 first (moved here from Track 0).
 
 A1. **`FShipFlightState::SubStep`**: the drive per decisions 3-5 (eased p;
     speed along the nose; `MaySpeed` of the nearest `RayToFloor` over every
@@ -943,7 +1108,9 @@ A1. **`FShipFlightState::SubStep`**: the drive per decisions 3-5 (eased p;
     spool-down state per decision 4's table; cruise's target speed along the
     commanded direction held to `MaySpeed`, and the hard stop at every floor
     sphere; engaging starts p at the forward speed. `SetCommand` no longer
-    clamps on disengage.
+    clamps on disengage. **`JumpTo` also zeroes the velocity and p**, so every
+    jump arrives at rest (decision 4); it is the one arrival path both jumps
+    take.
 A2. **`UShipSubsystem`**: `SetHelmInput(Commander, const FHelmInput&)` with
     `FHelmInput {FVector Attitude; bool bUpHeld, bDownHeld; int32 UpPresses,
     DownPresses;}`, `AllStop(Commander)`, `SetDriveLever(Commander, Notch)`
@@ -958,7 +1125,8 @@ A2. **`UShipSubsystem`**: `SetHelmInput(Commander, const FHelmInput&)` with
     moons, `ds.Flight.StarFloorRadii x R` for the star, `ds.Flight.Floor` for
     the edge -- before `Step`; an empty list in transit. `TransitBegan` also
     sets both levers to STOP. `ClearPilot` zeroes held lever input as it
-    releases attitude. CVars `ds.Drive.Top`, `.Response`, `.Sweep`,
+    releases attitude. CVars `ds.Drive.Top` (default 1 c, clamped to at most
+    1: ruling 1), `.Response`, `.Sweep`,
     `.HoldSeconds`, `ds.Flight.Floor`, `ds.Flight.StarFloorRadii`,
     `ds.Cruise.Sweep`, as `TAutoConsoleVariable`s read at use (a per-frame
     `FindConsoleVariable` fails `test.sh`); `ds.Drive.Tau` and `ds.Drive.Floor`
@@ -969,22 +1137,29 @@ A3. **`ADeepSpaceCharacter`**: `Throttle`, `GetThrottle()` and the
     (count a press) and `Triggered`/`Completed` (held), handed over once a
     frame in `SetHelmInput` and the counts zeroed; new `StopAction`
     (`IA_Stop`), `Started` -> `AllStop`; `PressStop()` and `TapLever(int32)`
-    for tests beside `PressDrive()`.
+    for tests beside `PressDrive()`. **For the map spec (its decision 13):**
+    `CycleTargetAction` (`IA_CycleTarget`), bound on `Started` to a
+    `CycleTarget()` that does nothing until stage 4 fills it in. It is built
+    here so the Blueprint is recompiled once for every new input, not again
+    in stage 4.
 A4. **`ShipHumComponent`**: the hiss's lever term is the live lever's
     fraction -- `|Throttle|` in cruise, `p / (NotchCount - 1)` under the drive.
 A5. **`Tools/setup_flight_input.py`**: `IA_LeverUp` (Boolean) on `LeftShift`
     and `IA_LeverDown` (Boolean) on `LeftControl` replace `IA_Throttle` and its
-    two mappings; `IA_Stop` (Boolean) on `X`; all clash-checked like `F` and
-    assigned on `BP_DeepSpaceCharacter`'s defaults. **`Tools/sky_probe.py`**:
+    two mappings; `IA_Stop` (Boolean) on `X`; `IA_CycleTarget` (Boolean) on
+    `Tab`, for the map spec; all clash-checked like `F` and assigned on
+    `BP_DeepSpaceCharacter`'s defaults. **`Tools/sky_probe.py`**:
     the drive law becomes decision 5's, so its table matches the game.
 A6. **[editor]** `./rebuild.sh --force`; `setup_flight_input.py`;
     recompile and save `BP_DeepSpaceCharacter` (two `UPROPERTY`s it saved,
-    `ThrottleSweepRate` and `ThrottleAction`, are gone: ADR 0002's second
-    amendment); `check_blueprints.py`; then the tests.
+    `ThrottleSweepRate` and `ThrottleAction`, are gone, and four input
+    actions are new: ADR 0002's second amendment); `check_blueprints.py`;
+    then the tests.
 
-### Track B: the HUD (~2 h)
+### Track B: the HUD (~2 h; stage 3)
 
-Owns `UI/ShipHUDWidget.*` and the HUD tests.
+Owns `UI/ShipHUDWidget.*`, the HUD tests, and, this stage only,
+`Tests/SliceLoopTest.cpp` for the rename's one call.
 
 B1. Public pure `SpeedWords` beside `AltitudeWords`; `MotionLine(const
     FShipFlightState&)` returning the ink and dim parts; `AltitudeLine(Cm,
@@ -992,9 +1167,10 @@ B1. Public pure `SpeedWords` beside `AltitudeWords`; `MotionLine(const
     horizontal box; the corner asks `GetHold()` and `GetMode()`;
     `DriveHoldsAtFloor` and `ds.HUD.FloorBand` go; `DriveLine` and
     `DriveLineText` become `JumpLine` and `JumpLineText` (and
-    `SliceLoopTest`'s one call, a one-word edit coordinated with Track A).
+    `SliceLoopTest`'s one call: a one-word edit, now a stage after Track A's
+    rewrite of the same file, so there is nothing to coordinate).
 
-### Track C: the dust and the star (~4 h, including the render check)
+### Track C: the dust and the star (~4 h, including the render check; stage 3)
 
 Owns `Ship/ShipCounterFrame.*`, `Sky/SkyProjection.cpp` (the warmth term),
 `Sky/ShipSky.cpp`, their tests, and the temporary eyes test.
@@ -1018,18 +1194,18 @@ C3. **[editor, eyes]** `Tests/Eyes/StarGlareEyesTest.cpp`, run once as in
 
 | Test | Pins today | Becomes |
 |---|---|---|
-| `DeepSpace.Ship.FlightDrive` (`ShipFlightStateTest.cpp`) | room falls by e per tau; settles onto the 100 km floor; half throttle doubles tau; starved quadruples it; disengage clamps to 200 m/s; backing closes no faster | Rewritten (A). **The lever:** a notch's speed is its table speed once settled; the ease never overshoots; STOP comes to rest; no reverse. **The cap binds only on the path:** a trajectory whose undisturbed miss altitude is above the floor is **bit-identical** to the same flight with no surfaces; with the nose fixed, velocity stays along the nose to 1e-9 through the whole approach. **Aim error:** from 0.2 AU at 10 c with 0, 0.01, 0.1 and 1 degree off, the ship either reaches the floor or passes at its undisturbed miss distance, and never ends farther than it started except by passing. **Arrival:** from STOP, 0.2 AU at 10 c reaches the floor within 90 s and 250,000 km at 1 c within 65 s; **never below any floor at any frame chop, including a 2 s hitch**; comes to rest on the floor with no substep's speed change larger than the braking curve's. **Every surface:** at 100 c past a giant toward its moon, and toward a planet while the star is nearer, at every frame chop from 30 to 144 Hz and a 2 s hitch, no substep ends inside any body or floor sphere. **Under and inside:** a ship placed under a floor, or inside a body, climbs out at the lever's speed and cannot descend. **p follows the hold:** in notch space p never rises faster than `DriveResponse`, including across a release by a turn off the limb at 10 c and by a climb; it falls faster only on the capture substep. **Spool-down:** each row of decision 4's table. `GetHold` says `HoldingOff` then `AtFloor`, and never flickers under a steady hold; the edge caps like a body; starved thrust slows the response four times and leaves the top alone; attitude untouched and zero acceleration reported (kept) |
+| `DeepSpace.Ship.FlightDrive` (`ShipFlightStateTest.cpp`) | room falls by e per tau; settles onto the 100 km floor; half throttle doubles tau; starved quadruples it; disengage clamps to 200 m/s; backing closes no faster | Rewritten (A). **The lever:** a notch's speed is its table speed once settled; the ease never overshoots; STOP comes to rest; no reverse. **The cap binds only on the path:** a trajectory whose undisturbed miss altitude is above the floor is **bit-identical** to the same flight with no surfaces; with the nose fixed, velocity stays along the nose to 1e-9 through the whole approach. **Aim error:** from 0.2 AU at 1 c with 0, 0.01, 0.1 and 1 degree off, the ship either reaches the floor or passes at its undisturbed miss distance, and never ends farther than it started except by passing. **Arrival:** from STOP, 0.2 AU at 1 c reaches the floor within 170 s and 250,000 km at 1 c within 65 s; **never below any floor at any frame chop, including a 2 s hitch**; comes to rest on the floor with no substep's speed change larger than the braking curve's. **Every surface:** at 1 c past a giant toward its moon, and toward a planet while the star is nearer, at every frame chop from 30 to 144 Hz and a 2 s hitch, no substep ends inside any body or floor sphere. **Under and inside:** a ship placed under a floor, or inside a body, climbs out at the lever's speed and cannot descend. **p follows the hold:** in notch space p never rises faster than `DriveResponse`, including across a release by a turn off the limb at 1 c and by a climb; it falls faster only on the capture substep. **Spool-down:** each row of decision 4's table. `GetHold` says `HoldingOff` then `AtFloor`, and never flickers under a steady hold; the edge caps like a body; starved thrust slows the response four times and leaves the top alone; attitude untouched and zero acceleration reported (kept). **The top:** no notch and no speed above 1 c whatever `ds.Drive.Top` says. **At rest after a jump:** `JumpTo` leaves velocity and p at zero |
 | same file, cruise | "drive off, the room changes nothing" | Cruise brakes to rest on the floor, never below, at full and quarter thrust; a turn made while drifting in hits the hard stop and slides, never enters; far from anything cruise is exactly today's |
 | `DeepSpace.Ship.Drive` (`ShipDriveTest.cpp`) | gating; tau stretched by thrust; `ds.Drive.Tau`/`.Floor` read at use; room = nearest surface less floor; room/e per tau through the subsystem | Gating kept, for `SetHelmInput`, `AllStop` and `SetDriveLever` too, and inert in transit; each lever survives F and standing up; X stops both; a tap under a hold slows the ship at once; `DriveResponse` is `ds.Drive.Response x thrust`; the new CVars read at use; `FloorFor` is `max(ds.Flight.Floor, RenderedFloor)` for an Earth and a giant, `StarFloorRadii x R` for the star, and `ds.Flight.Floor` at the edge; `GetRoom` is the minimum over surfaces of distance less that surface's floor |
 | `DeepSpace.Player.FlightInput` | the pawn's `Throttle` sweeps at 0.5/s and has stops; F toggles | The ship's cruise lever sweeps at `ds.Cruise.Sweep` and holds; the detent at zero; under the drive a tap is one notch and a hold repeats; **a press and release injected inside one frame moves one notch**; X stops both; a non-pilot moves nothing |
-| `DeepSpace.Loop.Drive` (`SliceLoopTest.cpp`) | twenty tau to the 100 km floor, e^-10 at ten tau; sixty tau outward stops short of the edge | From the opening shot, lever from STOP to 10 c: never farther, never shrinking, never below the floor, **at the floor within 90 s**, drawn at its true size there to 1e-3; placed 1 AU inside the edge and flown out at 100 c for 60 s, it never leaves its system and settles 10 km inside. Plus the same approach with the opening shot's nose 0.01 degrees off the centre: the same floor, the same time to within a second |
-| `DeepSpace.Loop.Jump` | **nothing of the drive** (it steers at throttle 0 and never engages it) | The `JumpLine` rename; plus: with the drive lever at 10 c when the fold opens, the ship arrives at rest with both levers at STOP |
+| `DeepSpace.Loop.Drive` (`SliceLoopTest.cpp`) | twenty tau to the 100 km floor, e^-10 at ten tau; sixty tau outward stops short of the edge | From the opening shot, lever from STOP to 1 c: never farther, never shrinking, never below the floor, **at the floor within 70 s** (54 s for an Earth and 64 s for a Jupiter at the opening distance), drawn at its true size there to 1e-3; placed 0.05 AU inside the edge and flown out at 1 c for 60 s (uncapped it would cross 0.12 AU), it never leaves its system and settles 10 km inside. Plus the same approach with the opening shot's nose 0.01 degrees off the centre: the same floor, the same time to within a second |
+| `DeepSpace.Loop.Jump` | **nothing of the drive** (it steers at throttle 0 and never engages it) | The `JumpLine` rename; plus: with the drive lever at 1 c when the fold opens, the ship arrives at rest, velocity exactly zero, with both levers at STOP. The in-system jump's arrival is pinned the same way in the map spec's `DeepSpace.Loop.InSystemJump` |
 | `DeepSpace.Ship.Jump` (`ShipJumpTest.cpp`) | "between stars the drive has no room" | `GetRoom()` rename (still 0 between stars: no surfaces); plus: in transit the levers do not move |
 | `DeepSpace.Ship.CounterFrame` | motes 90% at cruise, dark and hidden past 2 km/s under the drive | The dust is shown at every speed; `SeenSpeed` is the identity to the knee, continuous there, strictly increasing, and `DustTop` at the top; no mote is drawn beyond `NearFieldRadius` at any speed; stretch is 1 at or below the knee and at most `DustStretch` outside transit; the field streams along the velocity, not the nose, in cruise's slide |
 | `DeepSpace.Ship.CounterFrameJump` | the streaks along forward, wrapped in the field; round the ship after the jump | Kept, on field-space positions; plus: at 0.25, 0.5 and 0.75 of a transit every mote's shown transform equals today's formula for the same field position (the streak shape is unchanged) |
 | `DeepSpace.UI.HUDAltitude` | `DRIVE FLOOR` and its band; `DriveHoldsAtFloor`'s cases | The words for each `EFlightHold`, and `AT THE EDGE`; a ship at the floor's height with the drive off, or leaving, says neither; the corner ticked against the flight state draws what the seam gives |
 | `DeepSpace.Ship.NavStart` | the opening shot is above `DriveFloor` | Above `FloorFor` the opening world (a rename) |
-| new `DeepSpace.UI.HUDSpeed` | -- | `SpeedWords` at every boundary (999 M/S, 1.0 KM/S, 99.9, 100 KM/S, 2,000 KM/S, 0.01 C, 0.99 C, 1.0 C, 9.9 C, 10 C); every notch reads as its label; the motion line's six shapes above, **the dim part naming the other lever in every mode, and `SPOOLING DOWN` during the spool**; no line ever holds a number of seconds or minutes |
+| new `DeepSpace.UI.HUDSpeed` | -- | `SpeedWords` at every boundary (999 M/S, 1.0 KM/S, 99.9, 100 KM/S, 2,000 KM/S, 0.01 C, 0.99 C, 1 C at the top); every notch reads as its label; the motion line's six shapes above, **the dim part naming the other lever in every mode, and `SPOOLING DOWN` during the spool**; no line in this corner ever holds a number of seconds or minutes (the ETA is the target line's, ruling 3) |
 | `DeepSpace.Sky.Projection` | the star's surface as compressed T^2 | Honest T^4 below the ceiling and the ceiling above it; over the generated systems of the test seed's first sectors, the star's surface is at least 20x the brightest planet surface in its sky; the hottest star at the default knobs stays under half of half-float's maximum |
 
 Nothing in `Tools/test_*.py` reads the drive; they are run unchanged.
@@ -1038,7 +1214,7 @@ Nothing in `Tools/test_*.py` reads the drive; they are run unchanged.
 
 | CVar | Default | Lives in | Replaces |
 |---|---|---|---|
-| `ds.Drive.Top` | 100 c | `ShipSubsystem.cpp` | -- |
+| `ds.Drive.Top` | 1 c, and never above it (ruling 1) | `ShipSubsystem.cpp` | -- |
 | `ds.Drive.Response` | 3 notches/s, x the boosters' thrust | `ShipSubsystem.cpp` | `ds.Drive.Tau` |
 | `ds.Drive.Sweep` | 3 notches/s held (after 0.3 s) | `ShipSubsystem.cpp` | -- |
 | `ds.Drive.HoldSeconds` | 4 s | `ShipSubsystem.cpp` | -- |
@@ -1059,23 +1235,32 @@ the 80% braking margin, one constant for both modes (`ShipFlightSurface.cpp`).
 
 CLAUDE.md's *Flying* (X, the two levers, the detent, a tap from the ship's
 speed), *The drive and the jump* (decisions 3-6 replace the tau paragraph;
-the edge sentence stays; the fold is an all stop), *The sky* (the warmth
+the drive tops out at 1 c and anything faster is a jump; the edge sentence
+stays; every fold is an all stop and every jump arrives at rest), *The sky* (the warmth
 term, the dust's knee), and *Where each tunable lives* (the table above). Sky
 decisions 2 and 8 get an amendment note pointing here.
 
 ## Risks
 
 - **Capture may feel like a wall.** Steering onto a world above the smooth
-  limit drops many notches in one substep. The HUD names it and the ship does
-  what the nose said, but it is abrupt. The playtest decides; the successor
+  limit drops many notches in one substep. Under the 1 c top it is much
+  milder than revision 2's (at most x1.6 for a pilot within half a degree of
+  an Earth, x29 at five degrees; nothing on a Jupiter), but it is still
+  abrupt. The HUD names it and the ship does what the nose said. The playtest
+  decides; the successor
   is a fast finite fall above a hard `d / 0.25 s` bound (decision 5), not a
   cap on paths that miss.
-- **Flying past may surprise.** At 10 c from 0.2 AU a pilot who keeps the
-  bracket two degrees off passes an Earth 3,200 km up; at 100 c, half a
-  degree passes it 17,000 km up. That is the ship doing what it was told, and it is the
-  price of a cap that does not steer; the sibling spec's bracket, bearing and
-  distance are what let the pilot see it coming, and the `RayToFloor` seam is
-  what would let its words say so.
+- **Flying past may surprise.** At 1 c from 0.2 AU a nose held still a tenth
+  of a degree off passes an Earth 46,000 km up. A pilot who keeps the bracket
+  centred is captured at every bias up to five degrees, so passing needs a
+  nose left alone. That is the ship doing what it was told, and it is the
+  price of a cap that does not steer; the sibling spec's bracket and bearing
+  let the pilot see it coming, and its target line now says it outright:
+  `PASSING 46,000 KM UP` where an arriving path shows its ETA.
+- **The drive is slow across a system, on purpose.** At 1 c, 30 AU is four
+  hours. Without the in-system jump the long legs would be unflyable in
+  practice; the build order lands the jump in stage 3, one stage after the
+  lever, so no build that plays has one without the other for long.
 - **The dust above the knee may read as nothing.** It is deliberately a small
   range; the gate in decision 8 asks the question, and the motion line and
   the target's distance carry the rest.
@@ -1093,13 +1278,16 @@ decisions 2 and 8 get an amendment note pointing here.
   saved values in `BP_DeepSpaceCharacter`; A6's recompile, save and
   `check_blueprints.py` are not optional.
 - **The seam with the map spec.** Both touch `ShipHUDWidget.*`,
-  `ShipSubsystem.*` and `DeepSpaceCharacter.*`; the order is under *Seams*.
+  `ShipSubsystem.*` and `DeepSpaceCharacter.*`; the build order puts each
+  file in one track per stage (`docs/superpowers/plans/2026-09-26-poc2-build-order.md`).
 
-## Decisions needing sign-off
+## Decisions needing sign-off -- all ruled, 2026-09-26
 
 Each of these is expensive to reverse, constrains landing, or is a choice a
 reasonable person could make differently. Everything else above has an
-obvious default and is decided.
+obvious default and is decided. **The developer has ruled on every item**
+(the amendment at the top); each item keeps its question as it was put, with
+the ruling after it.
 
 1. **The drive lever: STOP plus 24 notches on a 1-2-5 series, 1 km/s to
    100 c, a tap per notch, counted from the ship's present speed.**
@@ -1109,6 +1297,10 @@ obvious default and is decided.
    code (a table, one CVar for the top, one function per tap), but the notches
    are what the player learns and what every speed readout says; changing
    them after playtests resets what the developer has calibrated by feel.
+   **Ruled (ruling 1): the top is 1 c.** STOP plus 18 notches, 1 km/s to 1 c,
+   a tap per notch counted from the ship's present speed, eased; anything
+   faster is a jump, including a new in-system jump (the map spec's decision
+   12).
 2. **The soft cap binds only when the nose's ray meets a surface's floor
    sphere, and then caps the whole speed along the nose, to that distance
    over N = 4 s, finishing on the boosters' braking curve.** *Alternatives:*
@@ -1122,7 +1314,7 @@ obvious default and is decided.
    is designed on top of whichever it is. This one hands landing a ship that
    goes where it points and can come down anywhere its nose is, at a speed
    set by time to the floor; the others hand it a ship that is steered or
-   slowed by the ground.
+   slowed by the ground. **Ruled (ruling 2): as specified.**
 3. **The floor is the sky's rendered floor -- 10 km over an Earth, 112 km
    over a giant, one stellar radius over a star -- and cruise obeys it too,
    so the POC never goes lower.** *Alternatives:* a flat floor (10 km, or
@@ -1130,14 +1322,16 @@ obvious default and is decided.
    floor at the renderer's 1.6e-3 R (1,100 km over a Sun, the disc filling
    the view) or at ten radii. *Recommended:* as specified. *Cost to change
    later:* the numbers are CVars; the rule sets where landing begins, and
-   landing will lower both this and the sky's floor together.
+   landing will lower both this and the sky's floor together. **Ruled
+   (ruling 2): as specified; this is where landing will later take over.**
 4. **Star surfaces go as honest T^4 with a ceiling at 8x, amending sky
    decision 2; the developer picks `StarSurface` in play.** *Alternatives:*
    keep the compressed T^2 and lower `StarSurface` alone (every sun dimmer,
    red dwarfs still 3.6x the rest); lower bloom (dims every point with the
    disc). *Recommended:* honest with the ceiling. *Cost to change later:* one
    line; but it is the look of three suns in four, and every later judgement
-   of a red-dwarf system is made on it.
+   of a red-dwarf system is made on it. **Ruled (ruling 5): honest with the
+   ceiling; `StarSurface` chosen live from the frames.**
 5. **No arrival time anywhere -- not on the HUD, not on the system map.**
    *Alternatives:* the map spec's coarse, static words for a lever setting
    (`at 10 C: about a minute`, never recomputed as the distance falls); a live
@@ -1145,7 +1339,9 @@ obvious default and is decided.
    with the static words as the fallback if a pilot cannot choose a notch
    without them. *Cost to change later:* cheap either way; but it sets the
    precedent both specs share, so it should be ruled once for both (the map
-   spec's item 3).
+   spec's item 3). **Ruled (ruling 3): a live ETA**, on the target line and
+   the map, at the present speed; none in this spec's corner. The
+   no-countdown rule is scoped back to the jump's charge in CLAUDE.md.
 6. **The dust is honest to 2 km/s, then a compressed representation, and it
    is a playtest gate.** *Alternatives:* honest dust with today's fade,
    leaving speed to the planets and the HUD; a wider compressed range carried
@@ -1153,14 +1349,17 @@ obvious default and is decided.
    the three questions of decision 8 answered in play. *Cost to change
    later:* low (one function, three CVars); it is here because it is the one
    place the design knowingly shows something untrue, and because it cannot
-   carry per-notch speed and says so.
+   carry per-notch speed and says so. **Ruled (ruling 5): the knee law,
+   judged in play.**
 7. **Each mode keeps its own lever across F, X stops both, and after X the
    lever starts again from STOP.** *Alternatives:* the drive resets to its
    bottom notch when engaged; X stops only the live lever; a double-tap of
    Shift after X restores the notch before it. *Recommended:* as specified,
-   accepting a seven-second hold to resume 10 c after an all stop. *Cost to
-   change later:* low; it is on the list because it is exactly the feel the
-   developer asked to be able to control, and they may want it otherwise.
+   accepting a seven-second hold to resume 10 c after an all stop (six to
+   resume 1 c, under ruling 1). *Cost to change later:* low; it is on the
+   list because it is exactly the feel the developer asked to be able to
+   control, and they may want it otherwise. **Ruled (ruling 5): as
+   specified.**
 8. **The fold is an all stop: the ship comes out of every jump at rest, both
    levers at STOP.** *Alternatives:* only the drive lever to STOP (a cruise
    lever left on carries the ship on at up to 200 m/s); the fold disengages
@@ -1168,4 +1367,6 @@ obvious default and is decided.
    flies the arrival into the star and parks at its floor). *Recommended:*
    all stop. *Cost to change later:* one line in `TransitBegan`; it is here
    because it sets the first moment in every system, the vision's arrival,
-   and it is the one change this spec makes to the jump.
+   and it is the one change this spec makes to the jump. **Ruled (ruling 5):
+   every jump, interstellar and in-system, arrives at rest with both levers at
+   STOP**, made exact by `JumpTo` zeroing the velocity (decision 4).

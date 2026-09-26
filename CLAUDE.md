@@ -513,8 +513,14 @@ back on the jump's schedule to service it, and a game that makes you do that
 is telling you that you are behind: the anti-chore principle's definition of a
 chore (developer's ruling). If it feels like the game acting without you, the
 answer is a softer cue before the fold -- the hum already rises as the jump
-winds -- never a confirm. For the same reason no screen shows a percentage, a
-bar or a countdown: a number that fills is a clock to watch.
+winds -- never a confirm. For the same reason **no screen shows the jump's
+charge** as a percentage, a bar or a countdown: a charge that fills is a clock
+to watch, and waiting it out is the jump's schedule, not the player's. That
+rule is about the charge. It was read for a while as "no time on any
+screen", and the developer ruled it back on 2026-09-26: a live time to
+arrival for an approach the player chose is allowed, and the target line and
+the system map carry one (`docs/superpowers/specs/2026-09-26-system-map-design.md`,
+decision 6).
 
 The fold lasts `ds.Nav.TransitSeconds`, with streaks past the window, and the
 helm does nothing between stars. Arrival is `FShipFlightState::JumpTo`, the

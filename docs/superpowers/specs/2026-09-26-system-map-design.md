@@ -1,9 +1,9 @@
 # DeepSpace — The System Map and the Target
 
 **Date:** 2026-09-26
-**Status:** Draft, revised after review the same day. Design only, not
-implemented. *Review record*, at the end, lists what changed and where the
-review was not followed.
+**Status:** Amended with the developer's rulings (below), after a revision
+following review the same day. Not implemented. *Review record*, at the end,
+lists what changed and where the review was not followed.
 **Answers:** the second playtest's note 3, under the developer's ruling C
 **Sibling:** `docs/superpowers/specs/2026-09-26-flight-feel-design.md`
 ("Flight Feel: Two Levers, a Soft Cap, and Speed You Can See"). That spec
@@ -18,6 +18,59 @@ lived-in ship (implemented)
 course as an id), ADR 0005 (the ship is the origin)
 **Governed by:** `docs/vision.md`: *scale is only felt in contrast*, *the
 anti-chore principle*, *shared presence, not division of labour*
+**Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
+
+## Amendment, 2026-09-26: the developer's rulings
+
+The developer read this spec and the flight-feel spec together and ruled on
+both sign-off lists. The rulings are binding and override anything below that
+disagrees. Every decision they change has been revised in place, with each
+superseded choice kept beside it as a rejected alternative, as the review
+revision did. Two decisions are new (12, 13) and so is *Open questions*.
+
+1. **The drive tops out at 1 c, and there is an in-system jump.** Verbatim:
+   "Top out at 1c, anything faster should be a jump (we should eventually
+   limit the amount of jumps before a cooldown period. 1c already feels
+   somewhat like quite the stretch from realism. there can be an option to
+   'jump to planet' within a system". At 1 c, 1 AU is 8 min 19 s and 30 AU is
+   4 h 9 min (the flight-feel spec's decision 3). So, with a world targeted,
+   **the existing jump machinery -- plot, engage, charge, align, the fold
+   opening by itself, transit, arrival at rest -- carries the ship to it**,
+   arriving at a standoff above that world instead of at a star: new
+   **decision 12**. The fold opening no longer clears the target when the jump
+   is in-system (decision 5). **The jump cooldown is future work and is not
+   built**; it is recorded in *Open questions* with its tension against the
+   anti-chore principle, because it is a wait imposed on the player.
+2. **The soft cap as specified** in the flight-feel spec (its decision 5): it
+   binds only when the nose's ray meets a floor sphere. That was this spec's
+   recommendation (decision 9), and it is adopted.
+3. **A live ETA.** Verbatim: "Live ETA, i don't recall ruling out a countdown
+   in this regard. This would be good." The developer is right: the
+   no-countdown rule was about the **jump's charge**, a filling bar the player
+   waits on, and CLAUDE.md had over-generalised it. That sentence is scoped
+   back to the charge, and **the target line, on the HUD and the map, carries a
+   live time to arrival at the current speed**: decision 6, rewritten.
+4. **Picking a target: both, and the seats change.** Verbatim: "Both, key
+   cycles targets when the map is focussed (an option from sitting in either
+   seat (i.e., copilot doesn't auto lock to jump menu, they can choose either
+   jump menu or map and that will zoom the screen. pilot just has look and
+   click control of map. When map is zoomed, (Tab) switches between planets
+   in the system." So: **at the helm** the pilot looks at the map and clicks
+   it, live, without sitting down at it (decision 2, unchanged in substance).
+   **In the chart chair**, the copilot seat, sitting no longer locks onto the
+   chart: the seated player chooses the chart or the map, and the chosen
+   screen zooms, with the existing fitted framing. **While the map is zoomed,
+   Tab cycles the system's worlds as the target.** New **decision 13**;
+   decisions 1, 2, 4 and 10 are revised.
+5. **Everything else as recommended**: the map's warped-log radial scale
+   (decision 3); the bracket seen by anyone who can see the target through the
+   glass (decision 7); landing works from the nearest surface and uses the
+   target only to name it (decision 9); the prograde mark shows with a target
+   (decision 7).
+
+The build order both specs follow is
+`docs/superpowers/plans/2026-09-26-poc2-build-order.md`, which replaces this
+spec's *Build tracks* (kept, marked superseded, for the reasoning).
 
 ## Context
 
@@ -135,7 +188,12 @@ night`).
   prograde mark showing where the ship is actually going, and a bearing that
   says `dead ahead` only when the nose is on the world.
 - **The target's name, bearing and distance on the HUD**, in the words the
-  HUD already uses.
+  HUD already uses, and **a live time to arrival** when the ship's path will
+  bring it down on the world (ruling 3).
+- **A jump to a world within the system**, on the jump the ship already has
+  (ruling 1), for the legs the 1 c drive makes long.
+- **A chart chair that is a seat, not a lock**: sit, then choose the chart or
+  the map, and Tab through the worlds on the map (ruling 4).
 - **Tests that show the proxy in the .03 AU geometry is drawn at the right
   size and place, and dark**, and a one-line way to look at it by eye.
 - Every tunable a console variable or a named, tested constant, and most of
@@ -145,7 +203,9 @@ night`).
 
 - **Autopilot, or anything else that flies the ship toward the target.**
   Ruling C. The target changes what is drawn and said, and nothing in the
-  flight state reads it.
+  flight state reads it. The in-system jump (decision 12) is not an
+  exception: it is the fold, which the player plots, engages and aims, and it
+  lets go two degrees from the world, at rest, leaving the approach to them.
 - **The drive, its lever, the soft cap, the floor, and the motion cue.** The
   flight-feel spec, decisions 1-8. This spec changes no speed.
 - **The star brightness of note 4.** The flight-feel spec, decision 9. This
@@ -156,12 +216,17 @@ night`).
 - **Moons.** Procgen makes none. The map and the id have room for them
   (decision 3) and nothing more.
 - **A galaxy map.** The chart shows what is near. The map shows *here*.
-- **The jump.** Untouched, except that the fold opening lets go of the
-  target (decision 5).
+- **The interstellar jump.** Untouched, except that its fold opening lets go
+  of the target (decision 5). The in-system jump reuses its machinery and
+  changes none of it (decision 12).
+- **A limit on jumps, or a cooldown.** Future (ruling 1); see *Open
+  questions*.
 
 ## Decisions
 
-### 1. The middle desk screen becomes `AShipMapScreen`, read and used from the helm
+### 1. The middle desk screen becomes `AShipMapScreen`, read and used from the helm and the chart chair
+
+*Revised by ruling 4: the chart chair can now zoom the map (decision 13).*
 
 **Which screen.** The middle of `cockpit_desk`'s three `screen` parts: desk-
 local (20, 0, 105), so cockpit (305, 200), world (1715, 0, 105), with its aft
@@ -207,17 +272,22 @@ starts and costs nothing: the draw size is a per-class default.
 
 **Read from the helm, not sat at.** The pilot is at the helm when they need
 the map: flying, looking for the world they are heading for, with the mouse
-already turning their head. So `AShipMapScreen` is **not `bUsable`**: E does
-nothing at it, no chair frames it, and nothing changes the camera. It is
-driven the way the engineering console is, by the view-aimed pointer:
-standing, within the player's 250 cm reach, as every screen is; and **seated
-at the helm**, which is new (decision 2).
+already turning their head. So `AShipMapScreen` is **not `bUsable`**: E at it
+does not sit anyone down, it has no chair of its own, and from the helm
+nothing changes the camera. It is driven the way the engineering console is,
+by the view-aimed pointer: standing, within the player's 250 cm reach, as
+every screen is; and **seated, from either chair**, which is new (decision
+2). **From the chart chair it can also be zoomed** (decision 13, ruling 4):
+the chair beside it frames it as it frames the chart, on the seated player's
+choice.
 
 **Rejected: a sit-down screen like the chart and the laptop.** There is no
 chair in front of the middle screen, and the chairs either side are the helm
 and the chart's. A sit-down map would send the pilot out of the helm, which is
 where the map is needed, and would make "look at the map" a trip. Reading the
-map would stop being a glance.
+map would stop being a glance. (The ruling's zoom is not this: it is the chart
+chair's, reached from a chair the copilot is already in, and the helm still
+never leaves the glass.)
 
 **Rejected: the port screen, dead ahead of the helm.** It is nearer to the
 pilot's line of sight, 1.5 m straight ahead, and would be a little easier to
@@ -225,19 +295,26 @@ read. But the developer named the middle screen, and the middle screen can be
 read from both chairs. That matters, because two people in the cockpit should
 share one map rather than each have their own.
 
-### 2. At the helm the pointer drives the map, and only the map
+### 2. Seated, the pointer drives the map, and only the map
+
+*Ruled (ruling 4): "pilot just has look and click control of map". At the
+helm this decision is unchanged in substance. The same gate now also serves
+the chart chair while it is not zoomed (decision 13), so the virtual is named
+for a seat rather than for the helm.*
 
 `AShipScreen` gains one virtual, not a property:
 
 ```cpp
-/** Whether the pointer reaches this screen from the helm. Only a screen
- *  meant to be glanced at and touched while flying says yes. A class
- *  decision, never a per-instance one: no edit in the level can make the
- *  chart drivable from the helm. */
-virtual bool IsDrivableFromHelm() const { return false; }
+/** Whether the pointer reaches this screen from a seat -- the helm, or the
+ *  chart chair while nothing is zoomed. Only a screen meant to be glanced at
+ *  and touched while flying says yes. A class decision, never a per-instance
+ *  one: no edit in the level can make the chart drivable from the helm. */
+virtual bool IsDrivableSeated() const { return false; }
 ```
 
-`AShipMapScreen` overrides it to return true. Because it is not a
+`AShipMapScreen` overrides it to return true. (This review revision called
+it `IsDrivableFromHelm`; the rename is the only change, and it is made before
+any code exists.) Because it is not a
 `UPROPERTY`, no placed instance in `L_Hauler` can change it, and
 `DeepSpace.Ship.MapScreen` holds that the map says yes and the chart, the
 laptop and the engineering console say no.
@@ -246,7 +323,7 @@ laptop and the engineering console say no.
 gates it instead. It runs a line trace from the eye along the view on the
 pointer's own channel (`Visibility`), out to `InteractionRange`, ignoring the
 pawn. If the first thing hit is the widget component of an `AShipScreen`
-whose `IsDrivableFromHelm()` is true, the pointer is active, with its usual
+whose `IsDrivableSeated()` is true, the pointer is active, with its usual
 `World` source and aim. Anything else deactivates it as today and releases
 the left button. The gate decides only *whether* the pointer is on. Its own
 trace uses the same channel, eye, direction, range and ignored pawn, so it
@@ -281,7 +358,12 @@ that?" directly. But it adds an input action to `setup_flight_input.py`,
 takes a key from a helm with little room left (the flight-feel spec takes X),
 and makes the map a readout of something picked elsewhere rather than the
 place where picking happens, which is the opposite of the ruling. It stays
-available as an addition. *Decisions needing sign-off*, item 1.
+available as an addition. *Decisions needing sign-off*, item 1. **Ruled
+(ruling 4): "Both", with the key placed where this objection does not bite.**
+The key is Tab, and it cycles only while the map is zoomed at the chart chair
+(decision 13), so it takes no key from the helm, and the map it cycles on is
+the one in front of the player, so picking still happens at the map. At the
+helm, look and click only: "pilot just has look and click control of map".
 
 **Rejected: widening `InteractionDistance` until the map is inside it and the
 chart outside.** That excludes the chart by one of two distances, 1.6 m and
@@ -378,7 +460,8 @@ wants next. A map that must be driven before it can be read is not a glance.
 **Rejected: ordinal**, equally spaced rings by orbit index, like a metro map.
 It is always legible. It also throws away the one structural fact a system
 has, inner rock huddled close and giants far out, which the warped log keeps
-wherever it is legible. *Decisions needing sign-off*, item 2.
+wherever it is legible. *Decisions needing sign-off*, item 2. **Ruled
+(ruling 5): the warped log.**
 
 **What each thing shows**, in helm pixels:
 
@@ -406,8 +489,8 @@ then planets innermost first). A test holds that order.
 |  |       (   *   )          |                                        |
 |  |     <ship>               |                                        |
 |  +--------------------------+                                        |
-|  › Kessa II · 12° to port, 3.0° up · 0.214 AU · NIGHT SIDE           |
-|  18° above the plane                                                 |
+|  › Kessa II · 0.1° to port · 0.214 AU · ETA 2 MIN · NIGHT SIDE       |
+|  18° above the plane                                  [ Jump here ]  |
 +----------------------------------------------------------------------+
 ```
 
@@ -422,7 +505,11 @@ then planets innermost first). A test holds that order.
   run wide: about 180 px at size 14. That width is why the orrery is 256 px
   and not larger.
 - **The band**, y 330-418: the target line (decision 6) in size 14, wrapping
-  to at most two lines, then the footer in size 13.
+  to at most two lines (y 330-370), then the footer in size 13 at the left
+  and, at the right on the same row, the one button decision 12 adds, 24 px
+  tall and 120 px wide (y 374-398): `Jump here` with a target that can be
+  jumped to, `Stand down` while the course is the target, disabled with
+  `Near enough to fly` inside the target's reach, and absent with no target.
 
 Slate sizes fonts in points at 96 DPI, so size 14 has an em of 18.7 widget
 pixels. At the helm that is **about 18 screen pixels, with capitals about
@@ -446,7 +533,9 @@ system costs a generation, so the map keeps **a cache of its own drawing**,
 the chart's `FAskedAt` pattern: the rings, the dots, and each world's universe
 position (for the row distances). The cache is **keyed on what the drawing
 depends on, and nothing else**: the id of the system the ship is in, whether
-it is in transit, the priors, and `ds.Nav.StandoffAU`. The id is asked every
+it is between stars (in a star jump's transit; an in-system jump's fold is
+not, since the system and its drawing are unchanged by it: decision 12), the
+priors, and `ds.Nav.StandoffAU`. The id is asked every
 frame of a new `UUniverseSubsystem::GetSystemIdAt(Where)`, which runs the stub
 search `GetSystemAt` already runs (`FGalaxyGenerator::FindSystemAt`) and stops
 before generating the system. A `PlaceShip` into another system, from the
@@ -459,9 +548,12 @@ worlds move, the key gains time. The ship's glyph, the row distances and the
 target mark are recomputed from the cache every frame, and none of that
 generates anything.
 
-### 4. Picking is a click on a world, and again clears it
+### 4. Picking is a click on a world, and again clears it -- or Tab, on the zoomed map
 
-Each world can be picked in two places: on the orrery and on its row. Both
+*Revised by ruling 4: "Both". A click, from the helm, standing, or the chart
+chair; and Tab, while the map is zoomed at the chart chair (decision 13).*
+
+Each world can be clicked in two places: on the orrery and on its row. Both
 end at one seam, `USystemMapWidget::SelectWorld(int32 Orbit)`, which targets
 or clears as the chart's `SelectRow` does:
 
@@ -493,9 +585,18 @@ can pick, and a second player in the chart chair sees the same mark. It is
 one ship with one target (vision: shared presence). The HUD line shows the
 target to everyone aboard.
 
+**Tab**, while the map is zoomed at the chart chair, targets the next world
+outward from the target, wrapping from the outermost to the innermost, and
+the innermost when there is no target. It goes through
+`UShipSubsystem::CycleTarget()`, which asks the pure
+`ShipNav::NextTarget(const FStarSystem&, const TOptional<FBodyId>&)`, and so
+lands on the same `SetTarget` as a click. It never clears: a click on the
+target does. Decision 13 has the rest.
+
 **Console**, beside `ds.Nav.Plot` and named with it because it is navigation:
 `ds.Nav.Target` lists the worlds, numbered by orbit; `ds.Nav.Target <n|name>`
-targets one; `ds.Nav.Target none` clears.
+targets one; `ds.Nav.Target next` cycles as Tab does; `ds.Nav.Target none`
+clears.
 
 ### 5. The target is an `FBodyId` the ship holds, beside the course
 
@@ -523,15 +624,21 @@ of range.
 position, radius, name and kind are asked of procgen every time. ADR 0003's
 amendment grows by one clause: *the ship stores no universe data beyond the id
 of the system it is steering for **and the id of the body it has marked**.*
+Since ruling 1 the course may name that same body instead of a system
+(decision 12); it is still an id, and still the only one of its kind.
 
 **How it clears:** by clicking it again, by `ds.Nav.Target none`, and **when
-the fold opens** (`FShipNavState::Step`, on `ENavEvent::TransitBegan`). It
-does **not** clear on arrival near the world, at the floor, when the pilot
-stands up, when the drive is toggled, or at all stop. A target is a setting
+a star jump's fold opens** (`FShipNavState::Step`, on
+`ENavEvent::TransitBegan` with a star course). It does **not** clear on
+arrival near the world, at the floor, when the pilot stands up, when the
+drive is toggled, at all stop, or **when an in-system jump's fold opens**:
+that jump's destination is the target, and the ship does not leave the
+system (decision 12, ruling 1). A target is a setting
 at the helm, and like the levers it stays where it is left.
 
 **What happens on a jump:** leaving a system lets go of what was marked in
-it. The new system arrives with no target, and nothing picks one for the
+it. A jump within the system keeps it, and arrives with the world it went
+to still marked. The new system arrives with no target, and nothing picks one for the
 player. There is no "nearest world" auto-mark and no suggestion (see *The
 anti-chore audit*).
 
@@ -547,25 +654,35 @@ navigation decision lives in the pure `FShipNavState`, and the clear-on-fold
 rule is the state machine's own, so it belongs there and is tested headless
 with the rest of the jump.
 
+**Rejected: every fold clears the target** (this spec before ruling 1, when
+every fold left the system). An in-system jump would let go of its own
+destination as it set out for it.
+
 **Two words that never swap** (plan conflict 7, extended): **the course** is
-the star the jump folds toward, chosen at the chart. **The target** is the
-world in this system that the pilot has marked, chosen at the map. They are
-independent. Either can be set without the other, and neither clears the
-other, except that the fold opening clears the target. The HUD's private
+where the jump folds to: a star, chosen at the chart, or -- since ruling 1 --
+the target itself, chosen with the map's `Jump here` (decision 12). **The
+target** is the world in this system that the pilot has marked, chosen at the
+map. A star course and the target are independent: either can be set without
+the other, and neither clears the other, except that a star jump's fold
+opening clears the target. An in-system course is never independent: it *is*
+the target, and changing or clearing the target lets it go. The HUD's private
 `ETarget` enum, which names what the crosshair dot is over, is left alone;
 the new types are named `UShipTargetOverlay`, `FTargetView` and `FTargetMark`,
 so no existing name changes.
 
-### 6. The HUD says where the target is, precisely enough to aim with
+### 6. The HUD says where the target is, precisely enough to aim with, and when the ship will get there
+
+*Revised by ruling 3: a live time to arrival, where this spec recommended none.*
 
 A new readout under the jump line in the top-right corner (`Margin + 40`),
 `Dim`, 10 pt, the same as the jump line (`JumpLine`, after the flight-feel
 spec's rename of `DriveLine`):
 
 ```
-› Kessa II · 12° to port, 3.0° up · 0.214 AU
-› Kessa II · 0.4° to starboard · 1,496 THOUSAND KM · NIGHT SIDE
-› Kessa II · dead ahead · 38,000 KM
+› Kessa II · 12° to port, 3.0° up · 0.214 AU · PASSING 0.031 AU UP
+› Kessa II · 0.1° to starboard · 1,496 THOUSAND KM · ETA 65 S · NIGHT SIDE
+› Kessa II · dead ahead · 38,000 KM · ETA 50 S
+› Kessa II · 40° to port · 0.214 AU
 ```
 
 - `›` is the chart's `PlottedMark`: the one you chose.
@@ -606,52 +723,71 @@ chosen so that "the pilot reads one set of words for both levers". It is the
 failure the developer described: 8 degrees off from 0.03 AU is a hundred
 Earth radii of miss, labelled `dead ahead`.
 
-**The line on time.** This spec and the flight-feel spec (its decision 7) show
-**no number in units of time that runs down**: no ETA, no time to surface, no
-countdown. That is the line drawn, and it is drawn between units of time and
-units of distance, not between numbers that change and numbers that do not.
-The target line's distance empties as the ship closes, and so does the
-altitude line's, and both stay. The distinction is this. A distance is a fact
-about where the world is, and it stays true if the pilot walks to the galley.
-A time to go is a fact about the wait: it is the approach turned into a
-readout of how much of it is left, and it is a function of the lever, so it
-reads as a score for the setting, something to bring down. That is the
-optimisation the anti-chore principle rules out, in the place the vision says
-*the time is the content*.
+**The time to arrival** (ruling 3: "Live ETA, i don't recall ruling out a
+countdown in this regard. This would be good."). The line ends, before
+`NIGHT SIDE`, with one of two things, or with neither:
 
-The first draft argued against an ETA by saying that "a number that empties is
-a clock", which its own distance readouts contradicted. It also said that "a
-pilot who wants the division can do it", which is not realistic across mixed
-units: 0.214 AU at 3,000 KM/S is about 3 hours, and nobody works that out at
-the helm. Nor is the division the true answer. Under the flight-feel spec's
-soft cap, the last part of every approach runs at the cap's pace, not the
-lever's (its decision 5's table: 0.2 AU at 10 c is 76 s, where the division
-says 10 s).
+- **`ETA <time>`** when a target resolves, the ship is not in transit, it
+  moves at 1 m/s or more, and **its velocity's ray meets the target's floor
+  sphere** -- `ShipFlight::RayToFloor`, the flight-feel spec's own test of
+  whether the cap will bring the ship down on a surface. Under the drive the
+  velocity is along the nose, so the ETA's appearing *is* the answer to "will
+  the drive bring me down on it?", the words the flight-feel spec asked this
+  one for (its *Seams*).
+- **`PASSING <altitude> UP`** when the ship is closing on the target on a path
+  that misses: the closest approach of the velocity's ray, less the radius, in
+  `AltitudeWords`. A time for a path that does not arrive would be a time to
+  nowhere, and it would jump the moment the nose came onto the world.
+- Neither when the ship is at rest, opening on the target, or in transit.
 
-There is a real case on the other side. Ruling A asks the player to choose the
-drive's speed deliberately, and a deliberate choice needs some sense of what a
-setting means in time, while the developer's complaint was that approaches
-took too long. A form exists that tells them without counting down: **coarse
-words for the lever setting**, `at 10 C: about a minute`, computed with the
-flight state's own approach law from the distance at the moment the lever or
-the target last changed, and **not recomputed as the distance falls**. It is
-a statement about the choice, made when the choice is made, and it never
-ticks. Its cost is a pure `ApproachSeconds` beside the flight-feel spec's cap,
-and the precedent. The recommendation is to show none for this build. The
-flight-feel lever brings every arrival to the floor in 55-190 s at the
-notches a player will use, so the question it answers may not come up. The
-coarse words are the fallback if playtest shows a pilot cannot choose a notch
-without them. This is one ruling for both specs: *Decisions needing sign-off*,
-item 3 here and item 5 there.
+**The value is the flight state's own law, at the current speed**:
+`ShipFlight::SecondsToFloor(D, Speed, BrakingAccel, HoldSeconds)` (the
+flight-feel spec's Track 0), with D the distance along the ray to the
+target's floor sphere, the braking the boosters have, and `ds.Drive.HoldSeconds`.
+The ship is taken to hold its present speed until the cap binds, then to
+follow the cap to the braking knee, then to brake. Once the lever has settled
+it agrees with the flown approach to 0.11 s over the median leg at 1 c (the
+flight-feel spec's decision 5 simulation), so it counts down a second a
+second, and it changes the moment the lever or the aim does. While the ship
+is still spooling up it overstates, because the speed it is computed at is
+still rising: "at the current speed" is what the developer asked for, and it
+is honest about the present.
 
-**Rejected: a live ETA on the target line**, on the grounds that nothing
-happens when it reaches zero, so nobody is behind. That is true, and it is the
-strongest case for a live one. But the harm is the watching and the scoring,
-not a consequence.
+**Words**, `NavText::Duration(Seconds)`: whole seconds under 100 s (`ETA 52
+S`), whole minutes under an hour (`ETA 12 MIN`), hours to a tenth under two
+days (`ETA 4.2 H`), whole days above (`ETA 3 D`, which is cruise's 200 m/s
+across 0.2 AU). It ticks each second only in the last hundred seconds of an
+approach, and is calm before. The map prints the same line (`ScreensAgree`).
+
+**What it does not do.** It is never the jump's: the charge still has no
+number, bar or countdown (CLAUDE.md, scoped back to the charge by this
+ruling), and an engaged in-system jump shows the jump's words, not a time to
+the fold. It counts down an approach the player chose, at a speed they can
+change at any moment, and nothing happens when it reaches zero but the ship
+arriving where the player sent it.
+
+**Rejected: no time anywhere** (this spec's recommendation, sign-off 3a,
+argued here at length before the ruling). It drew the line between units of
+time and units of distance: a distance is a fact about where the world is,
+while a time to go is the approach turned into a readout of how much of it is
+left, a function of the lever and so a score for the setting. The developer
+ruled that the rule it leaned on, CLAUDE.md's "no percentage, bar or
+countdown", was about the jump's charge, and that a live ETA "would be good".
+The charge is a wait before anything can happen; an approach is something the
+player is doing. **Rejected: coarse, static words for the lever setting**
+(sign-off 3b: `at 10 C: about a minute`, set when the lever or the target
+changed and never recomputed). It was the fallback that told the choice
+without ticking; the ruling asked for live. **Rejected: distance over speed.**
+Under the cap the speed is the distance over four seconds, so it would read a
+steady `4 S` through the whole last minute. **Rejected: an ETA for any
+heading, from the closing speed.** It would jump discontinuously when the nose
+came onto the world and the cap took over, and it would promise an arrival on
+a path that passes.
 
 **Rejected: a `closing` / `opening` word.** It is a fact rather than a clock,
 and harmless. But the prograde mark (decision 7) shows it better, and it would
-be a third word on a line that should stay short.
+be a third word on a line that should stay short. (Since the ruling, the ETA
+and `PASSING` say more than it would have, and only while closing.)
 
 ### 7. The bracket, the caret and the prograde mark: HUD space, from geometry, seen through the glass
 
@@ -708,10 +844,11 @@ and nothing showing where the ship points.
 
 **The prograde mark shows where the ship is going.** The nose is not the
 direction of travel. In cruise the ship has inertia, so after a turn it slides
-until the boosters catch up. Under the drive, the flight-feel spec's cap cuts
-only the closing component, so near a world the ship moves where the nose does
-not quite point, which that spec's own risks name as confusing. So while a
-target resolves, the pilot also sees an ink ring with three short ticks (top,
+until the boosters catch up. Under the drive the velocity is always along the
+nose (the flight-feel spec's revision 2, which dropped the closing-only cut
+this paragraph first answered), so there the mark sits on the caret; they part
+in cruise's slide after a turn, and in the moment after a drive toggle. So
+while a target resolves, the pilot also sees an ink ring with three short ticks (top,
 left, right: the flight-sim convention, and a different shape from the caret's
 plain ring and the bracket's corners). It is placed along the ship's velocity,
 taken into ship axes (`Orientation.Inverse() x GetVelocity()`), projected from
@@ -719,7 +856,8 @@ the camera like the caret, and hidden under 1 m/s and off the view. Bracket
 on caret means *pointed at it*. Bracket on prograde means *going to it*. It
 is shown only with a target because its question is "will I get to what I
 marked". Whether it should show always is a flight readout, the flight-feel
-spec's call: *Decisions needing sign-off*, item 6.
+spec's call: *Decisions needing sign-off*, item 6. **Ruled (ruling 5): with a
+target, for the pilot.**
 
 **Through the glass, never through a wall.** The HUD is drawn over everything,
 so a bracket drawn from direction alone would sit on the cockpit's back wall
@@ -757,7 +895,8 @@ occlusion for one line of code.
 **Rejected: pilot-only, like the caret**, with no trace. That would be
 simpler. But the developer found the need standing at the glass as much as
 sitting at the helm, and the trace makes "wherever it can be seen" safe.
-*Decisions needing sign-off*, item 4.
+*Decisions needing sign-off*, item 4. **Ruled (ruling 5): anyone who can see
+the target through the glass.**
 
 ### 8. The .03 AU question: what a test can show, and a way to look
 
@@ -819,12 +958,16 @@ one-line way to ask it.
   necessarily marked it. Whether landing reads the nearest surface or the
   target is landing's decision. This spec's recommendation is the nearest
   surface, with the target used only to name the landing on the HUD.
-  *Decisions needing sign-off*, item 5.
+  *Decisions needing sign-off*, item 5. **Ruled (ruling 5): landing works
+  from the nearest surface and uses the target only to name it.**
 - The port desk screen stays free, and it is directly ahead of the helm. If
   landing needs a screen at the helm, that is the one.
 
 **A recommendation to the flight-feel spec, recorded here because the map
-makes it matter.** Ruling B says the cap acts "only when the ship would hit a
+makes it matter.** *Adopted*: the flight-feel spec's revision 2 made it its
+rule (its decision 5), and the developer ruled that rule as specified
+(ruling 2). The paragraph is kept for its reasoning; its numbers are that
+spec's first draft's, at 10 c. Ruling B says the cap acts "only when the ship would hit a
 surface within a few seconds": that is time to impact along the velocity. The
 flight-feel spec's decision 5 is already much nearer that than today's drive.
 It takes no tangential speed, and it binds only within N = 4 s. But it caps
@@ -842,22 +985,31 @@ call, not this one's.
 
 ### 10. Two screens, two jobs, one ship
 
+*Revised by rulings 1 and 4: the map can send the jump to its target, and
+the chart chair zooms either screen.*
+
 The chart and the map sit side by side on one desk and are not two stations.
 
 | | The chart (starboard) | The map (middle) |
 |---|---|---|
 | Question | where next, among the stars | where things are, here |
-| Chooses | the course, a star (`FSystemId`) | the target, a world (`FBodyId`) |
-| Used | once a jump, sat down, framed | many times a system, glanced at from the helm |
+| Chooses | the course, a star (`FSystemId`) | the target, a world (`FBodyId`), and a jump to it (decision 12) |
+| Used | once a jump, from the chart chair, zoomed | many times a system: glanced at and clicked from the helm or the chart chair, zoomed from the chart chair |
 | Marker | teal point on the dome, nose caret | teal corners on the world, nose caret, prograde mark, edge chevron |
-| HUD | the jump line | the target line |
+| HUD | the jump line | the target line, with its ETA |
 
 Neither needs a second person, and nothing on one is better with somebody at
 the other (vision: *shared presence, not division of labour*). A solo pilot
 does both jobs, and a friend in the chart chair is company who can also see
-the map. The map does **not** show the course's direction, and the chart
+the map. The map does **not** show a star course's direction, and the chart
 does not show the system's worlds. Each answers one question completely, and
 a screen that half-answers the other's question invites checking both.
+
+**Where the two jobs meet: the in-system jump.** The map plots it, because it
+is a world and the map is where worlds are; the chart shows it as the
+course, with its engage toggle, because it is the jump (decision 12). It is
+one course and one lever seen from two screens, not two jumps, and neither
+screen needs the other to use it.
 
 ### 11. Legibility from the helm is a gate before the map merges
 
@@ -889,18 +1041,286 @@ in the middle of delivery. A render the orchestrator judges keeps the gate
 inside delivery. The developer's playtest remains the last word, as it is for
 everything.
 
+**Staged, by the build order.** The map widget lands in stage 1, before the
+target exists (stage 3), so the check runs twice: in stage 1 on the rows,
+rings and title, which is the gate for merging the map; and once more in
+stage 3, before the target track merges, with a world targeted, to judge the
+target ring, the band's two lines with an ETA, and the `Jump here` button.
+The test file is deleted with the second verdict.
+
+### 12. The in-system jump: the same fold, to a world
+
+*New, from ruling 1: "anything faster should be a jump ... there can be an
+option to 'jump to planet' within a system".*
+
+**What it is.** With a world targeted, the jump can be sent to it. It is the
+existing jump, not a second one: the same three levers (course, heading,
+engage), the same charge wound at the same rate by the same watts, the same
+cone, the fold opening by itself with no confirm, the same six-second
+transit, and the same arrival by translation, at rest with both levers at
+STOP (the flight-feel spec's decision 4). Two things differ: the course names
+a world rather than a star, and the arrival is a standoff above that world.
+
+**Why it exists.** At 1 c a system is large. The median leg from an arrival
+to the innermost world is 100 s, but 1 AU is 8 min 19 s, the 95th-percentile
+leg 21 minutes, 30 AU 4 h 9 min, and the longest leg procgen makes 19 hours
+(the flight-feel spec's decision 3). The drive tops out where the developer
+put it; the long leg is the jump's.
+
+**Sending it: `Jump here`, on the map.** With a target that resolves, the
+map's band shows one button (decision 3's layout). `Jump here` plots the
+target as the course *and* engages the jump, in one press. Pressed again it
+reads `Stand down`, and clears the course, which stands the jump down, as
+clearing does on the chart. One press does both because the in-system jump is
+chosen where the map is used, from the helm, and the chart that engages is
+out of the helm's reach (decision 2). A plot that still needed the chart
+would send the pilot out of the helm, into the other chair and back, for
+every hop. It is still the one engage lever the chart's toggle moves, and the
+chart shows it. Console: `ds.Nav.Plot target` plots the target as the
+course, and `ds.Nav.Engage` engages, as they do for a star.
+
+**One course.** `FShipNavState` holds a course that is a star *or* a world:
+`TOptional<FSystemId> Plotted` stays for a star, beside a new
+`TOptional<FBodyId> PlottedWorld`, and at most one is set. `Plot(FSystemId)`
+clears the world; `PlotWorld(FBodyId)` clears the star. The latest choice
+wins, as a second row clicked on the chart does. `GetPlotted()` is unchanged,
+so every reader of a star course is unchanged; `GetPlottedWorld()` and
+`HasCourse()` are new. The ship still stores no universe data beyond ids
+(ADR 0003's clause, decision 5).
+
+**An in-system course is always the target.** `PlotWorld` is refused unless
+the id is the target, and changing or clearing the target lets an in-system
+course go (and so stands it down). The bracket and the jump can never name
+different worlds.
+
+**Refused when near.** `PlotWorld` is refused, and the button is disabled
+with the words `Near enough to fly`, while the ship is within twice the
+world's standoff of its centre (`NavStart::WorldReachFactor` = 2, about
+730,000 km for an Earth). An in-system course that the ship flies inside that
+distance is let go, as if it had arrived, with the charge unspent. Inside its
+standoff the fold would carry the ship backward, and from twice it the drive
+at 1 c is there in a little over a minute.
+
+**Alignment.** The same cone, `ds.Nav.ConeDeg`, round the direction from the
+ship to the world's centre, which `UShipSubsystem::GetCourseDirection` now
+returns for an in-system course. So the HUD's jump line, the nose caret and
+the counter-frame's teal course point follow the world with no change of
+their own: the point sits inside the target's bracket, which is right,
+because the world is both.
+
+**The arrival.** `NavStart::WorldArrivalPoint(From, Planet, FloorCm,
+StandoffDeg)`: on the line from the departure point to the world's centre, at
+`WorldStandoffCm = max(R / sin(StandoffDeg / 2), R + 10 x Floor)` from the
+centre, with **`ds.Nav.WorldStandoffDeg` = 2**: the world is met as a disc 2
+degrees across, 53 px on 4K, within the cone of the nose, lit as its phase
+is. It is the interstellar arrival's rule applied to a world: on the line, so
+the world is where the nose was and nothing turns; a standoff chosen for
+what the arrival looks like rather than a distance; and *to a world, never
+onto it*, so the approach is still the player's. Two degrees is 57 radii:
+365,000 km from an Earth's centre, 4.0 million km from a Jupiter's, always
+far outside the floor the flight-feel spec defines (its decision 6: 10.2 km
+and 112 km), which the `10 x Floor` term guarantees for a body of any size.
+From there the drive at 1 c reaches an Earth's floor in **64 s** and a
+Jupiter's in **79 s**; at 0.1 c, 67 s and 187 s (the flight-feel spec's
+decision 5 table). If the point falls inside any other body's floor sphere
+(a moon, once procgen makes them), it moves out along the line until it does
+not.
+
+**Through `FShipNavState` and the subsystem.**
+
+- `Step` decides as now: the fold opens when engaged, with a course, charged
+  and aligned. On `TransitBegan` it clears the target **only for a star
+  course**: an in-system jump keeps its target (decision 5). On arrival it
+  clears the course and engage and bumps the serial for both. For a star it
+  records `LastArrival` and marks it visited, as now, and returns `Arrived`;
+  for a world it does neither, and returns a new **`ENavEvent::ArrivedAtWorld`**.
+- `UShipSubsystem` acts on `ArrivedAtWorld` with
+  `FlightState.JumpTo(NavStart::WorldArrivalPoint(...))`, as it acts on
+  `Arrived` with `ArrivalPoint`. `TransitBegan` is one case for both: the
+  charge spent, attitude released, both levers to STOP; and `JumpTo` zeroes
+  the velocity (the flight-feel spec's decision 4).
+- **The charge is one charge.** An in-system jump spends it, and whatever
+  jump follows winds from empty. That is the only limit on jumps this build
+  has; see *Open questions*.
+
+**What the HUD and the map say.**
+
+- The jump line: `JUMP WINDING · Kessa II · 12° to port`, `JUMP READY ·
+  Kessa II · dead ahead`: `NavText::Jump` with the world's name, in the
+  jump's own cone words, since it is the jump's cone. In the fold it reads
+  `IN THE FOLD`, where a star jump reads `BETWEEN STARS`, which an in-system
+  fold is not (`NavText::Jump(EJumpState, bool bInSystem)`).
+- The target line is empty in the fold, as for any transit, and the bracket
+  is hidden with the sky.
+- The map: the target's row carries `›` as ever; the band's button reads
+  `Stand down` while the course is the target; through the fold the ship's
+  glyph stays drawn where it left from and the footer says `In the fold.`
+  (the cache key's "between stars" is false for this fold, decision 3).
+- On arrival the target line reads the world at two degrees, with no ETA:
+  the ship is at rest, and the first thing the pilot does is set a lever.
+
+**What it does to the interstellar chart.** The chart still lists and plots
+only stars, and it is where the in-system course shows as the jump's course:
+its course line reads `› Kessa II · in this system · 12° to port`, none of its
+star rows carries the mark, and its toggle engages or stands down the
+in-system jump as it would a star's. Plotting a star there replaces an
+in-system course, as `Jump here` replaces a star course. Its `FAskedAt` keys
+on the course, star or world. The chart's rows, range, bearings, visited
+marks and everything else about stars are unchanged, and an in-system
+arrival marks nothing visited.
+
+**Rejected: plot on the map, engage on the chart**, the interstellar jump's
+split. For a world chosen at the helm, every hop would be a trip to the other
+chair and back. **Rejected: the chart lists the target as a row to plot.** A
+second place to plot the same thing, on the screen the helm cannot reach.
+**Rejected: an in-system jump with its own charge, cone or transit.** The
+ruling names the existing machinery, and a second set of rules is a second
+set to learn. **Rejected: arriving at the opening shot's framing, 18 degrees
+across** (40,000 km over an Earth). The world fills the glass on arrival and
+the floor is 54 s away: the approach, which the vision says is the content,
+is mostly skipped. **Rejected: 0.5 degrees across.** 70 s to an Earth's
+floor, but 119 s to a Jupiter's, and a world of 13 pixels: an arrival that
+looks like not having arrived. **Rejected: a fixed distance.** A giant would
+be met filling the view and a small world as a point. **Rejected: arriving
+at the floor, or close enough to land.** It would be autopilot for the one
+part the player is meant to fly (ruling C). **Rejected: the star as an
+in-system destination.** The star cannot be targeted (decision 4), and the
+interstellar arrival is already a standoff from it.
+
+**Cost to change:** low. The standoff is a CVar and the reach a constant; the
+course is one more optional in `FShipNavState`; the words are two.
+
+### 13. The chart chair: sit, then choose the chart or the map; Tab on the zoomed map
+
+*New, from ruling 4.* Verbatim: "Both, key cycles targets when the map is
+focussed (an option from sitting in either seat (i.e., copilot doesn't auto
+lock to jump menu, they can choose either jump menu or map and that will zoom
+the screen. pilot just has look and click control of map. When map is zoomed,
+(Tab) switches between planets in the system."
+
+**The helm is decision 2, unchanged.** The pilot looks at the map and clicks
+it, live, never sitting down at it and never zooming it. Tab does nothing at
+the helm.
+
+**The chart chair**, the copilot seat (the starboard `pilot_seat`, cockpit
+(175, 270), which is the chart's use transform), **no longer locks onto the
+chart.** Today E at the chart sits the player in its chair *and* frames the
+chart, the mouse becoming a cursor. Now it sits them, and stops there:
+
+- **Seated, not zoomed:** the view is the player's, within the seated limits
+  (100 degrees of yaw, 70 of pitch), as at the helm, and the pointer is gated
+  as at the helm (decision 2), so the map can be clicked by looking at it.
+- **E zooms the screen the view is on.** On the chart or the map, E frames it
+  with the existing fitted framing (`AShipScreen::GetViewTransform` and
+  `FitFieldOfView` for that screen, `ds.Screen.FrameMargin` clear): the mouse
+  becomes a cursor over it, and the body stays in the chair. The prompt names
+  what E will do: `Chart`, `Map`. On neither, E stands up (`Stand up`), as
+  today.
+- **Zoomed, E goes back to the seat** (`Back`), unzoomed. Choosing is one
+  press, switching screens is two and a glance, and leaving is two.
+- **Zoomed on the map, Tab cycles the target** (below).
+
+The chart's framing is exactly the one it has now. The map's is its own:
+`place_map_screen` sets its `ViewDistanceCm` to 60, the chart's, and the
+camera moves square-on to the map, 70 cm to port of the chair, and back. Both
+moves mark a camera cut, as sitting does. Magnified from 60 cm the map's 600
+x 424 is soft, never aliased (decision 1).
+
+**How the classes say it.** `AShipScreen` gains two virtuals beside decision
+2's, each a class decision no placed instance can change: `ZoomsOnSit()`
+(true by default, so the laptop still frames when you sit at it -- it has one
+screen and its own reason for a sit-down; `AShipNavScreen` says false) and
+`IsZoomableFromChartChair()` (the chart and the map say true). The pawn keeps
+`UsedScreen` (whose chair the body is in) and gains `ZoomedScreen` (what is
+framed, or nothing), a `TWeakObjectPtr`, not a `UPROPERTY`, so
+`BP_DeepSpaceCharacter`'s layout does not change; every framing function
+reads the second. Which screen E zooms is found by the pointer gate's own
+trace (decision 2). Standing up returns the body exactly as now
+(`GetUseFloorZ`, the standing-spot search).
+
+**Tab cycles the target while the map is zoomed.** `IA_CycleTarget` on Tab,
+`Started`, built by `setup_flight_input.py` and clash-checked like the others
+(Tab is free in `IMC_Default`); the flight-feel spec's Track A builds it with
+its own actions so the Blueprint is recompiled once. The pawn acts on it only
+while its `ZoomedScreen` is an `AShipMapScreen`, calling
+`UShipSubsystem::CycleTarget()`, which asks the pure `ShipNav::NextTarget`:
+the next world outward from the target, wrapping from the outermost to the
+innermost, the innermost when there is none, nothing in a system with no
+worlds, and (when procgen makes them) moons after their planet. It never
+clears. It is not pilot-gated, like every pick. Cycling away from the world
+an in-system course is set to lets that course go (decision 12), which the
+button, turning back to `Jump here`, shows at once.
+
+**Rejected: zoomed, E stands up** (today's one press to leave). Then the only
+way to the other screen is to stand up and sit down again, which is the
+lock-on the ruling removes. **Rejected: a click on an unzoomed screen zooms
+it.** On the map a click is a pick; it cannot mean both. **Rejected: zooming
+by looking alone** (a dwell). A view that changes because the head rested
+there is the game acting without the player. **Rejected: Tab at the helm.**
+"pilot just has look and click control of map." **Rejected: Shift+Tab to
+cycle back.** Shift is the lever at the helm, and a dozen worlds go round in a
+few presses; it is an addition if wanted. **Rejected: a second, larger map
+widget for the copilot.** It is the same panel, framed: one map, one ship.
+
+**Cost to change:** low. Which press does what is a few lines in the pawn;
+the virtuals are one line each.
+
+## Open questions
+
+### The jump cooldown (future; not built)
+
+The developer: "we should eventually limit the amount of jumps before a
+cooldown period". Nothing in this build limits jumps beyond the one charge
+every jump spends and winds again (decision 12). The question is recorded
+here because its answer pulls against the vision's anti-chore principle, and
+whoever designs it should start from that tension rather than find it:
+
+- **A cooldown is a wait the game imposes.** Shown, it is exactly what the
+  no-countdown rule still forbids -- the rule this amendment scoped *to* the
+  jump's charge, a bar the player must wait out before anything can happen.
+  Not shown, it is a jump that silently will not open, which reads as broken.
+- **A limit counted in jumps is a budget**, and a budget spent in-system is an
+  interstellar jump the player cannot make. That is the game telling the
+  player they are *behind*, the principle's own test, and at worst it
+  strands them.
+- **The charge is already a limit that never blocks.** Every jump costs a
+  wind-up, and nothing is counted. Any cooldown should first be asked whether
+  it is anything more than a longer charge.
+
+Constraints any design should meet: the interstellar jump is never
+unavailable for long enough to strand the player; no countdown and no bar
+for it; no confirm; nothing that reads as falling behind. Shapes worth
+evaluating then: a charge that winds slower after back-to-back jumps and
+recovers while the ship cruises (the limit felt as the wind-up, never
+counted); a limit on in-system jumps only; a wear cost carried by a later
+wear model. **Cost of deferring:** none. `FShipNavState` has room for any of
+them, and nothing built here assumes jumps are unlimited.
+
 ## The anti-chore audit
 
 - **Nothing on the map or the HUD says the player is behind.** No count of
   worlds seen or unseen, no "visited" marks on worlds (unlike the chart's
   systems; a world list with ticks becomes a list to finish), no ranking, no
   suggested target, no auto-target on arrival.
-- **No clock.** No number in units of time that runs down, and no bar
-  (decision 6). The one open question is a static, coarse description of a
-  lever setting, which is sign-off item 3.
+- **One clock, and it is the player's.** The live ETA (decision 6, ruling 3)
+  counts down an approach the player chose, at a speed they can change at any
+  moment, and nothing happens at zero but the arrival they asked for. It is
+  never the jump's: the charge is still a word, with no number, bar or
+  countdown. Nothing on the map or the HUD shows a lever as a fraction to
+  fill.
 - **Nothing is demanded.** The map does nothing on its own, and the target
   never expires except when the ship leaves the system, which the player
   chose.
+- **The in-system jump is an offer, not an obligation.** Every world can be
+  flown to at 1 c; the jump shortens the long legs. Nothing suggests it,
+  counts its use or scores a flight against it, and it arrives two degrees out
+  and at rest, so the approach is still the player's (decision 12).
+- **The seats are not stations.** The chart chair zooms either screen, the
+  helm clicks the map, and either player can do everything alone (decision
+  13; vision: shared presence, never division of labour).
+- **The cooldown is where this audit will be tested next.** A future limit
+  on jumps is a wait imposed on the player; *Open questions* records the
+  constraints it must meet before it is built.
 - **Precision is not a chore.** Tenths of a degree are an aid to aiming,
   offered only when there is something to aim at. Nothing scores alignment
   or rewards holding it, and `dead ahead` arrives as soon as the nose is on
@@ -929,16 +1349,20 @@ everything.
 
 | File | What |
 |---|---|
-| `Source/DeepSpace/Ship/ShipMapScreen.h/.cpp` | `AShipMapScreen : AShipScreen`: `PanelWidthCm` 68, `DrawSizePixels` 600 x 424, bezel 1 cm, `bUsable = false`, `IsDrivableFromHelm()` overridden true, `SetWidgetClass(USystemMapWidget)`. No `Reach` box and no interactable: nothing sits you down here. |
+| `Source/DeepSpace/Ship/ShipMapScreen.h/.cpp` | `AShipMapScreen : AShipScreen`: `PanelWidthCm` 68, `DrawSizePixels` 600 x 424, bezel 1 cm, `bUsable = false`, `SetWidgetClass(USystemMapWidget)` (stage 1); `IsDrivableSeated()` and `IsZoomableFromChartChair()` overridden true (stage 4, once `AShipScreen` has them). No `Reach` box and no interactable: nothing sits you down here; the chart chair zooms it (decision 13). |
 | `Source/DeepSpace/UI/SystemMapLayout.h/.cpp` | `namespace SystemMap`, pure: `MinRingGap(FMapPixels)` (derived, decision 3), `FMapScale Fit(const FStarSystem&, double StandoffAU, FMapPixels)`, the knots and the two-pass warp; `FVector2D Place(const FMapScale&, const FUniversePosition&)`; `FMapShip Ship(scale, position, orientation)` (glyph centre, nose angle or none, pinned inside or beyond, elevation in degrees); `FMapLayout Layout(const FStarSystem&, scale)` (rings, dots with their capped sizes, numerals, the target ring's size rule); `TOptional<int32> Pick(const FMapLayout&, FVector2D, float MaxRadius)`. |
 | `Source/DeepSpace/UI/SystemMapWidget.h/.cpp` | `USystemMapWidget : UShipScreenWidget`. `BuildScreen` (the title, a `USystemMapView`, the row `UButton`s, the band), `RefreshFromShip()` public, `SelectWorld(int32)`, `FAskedAt` keyed as decision 3 says, with `GetLayoutAsked()` for tests, and getters for each row's text and for the target line, like the chart's. |
 | `Source/DeepSpace/UI/SystemMapView.h/.cpp` | `USystemMapView : UUserWidget`: paints the orrery from an `FMapLayout` and the ship's `FMapShip`; `NativeOnMouseButtonDown` asks `SystemMap::Pick` and calls back `SelectWorld`; `NativeIsInteractable()` true. |
-| `Source/DeepSpace/UI/TargetMarker.h/.cpp` | `namespace TargetMarker`, pure except `SeenThroughGlass`: `AheadFloor` (0.25 degrees); `TOptional<FTargetView> View(const FStarSystem&, const FBodyId&, const FUniversePosition&, const FQuat&)` (ship-local direction, centre and surface distance, angular radius, `AheadRadians`, lit fraction, night side, name); `FString Line(const FTargetView&)`; `FVector ProgradeShipLocal(const FVector& Velocity, const FQuat&)`; `FTargetMark Place(bool bProjected, FVector2D Centre, float RadiusPx, FVector ViewSpaceDir, FVector2D ViewSize, float MinPx, float Inset, bool bPilot, bool bSeenThroughGlass)`; `bool SeenThroughGlass(const UWorld*, FVector Eye, FVector Dir, const AActor* Viewer)`, the one world query. |
+| `Source/DeepSpace/UI/TargetMarker.h/.cpp` | `namespace TargetMarker`, pure except `SeenThroughGlass`: `AheadFloor` (0.25 degrees); `TOptional<FTargetView> View(const FStarSystem&, const FBodyId&, const FUniversePosition&, const FQuat&, const FVector& Velocity, double FloorCm, double BrakingAccel, double HoldSeconds)` (ship-local direction, centre and surface distance, angular radius, `AheadRadians`, lit fraction, night side, name, and the ETA or the passing altitude, decision 6); `FString Line(const FTargetView&)`, which ends with `ETA ...` or `PASSING ... UP` as decision 6 says; `FVector ProgradeShipLocal(const FVector& Velocity, const FQuat&)`; `FTargetMark Place(bool bProjected, FVector2D Centre, float RadiusPx, FVector ViewSpaceDir, FVector2D ViewSize, float MinPx, float Inset, bool bPilot, bool bSeenThroughGlass)`; `bool SeenThroughGlass(const UWorld*, FVector Eye, FVector Dir, const AActor* Viewer)`, the one world query. |
+| `Source/DeepSpace/Ship/ShipTags.h` | `namespace ShipTags`: `Glass` (`Sky.Glass`), the C++ side of `placement.py`'s `GLASS_TAG`, in its own header so the level scripts (stage 1) and `TargetMarker::SeenThroughGlass` (stage 2) share it. |
 | `Source/DeepSpace/UI/ShipTargetOverlay.h/.cpp` | `UShipTargetOverlay : UUserWidget`, hit-test invisible: `PlaceFor(const UShipSubsystem&, const TOptional<FStarSystem>& Here)` projects the target and the prograde direction, asks `SeenThroughGlass` and `TargetMarker::Place`; static `ShowsTargetMark(Ship, Viewer, Here)` and `ShowsPrograde(Ship, Viewer, Here)`; `NativePaint` draws the corners, the chevron or the prograde mark; `GetLastMark()` for tests. |
 | `Source/DeepSpace/Tests/SystemMapLayoutTest.cpp` | `DeepSpace.UI.SystemMap.Scale`, `.Warp`, `.TwelveWorldsFit`, `.ShipOnTheWarp`, `.Pick` |
 | `Source/DeepSpace/Tests/SystemMapScreenTest.cpp` | `DeepSpace.UI.SystemMapScreen`, `DeepSpace.Ship.MapScreen` |
 | `Source/DeepSpace/Tests/ShipTargetTest.cpp` | `DeepSpace.Ship.Target` |
-| `Source/DeepSpace/Tests/TargetMarkerTest.cpp` | `DeepSpace.UI.TargetMarker.View`, `.Bearing`, `.Place`, `DeepSpace.UI.TargetOverlay`, `DeepSpace.Ship.TargetSeenThroughGlass` |
+| `Source/DeepSpace/Tests/TargetMarkerTest.cpp` | `DeepSpace.UI.TargetMarker.View`, `.Bearing`, `.Place`, `.Eta`, `DeepSpace.Ship.TargetSeenThroughGlass` (stage 2) |
+| `Source/DeepSpace/Tests/TargetOverlayTest.cpp` | `DeepSpace.UI.TargetOverlay` (stage 4: moved out of `TargetMarkerTest.cpp`, which is stage 2's) |
+| `Source/DeepSpace/Tests/InSystemJumpTest.cpp` | `DeepSpace.Ship.InSystemJump`, `DeepSpace.Loop.InSystemJump`, `DeepSpace.UI.NavigationScreen.InSystemCourse` (stage 3; its own file, because `SliceLoopTest.cpp` and `NavScreenTest.cpp` are other tracks' in stages 3 and 4) |
+| `Source/DeepSpace/Tests/ChartChairTest.cpp` | `DeepSpace.Ship.ChartChair` (stage 4) |
 | `Source/DeepSpace/Tests/NightSideTest.cpp` | `DeepSpace.Sky.NightSideIsDrawn` |
 | `Source/DeepSpace/Tests/MapFromHelmTest.cpp` | `DeepSpace.Ship.MapFromHelm` |
 | `Source/DeepSpace/Tests/Eyes/MapFromHelmEyesTest.cpp` | `Eyes.MapFromHelm`, temporary (decision 11), deleted with its verdict |
@@ -947,21 +1371,25 @@ everything.
 
 | File | Change |
 |---|---|
-| `Ship/ShipNavState.h/.cpp` | `TOptional<FBodyId> Target`; `SetTarget`, `ClearTarget`, `GetTarget` (false in transit); `Step` clears it on `TransitBegan`. `ShipNav::TargetPlanet`. |
-| `Ship/ShipSubsystem.h/.cpp` | `SetTarget` (checks the system here and the orbit), `ClearTarget`, `GetTarget`; `static float GetStandoffAU()` (for the map's rim, as `GetChartRangeLy` is for the chart); the `ds.Nav.Target` command. |
-| `Universe/UniverseSubsystem.h/.cpp` | `TOptional<FSystemId> GetSystemIdAt(const FUniversePosition&) const`: the stub search without the generation. |
-| `Ship/ShipScreen.h` | `virtual bool IsDrivableFromHelm() const`. Not reflected, so no Blueprint's saved layout changes; still a header change, so `./rebuild.sh --force`, then `check_blueprints.py` as routine. |
-| `Player/DeepSpaceCharacter.cpp` | `UpdatePointer`'s seated branch (decision 2). No new component and no header `UPROPERTY`, so `BP_DeepSpaceCharacter` is not invalidated. |
-| `UI/ShipHUDWidget.h/.cpp` | the overlay child and the target readout in `BuildLayout`; `NativeTick` places both, and the caret, from the `Here` it already asks for; `ShowsNoseCaret` gains `Here` and the target clause. No renames, and no word functions move. |
-| `UI/NavText.h/.cpp` | `WorldKind(EPlanetKind)`, `WorldName(const FPlanet&)`, `TargetBearing(ShipLocalDir, AheadRadians)`. `Bearing` is unchanged. |
+| `Ship/ShipNavState.h/.cpp` | `TOptional<FBodyId> Target`; `SetTarget`, `ClearTarget`, `GetTarget` (false in transit); `TOptional<FBodyId> PlottedWorld`, `PlotWorld` (only the target), `GetPlottedWorld`, `HasCourse`; `Step` clears the target on `TransitBegan` for a star course only, and returns `ArrivedAtWorld` for a world course; `ShipNav::TargetPlanet`, `ShipNav::NextTarget`. The header comment's "no percentage, no bar and no countdown anywhere" is scoped to the charge, as CLAUDE.md now is. |
+| `Ship/ShipSubsystem.h/.cpp` | `SetTarget` (checks the system here and the orbit), `ClearTarget`, `GetTarget`, `CycleTarget`; `PlotTarget` and the in-system course (refused inside `WorldReachFactor` standoffs, let go when flown inside them, let go when the target changes); `GetCourseDirection` for a world; `ArrivedAtWorld` handled with `NavStart::WorldArrivalPoint`; `static float GetStandoffAU()` (for the map's rim, as `GetChartRangeLy` is for the chart); `ds.Nav.Target` (with `next`), `ds.Nav.Plot target`, `ds.Nav.WorldStandoffDeg`. |
+| `Ship/NavStart.h/.cpp` | `WorldStandoffCm(Radius, FloorCm, StandoffDeg)`, `WorldArrivalPoint(From, Planet, FloorCm, StandoffDeg)`, `WorldReachFactor` = 2 (decision 12). |
+| `UI/NavigationWidget.h/.cpp` | the course line for an in-system course (`› Kessa II · in this system · 12° to port`), no row marked; `FAskedAt` keyed on the course, star or world (decision 12). |
+| `Universe/UniverseSubsystem.h/.cpp` | (stage 1, with the map, whose cache key needs it) `TOptional<FSystemId> GetSystemIdAt(const FUniversePosition&) const`: the stub search without the generation. |
+| `Ship/ShipScreen.h` | `virtual bool IsDrivableSeated() const`, `virtual bool ZoomsOnSit() const`, `virtual bool IsZoomableFromChartChair() const` (decisions 2, 13). Not reflected, so no Blueprint's saved layout changes; still a header change, so `./rebuild.sh --force`, then `check_blueprints.py` as routine. |
+| `Ship/ShipNavScreen.h/.cpp` | `ZoomsOnSit()` false and `IsZoomableFromChartChair()` true: sitting at the chart no longer frames it (decision 13). |
+| `Player/DeepSpaceCharacter.h/.cpp` | `UpdatePointer`'s seated branch (decision 2), from either chair; `ZoomedScreen` (a `TWeakObjectPtr`, not reflected), E's seat, zoom and back, and their prompts (decision 13); `CycleTarget()`'s body, whose binding the flight-feel spec's Track A builds. No new component and no new `UPROPERTY` in stage 4, so `BP_DeepSpaceCharacter` is not invalidated by it. |
+| `UI/ShipHUDWidget.h/.cpp` | the overlay child and the target readout in `BuildLayout`; `NativeTick` places both, and the caret, from the `Here` it already asks for; `ShowsNoseCaret` gains `Here` and the target clause; the jump line names a world course and says `IN THE FOLD` for an in-system fold (decision 12). No renames, and no word functions move. |
+| `UI/NavText.h/.cpp` | `WorldKind(EPlanetKind)`, `WorldName(const FPlanet&)` (stage 1, for the map's rows); `TargetBearing(ShipLocalDir, AheadRadians)`, `Duration(Seconds)`, `Jump(EJumpState, bool bInSystem)` (stage 2). `Bearing` is unchanged. |
 | `Sky/ShipSky.h/.cpp` | `ds.Sky.Goto`'s optional `night`; `ShipSky::GotoPlacement` takes the side. |
 | `Tools/hauler_layout.py` | `MAP_SCREEN`, `MAP_SCREEN_WIDTH`, `PILOT_EYE`; `Ship` gains `map_screen_location`, `map_screen_yaw`. The dressing needs no exclude: `cockpit_desk` exports only its wings, and the middle of the desk is not a surface. |
-| `Tools/build_hauler.py` | `place_map_screen` (`hauler_map_screen`); the `Sky.Glass` tag on `glass` boxes (`GLASS_TAG` in `placement.py`, mirrored in C++ as `ShipTags::Glass`, held equal by `test_placement.py` as the dressing's tags are). |
+| `Tools/build_hauler.py` | `place_map_screen` (`hauler_map_screen`, with `view_distance_cm` 60, the chart's, for the chart chair's zoom); the `Sky.Glass` tag on `glass` boxes (`GLASS_TAG` in `placement.py`, mirrored in C++ as `ShipTags::Glass`, held equal by `test_placement.py` as the dressing's tags are). |
 | `Tools/verify_level.py` | `check_map_screen` (class, label, yaw, position against the layout; the only `AShipMapScreen`); every glass box tagged. |
 | `Tools/validate_hauler.py` | `check_map_sightline`: the air from the helm's eye to the map's glass is empty, sampled every 10 cm, as `check_chart` is for the chart chair. `check_helm_glass`: from `PILOT_EYE`, a ray along the nose leaves the hull through a `glass` box before any other, and a ray aft meets a non-glass box first. |
 | `Tools/test_placement.py` | the map is in the cockpit facing aft, on the centre line, 1 cm proud of the middle desk screen and level with it, and its width is the one the C++ draws (it reads `ShipMapScreen.cpp`); `PILOT_EYE` equals `SkyTestWorld::PilotEye` (it reads `SkyTestWorld.h`). |
-| `Tools/sky_probe.py` | `--night`. |
-| `CLAUDE.md` | a *The system map* section after *The chart chair*: the screen and its draw size, the helm pointer rule, the course/target words, the two bearings, the glass tag; the tunables table; `ds.Nav.Target` in *Playtest console*. |
+| `Tools/sky_probe.py` | `--night` (stage 4: the flight-feel spec's Track A owns the file in stage 2). |
+| `Tools/setup_flight_input.py` | `IA_CycleTarget` (Boolean) on Tab, built in stage 2 by the flight-feel spec's Track A with its lever actions, so the Blueprint is recompiled once. |
+| `CLAUDE.md` | a *The system map* section after *The chart chair*: the screen and its draw size, the helm pointer rule, the chart chair's choice and Tab, the in-system jump, the live ETA, the course/target words, the two bearings, the glass tag; the tunables table; `ds.Nav.Target` in *Playtest console*. |
 | `docs/decisions/0003-*.md` | the amendment's one clause (decision 5). |
 
 ### CVars and commands
@@ -970,14 +1398,18 @@ everything.
 |---|---|---|
 | `ds.HUD.TargetMinPixels` | 28 (slate units) | `ShipTargetOverlay.cpp` |
 | `ds.HUD.TargetEdgeInset` | 48 (slate units) | `ShipTargetOverlay.cpp` |
-| `ds.Nav.Target [n\|name\|none]` | command | `ShipSubsystem.cpp` |
+| `ds.Nav.Target [n\|name\|next\|none]` | command | `ShipSubsystem.cpp` |
+| `ds.Nav.Plot target` | command, extended: the target as the course (decision 12) | `ShipSubsystem.cpp` |
+| `ds.Nav.WorldStandoffDeg` | 2 (the world's angular diameter at an in-system arrival) | `ShipSubsystem.cpp` |
 | `ds.Sky.Goto <body> <km> [night]` | command, extended | `ShipSky.cpp` |
 
 Everything else is a named constant with a test on it: `SystemMap::MinRingGap`
 (derived, 9 px), `PickRadius` (14 px), the rim margin (1.25), the draw size
 (600 x 424), `TargetMarker::AheadFloor` (0.25 degrees), the 10-degree switch
 from tenths to whole degrees, the 80% hide, the 0.15 night-side fraction, the
-1 m/s prograde threshold, and the 30 m glass trace.
+1 m/s prograde threshold, the 30 m glass trace, `NavStart::WorldReachFactor`
+(2), the `10 x Floor` standoff guard, and `NavText::Duration`'s boundaries
+(100 s, an hour, two days).
 
 ### Tests
 
@@ -1007,10 +1439,14 @@ Pure, no world:
   nothing, even with a ring within 14 px.
 - **`DeepSpace.Ship.Target`** (on `FShipNavState` and `UShipSubsystem`): set,
   clear, set again, which replaces; refused in transit; refused for another
-  system's world and for an orbit the system lacks; cleared by the fold
-  opening; kept through arrival at the floor, standing up, drive toggles, all
-  stop and a replotted course; `TargetPlanet` resolves nothing after a
-  `PlaceShip` into another system.
+  system's world and for an orbit the system lacks; cleared by a star
+  jump's fold opening and **kept through an in-system jump's**; kept through
+  arrival at the floor, standing up, drive toggles, all stop and a replotted
+  star course; `TargetPlanet` resolves nothing after a `PlaceShip` into
+  another system. `NextTarget`: from none to the innermost, outward one at a
+  time, the outermost wraps to the innermost, nothing in a system with no
+  worlds, and it never returns none from a set target in a system with
+  worlds; `CycleTarget` lands on the same `SetTarget` a click does.
 - **`DeepSpace.UI.TargetMarker.View`**: direction and distances against hand
   arithmetic; lit fraction at 0, 90 and 180 degrees; `NIGHT SIDE` exactly past
   the threshold; `AheadRadians` is the floor for a small far world and the
@@ -1027,6 +1463,14 @@ Pure, no world:
   on the inset edge pointing the right way, and a walker gets nothing;
   occluded, there is no bracket. These are the pure function's cases, fed
   their inputs directly; nothing here claims a HUD placed them.
+- **`.Eta`** (ruling 3): an ETA exactly when the velocity's ray meets the
+  target's floor sphere at 1 m/s or more, and its value is
+  `ShipFlight::SecondsToFloor` of that distance and speed; `PASSING` exactly
+  when closing on a path that misses, at the ray's closest approach less the
+  radius; neither at rest, when opening, or in transit; **the ETA falls by one
+  second a second, to within 0.5 s, along a settled approach stepped through
+  `FShipFlightState` at 1 c from 0.2 AU** (the flight state's own law, not a
+  copy of it); `Duration` at 99 S, 2 MIN, 59 MIN, 1.0 H, 47.9 H, 2 D.
 
 In a world:
 
@@ -1055,10 +1499,18 @@ In a world:
   layout is asked once while nothing changes, **not again when the ship
   moves 100 AU within the system**, and again the frame the system id, the
   priors or `ds.Nav.StandoffAU` changes (`GetLayoutAsked`, as
-  `ChartAsksOnChange` does); between stars it shows `Between stars.`
+  `ChartAsksOnChange` does); between stars it shows `Between stars.`, and
+  **in an in-system fold it keeps the system and says `In the fold.`**; the
+  band's button reads `Jump here` with a target, `Stand down` while the course
+  is the target, is disabled with `Near enough to fly` inside the reach, and
+  is absent without a target; pressing `Jump here` plots the target and
+  engages, pressing `Stand down` clears the course. (The target cases arrive
+  in stage 3, with the target.)
 - **`DeepSpace.Ship.MapScreen`**: spawned before `BeginPlay` (it builds its
-  collision there); not usable; its draw size is 600 x 424; drivable from the
-  helm; the chart, the laptop and the engineering console are not.
+  collision there); not usable; its draw size is 600 x 424; drivable seated
+  and zoomable from the chart chair; the chart is zoomable but not drivable
+  seated, and does not zoom on sit; the laptop zooms on sit and is neither;
+  the engineering console is none of them.
 - **`DeepSpace.Ship.MapFromHelm`**: a seated pilot looking at the map has an
   active pointer whose own last hit is the map's widget component; looking at
   the chart, the pointer is inactive; the left button is released on looking
@@ -1069,13 +1521,63 @@ In a world:
 - **`DeepSpace.Ship.ScreensAgree`** gains the target line: the HUD's readout
   and the map's are one string.
 - **`DeepSpace.Loop.Jump`** gains: a target picked before the jump is gone on
-  arrival, and one can be picked in the new system.
+  arrival, and one can be picked in the new system. (In stage 3 this case is
+  written in `InSystemJumpTest.cpp`, beside the in-system loop, because
+  `SliceLoopTest.cpp` is the flight-feel spec's Track B's that stage.)
+- **`DeepSpace.Ship.InSystemJump`** (decision 12, on `FShipNavState`,
+  `NavStart` and `UShipSubsystem`): `PlotWorld` refused unless the id is the
+  target, and inside `WorldReachFactor` standoffs; a star course and a world
+  course replace each other; changing, cycling or clearing the target lets
+  an in-system course go; the fold opens only engaged, charged and within the
+  cone of the world's direction; on `TransitBegan` the charge is spent, both
+  levers go to STOP and the target is kept; on `ArrivedAtWorld` the ship is
+  on the line from its departure to the world's centre at `WorldStandoffCm`
+  to a centimetre, the world is within the cone of the nose, the velocity is
+  exactly zero, the course and engage are cleared, the serial is bumped, and
+  `LastArrival` and the visited set are untouched; the arrival is outside
+  every floor sphere, for an Earth, a Jupiter and a body of 100 km radius
+  (where `10 x Floor` governs); a course the ship flies inside the reach is
+  let go with the charge unspent; `GetCourseDirection` points at the world.
+- **`DeepSpace.Loop.InSystemJump`**: from the opening shot, target the
+  outermost world through the map widget's seam, press `Jump here`, fill the
+  charge with `ds.Nav.Charge`, turn onto the world, and the fold opens by
+  itself; the jump line says `IN THE FOLD` in transit; the ship arrives at
+  rest, two degrees from the world, with the target still set; then the
+  drive lever set from STOP to 1 c reaches the world's floor within 85 s
+  (64 s for an Earth and 79 s for a Jupiter at that standoff).
+- **`DeepSpace.UI.NavigationScreen.InSystemCourse`**: the chart's course line
+  names an in-system course with `in this system`, no row carries the mark,
+  its toggle stands the jump down and engages it again, and plotting a star
+  row replaces the in-system course.
+- **`DeepSpace.Ship.ChartChair`** (decision 13): E at the chart sits the
+  player unzoomed, with the view free within the seated limits; E looking at
+  the chart zooms it with the chart's fitted field of view, and E again
+  returns unzoomed; E looking at the map zooms the map with its own fitted
+  field of view, the body unmoved; E looking at neither stands up, onto the
+  floor as `ScreenStandUp` holds; the laptop still zooms on sit; the prompt
+  reads `Chart`, `Map`, `Back` and `Stand up` in their states; Tab zoomed on
+  the map cycles I, II, ... and wraps; Tab zoomed on the chart, unzoomed, or
+  at the helm changes nothing. Every screen spawned before `BeginPlay`.
 
 Python: `test_placement.py` and `validate_hauler.py` as above;
 `verify_level.py` after the level rebuild. Temporary: `Eyes.MapFromHelm`
-(decision 11).
+(decision 11), run in stage 1 and again in stage 3.
 
 ## Build tracks
+
+**Superseded by the build order**,
+`docs/superpowers/plans/2026-09-26-poc2-build-order.md`, which stages both
+specs' work together and was checked against every file's owner there. In
+its terms: this spec's track 3 (the map widget) and track 6 (the level) are
+stage 1, and track 3 also takes `NavText::WorldKind`/`WorldName` and
+`UUniverseSubsystem::GetSystemIdAt`, which its rows and cache key need
+before stage 2 and 3 exist; track 2 (words and marker arithmetic) is stage 2,
+less its `ShipSky.*` and `sky_probe.py` edits, which move to stage 4; track 1
+(target state), with the whole of decision 12, is stage 3, and it also wires
+the stage-1 map widget to the target (its `SelectWorld`, the target ring and
+the band); tracks 4 (the pointer, now with decision 13's seats) and 5 (the
+HUD) are stage 4. The tracks below are kept as the reasoning the build order
+started from.
 
 Worktrees, with file ownership disjoint within this spec. The flight-feel
 spec's tracks are named as it names them: **0** (its shared seams, landing
@@ -1141,8 +1643,29 @@ merges named above.
   prograde mark hides within `AheadRadians` of the caret.
 - **A widget component in a scene capture.** Decision 11 assumes it draws.
   If it does not, see decision 11.
+- **Tab and Slate's focus navigation.** While a screen is zoomed the input
+  mode is game-and-UI, and Slate's default navigation config moves keyboard
+  focus on Tab. If a focused widget takes Tab before Enhanced Input sees it,
+  the cycle does nothing. `DeepSpace.Ship.ChartChair` drives the pawn's
+  handler directly, so it cannot catch this; the playtest can. The fallback
+  is to give the zoomed screen's input mode no focusable widget, or to turn
+  off tab navigation in the viewport's navigation config while zoomed.
+- **The in-system jump could make flying optional.** From anywhere to a
+  world is a 45 s wind, a turn and a six-second fold. That is the ruling's
+  intent for long legs, and the arrival two degrees out keeps the last minute
+  the player's. If playtest shows nobody flies a leg any more, the knobs are
+  `WorldReachFactor` and the charge, and the cooldown question (*Open
+  questions*) is where the real answer lives.
+- **The ETA while spooling up overstates.** Computed at the present speed, it
+  starts high and falls faster than a second a second until the lever
+  settles, about six seconds from STOP to 1 c. That is "at the current speed"
+  taken literally; if it reads as wrong, the successor computes it at the
+  lever's speed during the spool, one argument.
 
-## Decisions needing sign-off
+## Decisions needing sign-off -- all ruled, 2026-09-26
+
+**The developer has ruled on every item** (the amendment at the top). Each
+keeps its question as it was put, with the ruling after it.
 
 1. **How the pilot picks a target from the helm.**
    - *(a) Look at the map and click* (recommended): the pointer is live at the
@@ -1158,6 +1681,11 @@ merges named above.
    (a) without undoing it. Going back from (a) is one branch in
    `UpdatePointer`.
 
+   **Ruled (ruling 4): (c) both, with the key where the map is zoomed.** At
+   the helm, look and click (a). In the chart chair the seated player
+   chooses the chart or the map and the chosen screen zooms; while the map is
+   zoomed, Tab cycles the target (decision 13).
+
 2. **The map's radial scale.**
    - *(a) Warped log* (recommended): log radius with a derived minimum ring
      gap, and the ship through the same warp.
@@ -1168,6 +1696,8 @@ merges named above.
 
    **Cost of changing later:** low. The scale is one pure namespace, and the
    widget draws whatever it returns. Only its tests change.
+
+   **Ruled (ruling 5): (a), the warped log.**
 
 3. **Time on a readout.** One ruling for this spec and the flight-feel spec
    (its item 5). The criterion either way is *no number in units of time that
@@ -1189,6 +1719,13 @@ merges named above.
    line CLAUDE.md draws, and once one countdown exists the rule no longer
    holds anywhere.
 
+   **Ruled (ruling 3): (c), a live ETA**, on the target line and the map, at
+   the current speed (decision 6). The developer: "i don't recall ruling out
+   a countdown in this regard". The line CLAUDE.md drew was about the jump's
+   charge, and it is scoped back to the charge there; that is the answer to
+   "once one countdown exists the rule no longer holds anywhere": the rule
+   holds where it was made.
+
 4. **Who sees the bracket.**
    - *(a) Anyone, wherever the target can be seen through the glass*
      (recommended): an occlusion trace and a `Sky.Glass` tag; the edge chevron,
@@ -1200,6 +1737,8 @@ merges named above.
    **Cost of changing later:** low for (a) and (b), which differ by a
    predicate. High for (c), which needs a new material through the sky
    contract.
+
+   **Ruled (ruling 5): (a), anyone who can see the target through the glass.**
 
 5. **Whether landing reads the target.** This spec constrains the next one.
    - *(a) Landing works from the nearest surface and uses the target only to
@@ -1218,6 +1757,8 @@ merges named above.
    only on a path that meets a surface (decision 9's recommendation to the
    flight-feel spec).
 
+   **Ruled (ruling 5): (a), the nearest surface, the target only to name it.**
+
 6. **When the prograde mark shows.**
    - *(a) With a target, for the pilot* (recommended, this spec): its question
      is "will I get to what I marked".
@@ -1231,7 +1772,23 @@ merges named above.
    `ShowsPrograde`. It is here because the two specs meet at it, and it should
    have one owner.
 
+   **Ruled (ruling 5): (a), with a target, for the pilot.**
+
+New with the rulings, and decided here rather than put back to the
+developer, since each follows from a ruling and is cheap to change: the
+in-system jump's standoff (2 degrees across) and reach (twice it), its one
+`Jump here` press that plots and engages, the chart chair's E (zoom the
+screen looked at; zoomed, back to the seat), and the ETA's `PASSING` for a
+path that misses. Each carries its rejected alternatives in decisions 6, 12
+and 13.
+
 ## Review record
+
+**Amended in place with the developer's rulings, 2026-09-26** (the amendment
+at the top): decisions 1, 2, 4, 5, 6, 7, 9 and 10 revised; decisions 12 (the
+in-system jump) and 13 (the chart chair) and *Open questions* (the cooldown)
+new; the sign-offs marked ruled; *Build tracks* superseded by the build
+order. Superseded choices are kept as rejected alternatives.
 
 Revised in place after a review on the day of drafting. Superseded choices are
 kept above as rejected alternatives.
