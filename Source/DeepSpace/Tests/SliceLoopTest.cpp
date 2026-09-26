@@ -6,9 +6,11 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
+#include "Ship/ShipDressingSubsystem.h"
 #include "Ship/ShipNavState.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyStarfield.h"
+#include "Tests/HaulerDressingMarkers.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/ShipHUDWidget.h"
 #include "Universe/StarSystem.h"
@@ -168,6 +170,17 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // Somebody's ship: the hauler's real dressing surfaces, placed before
+    // play as the level build places them, so the whole loop runs with the
+    // clutter aboard and must come out the other side with it unchanged.
+    HaulerDressingMarkers::FMarkers Markers;
+    FString MarkersError;
+    const bool bMarkers = HaulerDressingMarkers::Load(Markers, MarkersError);
+    if (!TestTrue(TEXT("the hauler's dressing markers load ") + MarkersError, bMarkers))
+    {
+        return false;
+    }
+    HaulerDressingMarkers::Spawn(Test.World, Markers);
     Test.BeginPlay();
     Test.Step(0.0f);
 
@@ -175,6 +188,11 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     AShipSky* Sky = Test.Sky;
     AShipCounterFrame* Frame = Test.Frame;
     const FSystemId Home = Test.Universe->GetStartSystem();
+
+    UShipDressingSubsystem* Dressing = Test.World->GetSubsystem<UShipDressingSubsystem>();
+    const TMap<FString, TArray<FTransform>> Dressed = HaulerDressingMarkers::Drawing(Dressing ? Dressing->GetClutter() : nullptr);
+    TestTrue(FString::Printf(TEXT("the ship is dressed when play begins (%d instances)"), Dressing ? Dressing->GetInstanceCount() : 0),
+             Dressing && Dressing->GetInstanceCount() > 0);
 
     TestEqual(TEXT("the sky is built for the opening serial"), Sky->GetBuiltForSerial(), 0);
     TestTrue(TEXT("nothing outside the hull reaches the interior's captures: the dome"),
@@ -318,6 +336,21 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
         bGalaxyStill = After[Index].Equals(Galaxy[Index], 1e-6);
     }
     TestTrue(TEXT("the galaxy behind it all has not moved"), bGalaxyStill);
+
+    // Nothing aboard belongs to where the ship is. The dressing is drawn
+    // from the ship's markers and the universe's root, never from the system
+    // it arrives in or how many jumps it took, so dressed again here -- as
+    // ds.Dress.* redresses, and as the runtime ship generator one day will --
+    // it is the ship that left: no new mess per port, nothing to tidy however
+    // far it goes (the anti-chore principle). Asked by redressing, because a
+    // dressing that never ticks cannot change by itself, and a check that it
+    // had not would be a check of nothing.
+    if (Dressing)
+    {
+        Dressing->Redress();
+    }
+    TestTrue(TEXT("and dressed again where it arrived, the ship is dressed exactly as it left"),
+             !Dressed.IsEmpty() && Dressing && HaulerDressingMarkers::SameDrawing(Dressed, HaulerDressingMarkers::Drawing(Dressing->GetClutter())));
     return true;
 }
 

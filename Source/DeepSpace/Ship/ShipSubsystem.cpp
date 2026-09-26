@@ -108,15 +108,17 @@ namespace
         const TArray<FStarSystemStub> Chart = Ship->GetChart();
         const TOptional<FSystemId> Plotted = Ship->GetPlottedSystem();
         Out.Logf(TEXT("%d systems within %.1f ly. Plot one with ds.Nav.Plot <n>."),
-                 Chart.Num(), CVarRangeLy.GetValueOnGameThread());
+                 Chart.Num(), UShipSubsystem::GetChartRangeLy());
         for (int32 Index = 0; Index < Chart.Num(); ++Index)
         {
             const FStarSystemStub& Stub = Chart[Index];
-            FString Line = FString::Printf(TEXT("%2d  %-12s %5.1f ly  %s"), Index, *Stub.Name,
-                Here.DistanceTo(Stub.Position) / UniverseUnits::CmPerLightYear, *NavText::StarClass(Stub.Class));
+            // Worded by NavText, as the chart words the same row; only the
+            // columns are the console's.
+            FString Line = FString::Printf(TEXT("%2d  %-12s %8s  %s"), Index, *Stub.Name,
+                *NavText::Distance(Here.DistanceTo(Stub.Position)), *NavText::StarClass(Stub.Class));
             if (Ship->HasVisited(Stub.Id))
             {
-                Line += TEXT("  visited");
+                Line += TEXT("  ") + NavText::Visited(true);
             }
             if (Plotted && *Plotted == Stub.Id)
             {
@@ -320,7 +322,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // disengaged, or charged and waiting on alignment it wants nothing, so
     // it takes part in no split and an idle drive costs the ship nothing.
     const bool bWinding = GetJumpState() == EJumpState::Winding;
-    const float EngineWant = bWinding ? FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread()) : 0.0f;
+    const float EngineWant = bWinding ? GetWindingWant() : 0.0f;
     if (PowerState.GetWant(ShipPower::Engine) != EngineWant)
     {
         PowerState.SetWant(ShipPower::Engine, EngineWant);
@@ -587,8 +589,7 @@ TArray<FStarSystemStub> UShipSubsystem::GetChart() const
         return {};
     }
     TArray<FStarSystemStub> Chart = Cosmos->GetSystemsNear(
-        FlightState.GetUniversePosition(),
-        FMath::Max(0.0f, CVarRangeLy.GetValueOnGameThread()) * UniverseUnits::CmPerLightYear);
+        FlightState.GetUniversePosition(), GetChartRangeLy() * UniverseUnits::CmPerLightYear);
     if (const TOptional<FSystemId> Here = SystemHere())
     {
         Chart.RemoveAll([&Here](const FStarSystemStub& Stub) { return Stub.Id == *Here; });
@@ -679,6 +680,16 @@ TOptional<FVector> UShipSubsystem::GetCourseDirectionShipLocal() const
 double UShipSubsystem::GetJumpConeRadians() const
 {
     return FMath::DegreesToRadians(FMath::Max(0.0, static_cast<double>(CVarConeDeg.GetValueOnGameThread())));
+}
+
+float UShipSubsystem::GetWindingWant()
+{
+    return FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread());
+}
+
+float UShipSubsystem::GetChartRangeLy()
+{
+    return FMath::Max(0.0f, CVarRangeLy.GetValueOnGameThread());
 }
 
 bool UShipSubsystem::HasVisited(const FSystemId& Id) const

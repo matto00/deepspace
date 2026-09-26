@@ -21,6 +21,11 @@ from collections import defaultdict, namedtuple
 CELL = 10            # cm; the rasteriser's grid, and the wall thickness
 SLAB = 10            # cm; floor and ceiling thickness
 LINTEL = 20          # cm; the trim band over each opening
+# cm; the dark skirting at the foot of every wall (lived-in decision 12).
+# Boots and trolleys scuff the bottom of a real bulkhead first, and a ship
+# that has been lived in for years shows it there before anywhere else. It
+# is not random, so it stays here with the walls rather than in the dressing.
+KICK = 20
 
 SIDES = ("fore", "aft", "port", "starboard")
 
@@ -77,9 +82,10 @@ class FloorPlan:
                     if c not in self.owner:
                         self.wall_height[c] = max(self.wall_height.get(c, 0), h)
 
-        # Each wall cell's vertical column, as (z0, z1, role) segments. Openings
-        # replace a cell's default single segment.
-        self.columns = {c: [(-SLAB, h + SLAB, "wall")] for c, h in self.wall_height.items()}
+        # Each wall cell's vertical column, as (z0, z1, role) segments: the
+        # kick band, then the wall above it. Openings replace a cell's column.
+        self.columns = {c: [(-SLAB, KICK, "kick"), (KICK, h + SLAB, "wall")]
+                        for c, h in self.wall_height.items()}
         self.openings = []                      # (kind, cells, z0, z1) for keep-clear etc.
         for door in self.doors:
             self._carve_door(door)
@@ -176,9 +182,11 @@ class FloorPlan:
             if (i + di, j + dj) in self.owner:
                 raise PlanError("%s: not an exterior wall" % what)
         if kind == "window":
-            if not 0 < opening.sill < opening.head <= self.rooms[opening.room].height:
+            if not KICK < opening.sill < opening.head <= self.rooms[opening.room].height:
                 raise PlanError("%s: sill/head out of range" % what)
-            self._set(span, [(-SLAB, opening.sill, "wall"), (opening.sill, opening.head, "glass")]
+            # Under a sill the wall still meets the floor, so it keeps its kick.
+            self._set(span, [(-SLAB, KICK, "kick"), (KICK, opening.sill, "wall"),
+                             (opening.sill, opening.head, "glass")]
                       + self._lintel_and_above(opening.head))
             self.openings.append(("window", span, opening.sill, opening.head))
         else:

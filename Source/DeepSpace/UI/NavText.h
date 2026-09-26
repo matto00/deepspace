@@ -34,6 +34,31 @@ namespace NavText
      *  window shows, rather than by its letter. */
     DEEPSPACE_API FString StarClass(EStarClass Class);
 
+    /** A system by name and colour, as the HUD and the chart name where the
+     *  ship is: "Kessa · red dwarf". */
+    DEEPSPACE_API FString Place(const FString& Name, EStarClass Class);
+
+    /** The same with the ship's record, as the chart gives it: "Kessa · red
+     *  dwarf · visited" once the ship has been there. */
+    DEEPSPACE_API FString Place(const FString& Name, EStarClass Class, bool bVisited);
+
+    /** "visited" for somewhere the ship has been, and nothing for somewhere
+     *  it has not: never "unvisited", which would read as a list to finish. */
+    DEEPSPACE_API FString Visited(bool bVisited);
+
+    /** How far a star is, in light years to a tenth: "4.2 ly". A fact about
+     *  the sky, like a bearing; a tenth is as fine as choosing needs. */
+    DEEPSPACE_API FString Distance(double Cm);
+
+    /** Where the course is, as the chart reads it: "Kessa · 12° to port", in
+     *  the helm's own bearing words, or the name alone with no bearing to
+     *  give -- between stars, when there is nothing to steer. */
+    DEEPSPACE_API FString Course(const FString& CourseName, const TOptional<FVector>& ShipLocalDir,
+                                 double ConeRadians);
+
+    /** The chart's course with none plotted: "None". */
+    DEEPSPACE_API FString NoCourse();
+
     /** The chart's word for the jump: "Idle", "Winding", "Ready",
      *  "Between stars". */
     DEEPSPACE_API FString JumpWord(EJumpState State);

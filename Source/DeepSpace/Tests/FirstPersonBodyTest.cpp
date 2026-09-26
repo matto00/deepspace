@@ -2,11 +2,17 @@
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Player/DeepSpaceCharacter.h"
+#include "Ship/ShipDressingSubsystem.h"
+#include "Tests/HaulerDressingMarkers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -175,6 +181,125 @@ bool FCameraStaysInsideWallsTest::RunTest(const FString& Parameters)
     }
 
     DropWorld(World);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FCameraStaysOutOfClutterTest,
+    "DeepSpace.Player.CameraStaysOutOfClutter",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCameraStaysOutOfClutterTest::RunTest(const FString& Parameters)
+{
+    // The capsule never reaches a surface, but the eye does: crouched, it
+    // leans some 30 cm past the capsule at about a metre up, level with
+    // what stands on a workbench or a counter, and standing at the rack it
+    // is in a crate's band. Clutter the camera's sweep passed through put
+    // the view inside a toolbox. So the hauler's own clutter, dressed from
+    // its real markers, and the character put exactly where its eye would
+    // land in the middle of the largest thing on them.
+    HaulerDressingMarkers::FMarkers Markers;
+    FString Error;
+    const bool bLoaded = HaulerDressingMarkers::Load(Markers, Error);
+    if (!TestTrue(FString::Printf(TEXT("the hauler's markers load %s"), *Error), bLoaded))
+    {
+        return false;
+    }
+
+    // The world's own dressing, whatever a session last set.
+    IConsoleVariable* LivedIn = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Dress.LivedIn"));
+    IConsoleVariable* Seed = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Dress.Seed"));
+    const FString WasLivedIn = LivedIn ? LivedIn->GetString() : FString();
+    const FString WasSeed = Seed ? Seed->GetString() : FString();
+    if (LivedIn) { LivedIn->Set(TEXT("1"), ECVF_SetByConsole); }
+    if (Seed) { Seed->Set(TEXT("-1"), ECVF_SetByConsole); }
+
+    UWorld* World = MakeWorld(TEXT("CameraClutterTestWorld"));
+    ON_SCOPE_EXIT
+    {
+        DropWorld(World);
+        if (LivedIn) { LivedIn->Set(*WasLivedIn, ECVF_SetByConsole); }
+        if (Seed) { Seed->Set(*WasSeed, ECVF_SetByConsole); }
+    };
+
+    HaulerDressingMarkers::Spawn(World, Markers);
+    UShipDressingSubsystem* Dressing = World->GetSubsystem<UShipDressingSubsystem>();
+    if (!TestNotNull(TEXT("a game world has a dressing subsystem"), Dressing))
+    {
+        return false;
+    }
+    Dressing->Redress();
+
+    TArray<FBox> Things;
+    if (const AActor* Clutter = Dressing->GetClutter())
+    {
+        TInlineComponentArray<UInstancedStaticMeshComponent*> Layers(Clutter);
+        for (const UInstancedStaticMeshComponent* Layer : Layers)
+        {
+            const FBox MeshBox = Layer->GetStaticMesh()->GetBoundingBox();
+            for (int32 I = 0; I < Layer->GetInstanceCount(); ++I)
+            {
+                FTransform Instance;
+                Layer->GetInstanceTransform(I, Instance, /*bWorldSpace*/ true);
+                Things.Add(MeshBox.TransformBy(Instance));
+            }
+        }
+    }
+    if (!TestTrue(FString::Printf(TEXT("the hauler is dressed (%d things)"), Things.Num()), Things.Num() > 0))
+    {
+        return false;
+    }
+
+    ADeepSpaceCharacter* Character =
+        PoseCharacter(*this, World, TEXT("/Game/Characters/DeepSpace/Anims/RTG_crouching_idle.RTG_crouching_idle"));
+    if (!Character)
+    {
+        return false;
+    }
+    constexpr float NearClip = 10.0f;
+    constexpr float ProbeClear = 13.0f;    // the eye sweep's sphere, and a margin
+    Character->PlaceCamera(0.0f, FRotator::ZeroRotator);
+    const FVector Lean = Character->GetEyeLocation() - Character->GetActorLocation();
+
+    // The largest thing whose middle the eye can be put in with the sweep
+    // starting clear of everything: a start inside a box proves nothing.
+    Things.Sort([](const FBox& A, const FBox& B) { return A.GetVolume() > B.GetVolume(); });
+    const FBox* Target = nullptr;
+    FVector Stand = FVector::ZeroVector;
+    for (const FBox& Thing : Things)
+    {
+        const FVector At = Thing.GetCenter() - Lean;
+        const FVector Axis(At.X, At.Y, Thing.GetCenter().Z);
+        const bool bClear = !Things.ContainsByPredicate([&Axis, ProbeClear](const FBox& Other)
+        {
+            return Other.ComputeSquaredDistanceToPoint(Axis) < FMath::Square(ProbeClear);
+        });
+        if (bClear)
+        {
+            Target = &Thing;
+            Stand = At;
+            break;
+        }
+    }
+    if (!TestNotNull(TEXT("something on the hauler's surfaces the eye can lean into"), Target))
+    {
+        return false;
+    }
+
+    Character->SetActorLocation(Stand, false, nullptr, ETeleportType::TeleportPhysics);
+    const FVector Wants = Stand + Lean;
+    const FVector Size = Target->GetSize();
+    AddInfo(FString::Printf(TEXT("the eye leans into a %.0f x %.0f x %.0f cm thing centred at (%.0f, %.0f, %.0f)"),
+                            Size.X, Size.Y, Size.Z, Wants.X, Wants.Y, Wants.Z));
+    TestTrue(TEXT("unobstructed, the eye would be inside it: the premise"), Target->IsInsideOrOn(Wants));
+
+    Character->PlaceCamera(0.0f, FRotator::ZeroRotator);
+    const FVector Eye = Character->GetEyeLocation();
+    const float Gap = FMath::Sqrt(Target->ComputeSquaredDistanceToPoint(Eye));
+    AddInfo(FString::Printf(TEXT("the eye stops %.1f cm short of it"), Gap));
+    TestFalse(TEXT("the eye is inside nothing on the ship's surfaces"),
+              Things.ContainsByPredicate([&Eye](const FBox& Thing) { return Thing.IsInsideOrOn(Eye); }));
+    TestTrue(TEXT("and stops short of it by more than the near plane"), Gap > NearClip);
     return true;
 }
 

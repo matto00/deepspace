@@ -33,3 +33,15 @@ if [[ -n $fail ]]; then
     exit 1
 fi
 [[ ${pass:-0} -gt 0 ]] || { echo "no tests ran -- check $LOG"; exit 1; }
+
+# Green is not enough: each of these has been left in the log by a run whose
+# every test passed. A world torn down while still playing skips every
+# actor's and subsystem's EndPlay, and a console variable found by name on
+# every tick is a lookup the engine itself calls a performance problem.
+dirty=$(grep -E "missing call to EndPlay|Performance warning: Console object" "$LOG" \
+        | grep -v "LogAutomationController" || true)
+if [[ -n $dirty ]]; then
+    echo "LOG NOT CLEAN:"
+    echo "$dirty"
+    exit 1
+fi

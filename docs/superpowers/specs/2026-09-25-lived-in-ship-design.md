@@ -402,6 +402,17 @@ number or a table, not a rule, and numbers are data:
   chosen for the same reason. The tables (mixes, colour weights, templates)
   mirror as arrays of small `USTRUCT` rows declared in the config's header,
   never in the rules' header, so the pure struct carries no reflection.
+  *As built:* the tables are **overlays by name**, not whole mirrors. A
+  `Kinds`, `Templates` or `Colours` row replaces the code's entry of the same
+  name or adds a new one, and a `Kinds` row with no `Mix` keeps the code's
+  mix, so moving one λ is one line. An ini array key replaces the whole
+  array it names, so mirroring the tables whole would have made a one-mug
+  tune restate the catalogue. What the ini may say is held to
+  `DressRuleDomain` (`ShipDressing.h`): a Beta shape under 0.1, a λ over
+  7.5, a mix naming no template, a part that does not rest on z = 0 or an
+  unknown mesh refuses the whole read, and the rules in use stay, as
+  procgen's priors do. `ds.Dress.Reload` shares `GameIniReload` with
+  `ds.Universe.ReloadPriors`.
 - **Guarantees stay in code, not in the ini.** These are the Poisson `Max` of
   8, the eight redraws before an item is dropped, containment inside
   `[half, L − half]`, the excludes, and `Clear`. No ini edit may be able to
@@ -494,7 +505,8 @@ surface's own size, whatever that size is.
   one piece. Everything is spawned before `World->BeginPlay()`. Then:
   - there is exactly one `Dress.Clutter` actor;
   - its instance count equals the core's plan for the tagged markers only;
-  - every component is `NoCollision`;
+  - every component is query-only and blocks `ECC_Camera` alone (amended,
+    decision 5);
   - **every instance's world bounds, measured from its mesh's bounding box
     and its instance transform, lie within its marker's surface and under
     its `Clear`**. This is the pivot bug's test in a new costume: ADR 0006
@@ -749,6 +761,21 @@ where clutter meets the capsule.
 `ECC_Visibility` and `ECC_Camera`.** It fixes the traces but leaves a
 collision body that nothing can ever touch. `NoCollision` says the same thing
 more plainly.
+
+**Amended, 2026-09-26 (slice 3 review): surface clutter blocks
+`ECC_Camera` and nothing else.** The bullet above was wrong about the
+camera. The capsule cannot reach a surface, but the eye can: the crouch
+carries it about 30 cm past the capsule at about a metre up, level with the
+workbench, the counter and the galley table, and standing at the cargo rack
+it is inside a shelf-1 crate's band. With `NoCollision` the eye sweep in
+`ADeepSpaceCharacter::PlaceCamera` passed straight through, and the view
+could sit inside a toolbox. The sweep stopping at a mug is not a cost; it is
+the sweep doing for clutter what it already does for walls. So clutter is
+`QueryOnly`, ignores every channel, and blocks `ECC_Camera`. The laptop
+cursor and the `E` trace (`ECC_Visibility`) still pass through it, and the
+capsule (`ECC_Pawn`) still never meets it. `DeepSpace.Ship.Dressing.World`
+checks the responses, and `DeepSpace.Player.CameraStaysOutOfClutter` leans a
+crouched eye into the hauler's own clutter.
 
 ### 6. A new intent check: floor-band dressing may not create pockets
 

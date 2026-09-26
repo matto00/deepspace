@@ -103,7 +103,16 @@ private:
 
     TArray<FShipLamp> Lamps;
 
-    /** Advances with time; the flicker is a function of it, not of random
-     *  draws, so the same allocation always looks the same way. */
+    /** Advances with time, modulo FlickerPeriod; the flicker is a function
+     *  of it, not of random draws, so the same allocation always looks the
+     *  same way. */
     float Phase = 0.0f;
+
+    /** The flicker's two rates, radians per second. */
+    static constexpr float FlickerFast = 37.0f;
+    static constexpr float FlickerSlow = 13.7f;
+
+    /** 20 pi seconds: 370 turns of the fast rate and 137 of the slow, the
+     *  shortest time after which both are back where they started. */
+    static constexpr float FlickerPeriod = 20.0f * UE_PI;
 };

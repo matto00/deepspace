@@ -100,8 +100,13 @@ namespace SkyTestWorld
             Sky->SyncToShip();
         }
 
+        /** Play ends before the world goes, as it does in the game, so every
+         *  actor and subsystem is told and the world is not torn down still
+         *  playing. A world that never began play, or whose test ended it
+         *  already, ignores the call. */
         ~FSkyWorld()
         {
+            World->EndPlay(EEndPlayReason::RemovedFromWorld);
             GEngine->DestroyWorldContext(World);
             World->DestroyWorld(false);
         }

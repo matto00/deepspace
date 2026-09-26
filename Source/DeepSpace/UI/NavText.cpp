@@ -1,5 +1,7 @@
 #include "UI/NavText.h"
 
+#include "Universe/UniverseUnits.h"
+
 namespace
 {
     /** Whole degrees: a pilot steers by the degree, and a decimal would read
@@ -71,6 +73,36 @@ FString NavText::StarClass(EStarClass Class)
     case EStarClass::B: return TEXT("blue-white star");
     }
     return TEXT("star");
+}
+
+FString NavText::Place(const FString& Name, EStarClass Class)
+{
+    return Name + Separator + StarClass(Class);
+}
+
+FString NavText::Place(const FString& Name, EStarClass Class, bool bVisited)
+{
+    return bVisited ? Place(Name, Class) + Separator + Visited(true) : Place(Name, Class);
+}
+
+FString NavText::Visited(bool bVisited)
+{
+    return bVisited ? FString(TEXT("visited")) : FString();
+}
+
+FString NavText::Distance(double Cm)
+{
+    return FString::Printf(TEXT("%.1f ly"), Cm / UniverseUnits::CmPerLightYear);
+}
+
+FString NavText::Course(const FString& CourseName, const TOptional<FVector>& ShipLocalDir, double ConeRadians)
+{
+    return ShipLocalDir ? CourseName + Separator + Bearing(*ShipLocalDir, ConeRadians) : CourseName;
+}
+
+FString NavText::NoCourse()
+{
+    return TEXT("None");
 }
 
 FString NavText::JumpWord(EJumpState State)

@@ -25,6 +25,7 @@ import placement as PL
 MAP_PATH = "/Game/Maps/L_Hauler"
 TAG = "hauler_"
 TOLERANCE = 1.0  # cm
+MARKER_TOLERANCE = 0.5  # cm: the dressing reads its surfaces from these
 COLOUR_TOLERANCE = 2  # of 255, per channel
 LIGHTS_TAG = PL.LIGHTS_TAG
 
@@ -155,12 +156,16 @@ def main():
     failures += check_glass(ship, actors)
     failures += check_nav_screen(ship, every, actors)
     failures += check_hum(ship, every, actors)
+    failures += check_surfaces(ship, every, actors)
+    failures += check_keep_outs(ship, every, actors)
+    failures += check_wear_tags(ship, every, actors)
 
     lines = ["Checked %d boxes and %d lights (%d practical) against the layout, "
-             "the counter-frame, the sky, the glass, the chart and %d hum sources."
+             "the counter-frame, the sky, the glass, the chart, %d hum sources, "
+             "%d dressing surfaces, %d keep-outs and the wear tags."
              % (len(ship.boxes), len(ship.lights),
                 sum(1 for light in ship.lights if light.shadows),
-                len(ship.hum_sources)), ""]
+                len(ship.hum_sources), len(ship.surfaces), len(ship.keep_outs)), ""]
     if failures:
         lines.append("FAIL (%d):" % len(failures))
         lines += ["  - " + f for f in failures[:40]]
@@ -333,6 +338,115 @@ def check_hum(ship, every, actors):
     reactors = [a for a in built if a.get_editor_property("kind") == kinds["reactor"]]
     if len(reactors) != 1:
         failures.append("%d reactor voices, want exactly one" % len(reactors))
+    return failures
+
+
+def tags_of(actor):
+    return [str(t) for t in actor.get_editor_property("tags")]
+
+
+EDGES = {"-x": "NEG_X", "+x": "POS_X"}
+USES = {"centre": "CENTRE", "+y": "POS_Y", "-y": "NEG_Y"}
+
+
+def check_surfaces(ship, every, actors):
+    """Every dressing marker is where the layout's surface is, and says what
+    it says: location within 0.5 cm, yaw, room, kind, ordinal, size, edges,
+    clear and every exclude. The C++ reads only these, so this is the place
+    the layout and the dressing are held together; tagged Dress.Surface, or
+    the generator never finds it."""
+    failures = []
+    built = of_class(every, unreal.ShipDressingSurface)
+    if len(built) != len(ship.surfaces):
+        failures.append("%d dressing surfaces built, layout has %d" % (len(built), len(ship.surfaces)))
+    for m in ship.surfaces:
+        actor = actors.get(TAG + m.label)
+        if actor is None or not isinstance(actor, unreal.ShipDressingSurface):
+            failures.append("MISSING dressing surface " + m.label)
+            continue
+        p = actor.get_actor_location()
+        for a, axis in enumerate("xyz"):
+            if abs((p.x, p.y, p.z)[a] - m.location[a]) > MARKER_TOLERANCE:
+                failures.append("%s.%s is %.2f, layout says %.2f"
+                                % (m.label, axis, (p.x, p.y, p.z)[a], m.location[a]))
+        r = actor.get_actor_rotation()
+        if abs(((r.yaw - m.yaw) + 180) % 360 - 180) > 0.5 or max(abs(r.pitch), abs(r.roll)) > 0.5:
+            failures.append("%s is rotated (%.1f, %.1f, %.1f); the layout says yaw %s"
+                            % (m.label, r.pitch, r.yaw, r.roll, m.yaw))
+        if PL.SURFACE_TAG not in tags_of(actor):
+            failures.append("%s is not tagged %s" % (m.label, PL.SURFACE_TAG))
+        for name, want in (("room", m.room), ("kind", m.kind)):
+            got = str(actor.get_editor_property(name))
+            if got != want:
+                failures.append("%s %s is %s, layout says %s" % (m.label, name, got, want))
+        if actor.get_editor_property("ordinal") != m.ordinal:
+            failures.append("%s ordinal is %s, layout says %s"
+                            % (m.label, actor.get_editor_property("ordinal"), m.ordinal))
+        size = actor.get_editor_property("size")
+        if abs(size.x - m.size[0]) > 1e-3 or abs(size.y - m.size[1]) > 1e-3:
+            failures.append("%s size is (%.1f, %.1f), layout says %s" % (m.label, size.x, size.y, m.size))
+        if abs(actor.get_editor_property("clear") - m.clear) > 1e-3:
+            failures.append("%s clear is %.1f, layout says %s"
+                            % (m.label, actor.get_editor_property("clear"), m.clear))
+        if actor.get_editor_property("back") != getattr(unreal.DressEdge, EDGES[m.back]):
+            failures.append("%s back is %s, layout says %s" % (m.label, actor.get_editor_property("back"), m.back))
+        if actor.get_editor_property("use") != getattr(unreal.DressUse, USES[m.use]):
+            failures.append("%s use is %s, layout says %s" % (m.label, actor.get_editor_property("use"), m.use))
+        excludes = list(actor.get_editor_property("excludes"))
+        if len(excludes) != len(m.excludes):
+            failures.append("%s has %d excludes, layout says %d" % (m.label, len(excludes), len(m.excludes)))
+        else:
+            for got, (lo, hi) in zip(excludes, m.excludes):
+                g = (got.min.x, got.min.y, got.max.x, got.max.y)
+                if max(abs(a - b) for a, b in zip(g, (lo[0], lo[1], hi[0], hi[1]))) > 1e-3:
+                    failures.append("%s exclude is %s, layout says %s" % (m.label, g, (lo, hi)))
+    return failures
+
+
+def check_keep_outs(ship, every, actors):
+    """Every zone the dressing may never touch, as a tagged box exactly the
+    layout's: each door's and the console's keep-clear zone, the slide run,
+    the crawlway."""
+    failures = []
+    built = of_class(every, unreal.ShipDressingKeepOut)
+    if len(built) != len(ship.keep_outs):
+        failures.append("%d keep-outs built, layout has %d" % (len(built), len(ship.keep_outs)))
+    for k in ship.keep_outs:
+        actor = actors.get(TAG + k.label)
+        if actor is None or not isinstance(actor, unreal.ShipDressingKeepOut):
+            failures.append("MISSING keep-out " + k.label)
+            continue
+        if PL.KEEP_OUT_TAG not in tags_of(actor):
+            failures.append("%s is not tagged %s" % (k.label, PL.KEEP_OUT_TAG))
+        p = actor.get_actor_location()
+        size = actor.get_editor_property("size")
+        for a, axis in enumerate("xyz"):
+            lo = (p.x, p.y, p.z)[a] - (size.x, size.y, size.z)[a] / 2.0
+            hi = (p.x, p.y, p.z)[a] + (size.x, size.y, size.z)[a] / 2.0
+            if abs(lo - k.lo[a]) > MARKER_TOLERANCE or abs(hi - k.hi[a]) > MARKER_TOLERANCE:
+                failures.append("%s spans %.1f..%.1f in %s, layout says %s..%s"
+                                % (k.label, lo, hi, axis, k.lo[a], k.hi[a]))
+    return failures
+
+
+def check_wear_tags(ship, every, actors):
+    """Every furniture part carries Dress.Wear and the Piece.<prop>_<n> of
+    the placement it belongs to, so a whole desk wears together; nothing
+    else carries Dress.Wear, or a lamp panel or a screen could be swapped to
+    a furniture colour."""
+    failures = []
+    furniture = {TAG + b.label: b for b in ship.boxes if b.role == "furniture"}
+    for label, box in furniture.items():
+        actor = actors.get(label)
+        if actor is None:
+            continue                        # reported as MISSING already
+        tags = tags_of(actor)
+        want = PL.PIECE_TAG_PREFIX + PL.piece_of(box.label)
+        if PL.WEAR_TAG not in tags or want not in tags:
+            failures.append("%s is tagged %s, want %s and %s" % (box.label, tags, PL.WEAR_TAG, want))
+    for actor in every:
+        if PL.WEAR_TAG in tags_of(actor) and actor.get_actor_label() not in furniture:
+            failures.append("%s is tagged %s but is not furniture" % (actor.get_actor_label(), PL.WEAR_TAG))
     return failures
 
 

@@ -170,6 +170,168 @@ def resolve_props(plan, placements):
             role = lamp_role(place.room) if part.role == "lamp" else part.role
             out.append(Box("prop_%s_%d_%d" % (place.prop, n, k), centre, size,
                            role, part.mesh))
+        _check_anchor(place, n, room, out[len(out) - len(P.PROPS[place.prop]):])
+    return out
+
+
+def _check_anchor(place, n, room, parts):
+    """A prop anchored to the ceiling or a wall must touch it (props.ANCHOR):
+    a counter floating in the middle of the galley, or a ceiling panel lying
+    on the floor, is a PlanError rather than a ship that validates."""
+    anchor = P.ANCHOR.get(place.prop)
+    if anchor is None:
+        return
+    eps = 0.01
+    lo = [[b.centre[a] - b.size[a] / 2.0 for a in range(3)] for b in parts]
+    hi = [[b.centre[a] + b.size[a] / 2.0 for a in range(3)] for b in parts]
+    if anchor == "ceiling":
+        ok = any(h[2] >= room.height - eps for h in hi)
+    elif anchor == "wall":
+        ok = any(l[0] <= room.x + eps or h[0] >= room.x + room.w - eps
+                 or l[1] <= room.y + eps or h[1] >= room.y + room.d - eps
+                 for l, h in zip(lo, hi))
+    else:
+        raise PlanError("prop '%s' has unknown anchor '%s'" % (place.prop, anchor))
+    if not ok:
+        raise PlanError("%s #%d hangs from the %s but touches no %s of room '%s'"
+                        % (place.prop, n, anchor, anchor, place.room))
+
+
+# -- dressing surfaces --------------------------------------------------------
+
+# cm around anything standing on a surface that clutter may not cover: the
+# laptop's margin, and the chart's (plan conflict 16). Enough that a mug is
+# never pushed up against a lamp's base or a screen's edge as if placed there
+# to crowd it.
+DRESS_MARGIN = 15
+
+# The actor tags the dressing generator finds the layout's exports by, the
+# same strings as ShipDressing's in C++ (test_placement.py reads the C++).
+SURFACE_TAG = "Dress.Surface"
+KEEP_OUT_TAG = "Dress.KeepOut"
+WEAR_TAG = "Dress.Wear"
+PIECE_TAG_PREFIX = "Piece."
+
+# One surface, resolved: the contract AShipDressingSurface carries to C++.
+# location: the centre of its resting plane, world. yaw: its prop's facing.
+# size, back, use, clear: as props.Surface, in the surface's own frame.
+# excludes: surface-local ((x0, y0), (x1, y1)) rectangles nothing may cover.
+SurfaceMarker = namedtuple("SurfaceMarker", "label room kind ordinal location yaw size "
+                                            "back use clear excludes")
+
+# A world-space box no clutter may touch: a door's or the console's keep-clear
+# zone, the corridor's slide run, the crawlway.
+KeepOut = namedtuple("KeepOut", "label lo hi")
+
+
+def piece_of(label):
+    """The furniture piece a prop box belongs to: prop_<prop>_<n>_<k> is
+    part k of <prop>_<n>. Wear is drawn per piece, so a desk wears whole."""
+    if not label.startswith("prop_"):
+        raise ValueError("%s is not a prop part" % label)
+    return label[len("prop_"):].rsplit("_", 1)[0]
+
+
+def _ascii(*names):
+    """Room and kind are hashed into seeds as ASCII bytes (GenSeed::LabelText);
+    a name that depended on a text encoding would reshuffle the ship the day
+    the encoding did."""
+    for name in names:
+        try:
+            name.encode("ascii")
+        except UnicodeEncodeError:
+            raise PlanError("'%s' is not plain ASCII, and dressing seeds hash it as ASCII" % name)
+
+
+def _intersect(a, b):
+    (ax0, ay0), (ax1, ay1) = a
+    (bx0, by0), (bx1, by1) = b
+    lo = (max(ax0, bx0), max(ay0, by0))
+    hi = (min(ax1, bx1), min(ay1, by1))
+    if hi[0] - lo[0] <= 1e-6 or hi[1] - lo[1] <= 1e-6:
+        return None
+    return lo, hi
+
+
+def resolve_surfaces(plan, placements, accepts, world_excludes=()):
+    """Every dressing surface in the ship, as the markers build_hauler spawns.
+
+    `placements` must be hauler_layout.PLACEMENTS, never FURNITURE: the lamps
+    stand on surfaces and the counter is one. `accepts` is ROOM_DRESSING: a
+    surface is exported only if its room takes its kind, so a room that takes
+    nothing has nothing for the C++ to find. `world_excludes` are floor-plan
+    rectangles ((x0, y0), (x1, y1)) laid over every surface under them: the
+    laptop's and the chart's.
+
+    Each surface also excludes every placement resting on it -- its lowest
+    part's underside on the surface's plane -- by that placement's whole plan
+    footprint plus DRESS_MARGIN. The laptop's rule made general, so a lamp
+    moved in the layout takes its exclude with it. The whole footprint, not
+    the base: a lamp's arm reaches out over the desk, and a stack of books
+    under it would stand through the shade.
+    """
+    resolved, counts = [], {}
+    for place in placements:
+        n = counts.get(place.prop, 0)
+        counts[place.prop] = n + 1
+        resolved.append((place, n, resolve_props(plan, [place])))
+
+    out = []
+    for place, n, _ in resolved:
+        for surface in P.SURFACES.get(place.prop, ()):
+            kind = "%s.%s" % (place.prop, surface.name)
+            if kind not in accepts.get(place.room, ()):
+                continue
+            _ascii(place.room, kind)
+            room = plan.room(place.room)
+            ox, oy = _world(room, place.at)
+            oz = place.elevation + place.level * P.height(place.prop)
+            (cx, cy, cz), (sx, sy, _) = P.rotate(surface.at, surface.size + (0,), place.facing)
+            centre = (ox + cx, oy + cy, oz + cz)
+            world_rect = ((centre[0] - sx / 2.0, centre[1] - sy / 2.0),
+                          (centre[0] + sx / 2.0, centre[1] + sy / 2.0))
+            local_rect = ((-surface.size[0] / 2.0, -surface.size[1] / 2.0),
+                          (surface.size[0] / 2.0, surface.size[1] / 2.0))
+
+            # The prop's own parts on the surface, given prop-local.
+            excludes = []
+            for lo, hi in surface.exclude:
+                clipped = _intersect(((lo[0] - surface.at[0], lo[1] - surface.at[1]),
+                                      (hi[0] - surface.at[0], hi[1] - surface.at[1])), local_rect)
+                if clipped:
+                    excludes.append(clipped)
+
+            # Everything else standing on it, and the laptop and the chart.
+            laid = list(world_excludes)
+            for other, m, parts in resolved:
+                if (other.prop, m) == (place.prop, n):
+                    continue
+                low = min(parts, key=lambda b: b.centre[2] - b.size[2] / 2.0)
+                bottom = low.centre[2] - low.size[2] / 2.0
+                (x0, y0), (x1, y1) = world_rect
+                if (abs(bottom - centre[2]) < 0.01
+                        and x0 < low.centre[0] < x1 and y0 < low.centre[1] < y1):
+                    laid.append((
+                        (min(b.centre[0] - b.size[0] / 2.0 for b in parts) - DRESS_MARGIN,
+                         min(b.centre[1] - b.size[1] / 2.0 for b in parts) - DRESS_MARGIN),
+                        (max(b.centre[0] + b.size[0] / 2.0 for b in parts) + DRESS_MARGIN,
+                         max(b.centre[1] + b.size[1] / 2.0 for b in parts) + DRESS_MARGIN)))
+            back = (360 - place.facing) % 360
+            for rect in laid:
+                hit = _intersect(rect, world_rect)
+                if not hit:
+                    continue
+                lo, hi = hit
+                local = P.rotate_rect((lo[0] - centre[0], lo[1] - centre[1]),
+                                      (hi[0] - centre[0], hi[1] - centre[1]), back)
+                clipped = _intersect(local, local_rect)
+                if clipped:
+                    excludes.append(clipped)
+
+            out.append(SurfaceMarker(
+                "surface_%s_%d_%s" % (place.prop, n, surface.name), place.room, kind, n,
+                centre, place.facing, tuple(surface.size), surface.back, surface.use,
+                surface.clear, tuple(sorted(excludes))))
     return out
 
 

@@ -234,6 +234,17 @@ public:
      *  jump and the HUD's "dead ahead" ask the same number. */
     double GetJumpConeRadians() const;
 
+    /** Watts the engine asks for while the jump winds, ds.Nav.WindingWant as
+     *  tuned now; never negative. What the hum measures the engine's share
+     *  against (plan conflict 8), asked here rather than of the console by
+     *  name, so the one tunable has one reader and no per-frame lookup. */
+    static float GetWindingWant();
+
+    /** How far the chart reaches, light years: ds.Nav.RangeLy as tuned now,
+     *  never negative. GetChart's radius, for anything that must know when
+     *  the chart's answer can have changed. */
+    static float GetChartRangeLy();
+
     bool HasVisited(const FSystemId& Id) const;
 
 private:

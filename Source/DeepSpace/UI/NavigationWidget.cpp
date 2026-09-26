@@ -11,6 +11,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Components/Widget.h"
+#include "Misc/Crc.h"
 #include "Ship/ShipNavState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Styling/SlateTypes.h"
@@ -192,28 +193,92 @@ void UNavigationWidget::RefreshFromShip()
         return;
     }
 
-    const bool bTransit = Subsystem->IsInTransit();
+    const FAskedAt Now = FAskedAt::Now(*Subsystem);
+    if (!SystemsAskedAt || !Now.SameSystems(*SystemsAskedAt))
+    {
+        RefreshSystems(*Subsystem);
+        SystemsAskedAt = Now;
+    }
+    if (!CourseAskedAt || !Now.SameCourse(*CourseAskedAt))
+    {
+        RefreshCourse(*Subsystem);
+        CourseAskedAt = Now;
+    }
+
+    // The jump, as a word and never a number. Asked every frame: it winds.
+    JumpLine->SetText(FText::FromString(NavText::JumpWord(Subsystem->GetJumpState()) + TEXT(".")));
+
+    if (EngageButton && EngageLabel)
+    {
+        const bool bCanPress = !Now.bInTransit && Now.Plotted.IsSet();
+        EngageButton->SetIsEnabled(bCanPress);
+        EngageLabel->SetText(Subsystem->IsJumpEngaged()
+            ? NSLOCTEXT("DeepSpace", "ChartStandDown", "STAND DOWN")
+            : NSLOCTEXT("DeepSpace", "ChartEngage", "ENGAGE"));
+        EngageLabel->SetColorAndOpacity(FSlateColor(bCanPress ? Accent : Dim));
+    }
+}
+
+UNavigationWidget::FAskedAt UNavigationWidget::FAskedAt::Now(const UShipSubsystem& Ship)
+{
+    FAskedAt Asked;
+    Asked.JumpSerial = Ship.GetJumpSerial();
+    Asked.bInTransit = Ship.IsInTransit();
+    Asked.Plotted = Ship.GetPlottedSystem();
+    Asked.Position = Ship.GetFlightState().GetUniversePosition();
+    Asked.Orientation = Ship.GetFlightState().GetUniverseOrientation();
+    Asked.RangeLy = UShipSubsystem::GetChartRangeLy();
+    Asked.ConeRadians = Ship.GetJumpConeRadians();
+
+    // ds.Universe.ReloadPriors changes every system without telling anyone,
+    // and the chart must show the new universe on its next frame. Every
+    // prior is a double, so the struct is its bytes.
+    static_assert(sizeof(FGenPriors) % sizeof(double) == 0, "FGenPriors must be only doubles to be hashed as bytes");
+    if (const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(&Ship))
+    {
+        const FGenPriors Priors = Universe->GetPriors();
+        Asked.Priors = FCrc::MemCrc32(&Priors, sizeof(Priors));
+    }
+    return Asked;
+}
+
+bool UNavigationWidget::FAskedAt::SameSystems(const FAskedAt& Then) const
+{
+    // A thousandth of a light year, 63 AU: a hundredth of the tenth the rows
+    // are read to, so they are never visibly behind, and far more than a
+    // cruise covers in a session, so a ship cruising between planets asks
+    // nothing. Only the drive, running out toward the system's edge, moves
+    // the ship far enough to be asked again as it goes.
+    constexpr double MovedFarEnoughCm = 1.0e-3 * UniverseUnits::CmPerLightYear;
+    return JumpSerial == Then.JumpSerial && bInTransit == Then.bInTransit && Plotted == Then.Plotted
+        && RangeLy == Then.RangeLy && Priors == Then.Priors
+        && Position.DistanceTo(Then.Position) < MovedFarEnoughCm;
+}
+
+bool UNavigationWidget::FAskedAt::SameCourse(const FAskedAt& Then) const
+{
+    // The bearing turns with the ship; it is read to a whole degree, and any
+    // turn at all may cross one.
+    return SameSystems(Then) && Orientation == Then.Orientation && ConeRadians == Then.ConeRadians;
+}
+
+void UNavigationWidget::RefreshSystems(const UShipSubsystem& Subsystem)
+{
+    ++SystemsAsked;
+    const bool bTransit = Subsystem.IsInTransit();
 
     // Here: the system's name and colour, and whether you have been before.
-    const TOptional<FStarSystem> Here = SystemHere(*Subsystem);
-    FString Place = NavText::JumpWord(EJumpState::Transit);
-    if (Here)
-    {
-        Place = Here->Stub.Name + NavText::Separator + NavText::StarClass(Here->Star.Class);
-        if (Subsystem->HasVisited(Here->Stub.Id))
-        {
-            Place += NavText::Separator;
-            Place += TEXT("visited");
-        }
-    }
-    HereLine->SetText(FText::FromString(Place));
+    const TOptional<FStarSystem> Here = SystemHere(Subsystem);
+    HereLine->SetText(FText::FromString(Here
+        ? NavText::Place(Here->Stub.Name, Here->Star.Class, Subsystem.HasVisited(Here->Stub.Id))
+        : NavText::JumpWord(EJumpState::Transit)));
 
     // The rows: the chart as the ship gives it, nearest first, without the
     // system the ship is in. Between stars there is nothing to choose, so
     // the rows stay readable and cannot be pressed.
-    const FUniversePosition Position = Subsystem->GetFlightState().GetUniversePosition();
-    const TArray<FStarSystemStub> Chart = Subsystem->GetChart();
-    const TOptional<FSystemId> Plotted = Subsystem->GetPlottedSystem();
+    const FUniversePosition Position = Subsystem.GetFlightState().GetUniversePosition();
+    const TArray<FStarSystemStub> Chart = Subsystem.GetChart();
+    const TOptional<FSystemId> Plotted = Subsystem.GetPlottedSystem();
     for (int32 Index = 0; Index < RowCount; ++Index)
     {
         if (!RowButtons.IsValidIndex(Index) || !RowButtons[Index])
@@ -240,41 +305,26 @@ void UNavigationWidget::RefreshFromShip()
         RowNames[Index]->SetText(FText::FromString(
             (bPlotted ? FString(PlottedMark) + TEXT(" ") : FString(TEXT("   "))) + Stub.Name));
         RowNames[Index]->SetColorAndOpacity(FSlateColor(bPlotted ? Accent : Ink));
-        RowDistances[Index]->SetText(FText::FromString(FString::Printf(
-            TEXT("%.1f ly"), Position.DistanceTo(Stub.Position) / UniverseUnits::CmPerLightYear)));
+        RowDistances[Index]->SetText(FText::FromString(NavText::Distance(Position.DistanceTo(Stub.Position))));
         RowClasses[Index]->SetText(FText::FromString(NavText::StarClass(Stub.Class)));
-        RowVisited[Index]->SetText(Subsystem->HasVisited(Stub.Id)
-            ? NSLOCTEXT("DeepSpace", "ChartVisited", "visited") : FText::GetEmpty());
+        RowVisited[Index]->SetText(FText::FromString(NavText::Visited(Subsystem.HasVisited(Stub.Id))));
     }
+}
 
-    // The jump, as a word and never a number.
-    JumpLine->SetText(FText::FromString(NavText::JumpWord(Subsystem->GetJumpState()) + TEXT(".")));
+void UNavigationWidget::RefreshCourse(const UShipSubsystem& Subsystem)
+{
+    ++CourseAsked;
 
-    // The course, as the same bearing words the helm reads, so the chair and
+    // The course, in the same bearing words the helm reads, so the chair and
     // the helm can never describe one heading two ways.
-    FString Course = TEXT("None.");
-    if (const TOptional<FStarSystem> Star = PlottedSystem(*Subsystem))
+    FString Course = NavText::NoCourse();
+    if (const TOptional<FStarSystem> Star = PlottedSystem(Subsystem))
     {
-        Course = Star->Stub.Name;
-        const TOptional<FVector> Bearing = Subsystem->GetCourseDirectionShipLocal();
-        if (!bTransit && Bearing)
-        {
-            Course += TEXT(" — ");
-            Course += NavText::Bearing(*Bearing, Subsystem->GetJumpConeRadians());
-        }
-        Course += TEXT(".");
+        const TOptional<FVector> Bearing = Subsystem.IsInTransit()
+            ? TOptional<FVector>() : Subsystem.GetCourseDirectionShipLocal();
+        Course = NavText::Course(Star->Stub.Name, Bearing, Subsystem.GetJumpConeRadians());
     }
-    CourseLine->SetText(FText::FromString(Course));
-
-    if (EngageButton && EngageLabel)
-    {
-        const bool bCanPress = !bTransit && Plotted.IsSet();
-        EngageButton->SetIsEnabled(bCanPress);
-        EngageLabel->SetText(Subsystem->IsJumpEngaged()
-            ? NSLOCTEXT("DeepSpace", "ChartStandDown", "STAND DOWN")
-            : NSLOCTEXT("DeepSpace", "ChartEngage", "ENGAGE"));
-        EngageLabel->SetColorAndOpacity(FSlateColor(bCanPress ? Accent : Dim));
-    }
+    CourseLine->SetText(FText::FromString(Course + TEXT(".")));
 }
 
 void UNavigationWidget::SelectRow(int32 Index)
