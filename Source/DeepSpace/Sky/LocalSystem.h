@@ -6,6 +6,21 @@
 
 class UWorld;
 
+/** The nearest surface and which one it is: the drive's room, and what the
+ *  HUD says it is above. */
+struct DEEPSPACE_API FSkyNearestSurface
+{
+    /** cm, never negative. */
+    double Distance = 0.0;
+
+    /** Index into FSkySystem::Bodies, or INDEX_NONE for the edge and for an
+     *  empty system. */
+    int32 Body = INDEX_NONE;
+
+    /** The system's edge is nearer than any body. */
+    bool bEdge = false;
+};
+
 /**
  * The one seam between the sky and the subsystems that know where the ship
  * is. Free functions that ask and store nothing (sky decision 7): nothing
@@ -60,4 +75,12 @@ namespace LocalSystem
      * room and it runs at cruise speed.
      */
     DEEPSPACE_API double NearestSurfaceDistance(const FSkySystem& System, const FUniversePosition& Where);
+
+    /**
+     * NearestSurfaceDistance, and which surface that is. The one measure
+     * behind both: NearestSurfaceDistance is this one's Distance, so the
+     * altitude the HUD reads is the room the drive closes, never a second
+     * answer to the same question. A body wins a tie with the edge.
+     */
+    DEEPSPACE_API FSkyNearestSurface NearestSurface(const FSkySystem& System, const FUniversePosition& Where);
 }

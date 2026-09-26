@@ -11,6 +11,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Player/DeepSpaceCharacter.h"
 #include "Ship/ShipSubsystem.h"
+#include "Sky/LocalSystem.h"
 #include "UI/NavText.h"
 #include "UI/ShipScreenWidget.h"
 #include "Universe/UniverseSubsystem.h"
@@ -40,6 +41,19 @@ namespace
      *  the camera; 100 km keeps it far inside float range after the view
      *  transform. */
     constexpr double CaretDistance = 1.0e7;
+
+    /**
+     * How near the drive floor the altitude must be, as a fraction of it, to
+     * be said to be there. The drive closes a tenth of its room every 1.5 s,
+     * so it is within 5% -- 5 km of a 100 km floor, and "105 KM" on the
+     * readout -- a minute and a half after passing 1,000 km, and never
+     * reaches it exactly: without a band the words would arrive at the
+     * heat death of the universe.
+     */
+    TAutoConsoleVariable<float> CVarFloorBand(
+        TEXT("ds.HUD.FloorBand"), 0.05f,
+        TEXT("How close to the drive floor, as a fraction of it, the altitude line says DRIVE FLOOR."),
+        ECVF_Default);
 
     /** A dash reads as "no reading", where a zero would read as a measurement. */
     const FText Blank = NSLOCTEXT("DeepSpace", "HUDBlank", "-----");
@@ -166,10 +180,10 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     PowerLine = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
     DriveLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
     MotionLine = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
-    HoldLine  = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
+    AltitudeReadout = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
 
     const TArray<UWidget*> Corners = {ShipLine, PlaceLine, PowerLine,
-                                      DriveLine, MotionLine, HoldLine};
+                                      DriveLine, MotionLine, AltitudeReadout};
     for (UWidget* Widget : Corners)
     {
         Canvas->AddChild(Widget);
@@ -180,7 +194,8 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     PlaceCorner(PowerLine,  FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin));
     PlaceCorner(DriveLine,  FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin + 20.0f));
     PlaceCorner(MotionLine, FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin));
-    PlaceCorner(HoldLine,   FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin - 20.0f));
+    // Over the speed: how fast and how far from anything read together.
+    PlaceCorner(AltitudeReadout, FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin - 20.0f));
 
     return Canvas;
 }
@@ -282,6 +297,11 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
         MotionLine->SetText(FText::FromString(Motion));
     }
 
+    if (AltitudeReadout)
+    {
+        AltitudeReadout->SetText(AltitudeLineText(*ShipState));
+    }
+
     // Where the ship is: the system asked of its position, never remembered.
     const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(this);
     if (PlaceLine)
@@ -358,4 +378,88 @@ FText UShipHUDWidget::DriveLineText(const UShipSubsystem& ShipState, const UUniv
         ? FText::FromString(NavText::Jump(ShipState.GetJumpState(), Star->Stub.Name, *Bearing,
                                           ShipState.GetJumpConeRadians()))
         : Blank;
+}
+
+namespace
+{
+    /** 1234567 as "1,234,567": digits a pilot can read at a glance. */
+    FString Grouped(int64 Value)
+    {
+        FString Digits = FString::Printf(TEXT("%lld"), static_cast<long long>(FMath::Abs(Value)));
+        for (int32 At = Digits.Len() - 3; At > 0; At -= 3)
+        {
+            Digits.InsertAt(At, TEXT(','));
+        }
+        return Value < 0 ? TEXT("-") + Digits : Digits;
+    }
+}
+
+FString UShipHUDWidget::AltitudeWords(double Cm)
+{
+    // Every unit is chosen on the rounded value it would print, so a reading
+    // never shows its own unit's ceiling -- "1000 M" -- before handing over.
+    const double Metres = FMath::Max(Cm, 0.0) * 0.01;
+    const int64 WholeMetres = FMath::RoundToInt64(Metres);
+    if (WholeMetres < 1000)
+    {
+        return FString::Printf(TEXT("%lld M"), static_cast<long long>(WholeMetres));
+    }
+    const double Km = Metres * 0.001;
+    const int64 TenthsKm = FMath::RoundToInt64(Km * 10.0);
+    if (TenthsKm < 1000)
+    {
+        return FString::Printf(TEXT("%lld.%lld KM"), static_cast<long long>(TenthsKm / 10), static_cast<long long>(TenthsKm % 10));
+    }
+    const int64 WholeKm = FMath::RoundToInt64(Km);
+    if (WholeKm < 10000)
+    {
+        return Grouped(WholeKm) + TEXT(" KM");
+    }
+    const double AU = Metres * 100.0 / UniverseUnits::CmPerAU;
+    if (FMath::RoundToInt64(AU * 1000.0) < 10)
+    {
+        return Grouped(FMath::RoundToInt64(Km * 0.001)) + TEXT(" THOUSAND KM");
+    }
+    const int64 ThousandthsAU = FMath::RoundToInt64(AU * 1000.0);
+    if (ThousandthsAU < 1000)
+    {
+        return FString::Printf(TEXT("0.%03lld AU"), static_cast<long long>(ThousandthsAU));
+    }
+    const int64 HundredthsAU = FMath::RoundToInt64(AU * 100.0);
+    if (HundredthsAU < 10000)
+    {
+        return FString::Printf(TEXT("%lld.%02lld AU"), static_cast<long long>(HundredthsAU / 100), static_cast<long long>(HundredthsAU % 100));
+    }
+    return Grouped(FMath::RoundToInt64(AU)) + TEXT(" AU");
+}
+
+FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, double FloorCm, double FloorBand)
+{
+    FString Line = AltitudeWords(AltitudeCm) + (bEdge ? FString(TEXT(" TO THE EDGE")) : TEXT(" ABOVE ") + Surface);
+    // Either side of the floor: the drive settles onto it from above, and
+    // a slow cruise just under it is still, to the eye, the floor.
+    if (FloorCm > 0.0 && FMath::Abs(AltitudeCm - FloorCm) <= FMath::Max(FloorBand, 0.0) * FloorCm)
+    {
+        Line += NavText::Separator;
+        Line += TEXT("DRIVE FLOOR");
+    }
+    return Line;
+}
+
+FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState)
+{
+    if (ShipState.IsInTransit())
+    {
+        return Blank;
+    }
+    const FSkySystem Here = LocalSystem::Current(ShipState.GetWorld());
+    const FShipFlightState& Flight = ShipState.GetFlightState();
+    const FSkyNearestSurface Nearest = LocalSystem::NearestSurface(Here, Flight.GetUniversePosition());
+    if (!Nearest.bEdge && !Here.Bodies.IsValidIndex(Nearest.Body))
+    {
+        return Blank;
+    }
+    const FString Surface = Nearest.bEdge ? FString() : Here.Bodies[Nearest.Body].Id.ToString();
+    return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, Flight.GetLimits().DriveFloor,
+                                          CVarFloorBand.GetValueOnGameThread()));
 }

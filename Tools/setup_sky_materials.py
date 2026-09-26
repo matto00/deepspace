@@ -192,11 +192,144 @@ class Graph:
 
 # -- the materials -------------------------------------------------------------
 
+def noise_band(g, position, offset, frequency, levels, filter_width, stretch):
+    """One band of the face: GradientALU noise of `levels` octaves on
+    position * frequency + offset, -1..1, mean zero.
+
+    The noise gets its own pixel footprint through FilterWidth, which the
+    engine's noise loop uses exactly as a fade: every octave is multiplied by
+    saturate(1 - footprint * its frequency), so an octave is gone once its
+    wavelength is under filter_pixels and all there by a few times that.
+    That per-pixel fade is what makes the finer bands arrive as the world
+    grows on screen -- and arrive near the ground before the horizon, where
+    one pixel covers far more of it -- without anything counting pixels on
+    the CPU. A faded octave contributes 0, the band's middle, so a world
+    too small to hold its detail is exactly its coarse face.
+
+    The frequency is applied here rather than as the node's Scale so the
+    seed offset can be added after it: the offset is then a few hundred
+    units against positions up to fifty thousand, and costs the finest band
+    nothing in float precision. `stretch` is the most the position is
+    stretched along any axis, so the footprint is taken at the highest
+    frequency the band really has.
+    """
+    scaled = g.add(g.mul(position, g.constant(frequency)), offset)
+    width = g.mul(g.mul(filter_width, g.constant(frequency)), stretch)
+    noise = g.node(unreal.MaterialExpressionNoise,
+                   scale=1.0, output_min=-1.0, output_max=1.0, levels=int(levels),
+                   level_scale=float(CONSTANTS["level_scale"]), turbulence=False,
+                   noise_function=unreal.NoiseFunction.NOISEFUNCTION_GRADIENT_ALU)
+    # Position is the first input, connected by index: its pin is named for
+    # a world-space origin it does not have here.
+    g.link(scaled, noise, "")
+    link_any(g, width, noise, ("FilterWidth", "Filter Width"))
+    return noise
+
+
+def link_any(g, source, target, names):
+    """Connect to whichever spelling of a pin this engine uses."""
+    for pin in names:
+        if MEL.connect_material_expressions(source, "", target, pin):
+            return
+    raise RuntimeError("could not connect %s -> %s.%s" % (source.get_name(), target.get_name(), "/".join(names)))
+
+
+def surface_face(g, mottle, detail, banding, seed):
+    """The world's face: 1 + swing, the factor the shaded disc is multiplied
+    by. Everything is a function of D, the unit direction to the pixel in
+    object space -- normalize(LocalPosition) -- so the face is fixed to the
+    body however the proxy is moved and rescaled each frame, and every
+    frequency is in cycles per body radius, whatever mesh draws it.
+
+        footprint = max(|ddx D|, |ddy D|) * filter_pixels
+        offset    = SurfaceSeed.xyz            (where on the noise this world is)
+        stretch   = lerp(1, belt_stretch, Banding)
+        P         = D * (1, 1, stretch)
+
+        coarse    = noise(P * continent_frequency + offset)
+        rocky     = clamp(coarse * continent_contrast, -1, 1)
+        belts     = sin(pi * pairs * (D.z + belt_warp * coarse)) * belt fade
+        face      = lerp(rocky, belts, Banding) * Mottle
+                  + sum_i detail_weight_i * noise(P * detail_frequency_i + offset_i) * Detail
+        factor    = 1 + clamp(face, -max_swing, max_swing)
+
+    Rock gets basins and highlands, steepened so they read as places with
+    edges rather than weather; a giant gets belts parallel to its orbit (the
+    universe's z is the system's pole) wandered by the same coarse noise,
+    and the same detail bands stretched sixfold across the belts, so they
+    streak along them as cloud does. Every term is centred on zero, so the
+    disc keeps its flux on average through the resolve, and the clamp is
+    the half-float guard: the face never more than doubles a pixel.
+    """
+    position = g.node(unreal.MaterialExpressionLocalPosition)
+    direction = g.node(unreal.MaterialExpressionNormalize)
+    g.link(position, direction, "", output_name="XYZ")
+
+    ddx = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDX, direction))
+    ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
+    footprint = g.mul(g.binary(unreal.MaterialExpressionMax, ddx, ddy), g.constant(CONSTANTS["filter_pixels"]))
+
+    stretch = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["belt_stretch"]))
+    g.link(banding, stretch, "Alpha")
+    axes = g.binary(unreal.MaterialExpressionAppendVector,
+                    g.node(unreal.MaterialExpressionConstant2Vector, r=1.0, g=1.0), stretch)
+    offset = g.node(unreal.MaterialExpressionComponentMask, r=True, g=True, b=True, a=False)
+    g.link(seed, offset)
+    # The seed's w, from the parameter's own alpha pin: its default output
+    # is only the colour's three channels.
+    shape = g.node(unreal.MaterialExpressionMultiply, const_b=float(CONSTANTS["belt_pairs_range"]))
+    g.link(seed, shape, "A", output_name="A")
+    stretched = g.mul(direction, axes)
+
+    def band_offset(index):
+        # Each band from its own corner of the noise, so no band's features
+        # sit on the one below's and the octaves read as separate scales.
+        return g.add(offset, g.colour((37.0 * index, 59.0 * index, 83.0 * index)))
+
+    coarse = noise_band(g, stretched, band_offset(0), CONSTANTS["continent_frequency"], CONSTANTS["continent_levels"],
+                        footprint, stretch)
+
+    rocky = g.node(unreal.MaterialExpressionClamp, min_default=-1.0, max_default=1.0)
+    g.link(g.mul(coarse, g.constant(CONSTANTS["continent_contrast"])), rocky, "")
+
+    # Belts: pairs light and dark from pole to pole, how many chosen by the
+    # seed's w. They fade on the same footprint rule as the noise, so a
+    # giant a few pixels across is not a moire of stripes.
+    pairs = g.add(shape, g.constant(CONSTANTS["belt_pairs_min"]))
+    latitude = g.node(unreal.MaterialExpressionComponentMask, r=False, g=False, b=True, a=False)
+    g.link(direction, latitude)
+    wandered = g.add(latitude, g.mul(coarse, g.constant(CONSTANTS["belt_warp"])))
+    # Sine with period 2 is sin(pi x).
+    belts = g.node(unreal.MaterialExpressionSine, period=2.0)
+    g.link(g.mul(wandered, pairs), belts)
+    belt_fade = g.unary(unreal.MaterialExpressionSaturate,
+                        g.unary(unreal.MaterialExpressionOneMinus, g.mul(footprint, pairs)))
+    banded = g.mul(belts, belt_fade)
+
+    kind = g.node(unreal.MaterialExpressionLinearInterpolate)
+    g.link(rocky, kind, "A")
+    g.link(banded, kind, "B")
+    g.link(banding, kind, "Alpha")
+    face = g.mul(kind, mottle)
+
+    fine = None
+    for index, (frequency, weight) in enumerate(zip(CONSTANTS["detail_frequencies"], CONSTANTS["detail_weights"]), 1):
+        band = noise_band(g, stretched, band_offset(index), frequency, CONSTANTS["detail_levels"], footprint, stretch)
+        term = g.mul(band, g.constant(weight))
+        fine = term if fine is None else g.add(fine, term)
+    face = g.add(face, g.mul(fine, detail))
+
+    swing = float(CONSTANTS["surface_max_swing"])
+    bounded = g.node(unreal.MaterialExpressionClamp, min_default=-swing, max_default=swing)
+    g.link(face, bounded, "")
+    return g.add(bounded, g.constant(1.0))
+
+
 def sky_body():
     """Planets and moons.
 
         shaded   = gain * saturate(N.L) * smoothstep(-w, w, N.L)
-        disc     = shaded * (1 + Mottle * noise(object position))
+        disc     = shaded * face                      (surface_face)
         emissive = Colour * Brightness * lerp(disc, 1, PointBlend)
                  + Rim * Brightness * fresnel * saturate(N.L) * (1 - PointBlend)
 
@@ -209,6 +342,9 @@ def sky_body():
     keeps total flux. The smoothstep only rounds the terminator's last few
     percent. The night side is black: an unlit world is a hole in the stars,
     which is itself a way of seeing it.
+
+    The face multiplies the lit disc only: the terminator, the limb and the
+    rim are the lighting's, and are what they were.
     """
     asset = "M_SkyBody"
     material = fresh_material(asset)
@@ -217,9 +353,12 @@ def sky_body():
     colour = g.vector("colour", (1.0, 1.0, 1.0, 1.0))
     light = g.vector("light_direction", (0.0, 0.0, 1.0, 0.0))
     rim = g.vector("rim", (0.0, 0.0, 0.0, 1.0))
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.5))
     brightness = g.scalar("brightness", 1.0)
     point_blend = g.scalar("point_blend", 1.0)
-    mottle = g.scalar("mottle", 0.15)
+    mottle = g.scalar("mottle", 0.35)
+    detail = g.scalar("detail", 0.3)
+    banding = g.scalar("banding", 0.0)
 
     normal = g.node(unreal.MaterialExpressionVertexNormalWS)
     n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
@@ -230,18 +369,7 @@ def sky_body():
     g.link(n_dot_l, soft, "Value")
 
     shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
-
-    # Object space, so the mottle stays on the world however the proxy is
-    # scaled each frame; centred on zero so it moves no flux on average.
-    position = g.node(unreal.MaterialExpressionLocalPosition)
-    noise = g.node(unreal.MaterialExpressionNoise,
-                   scale=float(CONSTANTS["mottle_scale"]), output_min=-1.0, output_max=1.0,
-                   levels=4, turbulence=False)
-    # Position is the first input; its pin is named for a world-space origin
-    # it does not have here, so it is connected by index, not by name.
-    g.link(position, noise, "", output_name="XYZ")
-    mottled = g.add(g.mul(noise, mottle), g.constant(1.0))
-    disc = g.mul(shaded, mottled)
+    disc = g.mul(shaded, surface_face(g, mottle, detail, banding, seed))
 
     blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_b=1.0)
     g.link(disc, blend, "A")

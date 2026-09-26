@@ -68,6 +68,29 @@ bool FLocalSystemTest::RunTest(const FString& Parameters)
             LocalSystem::NearestSurfaceDistance(Edgeless, NearEdge) > Fixture.EdgeRadius * 0.5);
     }
 
+    // Which surface it is: what the HUD's altitude is above. The distance is
+    // the drive's own, so the altitude read is the room being closed.
+    {
+        const FUniversePosition NearMoon = Moon.Position + FVector(0.0, 1.0e9 + Moon.Radius, 0.0);
+        const FVector Out = FVector(1.0, 1.0, 0.0).GetSafeNormal();
+        const FUniversePosition NearEdge = Star.Position + Out * (Fixture.EdgeRadius - 1.0e12);
+        for (const FUniversePosition& Where : { SkyTestFixtures::Opening(), NearMoon, NearEdge, Home.Position })
+        {
+            TestEqual(TEXT("the surface's distance is exactly the drive's room"),
+                LocalSystem::NearestSurface(Fixture, Where).Distance, LocalSystem::NearestSurfaceDistance(Fixture, Where));
+        }
+        const FSkyNearestSurface Opening = LocalSystem::NearestSurface(Fixture, SkyTestFixtures::Opening());
+        TestEqual(TEXT("from the opening it is the home planet"), Opening.Body, SkyTestFixtures::HomeIndex);
+        TestFalse(TEXT("not the edge"), Opening.bEdge);
+        TestEqual(TEXT("near the moon it is the moon, not the planet it circles"),
+            LocalSystem::NearestSurface(Fixture, NearMoon).Body, SkyTestFixtures::MoonIndex);
+        const FSkyNearestSurface Edge = LocalSystem::NearestSurface(Fixture, NearEdge);
+        TestTrue(TEXT("far out it is the edge"), Edge.bEdge);
+        TestEqual(TEXT("which is no body"), Edge.Body, INDEX_NONE);
+        const FSkyNearestSurface Nothing = LocalSystem::NearestSurface(FSkySystem(), SkyTestFixtures::Opening());
+        TestTrue(TEXT("an empty system has no surface at all"), Nothing.Body == INDEX_NONE && !Nothing.bEdge);
+    }
+
     // The adapter from procgen's data: a hand-written system, not a
     // generated one, so this pins FromSystem and nothing of the generator.
     {
@@ -119,6 +142,23 @@ bool FLocalSystemTest::RunTest(const FString& Parameters)
             }
             TestTrue(TEXT("bare rock is darker than an ocean world"), Sky.Bodies[1].Albedo < Sky.Bodies[2].Albedo);
             TestTrue(TEXT("an ocean world has a sky at its limb"), Sky.Bodies[2].Rim.B > 0.0f);
+
+            // Each world's face: ground for rock and ocean, and seeded from
+            // the system and the orbit, so two worlds never wear one face and
+            // the same world always wears its own.
+            TestTrue(TEXT("rock wears ground"), Sky.Bodies[1].Surface == ESkySurface::Rocky);
+            TestTrue(TEXT("so does an ocean world"), Sky.Bodies[2].Surface == ESkySurface::Rocky);
+            TestNotEqual(TEXT("two worlds of one system have two faces"), Sky.Bodies[1].SurfaceSeed, Sky.Bodies[2].SurfaceSeed);
+            TestEqual(TEXT("and the same world the same face every time"),
+                FSkySystem::FromSystem(System, Stubs).Bodies[2].SurfaceSeed, Sky.Bodies[2].SurfaceSeed);
+            FStarSystem Elsewhere = System;
+            Elsewhere.Stub.Seed = System.Stub.Seed + 1;
+            TestNotEqual(TEXT("the same orbit in another system is another face"),
+                FSkySystem::FromSystem(Elsewhere, Stubs).Bodies[1].SurfaceSeed, Sky.Bodies[1].SurfaceSeed);
+
+            FStarSystem Giant = System;
+            Giant.Planets[1].Kind = EPlanetKind::GasGiant;
+            TestTrue(TEXT("a giant wears belts"), FSkySystem::FromSystem(Giant, Stubs).Bodies[2].Surface == ESkySurface::Banded);
         }
         if (TestEqual(TEXT("one neighbour: the system itself is left out"), Sky.Neighbours.Num(), 1))
         {

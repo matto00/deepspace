@@ -46,6 +46,35 @@ public:
     static FText DriveLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
 
     /**
+     * A distance in the unit a person would say it in: metres under a
+     * kilometre, kilometres to a tenth under a hundred and whole ones under
+     * ten thousand, then thousands of kilometres, then astronomical units
+     * from a hundredth of one. Each unit takes over exactly where the last
+     * would round up to its own threshold, so "1000 M" and "100.0 KM" are
+     * never shown. Pure.
+     */
+    static FString AltitudeWords(double Cm);
+
+    /**
+     * The altitude line: how far the nearest surface is, and whose it is --
+     * "212 KM ABOVE Kessa IV", or "3,400 AU TO THE EDGE" when the system's
+     * edge is nearer than any world. Within FloorBand of FloorCm either way
+     * it adds "DRIVE FLOOR": the drive settles there and closes no further,
+     * so the number has stopped falling because this is as close as the
+     * drive goes, not because something is wrong. Pure.
+     */
+    static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, double FloorCm, double FloorBand);
+
+    /**
+     * The altitude corner's line, asked of its owners: the nearest surface
+     * from LocalSystem::NearestSurface -- the measure the drive's room is --
+     * against the drive floor the ship is flying with, or a dash between
+     * stars and where there is nothing near. Stores nothing, so a headless
+     * test reads exactly what the corner draws.
+     */
+    static FText AltitudeLineText(const UShipSubsystem& Ship);
+
+    /**
      * The nose caret (nav decision 3): a ring on the HUD where the ship's nose
      * meets the sky, which sits on the teal course marker exactly when the
      * ship is aligned, however the pilot's head is turned. Built with the
@@ -102,7 +131,7 @@ private:
     UPROPERTY() TObjectPtr<UTextBlock> PowerLine;
     UPROPERTY() TObjectPtr<UTextBlock> DriveLine;
     UPROPERTY() TObjectPtr<UTextBlock> MotionLine;
-    UPROPERTY() TObjectPtr<UTextBlock> HoldLine;
+    UPROPERTY() TObjectPtr<UTextBlock> AltitudeReadout;
 
     ETarget Target = ETarget::Nothing;
 

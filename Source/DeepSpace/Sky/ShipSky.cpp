@@ -110,9 +110,25 @@ namespace
         TEXT("ds.Sky.StarfieldFaint"), 0.01f,
         TEXT("Emission of a flux-1 point at infinity, before ds.Sky.Radiance."));
 
+    /**
+     * The coarse face: continents and basins on rock, belts on a giant. It
+     * is what a world is recognised by from across the system, so it is
+     * strong enough to read at a few dozen pixels; the graph bounds it with
+     * the detail at SkyMaterial::SurfaceMaxSwing however far this is pushed.
+     */
     TAutoConsoleVariable<float> CVarMottle(
-        TEXT("ds.Sky.Mottle"), 0.15f,
-        TEXT("Noise amplitude on a resolved disc, so it reads as a world rather than a ball."));
+        TEXT("ds.Sky.Mottle"), 0.35f,
+        TEXT("Amplitude of a resolved world's coarse face -- continents and basins, or a giant's belts."));
+
+    /**
+     * The fine bands, each of which fades in only once the screen can hold
+     * it: this is what keeps a closing world showing new ground rather
+     * than a bigger blur, and so what says how near it is. Weaker than the
+     * coarse face, so the continents still read under it.
+     */
+    TAutoConsoleVariable<float> CVarSurfaceDetail(
+        TEXT("ds.Sky.SurfaceDetail"), 0.3f,
+        TEXT("Amplitude of the finer bands of a world's face, which fade in as the world grows on screen."));
 
     TAutoConsoleVariable<float> CVarVeil(
         TEXT("ds.Sky.Veil"), 1.0f,
@@ -309,6 +325,10 @@ void AShipSky::RebuildFor(const FSkySystem& System)
             if (Body.Kind != ESkyBodyKind::Star)
             {
                 Instance->SetVectorParameterValue(SkyMaterial::Rim, Body.Rim);
+                // A world's face is its own for as long as the proxy lives:
+                // set once, like its colour, and never per frame.
+                Instance->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Body.SurfaceSeed));
+                Instance->SetScalarParameterValue(SkyMaterial::Banding, ShipSky::Banding(Body.Surface));
             }
         }
 
@@ -355,6 +375,7 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
 
     const float Radiance = CVarRadiance.GetValueOnGameThread();
     const float Mottle = CVarMottle.GetValueOnGameThread();
+    const float Detail = CVarSurfaceDetail.GetValueOnGameThread();
 
     for (int32 Index = 0; Index < Proxies.Num(); ++Index)
     {
@@ -376,6 +397,7 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
         {
             Instance->SetScalarParameterValue(SkyMaterial::PointBlend, static_cast<float>(View.PointBlend));
             Instance->SetScalarParameterValue(SkyMaterial::Mottle, Mottle);
+            Instance->SetScalarParameterValue(SkyMaterial::Detail, Detail);
             // The material shades with world-space normals, and the proxy's
             // world is the counter-frame's rotation of universe axes. Asked
             // of the flight state rather than of the actor, so the phase is
@@ -643,6 +665,18 @@ double ShipSky::ViewPixelAngle(const UWorld* World)
 double ShipSky::ManualExposureBias(double SceneEV100)
 {
     return AutoExposureDefaultBias - SceneEV100;
+}
+
+FLinearColor ShipSky::SurfaceSeed(uint64 Seed)
+{
+    const auto Bits = [Seed](int32 Shift) { return static_cast<float>((Seed >> Shift) & 0xFFFFull) / 65536.0f; };
+    const float Span = static_cast<float>(SkyMaterial::SurfaceOffsetSpan);
+    return FLinearColor(Bits(0) * Span, Bits(16) * Span, Bits(32) * Span, Bits(48));
+}
+
+float ShipSky::Banding(ESkySurface Surface)
+{
+    return Surface == ESkySurface::Banded ? 1.0f : 0.0f;
 }
 
 int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)

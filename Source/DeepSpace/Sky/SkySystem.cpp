@@ -1,5 +1,6 @@
 #include "Sky/SkySystem.h"
 #include "Sky/SkyColour.h"
+#include "Universe/GenSeed.h"
 #include "Universe/UniverseUnits.h"
 
 namespace
@@ -12,7 +13,12 @@ namespace
         double Albedo;
         FLinearColor Colour;
         FLinearColor Rim;
+        ESkySurface Surface = ESkySurface::Rocky;
     };
+
+    /** The face's purpose label: a child of the system's seed that no
+     *  generator stream reads, so choosing a look changes no world. */
+    constexpr uint64 SurfacePurpose = GenSeed::Label("sky.surface");
 
     FWorldLook LookOf(EPlanetKind Kind)
     {
@@ -32,7 +38,7 @@ namespace
             return { 0.60, FLinearColor(0.86f, 0.89f, 0.93f), FLinearColor::Black };
         // Banded cloud tops, Jupiter's half, with a faint haze at the limb.
         case EPlanetKind::GasGiant:
-            return { 0.50, FLinearColor(0.80f, 0.70f, 0.56f), FLinearColor(0.20f, 0.18f, 0.14f) };
+            return { 0.50, FLinearColor(0.80f, 0.70f, 0.56f), FLinearColor(0.20f, 0.18f, 0.14f), ESkySurface::Banded };
         }
         return { 0.30, FLinearColor::White, FLinearColor::Black };
     }
@@ -66,6 +72,10 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         Body.Colour = Look.Colour;
         Body.Albedo = Look.Albedo;
         Body.Rim = Look.Rim;
+        Body.Surface = Look.Surface;
+        // By orbit index, which never renumbers (FStarSystem::Planets): a
+        // world keeps its face however many planets are added outside it.
+        Body.SurfaceSeed = GenSeed::Derive(System.Stub.Seed, SurfacePurpose, static_cast<uint64>(Index));
     }
 
     for (const FStarSystemStub& Stub : Neighbours)

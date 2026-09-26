@@ -65,16 +65,28 @@ uint64 LocalSystem::StarfieldSeed(const UWorld* World, uint64 Fallback)
 
 double LocalSystem::NearestSurfaceDistance(const FSkySystem& System, const FUniversePosition& Where)
 {
+    return NearestSurface(System, Where).Distance;
+}
+
+FSkyNearestSurface LocalSystem::NearestSurface(const FSkySystem& System, const FUniversePosition& Where)
+{
+    FSkyNearestSurface Nearest;
     if (System.IsEmpty())
     {
-        return 0.0;
+        return Nearest;
     }
 
-    double Nearest = TNumericLimits<double>::Max();
+    double Distance = TNumericLimits<double>::Max();
     const FSkyBody* Star = nullptr;
-    for (const FSkyBody& Body : System.Bodies)
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
     {
-        Nearest = FMath::Min(Nearest, Where.DistanceTo(Body.Position) - Body.Radius);
+        const FSkyBody& Body = System.Bodies[Index];
+        const double ToSurface = Where.DistanceTo(Body.Position) - Body.Radius;
+        if (ToSurface < Distance)
+        {
+            Distance = ToSurface;
+            Nearest.Body = Index;
+        }
         if (!Star && Body.Kind == ESkyBodyKind::Star)
         {
             Star = &Body;
@@ -86,7 +98,14 @@ double LocalSystem::NearestSurfaceDistance(const FSkySystem& System, const FUniv
     // GetSystemAt stops answering. You leave a system by jumping.
     if (Star && System.EdgeRadius > 0.0)
     {
-        Nearest = FMath::Min(Nearest, System.EdgeRadius - Where.DistanceTo(Star->Position));
+        const double ToEdge = System.EdgeRadius - Where.DistanceTo(Star->Position);
+        if (ToEdge < Distance)
+        {
+            Distance = ToEdge;
+            Nearest.Body = INDEX_NONE;
+            Nearest.bEdge = true;
+        }
     }
-    return FMath::Max(Nearest, 0.0);
+    Nearest.Distance = FMath::Max(Distance, 0.0);
+    return Nearest;
 }

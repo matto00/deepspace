@@ -1,8 +1,17 @@
 #include "Misc/AutomationTest.h"
 #include "Dom/JsonObject.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionCameraPositionWS.h"
 #include "Materials/MaterialExpressionCollectionParameter.h"
+#include "Materials/MaterialExpressionLocalPosition.h"
+#include "Materials/MaterialExpressionNoise.h"
+#include "Materials/MaterialExpressionObjectPositionWS.h"
 #include "Materials/MaterialExpressionParameter.h"
+#include "Materials/MaterialExpressionPixelDepth.h"
+#include "Materials/MaterialExpressionScreenPosition.h"
+#include "Materials/MaterialExpressionTextureBase.h"
+#include "Materials/MaterialExpressionViewSize.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialExpressionPerInstanceCustomData.h"
 #include "Materials/MaterialParameterCollection.h"
@@ -41,6 +50,9 @@ namespace
             { TEXT("brightness"), SkyMaterial::Brightness, TEXT("scalar") },
             { TEXT("point_blend"), SkyMaterial::PointBlend, TEXT("scalar") },
             { TEXT("mottle"), SkyMaterial::Mottle, TEXT("scalar") },
+            { TEXT("detail"), SkyMaterial::Detail, TEXT("scalar") },
+            { TEXT("banding"), SkyMaterial::Banding, TEXT("scalar") },
+            { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
         };
@@ -93,6 +105,72 @@ namespace
             Errors.Add(TEXT("the translator failed without saying why"));
         }
         return Errors;
+    }
+
+    /**
+     * M_SkyBody's face, as the developer asked for it: detail fixed to the
+     * body, in several bands, whose finer ones arrive as the world grows.
+     * The names above cannot see any of that, so the graph is read:
+     *
+     * - Object space and nothing else. The one position it reads is the
+     *   mesh's own; a world-space, screen-space or camera-relative position
+     *   anywhere in the graph is detail that swims as the proxy is moved
+     *   and rescaled every frame. And no texture: nothing from outside.
+     * - One coarse band and the contract's detail bands, each fading by the
+     *   pixel footprint through FilterWidth. A band without it would sit on
+     *   a distant world as shimmer instead of waiting for the screen to hold
+     *   it -- and a band would stop being new detail and become noise.
+     * - Each band at the octave count the contract gives it.
+     */
+    void CheckSurfaceFace(FAutomationTestBase& Test, const UMaterial& Material, const TSharedPtr<FJsonObject>& Constants)
+    {
+        int32 LocalPositions = 0;
+        TArray<const UMaterialExpressionNoise*> Bands;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            const UMaterialExpression* Node = Expression.Get();
+            LocalPositions += Cast<UMaterialExpressionLocalPosition>(Node) ? 1 : 0;
+            if (const UMaterialExpressionNoise* Noise = Cast<UMaterialExpressionNoise>(Node))
+            {
+                Bands.Add(Noise);
+            }
+            const bool bSwims = Cast<UMaterialExpressionWorldPosition>(Node) || Cast<UMaterialExpressionScreenPosition>(Node)
+                || Cast<UMaterialExpressionPixelDepth>(Node) || Cast<UMaterialExpressionCameraPositionWS>(Node)
+                || Cast<UMaterialExpressionObjectPositionWS>(Node) || Cast<UMaterialExpressionViewSize>(Node);
+            Test.TestFalse(FString::Printf(TEXT("M_SkyBody's face reads no world, screen or camera position (%s)"), *Node->GetName()), bSwims);
+            Test.TestFalse(FString::Printf(TEXT("M_SkyBody samples no texture (%s)"), *Node->GetName()),
+                Cast<UMaterialExpressionTextureBase>(Node) != nullptr);
+        }
+        Test.TestEqual(TEXT("M_SkyBody's face is taken from the mesh's own position, once"), LocalPositions, 1);
+
+        const TArray<TSharedPtr<FJsonValue>>& Frequencies = Constants->GetArrayField(TEXT("detail_frequencies"));
+        const TArray<TSharedPtr<FJsonValue>>& Weights = Constants->GetArrayField(TEXT("detail_weights"));
+        Test.TestEqual(TEXT("a weight for every detail band"), Weights.Num(), Frequencies.Num());
+        Test.TestTrue(TEXT("several detail bands, not one"), Frequencies.Num() >= 2);
+        for (int32 Index = 1; Index < Frequencies.Num(); ++Index)
+        {
+            Test.TestTrue(TEXT("each detail band finer than the last"), Frequencies[Index]->AsNumber() > Frequencies[Index - 1]->AsNumber());
+        }
+        Test.TestTrue(TEXT("and the coarsest detail finer than the continents"),
+            Frequencies.Num() > 0 && Frequencies[0]->AsNumber() > Constants->GetNumberField(TEXT("continent_frequency")));
+
+        Test.TestEqual(TEXT("M_SkyBody has the coarse band and every detail band"), Bands.Num(), 1 + Frequencies.Num());
+        const int32 ContinentLevels = static_cast<int32>(Constants->GetNumberField(TEXT("continent_levels")));
+        const int32 DetailLevels = static_cast<int32>(Constants->GetNumberField(TEXT("detail_levels")));
+        int32 Coarse = 0;
+        for (const UMaterialExpressionNoise* Noise : Bands)
+        {
+            Test.TestNotNull(TEXT("every band fades by the pixel footprint (FilterWidth is wired)"), Noise->FilterWidth.Expression);
+            Test.TestNotNull(TEXT("and is placed on the body (Position is wired)"), Noise->Position.Expression);
+            Test.TestTrue(TEXT("every band is centred on zero, so the disc keeps its flux"),
+                !Noise->bTurbulence && FMath::IsNearlyEqual(Noise->OutputMin, -Noise->OutputMax));
+            Test.TestEqual(TEXT("every band's octaves step as the contract says"), static_cast<double>(Noise->LevelScale),
+                Constants->GetNumberField(TEXT("level_scale")));
+            Coarse += Noise->Levels == ContinentLevels ? 1 : 0;
+            Test.TestTrue(FString::Printf(TEXT("a band has the contract's octaves (%d)"), Noise->Levels),
+                Noise->Levels == ContinentLevels || Noise->Levels == DetailLevels);
+        }
+        Test.TestTrue(TEXT("one of them is the coarse band"), Coarse >= 1);
     }
 
     TSet<FName> AssetNames(const UMaterialInterface* Material, bool bScalars)
@@ -148,6 +226,10 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("the disc gain is the one SkyProjection assumes"),
         Contract->GetObjectField(TEXT("constants"))->GetNumberField(TEXT("lambert_disc_gain")), SkyMaterial::LambertDiscGain);
+    TestEqual(TEXT("the face's bound is the one the header promises"),
+        Contract->GetObjectField(TEXT("constants"))->GetNumberField(TEXT("surface_max_swing")), SkyMaterial::SurfaceMaxSwing);
+    TestTrue(TEXT("and it keeps a world between a tenth and twice its smooth disc: never black, never the ceiling's"),
+        SkyMaterial::SurfaceMaxSwing > 0.0 && SkyMaterial::SurfaceMaxSwing < 1.0);
 
     struct FExpected
     {
@@ -214,6 +296,10 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("%s is unlit: its emissive is the final pixel"), Expected.Asset),
             Material->GetShadingModels().HasOnlyShadingModel(MSM_Unlit));
 
+        if (Material->GetFName() == TEXT("M_SkyBody"))
+        {
+            CheckSurfaceFace(*this, *Material, Contract->GetObjectField(TEXT("constants")));
+        }
         if (Material->GetFName() == TEXT("M_SkyGlass"))
         {
             TestTrue(TEXT("M_SkyGlass is translucent"), Material->GetBlendMode() == BLEND_Translucent);

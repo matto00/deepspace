@@ -54,6 +54,7 @@ namespace SkyTestFixtures
         Inner.Position = StarPosition() + FVector(-5.5e12, -2.0e12, 0.0);
         Inner.Radius = 2.4397e8;
         Inner.Albedo = 0.12;
+        Inner.SurfaceSeed = 0xA4093822299F31D0ull;
 
         // Earth-like, 40,000 km ahead of the opening.
         FSkyBody& Home = System.Bodies.AddDefaulted_GetRef();
@@ -62,6 +63,7 @@ namespace SkyTestFixtures
         Home.Radius = 6.3781e8;
         Home.Albedo = 0.3;
         Home.Rim = FLinearColor(0.18f, 0.32f, 0.70f);
+        Home.SurfaceSeed = 0x243F6A8885A308D3ull;
 
         // Jupiter-like, 5.2 AU and a little out of the plane.
         FSkyBody& Giant = System.Bodies.AddDefaulted_GetRef();
@@ -69,6 +71,8 @@ namespace SkyTestFixtures
         Giant.Position = StarPosition() + FVector(3.9e13, 6.7e13, 1.0e12);
         Giant.Radius = 6.9911e9;
         Giant.Albedo = 0.5;
+        Giant.Surface = ESkySurface::Banded;
+        Giant.SurfaceSeed = 0x13198A2E03707344ull;
 
         // Home's moon, at the Moon's distance, on the far side from the star.
         FSkyBody& Moon = System.Bodies.AddDefaulted_GetRef();
@@ -77,6 +81,7 @@ namespace SkyTestFixtures
         Moon.Position = Opening() + FVector(4.0e9, -3.844e10, 0.0);
         Moon.Radius = 1.7374e8;
         Moon.Albedo = 0.12;
+        Moon.SurfaceSeed = 0x082EFA98EC4E6C89ull;
 
         return System;
     }
