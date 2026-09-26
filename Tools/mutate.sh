@@ -18,6 +18,10 @@
 set -u
 cd "$(dirname "$0")/.."
 F=$1; OLD=$2; NEW=$3; FILTER=$4
+# The file is restored with git checkout, which discards every uncommitted
+# edit to it along with the mutant. That has already cost one agent its
+# work, so refuse rather than restore over anything but HEAD.
+git diff --quiet HEAD -- "$F" || { echo "UNCOMMITTED CHANGES IN $F -- commit first; restoring would discard them"; exit 2; }
 python3 - "$F" "$OLD" "$NEW" <<'PY' || { echo "MUTANT NOT APPLIED (pattern missing)"; exit 2; }
 import sys
 f,old,new=sys.argv[1:]
