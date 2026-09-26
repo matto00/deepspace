@@ -13,9 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (LIGHTS_TAG, SKY_DIRECTORY, Mood, Mount, Place, Practical, kelvin_to_rgb,
+from placement import (LAMPS_TAG, LIGHTS_TAG, SKY_DIRECTORY, Mood, Mount, Place, Practical, kelvin_to_rgb,
                        lamp_emissive, lamp_role, resolve_lights, resolve_mount,
-                       resolve_practicals, resolve_props, sky_asset, LIGHT_SPACING)
+                       resolve_point, resolve_practicals, resolve_props, sky_asset,
+                       LIGHT_SPACING)
 
 ROOM = Room("r", 1000, 2000, 400, 300, 250)
 PLAN = FloorPlan([ROOM])
@@ -346,6 +347,126 @@ def test_mount_sits_on_the_wall_facing_in():
     assert x == ROOM.x + ROOM.w / 2.0
     assert ROOM.y < y < ROOM.y + ROOM.d          # inside the room, near the wall
     assert ROOM.y + ROOM.d - y < 20
+
+
+def test_the_lamps_tag_is_the_one_the_cpp_dims():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipLightingSubsystem.cpp")) as f:
+        cpp = f.read()
+    assert 'LampsTag(TEXT("%s"))' % LAMPS_TAG in cpp, LAMPS_TAG
+
+
+def test_every_glowing_box_is_a_lamp_the_lighting_can_find():
+    # build_hauler tags a box LAMPS_TAG exactly when its role starts lamp_.
+    # That has to be every ceiling panel and every prop part that glows, or
+    # something stays lit over a browned-out room.
+    ship = L.generate()
+    lamps = [b for b in ship.boxes if b.role.startswith("lamp_")]
+    panels = [b for b in lamps if b.label.startswith("lamp_")]
+    parts = [b for b in lamps if b.label.startswith("prop_")]
+    assert len(panels) == sum(1 for l in ship.lights if not l.shadows)
+    assert len(parts) == len(L.PRACTICALS), [b.label for b in parts]
+    assert not [b for b in ship.boxes if b.role == "lamp"]
+
+
+# -- the chart ---------------------------------------------------------------
+
+def _chart_prop(ship):
+    """The desk screen prop the chart covers: the screen box whose y-span
+    holds the chart's y."""
+    _, y, _ = ship.nav_screen_location
+    screens = [b for b in ship.boxes if b.role == "screen"
+               and abs(b.centre[1] - y) <= b.size[1] / 2.0]
+    assert len(screens) == 1, [b.label for b in screens]
+    return screens[0]
+
+
+def test_the_chart_is_in_the_cockpit_facing_aft():
+    ship = L.generate()
+    x, y, z = ship.nav_screen_location
+    r = ship.plan.room("cockpit")
+    assert r.x < x < r.x + r.w and r.y < y < r.y + r.d and 0 < z < r.height
+    assert ship.nav_screen_yaw == 0
+    assert L.NAV_SCREEN[0] == "cockpit"
+
+
+def test_the_chart_is_read_from_the_starboard_pilot_seat():
+    # Within 20 cm sideways of the chair: the seat follows the glass's
+    # normal, so further off and the body sits beside the cushion.
+    ship = L.generate()
+    seats = [p for p in L.FURNITURE if p.prop == "pilot_seat" and p.room == "cockpit"]
+    starboard = max(seats, key=lambda p: p.at[1])
+    assert starboard.at == L.NAV_SCREEN_CHAIR[1]
+    _, seat_y, _ = resolve_point(ship.plan, "cockpit", starboard.at)
+    assert abs(ship.nav_screen_location[1] - seat_y) <= 20, ship.nav_screen_location
+    # And not the helm's seat: the chart is the other chair.
+    assert starboard.at != L.PILOT_SEAT[1]
+
+
+def test_the_chart_stands_proud_of_the_desk_screen_behind_it():
+    # At least 1 cm. The reach volume starts 0.5 cm behind the glass, and
+    # the prop blocks Visibility: closer, and the prop takes the bezel.
+    ship = L.generate()
+    prop = _chart_prop(ship)
+    aft_face = prop.centre[0] - prop.size[0] / 2.0
+    assert aft_face - ship.nav_screen_location[0] >= 1.0, (aft_face, ship.nav_screen_location)
+    # Level with the prop, so the chart covers the screen it replaces.
+    lo, hi = prop.centre[2] - prop.size[2] / 2.0, prop.centre[2] + prop.size[2] / 2.0
+    assert lo < ship.nav_screen_location[2] < hi
+
+
+def test_the_chart_width_is_the_one_the_cpp_draws():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipNavScreen.cpp")) as f:
+        cpp = f.read()
+    assert "PanelWidthCm = %d.0f;" % L.NAV_SCREEN_WIDTH in cpp, L.NAV_SCREEN_WIDTH
+
+
+def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
+    # Plan conflict 16: the footprint plus the laptop's margin, and the strip
+    # to the chair. Slice 3's clutter reads it; nothing may sit on the chart.
+    ship = L.generate()
+    (x0, y0), (x1, y1) = ship.nav_screen_exclude
+    x, y, _ = ship.nav_screen_location
+    half = L.NAV_SCREEN_WIDTH / 2.0
+    m = L.NAV_SCREEN_MARGIN
+    assert x0 <= x - m and x1 >= x + m
+    assert y0 <= y - half - m and y1 >= y + half + m
+    chair_x, _, _ = resolve_point(ship.plan, *L.NAV_SCREEN_CHAIR)
+    assert x0 <= chair_x
+    # It is on the desk's starboard half, never over the helm's side.
+    helm_y = resolve_point(ship.plan, L.PILOT_SEAT[0], L.PILOT_SEAT[1])[1]
+    assert y0 > helm_y
+
+
+# -- the hum -----------------------------------------------------------------
+
+def test_no_two_hum_sources_share_a_point():
+    # Each source seeds its noise from its world position rounded to 1 cm;
+    # two at one point hiss the same noise and comb into a whistle.
+    ship = L.generate()
+    points = [tuple(round(c) for c in loc) for _, loc, _ in ship.hum_sources]
+    assert len(points) == len(set(points)), points
+    labels = [label for label, _, _ in ship.hum_sources]
+    assert len(labels) == len(set(labels)), labels
+
+
+def test_there_is_one_reactor_voice_at_the_reactor():
+    ship = L.generate()
+    reactors = [s for s in ship.hum_sources if s[2] == "reactor"]
+    assert len(reactors) == 1 and reactors[0][0] == "hum_reactor"
+    (reactor,) = [p for p in L.PLACEMENTS if p.prop == "reactor"]
+    x, y, _ = resolve_point(ship.plan, reactor.room, reactor.at)
+    assert reactors[0][1][:2] == (x, y), (reactors[0][1], (x, y))
+    assert {s[2] for s in ship.hum_sources} == {"reactor", "air"}
+
+
+def test_every_room_has_its_air_under_its_own_ceiling():
+    ship = L.generate()
+    air = {label: loc for label, loc, kind in ship.hum_sources if kind == "air"}
+    assert sorted(air) == sorted("hum_" + r.name for r in L.ROOMS)
+    for r in L.ROOMS:
+        x, y, z = air["hum_" + r.name]
+        assert r.x < x < r.x + r.w and r.y < y < r.y + r.d, r.name
+        assert 0 < z < r.height and r.height - z <= 30, (r.name, z)
 
 
 def main():

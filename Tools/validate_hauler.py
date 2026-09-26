@@ -293,6 +293,23 @@ def check_console(grid, ship, failures):
         failures.append("The console at %s is buried in geometry." % (ship.console_location,))
 
 
+def check_chart(grid, ship, failures):
+    """The air in front of the chart's glass is empty, all the way back to
+    its chair: a prop there would stand between the reader and the chart,
+    and the pointer would find it first. Sampled every 10 cm along the view
+    line at the glass's height, from 5 cm in front of it."""
+    x, y, z = ship.nav_screen_location
+    chair_x = L.resolve_point(ship.plan, *L.NAV_SCREEN_CHAIR)[0]
+    step = x - 5
+    while step > chair_x:
+        i, j, k = grid.cell_of(step, y, z)
+        if grid.solid[grid.index(i, j, k)]:
+            failures.append("Something solid at x %.0f stands between the chart and its chair."
+                            % step)
+            return
+        step -= CELL
+
+
 def main():
     try:
         ship = L.generate()
@@ -305,6 +322,7 @@ def main():
     check_hull(grid, ship, failures)
     check_components(ship.boxes, failures)
     check_console(grid, ship, failures)
+    check_chart(grid, ship, failures)
     check_keep_clear(ship, failures)
     by_stand = check_reachability(grid, ship, failures)
     check_slide_run(grid, ship, by_stand, failures)
@@ -319,7 +337,7 @@ def main():
         return 1
     print("\nPASS: plan consistent, hull sealed, one piece, every region reachable in "
           "its posture, crawlway crouch-only, %d cm slide run clear, doors and console "
-          "unobstructed." % L.SLIDE_RUN)
+          "unobstructed, the chart in clear view of its chair." % L.SLIDE_RUN)
     return 0
 
 

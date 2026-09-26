@@ -170,8 +170,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sky")
     TObjectPtr<UMaterialInterface> PointStarMaterial;
 
-    /** MPC_Sky, which M_SkyGlass reads for the veil. Null until the veil
-     *  lands (slice 2); nothing is written while it is. */
+    /** MPC_Sky, which M_SkyGlass reads for the veil: the room's light and
+     *  the reflection's strength, written every frame. Nothing is written
+     *  while it is unassigned, and the glass then shows the collection's
+     *  defaults, the lit ship. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sky")
     TObjectPtr<UMaterialParameterCollection> SkyParameters;
 

@@ -117,7 +117,8 @@ namespace
 
     TAutoConsoleVariable<float> CVarVeil(
         TEXT("ds.Sky.Veil"), 1.0f,
-        TEXT("How strongly the glass reflects the lit room (slice 2: needs MPC_Sky)."));
+        TEXT("How strongly the glass reflects the lit room. At 1, a fully lit room hides stars fainter than flux 4, ")
+        TEXT("about seven in eight; with the lights off every star shows."));
 
     TAutoConsoleVariable<float> CVarBloom(
         TEXT("ds.Sky.Bloom"), 0.675f,
@@ -411,7 +412,8 @@ void AShipSky::DrawSun(const FSkySystem& System, const FSkyFrame& Frame)
     Sun->SetRelativeRotation(FRotationMatrix::MakeFromX(-Frame.SunDirection).ToQuat());
 
     // Compressed irradiance, the one term decision 2 allows compressed, and
-    // the eclipse: always 1 until slice 2, multiplied in from the first day.
+    // the eclipse: park in a planet's shadow and the deck goes dark but for
+    // the ship's own lamps.
     Sun->SetIntensity(CVarSunLux.GetValueOnGameThread() * Frame.SunIrradiance * Frame.SunVisibleFraction);
 
     // An orange star makes a warm ship (sky open question 4).

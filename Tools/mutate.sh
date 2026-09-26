@@ -3,11 +3,13 @@
 #
 #   Tools/mutate.sh FILE 'exact old text' 'new text' TESTFILTER
 #
-# Exits 0 if the mutant was killed (TESTFILTER went red), 1 if it SURVIVED --
-# the test is vacuous -- and 2 if the mutation proves nothing: the text was
-# not found, the mutant did not compile, or the library was not rebuilt.
+# Exits 0 if the mutant was killed (a test in TESTFILTER completed with a
+# failure), 1 if it SURVIVED -- the test is vacuous -- and 2 if the mutation
+# proves nothing: the text was not found, the mutant did not compile, the
+# library was not rebuilt, or the run went red without any test failing (the
+# editor died, or the filter matched nothing).
 #
-# Each of those three has happened here. A mutant that fails to compile
+# Each of those has happened here. A mutant that fails to compile
 # leaves the old library in place, so the tests pass and look like a
 # survivor; a mutation whose search text did not match changes nothing, so
 # the tests pass and look like a survivor. So the diff is checked, the build
@@ -39,9 +41,16 @@ lib=Binaries/Linux/libUnrealEditor-DeepSpace.so
 if ./test.sh "$FILTER" > Saved/mutant-test.log 2>&1; then
     echo "SURVIVED: $FILTER stayed GREEN under the mutant  <-- vacuous"
     verdict=1
-else
+elif grep -qE "Test Completed\. Result=\{(Fail|Error)" Saved/Logs/DeepSpace.log; then
     echo "KILLED: $FILTER went red"; grep -E "passed:|Result=\{Fail" Saved/mutant-test.log | head -3
     verdict=0
+else
+    # Red with no failing test in the log: the editor died, or nothing ran.
+    # A crash is not the test catching the mutant, and counting it as one has
+    # already passed off a survivor as killed.
+    echo "NO VERDICT: $FILTER ran no test to a failure -- the run died or matched nothing"
+    grep -E "passed:|no tests ran" Saved/mutant-test.log | head -3
+    verdict=2
 fi
 git checkout -q -- "$F"; git diff --quiet -- "$F" && echo "restored clean"
 exit $verdict

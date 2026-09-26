@@ -20,7 +20,7 @@ from collections import namedtuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from floorplan import Door, FloorPlan, Room, Seal, Window, CELL
+from floorplan import Door, FloorPlan, PlanError, Room, Seal, Window, CELL
 from placement import (Mood, Mount, Place, Practical, Region, resolve_lights,
                        resolve_mount, resolve_point, resolve_practicals,
                        resolve_props)
@@ -196,6 +196,41 @@ CONSOLE_WIDTH = 100
 # galley_table prop's surface is 8 cm thick and centred at 75.
 LAPTOP = ("galley", (300, 230), 79, 90)
 
+# The chart: the starboard desk screen, turned into the one you choose a star
+# at. The actor's origin is the centre of its glass, so this places the glass
+# and not a casing. (room, (x, y) from the room's corner, z, yaw), shaped like
+# LAPTOP. x 301 is the desk screen prop's aft face (302) less 1 cm: the
+# chart's reach volume starts 0.5 cm behind its glass, and the prop blocks
+# Visibility, so a mount that crept back by that half-centimetre would hand
+# every bezel trace to the prop. y 285 is the prop's own centre line. Yaw 0
+# faces -X, aft, towards the starboard pilot seat it is read from
+# (AShipScreen::ConfigurePanel turns the panel round once, centrally).
+NAV_SCREEN = ("cockpit", (301, 285), 105, 0)
+
+# The chart's panel width, cm: AShipNavScreen's PanelWidthCm, mirrored here
+# for the clutter exclude alone. test_placement.py reads the C++ to hold the
+# two equal.
+NAV_SCREEN_WIDTH = 68
+
+# Plan conflict 16, recorded for slice 3's clutter generator: nothing may be
+# dressed over the chart's footprint plus this margin, nor on the strip
+# between the chart and the chair it is read from. The margin is the
+# laptop's. generate() resolves it into ship.nav_screen_exclude.
+NAV_SCREEN_MARGIN = 15
+NAV_SCREEN_CHAIR = ("cockpit", (175, 270))    # the starboard pilot_seat
+
+# Where the ship is heard from (lived-in decision 9). One reactor, at the
+# reactor prop's own place, carrying the whole voice. One air handler per
+# room, centred 20 cm under its ceiling: air handling is not a power
+# consumer, so it is the same quiet noise everywhere, and one per room keeps
+# every room's air in the room rather than bleeding through a wall from the
+# next. No two may share a point: each source seeds its noise from its
+# rounded world position, and two at one point would hiss the same noise and
+# comb into a whistle (test_placement.py).
+HumSource = namedtuple("HumSource", "room at z kind")
+HUM_SOURCES = ([HumSource("engineering", (200, 200), 120, "reactor")]
+               + [HumSource(r.name, (r.w / 2, r.d / 2), r.height - 20, "air") for r in ROOMS])
+
 # The game opens with waking aboard your ship.
 PLAYER_START = ("bunk", (200, 150), 100)
 
@@ -210,7 +245,9 @@ SLIDE_ROOM = "corridor"
 Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
                           "player_start regions keep_clear "
                           "pilot_seat_location pilot_seat_yaw "
-                          "laptop_location laptop_yaw")
+                          "laptop_location laptop_yaw "
+                          "nav_screen_location nav_screen_yaw nav_screen_exclude "
+                          "hum_sources")
 
 
 def generate():
@@ -262,7 +299,34 @@ def generate():
     laptop_room, laptop_at, laptop_z, laptop_yaw = LAPTOP
     laptop_location = resolve_point(plan, laptop_room, laptop_at, laptop_z)
 
+    nav_room, nav_at, nav_z, nav_screen_yaw = NAV_SCREEN
+    nav_screen_location = resolve_point(plan, nav_room, nav_at, nav_z)
+    nav_screen_exclude = chart_exclude(plan, nav_screen_location, nav_screen_yaw)
+
+    # (label, world location, kind). The reactor is hum_reactor; each room's
+    # air is hum_<room>.
+    hum_sources = [("hum_reactor" if s.kind == "reactor" else "hum_" + s.room,
+                    resolve_point(plan, s.room, s.at, s.z), s.kind)
+                   for s in HUM_SOURCES]
+
     return Ship(plan, boxes, lights, console_location, console_yaw,
                 player_start, regions, keep_clear,
                 pilot_seat_location, seat_yaw,
-                laptop_location, laptop_yaw)
+                laptop_location, laptop_yaw,
+                nav_screen_location, nav_screen_yaw, nav_screen_exclude,
+                hum_sources)
+
+
+def chart_exclude(plan, location, yaw):
+    """Plan conflict 16 as a world-space floor rectangle ((x0, y0), (x1, y1)):
+    the chart's footprint plus NAV_SCREEN_MARGIN, stretched aft to the chair
+    it is read from. Slice 3's surfaces take it as an exclude on the cockpit
+    desk, as they take the laptop's on the galley table. Only a chart facing
+    aft (yaw 0) is supported: that is the one the layout has, and a turned
+    chart would need its chair turned with it."""
+    if yaw != 0:
+        raise PlanError("the chart exclude assumes the chart faces aft (yaw 0), not %s" % yaw)
+    x, y, _ = location
+    chair_x, _, _ = resolve_point(plan, NAV_SCREEN_CHAIR[0], NAV_SCREEN_CHAIR[1])
+    half = NAV_SCREEN_WIDTH / 2.0 + NAV_SCREEN_MARGIN
+    return (min(x, chair_x) - NAV_SCREEN_MARGIN, y - half), (x + NAV_SCREEN_MARGIN, y + half)

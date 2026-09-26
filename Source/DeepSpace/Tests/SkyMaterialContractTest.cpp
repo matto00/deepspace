@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "Dom/JsonObject.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionCollectionParameter.h"
 #include "Materials/MaterialExpressionParameter.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialExpressionPerInstanceCustomData.h"
@@ -9,6 +10,8 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "HAL/IConsoleManager.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -242,7 +245,8 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         }
     }
 
-    // MPC_Sky: the header and JSON agree now; the asset comes with the veil.
+    // MPC_Sky: the header, the JSON and the asset hold the same scalars, and
+    // M_SkyGlass reads exactly those -- by an id that still resolves.
     {
         const TSharedPtr<FJsonObject> Collection = Contract->GetObjectField(TEXT("collections"))->GetObjectField(TEXT("MPC_Sky"));
         TSet<FName> JsonScalars;
@@ -252,14 +256,10 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("MPC_Sky has no vectors"), JsonVectors.Num(), 0);
         TestEqual(TEXT("MPC_Sky lives where the JSON says"), FString(SkyMaterial::ParametersPath),
             FString::Printf(TEXT("%s/MPC_Sky.MPC_Sky"), *Directory));
+        TestFalse(TEXT("MPC_Sky is no longer pending: the veil has landed"), Collection->HasField(TEXT("pending")));
 
-        FString Pending;
-        if (Collection->TryGetStringField(TEXT("pending"), Pending))
-        {
-            AddInfo(TEXT("MPC_Sky is pending: ") + Pending);
-        }
-        else if (const UMaterialParameterCollection* Built = LoadObject<UMaterialParameterCollection>(nullptr, SkyMaterial::ParametersPath);
-                 TestNotNull(TEXT("MPC_Sky is built"), Built))
+        const UMaterialParameterCollection* Built = LoadObject<UMaterialParameterCollection>(nullptr, SkyMaterial::ParametersPath);
+        if (TestNotNull(TEXT("MPC_Sky is built (Tools/setup_sky_materials.py)"), Built))
         {
             TSet<FName> Names;
             for (const FCollectionScalarParameter& Parameter : Built->ScalarParameters)
@@ -268,6 +268,65 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
             }
             TestTrue(TEXT("MPC_Sky holds exactly its scalars; has ") + Describe(Names), SameSet(Names, JsonScalars));
             TestEqual(TEXT("and no vectors"), Built->VectorParameters.Num(), 0);
+
+            // The defaults are what the glass shows where nothing writes
+            // them: the editor's viewport, before play.
+            const TSharedPtr<FJsonObject> Defaults = Collection->GetObjectField(TEXT("defaults"));
+            const TSharedPtr<FJsonObject> ByRole = Contract->GetObjectField(TEXT("parameters"));
+            for (const TSharedPtr<FJsonValue>& Role : Collection->GetArrayField(TEXT("parameters")))
+            {
+                const FName Name(*ByRole->GetObjectField(Role->AsString())->GetStringField(TEXT("name")));
+                const FCollectionScalarParameter* Parameter = Built->ScalarParameters.FindByPredicate(
+                    [&Name](const FCollectionScalarParameter& Candidate) { return Candidate.ParameterName == Name; });
+                TestTrue(FString::Printf(TEXT("MPC_Sky's %s defaults to the JSON's"), *Name.ToString()),
+                    Parameter && FMath::IsNearlyEqual(Parameter->DefaultValue, static_cast<float>(Defaults->GetNumberField(Role->AsString()))));
+            }
+
+            // A material holds a collection parameter by id and looks its
+            // name up on load. An id the collection no longer has loads as
+            // None and reads zero: a veil that is simply never there, with
+            // the names above all correct.
+            const UMaterial* Glass = LoadObject<UMaterial>(nullptr, SkyMaterial::GlassPath);
+            if (TestNotNull(TEXT("M_SkyGlass is built"), Glass))
+            {
+                TSet<FName> Read;
+                int32 Nodes = 0;
+                for (const TObjectPtr<UMaterialExpression>& Expression : Glass->GetExpressions())
+                {
+                    const UMaterialExpressionCollectionParameter* Node = Cast<UMaterialExpressionCollectionParameter>(Expression);
+                    if (!Node)
+                    {
+                        continue;
+                    }
+                    ++Nodes;
+                    Read.Add(Node->ParameterName);
+                    TestTrue(FString::Printf(TEXT("M_SkyGlass reads %s from MPC_Sky"), *Node->ParameterName.ToString()),
+                        Node->Collection == Built);
+                    TestEqual(FString::Printf(TEXT("M_SkyGlass's %s is held by an id MPC_Sky still has"), *Node->ParameterName.ToString()),
+                        Built->GetParameterName(Node->ParameterId), Node->ParameterName);
+                }
+                TestTrue(TEXT("M_SkyGlass reads exactly MPC_Sky's scalars, the veil and the room's light; reads ") + Describe(Read),
+                    SameSet(Read, JsonScalars));
+                TestEqual(TEXT("once each"), Nodes, JsonScalars.Num());
+            }
+        }
+
+        // The veil's tuning target, stated so it can be checked (sky decision
+        // 6): a fully lit room reflects in the glass at about the pixel value
+        // of a flux-4 star, which leaves the brightest eighth of the starfield
+        // showing through it. Translucency blends the glass's emissive in at
+        // its opacity, so that is what reaches the screen.
+        const TSharedPtr<FJsonObject> Constants = Contract->GetObjectField(TEXT("constants"));
+        const TArray<TSharedPtr<FJsonValue>>& VeilRgb = Constants->GetArrayField(TEXT("veil_colour"));
+        if (TestEqual(TEXT("the veil is a colour"), VeilRgb.Num(), 3))
+        {
+            const FLinearColor VeilColour(VeilRgb[0]->AsNumber(), VeilRgb[1]->AsNumber(), VeilRgb[2]->AsNumber());
+            const IConsoleVariable* Veil = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Veil"));
+            const double OnScreen = VeilColour.GetLuminance() * Constants->GetNumberField(TEXT("glass_opacity"))
+                * (Veil ? Veil->GetFloat() : 0.0);
+            const double FluxFour = AShipSky::PointStarBrightness(4.0);
+            TestTrue(FString::Printf(TEXT("a lit room's veil (%.4f on screen) is about a flux-4 star (%.4f)"), OnScreen, FluxFour),
+                FMath::Abs(OnScreen / FluxFour - 1.0) < 0.15);
         }
     }
     return true;

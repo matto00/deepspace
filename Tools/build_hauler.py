@@ -204,6 +204,13 @@ def spawn_box(actor_sub, box, mesh, material):
     component.set_static_mesh(mesh)
     component.set_mobility(unreal.ComponentMobility.STATIC)
     component.set_material(0, material)
+    # Every glowing box -- a ceiling panel, or a prop's lamp part, which
+    # resolve_props has already renamed to its room's lamp_ role -- is found
+    # by UShipLightingSubsystem through this tag and dimmed with the lights.
+    # It can stay Static: C++ drives its Colour through a dynamic material
+    # instance and never moves it.
+    if box.role.startswith("lamp_"):
+        actor.set_editor_property("tags", [unreal.Name(PL.LAMPS_TAG)])
     # The sunlight on the deck is the shape of the windows, which it can only
     # be if the glass in them casts no shadow (sky decision 5).
     if box.role == "glass":
@@ -285,8 +292,9 @@ def place_sky(actor_sub, sphere):
     assets. It attaches itself to the counter-frame at BeginPlay, so where
     it is placed does not matter, and the origin says so.
 
-    MPC_Sky is the glass veil's, which lands in slice 2. Until the collection
-    exists the slot stays empty and the sky writes nothing to it.
+    MPC_Sky is the glass veil's. It is required: a sky built without it
+    writes nothing to the glass, and the veil sits at the collection's
+    lit-room defaults whatever the lights do, with nothing in play to say so.
     """
     sky = actor_sub.spawn_actor_from_class(
         unreal.ShipSky, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
@@ -295,10 +303,41 @@ def place_sky(actor_sub, sphere):
     sky.set_editor_property("body_material", sky_asset("M_SkyBody"))
     sky.set_editor_property("star_material", sky_asset("M_SkyStar"))
     sky.set_editor_property("point_star_material", sky_asset("M_SkyStarfield"))
-    parameters = sky_asset("MPC_Sky", required=False)
-    if parameters:
-        sky.set_editor_property("sky_parameters", parameters)
+    sky.set_editor_property("sky_parameters", sky_asset("MPC_Sky"))
     return sky
+
+
+def place_nav_screen(actor_sub, ship):
+    """The chart, over the starboard desk screen (nav spec B3). The three
+    seat tunables are the chair playtest's knobs, per instance, so a nudge is
+    this function and a level rebuild rather than C++: use_distance_cm lands
+    the body on the starboard chair's centre (cockpit x 175 against the glass
+    at 301), seat_height_cm is the cushion's top, and view_distance_cm is how
+    far the eyes lean in to read. Everything else -- the panel's size, the
+    widget, the reach volume -- is the class's, per ADR 0002."""
+    chart = actor_sub.spawn_actor_from_class(
+        unreal.ShipNavScreen, unreal.Vector(*ship.nav_screen_location),
+        unreal.Rotator(0, 0, ship.nav_screen_yaw))
+    chart.set_actor_label(TAG + "nav_screen")
+    chart.set_editor_property("use_distance_cm", 126.0)
+    chart.set_editor_property("seat_height_cm", 55.0)
+    chart.set_editor_property("view_distance_cm", 60.0)
+    return chart
+
+
+HUM_KINDS = {"reactor": unreal.ShipHumKind.REACTOR, "air": unreal.ShipHumKind.AIR}
+
+
+def place_hum_sources(actor_sub, ship):
+    """Where the ship is heard from: the reactor, and each room's air. The
+    script says where each stands and which voice it is and nothing more;
+    the voice is C++ (ADR 0002). The hum component is the actor's root, so
+    there is no child to strand at the origin (the Static-child trap)."""
+    for label, location, kind in ship.hum_sources:
+        actor = actor_sub.spawn_actor_from_class(
+            unreal.ShipHumSource, unreal.Vector(*location), unreal.Rotator(0, 0, 0))
+        actor.set_actor_label(TAG + label)
+        actor.set_editor_property("kind", HUM_KINDS[kind])
 
 
 def build():
@@ -319,6 +358,7 @@ def build():
         spawn_box(actor_sub, box, meshes[box.mesh], mats[box.role])
 
     place_lights(actor_sub, ship.lights)
+    place_hum_sources(actor_sub, ship)
     sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
     place_counter_frame(actor_sub, sphere)
     place_sky(actor_sub, sphere)
@@ -344,6 +384,8 @@ def build():
         component.set_material(0, mats["furniture"])
     laptop.fit_parts()
 
+    place_nav_screen(actor_sub, ship)
+
     start = actor_sub.spawn_actor_from_class(
         unreal.PlayerStart, unreal.Vector(*ship.player_start), unreal.Rotator(0, 0, 0))
     start.set_actor_label(TAG + "player_start")
@@ -362,10 +404,13 @@ def build():
     level_sub.save_current_level()
 
     summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights (%d practical, "
-               "shadowed), %d glass panes casting no shadow, one counter-frame, one sky."
+               "shadowed), %d lamp boxes tagged %s, %d glass panes casting no shadow, "
+               "%d hum sources, one chart, one counter-frame, one sky."
                % (removed, len(ship.boxes), len(ship.lights),
                   sum(1 for light in ship.lights if light.shadows),
-                  sum(1 for box in ship.boxes if box.role == "glass")))
+                  sum(1 for box in ship.boxes if box.role.startswith("lamp_")), PL.LAMPS_TAG,
+                  sum(1 for box in ship.boxes if box.role == "glass"),
+                  len(ship.hum_sources)))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)

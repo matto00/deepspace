@@ -7,6 +7,7 @@
 #include "Misc/Parse.h"
 #include "Ship/ShipSubsystem.h"
 #include "Universe/GalaxyGenerator.h"
+#include "Universe/ProcGenPriorsConfig.h"
 #include "Universe/SystemDescription.h"
 #include "Universe/UniverseUnits.h"
 
@@ -58,7 +59,9 @@ namespace
     void Describe(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
     {
         const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(World);
-        const FGenPriors Priors = Universe ? Universe->GetPriors() : FGenPriors{};
+        // Another universe's seed is described under this session's priors:
+        // the ini's, whether or not this world has a universe of its own.
+        const FGenPriors Priors = GetDefault<UProcGenPriorsConfig>()->ToPriors();
 
         if (Args.IsEmpty())
         {
@@ -142,6 +145,48 @@ namespace
         }
     }
 
+    /** Re-reads the priors from DefaultGame.ini on disk and says which moved.
+     *  Nothing needs telling: every query asks the config afresh, so the next
+     *  Describe, the next chart and the sky's next frame are the new universe.
+     *  The ship does not move -- it is wherever it was, in whatever the new
+     *  numbers put there. */
+    void ReloadPriors(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        const FGenPriors Before = GetDefault<UProcGenPriorsConfig>()->ToPriors();
+        const TArray<FString> Refusals = UProcGenPriorsConfig::ReloadFromIni();
+        const FGenPriors After = GetDefault<UProcGenPriorsConfig>()->ToPriors();
+
+        if (!Refusals.IsEmpty())
+        {
+            Out.Log(TEXT("ds.Universe.ReloadPriors: DefaultGame.ini refused; the priors in use are unchanged. Fix:"));
+            for (const FString& Refusal : Refusals)
+            {
+                Out.Logf(TEXT("  %s"), *Refusal);
+            }
+            return;
+        }
+
+        int32 Changed = 0;
+#define DS_REPORT_PRIOR(Name)                                                                   \
+        if (Before.Name != After.Name)                                                          \
+        {                                                                                       \
+            Out.Logf(TEXT("  %s  %.6g -> %.6g"), TEXT(#Name), Before.Name, After.Name);         \
+            ++Changed;                                                                          \
+        }
+        DS_GEN_PRIORS(DS_REPORT_PRIOR)
+#undef DS_REPORT_PRIOR
+
+        if (Changed == 0)
+        {
+            Out.Log(TEXT("ds.Universe.ReloadPriors: DefaultGame.ini's priors are the ones already in use."));
+            return;
+        }
+        Out.Logf(TEXT("ds.Universe.ReloadPriors: %d prior%s changed; the universe has re-rolled around the ship. ")
+                 TEXT("ds.Universe.Describe to read where it now is."),
+            Changed, Changed == 1 ? TEXT("") : TEXT("s"));
+        UE_LOG(LogUniverse, Log, TEXT("Priors reloaded from the ini: %d changed"), Changed);
+    }
+
     FAutoConsoleCommandWithWorldArgsAndOutputDevice DescribeCommand(
         TEXT("ds.Universe.Describe"),
         TEXT("Describe the system the ship is in, or else the start system. ")
@@ -153,6 +198,12 @@ namespace
         TEXT("ds.Universe.Near"),
         TEXT("'ds.Universe.Near <ly>': the systems within that range of the ship, nearest first (default 12 ly)."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Near));
+
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ReloadPriorsCommand(
+        TEXT("ds.Universe.ReloadPriors"),
+        TEXT("Re-read the procgen priors from Config/DefaultGame.ini ([/Script/DeepSpace.ProcGenPriorsConfig]) ")
+        TEXT("and list the ones that changed. No rebuild, no restart."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ReloadPriors));
 }
 
 UUniverseSubsystem* UUniverseSubsystem::Get(const UObject* WorldContext)
@@ -170,7 +221,6 @@ void UUniverseSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
 
     RootSeed = ResolveSeed(UniverseSeed, FCommandLine::Get());
-    Priors = FGenPriors{};
 
     UE_LOG(LogUniverse, Log, TEXT("Universe seed %llu (0x%016llX)"),
         static_cast<unsigned long long>(RootSeed), static_cast<unsigned long long>(RootSeed));
@@ -183,12 +233,12 @@ uint64 UUniverseSubsystem::GetRootSeed() const
 
 FGenPriors UUniverseSubsystem::GetPriors() const
 {
-    return Priors;
+    return GetDefault<UProcGenPriorsConfig>()->ToPriors();
 }
 
 FGalaxyGenerator UUniverseSubsystem::MakeGalaxy() const
 {
-    return FGalaxyGenerator(RootSeed, Priors);
+    return FGalaxyGenerator(RootSeed, GetPriors());
 }
 
 TOptional<FStarSystem> UUniverseSubsystem::GetSystemAt(const FUniversePosition& Where) const

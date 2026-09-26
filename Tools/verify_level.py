@@ -55,7 +55,8 @@ def main():
     for label, want in (("console", ship.console_location),
                         ("player_start", ship.player_start),
                         ("pilot_seat", ship.pilot_seat_location),
-                        ("laptop", ship.laptop_location)):
+                        ("laptop", ship.laptop_location),
+                        ("nav_screen", ship.nav_screen_location)):
         actor = actors.get(TAG + label)
         if actor is None:
             failures.append("MISSING " + label)
@@ -117,6 +118,18 @@ def main():
         if material is None or material.get_name() != want:
             failures.append("%s wears %s, not %s"
                             % (box.label, material.get_name() if material else "nothing", want))
+        # And carries the tag the lighting finds it by, or it glows at full
+        # over a room that has browned out.
+        if PL.LAMPS_TAG not in [str(t) for t in actor.get_editor_property("tags")]:
+            failures.append("%s is not tagged %s" % (box.label, PL.LAMPS_TAG))
+
+    # Only lamps carry it: anything else tagged would be dimmed as a lamp.
+    lamp_labels = {TAG + b.label for b in ship.boxes if b.role.startswith("lamp_")}
+    for actor in every:
+        if (PL.LAMPS_TAG in [str(t) for t in actor.get_editor_property("tags")]
+                and actor.get_actor_label() not in lamp_labels):
+            failures.append("%s is tagged %s but is not a lamp"
+                            % (actor.get_actor_label(), PL.LAMPS_TAG))
 
     # The tag is the contract C++ addresses generated actors by (never the
     # name, never the index), so an untagged light is a light the ship cannot
@@ -140,11 +153,14 @@ def main():
     failures += check_counter_frame(every)
     failures += check_sky(every)
     failures += check_glass(ship, actors)
+    failures += check_nav_screen(ship, every, actors)
+    failures += check_hum(ship, every, actors)
 
     lines = ["Checked %d boxes and %d lights (%d practical) against the layout, "
-             "the counter-frame, the sky and the glass."
+             "the counter-frame, the sky, the glass, the chart and %d hum sources."
              % (len(ship.boxes), len(ship.lights),
-                sum(1 for light in ship.lights if light.shadows)), ""]
+                sum(1 for light in ship.lights if light.shadows),
+                len(ship.hum_sources)), ""]
     if failures:
         lines.append("FAIL (%d):" % len(failures))
         lines += ["  - " + f for f in failures[:40]]
@@ -154,6 +170,10 @@ def main():
         lines.append("PASS: the built level matches the layout within %.1f cm." % TOLERANCE)
     with open(os.path.join(unreal.Paths.project_saved_dir(), "verify_level.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
+    # The report is the detail; the exit code is what a script or a queue
+    # can act on without reading it.
+    if failures:
+        sys.exit(1)
 
 
 def path_of(asset):
@@ -212,12 +232,11 @@ def check_sky(every):
             got = path_of(sky.get_editor_property(slot))
             if got != want:
                 failures.append("sky %s is %s, not %s" % (slot, got, want))
-        # The veil's collection lands in slice 2; once it exists it must be
-        # assigned, or the glass never answers the lights.
-        if unreal.EditorAssetLibrary.does_asset_exist(PL.sky_package("MPC_Sky")):
-            got = path_of(sky.get_editor_property("sky_parameters"))
-            if got != PL.sky_asset("MPC_Sky"):
-                failures.append("sky sky_parameters is %s, not %s" % (got, PL.sky_asset("MPC_Sky")))
+        # The veil's collection: without it the glass never answers the
+        # lights, and nothing in play says so.
+        got = path_of(sky.get_editor_property("sky_parameters"))
+        if got != PL.sky_asset("MPC_Sky"):
+            failures.append("sky sky_parameters is %s, not %s" % (got, PL.sky_asset("MPC_Sky")))
     for cls in (unreal.DirectionalLight, unreal.SkyLight, unreal.SkyAtmosphere,
                 unreal.VolumetricCloud, unreal.ExponentialHeightFog):
         for actor in of_class(every, cls):
@@ -243,6 +262,77 @@ def check_glass(ship, actors):
             failures.append("%s wears %s, not %s" % (box.label, got, want))
         if component.get_editor_property("cast_shadow"):
             failures.append("%s casts a shadow, so no sunlight comes through it" % box.label)
+    return failures
+
+
+def check_nav_screen(ship, every, actors):
+    """One chart, facing aft, with its glass at least 1 cm proud of the
+    built desk screen prop behind it. The chart's reach volume starts 0.5 cm
+    behind the glass and the prop blocks Visibility: a mount that crept back
+    past the prop's face would hand every bezel trace to the prop. Checked
+    against the built prop's bounds, not the layout's, because the layout
+    agreeing with itself is what hid milestone 1's pivot bug."""
+    failures = []
+    charts = of_class(every, unreal.ShipNavScreen)
+    if len(charts) != 1:
+        return ["%d charts, want exactly one" % len(charts)]
+    chart = charts[0]
+    if chart.get_actor_label() != TAG + "nav_screen":
+        failures.append("the chart is labelled %s, not %snav_screen"
+                        % (chart.get_actor_label(), TAG))
+    r = chart.get_actor_rotation()
+    if abs(((r.yaw - ship.nav_screen_yaw) + 180) % 360 - 180) > 1.0 or max(abs(r.pitch), abs(r.roll)) > 1.0:
+        failures.append("the chart is rotated (%.1f, %.1f, %.1f); the layout says yaw %s"
+                        % (r.pitch, r.yaw, r.roll, ship.nav_screen_yaw))
+    _, y, _ = ship.nav_screen_location
+    behind = [b for b in ship.boxes if b.role == "screen" and abs(b.centre[1] - y) <= b.size[1] / 2.0]
+    if len(behind) != 1:
+        failures.append("%d desk screens behind the chart, want one" % len(behind))
+    else:
+        prop = actors.get(TAG + behind[0].label)
+        if prop is not None:            # a missing one is reported already
+            origin, extent = prop.get_actor_bounds(False)
+            aft_face = origin.x - extent.x
+            x = chart.get_actor_location().x
+            if aft_face - x < 1.0:
+                failures.append("the chart's glass is at x %.2f, %.2f cm proud of the desk screen "
+                                "at %.2f; it must be at least 1" % (x, aft_face - x, aft_face))
+    for name, want in (("use_distance_cm", 126.0), ("seat_height_cm", 55.0),
+                       ("view_distance_cm", 60.0)):
+        got = chart.get_editor_property(name)
+        if abs(got - want) > 1e-3:
+            failures.append("the chart's %s is %.1f, build_hauler sets %.1f" % (name, got, want))
+    return failures
+
+
+def check_hum(ship, every, actors):
+    """One hum source per layout entry, each where the layout puts it and
+    the voice it names; exactly one reactor. A source out of place is not
+    only in the wrong room: it seeds its noise from where it stands, so two
+    that collide hiss the same noise into a whistle."""
+    failures = []
+    kinds = {"reactor": unreal.ShipHumKind.REACTOR, "air": unreal.ShipHumKind.AIR}
+    built = of_class(every, unreal.ShipHumSource)
+    if len(built) != len(ship.hum_sources):
+        failures.append("%d hum sources built, layout has %d" % (len(built), len(ship.hum_sources)))
+    for label, location, kind in ship.hum_sources:
+        actor = actors.get(TAG + label)
+        if actor is None:
+            failures.append("MISSING " + label)
+            continue
+        if not isinstance(actor, unreal.ShipHumSource):
+            failures.append("%s is a %s, not a ShipHumSource" % (label, actor.get_class().get_name()))
+            continue
+        p = actor.get_actor_location()
+        for a, axis in enumerate("xyz"):
+            if abs((p.x, p.y, p.z)[a] - location[a]) > TOLERANCE:
+                failures.append("%s.%s is %.1f, layout says %.1f"
+                                % (label, axis, (p.x, p.y, p.z)[a], location[a]))
+        if actor.get_editor_property("kind") != kinds[kind]:
+            failures.append("%s is %s, layout says %s" % (label, actor.get_editor_property("kind"), kind))
+    reactors = [a for a in built if a.get_editor_property("kind") == kinds["reactor"]]
+    if len(reactors) != 1:
+        failures.append("%d reactor voices, want exactly one" % len(reactors))
     return failures
 
 

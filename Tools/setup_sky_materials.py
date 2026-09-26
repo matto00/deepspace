@@ -1,4 +1,5 @@
-"""Author the sky's materials: M_SkyBody, M_SkyStar, M_SkyStarfield, M_SkyGlass.
+"""Author the sky's materials: M_SkyBody, M_SkyStar, M_SkyStarfield, M_SkyGlass,
+and the parameter collection MPC_Sky that the glass reads.
 
 Every parameter name comes from Tools/sky_material_contract.json, the same
 list Source/DeepSpace/Sky/SkyMaterialContract.h holds, so no Unreal name is
@@ -12,12 +13,10 @@ generated, like the level: each run clears every graph and rebuilds it, so
 tune them here, never in the editor. All four are unlit -- the emissive is
 the final pixel and no light touches them (sky decision 5).
 
-Slice 2 drops in two things, and the script is shaped for both:
-- MPC_Sky, the parameter collection: the contract lists it under
-  "collections" marked "pending"; author_collection() already builds it and
-  runs as soon as the marker is removed.
-- The glass veil: glass_veil() returns the term M_SkyGlass adds to its
-  emissive, and returns nothing until then.
+The collections are authored first, because a material that reads one
+holds it by the id of each parameter, not its name: M_SkyGlass is built
+against the MPC_Sky this same run leaves on disk. A collection marked
+"pending" in the contract is skipped, and so is any term that reads it.
 
 Run with the editor closed, through the machine-wide lock:
 
@@ -176,6 +175,16 @@ class Graph:
         if not MEL.connect_material_property(source, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR):
             raise RuntimeError("could not connect the emissive")
 
+    def collection_scalar(self, collection, role):
+        """A scalar from a Material Parameter Collection. The collection is
+        set before the name: the expression resolves the name to the
+        parameter's id when the name changes, and that id -- not the name --
+        is what is saved and what the material reads on load."""
+        expression = self.node(unreal.MaterialExpressionCollectionParameter,
+                               collection=collection, parameter_name=name(role))
+        self.parameters[role] = expression
+        return expression
+
     def opacity(self, source):
         if not MEL.connect_material_property(source, "", unreal.MaterialProperty.MP_OPACITY):
             raise RuntimeError("could not connect the opacity")
@@ -283,25 +292,41 @@ def sky_starfield():
     finish(material, asset)
 
 
-def glass_veil(graph):
+def glass_veil(graph, collection):
     """The veil, VeilColour * MPC_Sky.Veil * MPC_Sky.InteriorLight: the room
-    reflected in the glass, so a lit ship hides the faint stars (sky decision
-    6). Slice 2. Returns the node to add to the glass's emissive, or None."""
-    return None
+    reflected in the glass, so a lit ship hides the faint stars and a dark one
+    shows them all (sky decision 6). Returns the node to add to the glass's
+    emissive, or None while MPC_Sky is pending.
+
+    veil_colour is set by the spec's target: with the lights fully fed and
+    ds.Sky.Veil at 1, the veil lands on screen at the pixel value of a flux-4
+    star, so that about one star in eight shows through a lit room. A flux-4
+    star is PointStarBrightness(4) = sqrt(4) * 0.01 * 3 = 0.06. Translucency
+    blends the glass's emissive in at its opacity, 0.12, so the veil's own
+    emissive is 0.06 / 0.12 = 0.5. The colour leans warm: what a window
+    reflects is the room, and the rooms are lit mostly warm. Tune it in
+    play with ds.Sky.Veil, and write the settled factor back here.
+    """
+    if collection is None:
+        return None
+    colour = graph.colour(CONSTANTS["veil_colour"])
+    veil = graph.collection_scalar(collection, "veil")
+    interior = graph.collection_scalar(collection, "interior_light")
+    return graph.mul(graph.mul(colour, veil), interior)
 
 
-def sky_glass():
-    """The cockpit and galley windows: translucent and unlit, a faint tint
-    and little else, so what is outside reads as outside.
+def sky_glass(collections):
+    """The cockpit and galley windows: translucent and unlit, a faint tint,
+    and the room's reflection over whatever is outside.
 
-        emissive = tint (+ the veil, slice 2); opacity = glass_opacity
+        emissive = tint + veil; opacity = glass_opacity
     """
     asset = "M_SkyGlass"
     material = fresh_material(asset)
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
     g = Graph(material)
     emissive = g.colour(CONSTANTS["glass_tint"])
-    veil = glass_veil(g)
+    veil = glass_veil(g, collections.get("MPC_Sky"))
     if veil is not None:
         emissive = g.add(emissive, veil)
     g.emissive(emissive)
@@ -311,7 +336,9 @@ def sky_glass():
 
 def author_collection(asset, entry):
     """A Material Parameter Collection: global shader scalars any material can
-    read and C++ can set once a frame."""
+    read and C++ can set once a frame. The defaults are what a material sees
+    where nothing writes them -- the editor's own viewport, before play --
+    and for MPC_Sky that is the lit ship, veil and all."""
     path = "%s/%s" % (DIRECTORY, asset)
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         collection = unreal.EditorAssetLibrary.load_asset(path)
@@ -319,29 +346,39 @@ def author_collection(asset, entry):
         collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             asset, DIRECTORY, unreal.MaterialParameterCollection,
             unreal.MaterialParameterCollectionFactoryNew())
+    # A parameter that already exists keeps its entry, and with it its id:
+    # a material holds a collection parameter by id and looks the name up
+    # on load, so an id made fresh each run would turn every material that
+    # reads this collection into one reading None, silently.
+    existing = {str(p.get_editor_property("parameter_name")): p
+                for p in collection.get_editor_property("scalar_parameters")}
+    defaults = entry.get("defaults", {})
     scalars = []
     for role in entry["parameters"]:
-        parameter = unreal.CollectionScalarParameter()
+        parameter = existing.get(name(role)) or unreal.CollectionScalarParameter()
         parameter.set_editor_property("parameter_name", name(role))
-        parameter.set_editor_property("default_value", 0.0)
+        parameter.set_editor_property("default_value", float(defaults.get(role, 0.0)))
         scalars.append(parameter)
     collection.set_editor_property("scalar_parameters", scalars)
     collection.set_editor_property("vector_parameters", [])
     unreal.EditorAssetLibrary.save_loaded_asset(collection, only_if_is_dirty=False)
-    log("%s: scalars %s" % (asset, [name(r) for r in entry["parameters"]]))
+    kept = [name(r) for r in entry["parameters"] if name(r) in existing]
+    log("%s: scalars %s (ids kept for %s)" % (asset, [name(r) for r in entry["parameters"]], kept))
+    return collection
 
 
 def main():
     unreal.EditorAssetLibrary.make_directory(DIRECTORY)
+    collections = {}
     for asset, entry in CONTRACT["collections"].items():
         if "pending" in entry:
             log("%s: pending (%s)" % (asset, entry["pending"]))
         else:
-            author_collection(asset, entry)
+            collections[asset] = author_collection(asset, entry)
     sky_body()
     sky_star()
     sky_starfield()
-    sky_glass()
+    sky_glass(collections)
     log("ok")
 
 
