@@ -518,6 +518,10 @@ bool FSliceLoopPointStarsTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("doubling ds.Sky.Radiance doubles the dome on the next frame"),
                  FMath::IsNearlyEqual(CustomData(Dome, Bright, SkyMaterial::CustomDataBrightness), 2.0f * Drawn, 1e-5f));
     }
+    // Settled back before the next tuning: Radiance going back to 3 moves
+    // the brightness key, and a rebuild on its account would resize the dome
+    // whether or not the size is keyed at all.
+    Test.Step(0.0f);
     {
         // What the CVar's own help suggests when two-pixel points shimmer
         // under TSR: it must reach the 3,000 stars, not only the destinations.
