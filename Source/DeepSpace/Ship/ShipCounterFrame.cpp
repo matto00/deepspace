@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
@@ -17,6 +18,8 @@
 #include "UI/ShipScreenWidget.h"
 #include "Universe/GenSeed.h"
 #include "Universe/GenStream.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogCounterFrame, Log, All);
 
 namespace
 {
@@ -87,6 +90,15 @@ namespace
         return FTransform(FQuat::Identity, Where - Fit.Centre * Scale, FVector(Scale));
     }
 
+    /** Whether a layer draws with the given material, or a runtime copy of
+     *  it: compared by the base material, which a dynamic instance keeps. */
+    bool DrawsWith(const UInstancedStaticMeshComponent* Layer, const TCHAR* Path)
+    {
+        const UMaterialInterface* Material = Layer ? Layer->GetMaterial(0) : nullptr;
+        const UMaterial* Base = Material ? Material->GetMaterial() : nullptr;
+        return Base && Base->GetPathName() == Path;
+    }
+
     /** The sky's flux exponent, read at use if the sky has registered it, so
      *  the background and the bodies are compressed alike; the projection's
      *  own default otherwise. */
@@ -153,9 +165,36 @@ double AShipCounterFrame::GetPixelAngle() const
     return 2.0 * FMath::Tan(FMath::DegreesToRadians(FieldOfView) * 0.5) / Width;
 }
 
+TArray<FString> AShipCounterFrame::FindMaterialProblems() const
+{
+    TArray<FString> Problems;
+    const auto Named = [](const UInstancedStaticMeshComponent* Layer)
+    {
+        const UMaterialInterface* Material = Layer ? Layer->GetMaterial(0) : nullptr;
+        return Material ? Material->GetPathName() : FString(TEXT("no material"));
+    };
+    if (!DrawsWith(DistantStars, SkyMaterial::StarfieldPath))
+    {
+        Problems.Add(FString::Printf(
+            TEXT("DistantStars draws with %s, not %s: it ignores each star's colour and brightness, so every star draws alike"),
+            *Named(DistantStars), SkyMaterial::StarfieldPath));
+    }
+    if (!DrawsWith(NearStars, SkyMaterial::StarPath))
+    {
+        Problems.Add(FString::Printf(
+            TEXT("NearStars draws with %s, not %s: the motes cannot fade and the course marker cannot be tinted"),
+            *Named(NearStars), SkyMaterial::StarPath));
+    }
+    return Problems;
+}
+
 void AShipCounterFrame::BeginPlay()
 {
     Super::BeginPlay();
+    for (const FString& Problem : FindMaterialProblems())
+    {
+        UE_LOG(LogCounterFrame, Warning, TEXT("%s: %s. Rebuild the level (Tools/build_hauler.py)."), *GetName(), *Problem);
+    }
     RebuildStarfield();
     SyncToShip();
 }

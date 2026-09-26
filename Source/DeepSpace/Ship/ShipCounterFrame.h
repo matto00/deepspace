@@ -89,6 +89,20 @@ public:
      */
     double GetPixelAngle() const;
 
+    /**
+     * What is wrong with the materials the level gave this frame, one line
+     * each; empty when the dome is M_SkyStarfield and the motes M_SkyStar.
+     *
+     * The frame never loads them itself -- Tools/build_hauler.py assigns them
+     * (ADR 0002, sky spec) -- so a level built with the wrong ones still
+     * draws, and wrongly: any other dome material ignores the per-instance
+     * colour and brightness, so every star draws alike, and any other mote
+     * material has no Brightness, so the fade pops and the course marker
+     * cannot be tinted. None of that is visible under -nullrhi, so it is
+     * said, as a warning, at BeginPlay.
+     */
+    TArray<FString> FindMaterialProblems() const;
+
     /** Where the dome is drawn, cm: DistantStarRadius. Behind every body the
      *  sky draws, so nothing on it crosses a planet. */
     double GetDomeRadius() const;

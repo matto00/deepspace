@@ -238,6 +238,45 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         Motes->Destroy();
     }
 
+    // Which materials it is drawn with, which is the level's to assign and
+    // invisible under -nullrhi: milestone 1's M_Star reads no custom data and
+    // has no Brightness, so on it every star draws alike and the motes pop.
+    UMaterialInterface* StarfieldMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarfieldPath);
+    UMaterialInterface* OldStar = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/M_Star.M_Star"));
+    if (Ship && TestNotNull(TEXT("M_SkyStarfield exists"), StarfieldMaterial)
+        && TestNotNull(TEXT("M_SkyStar exists for the material check"), StarMaterial)
+        && TestNotNull(TEXT("and milestone 1's M_Star"), OldStar))
+    {
+        AShipCounterFrame* Checked = World->SpawnActor<AShipCounterFrame>();
+        UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+        Checked->GetDistantStars()->SetStaticMesh(Sphere);
+        Checked->GetNearStars()->SetStaticMesh(Sphere);
+        Checked->DistantStarCount = 16;
+
+        Checked->GetDistantStars()->SetMaterial(0, OldStar);
+        Checked->GetNearStars()->SetMaterial(0, OldStar);
+        TestEqual(TEXT("M_Star on both layers is two problems"), Checked->FindMaterialProblems().Num(), 2);
+
+        Checked->GetDistantStars()->SetMaterial(0, StarfieldMaterial);
+        TestEqual(TEXT("M_SkyStarfield on the dome answers one"), Checked->FindMaterialProblems().Num(), 1);
+        Checked->GetDistantStars()->SetMaterial(0, StarMaterial);
+        Checked->GetNearStars()->SetMaterial(0, StarfieldMaterial);
+        TestEqual(TEXT("the two swapped are still two"), Checked->FindMaterialProblems().Num(), 2);
+
+        Checked->GetDistantStars()->SetMaterial(0, StarfieldMaterial);
+        Checked->GetNearStars()->SetMaterial(0, StarMaterial);
+        TestEqual(TEXT("M_SkyStarfield on the dome and M_SkyStar on the motes is none"),
+                  Checked->FindMaterialProblems().Num(), 0);
+
+        // The fade swaps the motes onto a runtime copy; that is still M_SkyStar.
+        Checked->RebuildStarfield();
+        Checked->SyncToShip();
+        TestTrue(TEXT("the motes now draw a runtime copy"),
+                 Cast<UMaterialInstanceDynamic>(Checked->GetNearStars()->GetMaterial(0)) != nullptr);
+        TestEqual(TEXT("which is still M_SkyStar"), Checked->FindMaterialProblems().Num(), 0);
+        Checked->Destroy();
+    }
+
     GEngine->DestroyWorldContext(World);
     World->DestroyWorld(false);
     return true;
