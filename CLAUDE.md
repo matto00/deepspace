@@ -91,9 +91,12 @@ green merged.
 checks everything that has made a mutation silently prove nothing here -- the
 text not found, the mutant not compiling, the library not rebuilt -- before
 reading a verdict, and restores the file. Rebuild afterwards: its last build
-held the mutant. `./test.sh` itself exits non-zero if no tests ran, and a
-test path that has children becomes a group node and silently stops running,
-so compare the tests that ran against those defined when a count looks off.
+held the mutant. `./test.sh` itself exits non-zero if no tests ran, or if
+the log shows a world torn down without `EndPlay` or a console variable
+looked up by name every frame -- both have been left by runs whose every
+test passed. A test path that has children becomes a group node and
+silently stops running, so compare the tests that ran against those defined
+when a count looks off.
 
 Run automation tests headlessly (preferred — no UI clicking, works over SSH):
 
@@ -146,6 +149,8 @@ been abandoned. Say so.
   both (*The drive and the jump*).
 - `Ship/ShipHum*`, `Ship/ShipLightingSubsystem.*`, `Ship/ShipNavScreen.*` —
   the hum, the lights and lamps, the chart chair.
+- `Ship/ShipDressing*` — the pure dressing core, its rules and ini, the
+  surface and keep-out markers, and `UShipDressingSubsystem` (*The dressing*).
 
 Consumers **ask** the subsystem for state; they never store it. That discipline
 is what keeps ship state from scattering across actors.
@@ -237,6 +242,7 @@ are rebuilt too: tune them in `build_hauler.py`, not in the editor.
 
 ```bash
 python3 Tools/test_floorplan.py && python3 Tools/test_placement.py
+python3 Tools/test_dressing_markers.py  # after a surface change: python3 Tools/dressing_markers.py
 python3 Tools/validate_hauler.py        # no editor needed, ~1s
 ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
     "$PWD/DeepSpace.uproject" \
@@ -530,10 +536,16 @@ from the dynamic instance, which holds whatever was last written.
 cockpit, with `UNavigationWidget` built in C++. E sits you down at it; it shows
 where you are, the six nearest systems, the jump as a word and the course as a
 bearing. Clicking a row plots it (again clears it), and one toggle engages or
-stands down. That is all it does: aiming is the helm's. It asks the ship every
-frame and keeps nothing, so a course plotted from the console shows here
-untold. The chair beside the helm is not a second station (vision: shared
-presence, never division of labour).
+stands down. That is all it does: aiming is the helm's. It keeps nothing it
+could ask for, so a course plotted from the console shows here untold. The
+jump's word is asked every frame; where the ship is, the rows and the course
+cost a sector scan or a generated system, so they are asked again only when
+something they depend on has changed (`UNavigationWidget::FAskedAt`: the jump
+serial, transit, the plotted system, the ship's position past
+`MovedFarEnoughCm`, its heading, `ds.Nav.RangeLy`, the priors). The chart is
+in view from the helm and would otherwise pay for that every frame. The chair
+beside the helm is not a second station (vision: shared presence, never
+division of labour).
 
 It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
 from `NAV_SCREEN` in `hauler_layout.py`. **Its three seat tunables,
@@ -547,14 +559,73 @@ screen test must.
 
 ## The dressing
 
-The clutter is generated in **C++ at world start**, not baked by Python (ADR
-0006, amended: the exception was refused). `UShipDressingSubsystem` finds the
-surfaces the layout exports as markers tagged **`Dress.Surface`**, plans with
-the pure `ShipDressing` core under a seed derived from the universe's, and
-spawns the result as instances on one transient actor. It is tuned from the
-console with `ds.Dress.*`, and redresses a running session in place. It is
-being built as this is written; the lived-in spec's decisions 1-1d are its
-contract, and its own section belongs here once it lands.
+Somebody's things on the ship's surfaces -- mugs on the counter, books on the
+bunk desk, crates on the rack -- and the wear on its furniture. It is
+generated in **C++ at world start**, never baked by Python (ADR 0006,
+amended: the exception was refused), and the lived-in spec's decisions 1-1d
+are its contract.
+
+- **The layout exports where things may rest.** `build_hauler.py`'s
+  `place_surfaces` spawns one `AShipDressingSurface` per surface
+  `resolve_surfaces` finds (`ROOM_DRESSING` in `hauler_layout.py` says which
+  kinds each room takes), tagged **`Dress.Surface`**; `place_keep_outs` spawns
+  an `AShipDressingKeepOut` for every door's and the console's keep-clear
+  zone, the slide run and the crawlway, tagged **`Dress.KeepOut`**. Every
+  furniture part is tagged **`Dress.Wear`** and **`Piece.<prop>_<n>`**, so a
+  whole desk wears together. The markers carry data and no logic (ADR 0002),
+  and `verify_level.py` holds each one to the layout. The tag strings live in
+  `ShipDressingTags` (`Ship/ShipDressingTypes.h`) and `placement.py`, and
+  `test_placement.py` reads the C++ to hold them equal.
+- **The pure core plans.** `ShipDressing::Dress` (`Ship/ShipDressing.h`) is a
+  function of surfaces, keep-outs, a seed and `FShipDressingRules`
+  (`Ship/ShipDressingRules.h`): Poisson for how many, Beta for where along
+  and how far back, a categorical for what and in which colour, a geometric
+  pile. `DressGuarantees` is what no rule may move -- containment, the clear,
+  the excludes, the keep-outs, nothing below `MinRestHeightCm` -- so no tune
+  can put a mug through a shelf or onto the floor.
+- **`UShipDressingSubsystem` draws it.** In `OnWorldBeginPlay` it gathers the
+  tagged markers, asks the core for a plan under
+  `ShipDressing::DressSeed(root)` -- the universe's root seed, so two players
+  aboard one universe see one set of mugs -- and spawns it as
+  `UInstancedStaticMeshComponent`s on one transient actor tagged
+  **`Dress.Clutter`**: Movable, `NoCollision`, each instance scaled and offset
+  from its mesh's measured bounds (the pivot trap, again). It swaps worn
+  pieces to `MI_Ship_furniture_faded` / `_replaced`. The clutter's
+  `MI_Ship_<role>` materials are authored by `build_hauler.py` (`PLAIN`), so a
+  missing one means the level build has not run. **It never ticks**: nothing
+  accumulates, nothing is ever to tidy (the anti-chore principle, kept by
+  structure). The editor world never begins play, so the viewport shows bare
+  surfaces; press Play to see it.
+- **The rules are data.** `[/Script/DeepSpace.ShipDressingConfig]` in
+  `DefaultGame.ini`, read through `UShipDressingConfig`, lays ini lines over
+  the code's defaults: scalars by name, and `+Kinds`, `+Templates` and
+  `+Colours` rows that replace the entry of the same name (a `Kinds` row with
+  no `Mix` keeps the code's mix). A read outside `DressRuleDomain` is refused
+  whole and names the line. `ds.Dress.Reload` re-reads the file from disk
+  through `GameIniReload::RereadFromDisk` -- the same path as
+  `ds.Universe.ReloadPriors`, for the same config-cache trap -- and redresses
+  every running world.
+
+Console:
+
+- `ds.Dress.LivedIn` -- scales every surface's mean count: 0.3 freshly moved
+  in, 1 lived in, 2 squalid, 0 bare. Setting it redresses in place.
+- `ds.Dress.Seed <root>` -- dress as that root's universe would; -1 for the
+  world's own. Setting it redresses. `ds.Dress.Redress [root]` does the same
+  as a command.
+- `ds.Dress.Reload` -- as above. `ds.Dress.Describe` -- every surface and
+  what is on it, one line each.
+
+The tests: `DeepSpace.Ship.Dressing.*` hold the core to its rules on
+`Tests/DressingTestFixtures.h` (hand-typed, allowed to lag) and the subsystem
+to its plan with probe markers. `DeepSpace.Dressing.Hauler.*` dress the
+hauler's *real* surfaces, spawned from `Tools/dressing_markers.json`, which
+`python3 Tools/dressing_markers.py` writes from `generate()` and
+`test_dressing_markers.py` holds equal to it: **after any change to the
+layout's surfaces, rerun the script**, or that test fails. `DeepSpace.Loop.Jump`
+flies the whole loop with the ship dressed. Whether it reads as somebody's
+ship is a playtest question: walk it at `ds.Dress.LivedIn` 0.3, 1 and 2, and
+at `ds.Dress.Seed` 1, 2 and 3.
 
 ## Playtest console
 
@@ -573,7 +644,8 @@ ds.Nav.Engage               engage (ds.Nav.Engage 0 stands down); aim, and it fi
 ```
 
 `ds.Nav.Charge` fills the charge on the next tick, once. `ds.Nav.Clear` drops
-the course. `ds.HUD 0` hides the HUD for an unadorned look.
+the course. `ds.HUD 0` hides the HUD for an unadorned look. `ds.Dress.LivedIn`
+and `ds.Dress.Seed` redress the ship where you stand (*The dressing*).
 
 ## Where each tunable lives
 
@@ -605,9 +677,12 @@ tests that assert it.
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.15, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
+| `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |
 
-Tunables that are not CVars: the universe's seed and priors
-(`Config/DefaultGame.ini`, above); room moods and practicals
+Tunables that are not CVars: the universe's seed and priors, and the
+dressing's rules (`Config/DefaultGame.ini`, above, reloaded with
+`ds.Universe.ReloadPriors` and `ds.Dress.Reload`; write a settled dressing
+number back into `ShipDressingRules.cpp`); room moods and practicals
 (`hauler_layout.py`, a level rebuild); the chart's seat (`place_nav_screen`, a
 level rebuild); the reactor rating and each consumer's want
 (`UShipSubsystem`'s `static constexpr`s, a header change).
