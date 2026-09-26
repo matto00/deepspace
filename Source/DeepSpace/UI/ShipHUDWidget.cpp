@@ -10,6 +10,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/DeepSpaceCharacter.h"
+#include "Ship/ShipFlightState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "UI/NavText.h"
@@ -43,16 +44,15 @@ namespace
     constexpr double CaretDistance = 1.0e7;
 
     /**
-     * How near the drive floor the altitude must be, as a fraction of it, to
-     * be said to be there. The drive closes a tenth of its room every 1.5 s,
-     * so it is within 5% -- 5 km of a 100 km floor, and "105 KM" on the
-     * readout -- a minute and a half after passing 1,000 km, and never
-     * reaches it exactly: without a band the words would arrive at the
-     * heat death of the universe.
+     * How little room the drive may have left, as a fraction of its floor,
+     * to be said to be at it. The drive closes a tenth of its room every
+     * 1.5 s and never reaches the floor exactly, so without a band the words
+     * would arrive at the heat death of the universe; with 5% they arrive at
+     * "105 KM" over a 100 km floor, a minute and a half after 1,000 km.
      */
     TAutoConsoleVariable<float> CVarFloorBand(
         TEXT("ds.HUD.FloorBand"), 0.05f,
-        TEXT("How close to the drive floor, as a fraction of it, the altitude line says DRIVE FLOOR."),
+        TEXT("How close to the drive floor, as a fraction of it, the drive must have settled for the altitude line to say DRIVE FLOOR."),
         ECVF_Default);
 
     /** A dash reads as "no reading", where a zero would read as a measurement. */
@@ -297,18 +297,21 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
         MotionLine->SetText(FText::FromString(Motion));
     }
 
+    // Where the ship is: the system asked of its position, never remembered,
+    // and asked once this frame for both lines that need it. The altitude
+    // wants only its surfaces, so nothing out to the neighbours is searched.
+    const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(this);
+    const TOptional<FStarSystem> Here = (Universe && !ShipState->IsInTransit())
+        ? Universe->GetSystemAt(ShipState->GetFlightState().GetUniversePosition())
+        : TOptional<FStarSystem>();
+
     if (AltitudeReadout)
     {
-        AltitudeReadout->SetText(AltitudeLineText(*ShipState));
+        AltitudeReadout->SetText(AltitudeLineText(*ShipState, LocalSystem::Here(Here)));
     }
 
-    // Where the ship is: the system asked of its position, never remembered.
-    const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(this);
     if (PlaceLine)
     {
-        const TOptional<FStarSystem> Here = (Universe && !ShipState->IsInTransit())
-            ? Universe->GetSystemAt(ShipState->GetFlightState().GetUniversePosition())
-            : TOptional<FStarSystem>();
         PlaceLine->SetText(ShipState->IsInTransit() ? FText::FromString(NavText::Jump(EJumpState::Transit))
                            : Here ? FText::FromString(NavText::Place(Here->Stub.Name, Here->Star.Class))
                                   : Blank);
@@ -433,12 +436,10 @@ FString UShipHUDWidget::AltitudeWords(double Cm)
     return Grouped(FMath::RoundToInt64(AU)) + TEXT(" AU");
 }
 
-FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, double FloorCm, double FloorBand)
+FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, bool bAtDriveFloor)
 {
     FString Line = AltitudeWords(AltitudeCm) + (bEdge ? FString(TEXT(" TO THE EDGE")) : TEXT(" ABOVE ") + Surface);
-    // Either side of the floor: the drive settles onto it from above, and
-    // a slow cruise just under it is still, to the eye, the floor.
-    if (FloorCm > 0.0 && FMath::Abs(AltitudeCm - FloorCm) <= FMath::Max(FloorBand, 0.0) * FloorCm)
+    if (bAtDriveFloor)
     {
         Line += NavText::Separator;
         Line += TEXT("DRIVE FLOOR");
@@ -446,20 +447,58 @@ FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, 
     return Line;
 }
 
+bool UShipHUDWidget::DriveHoldsAtFloor(const FShipFlightState& Flight, double SurfaceCm, const FVector& AwayFromSurface,
+                                       double FloorBand)
+{
+    const FShipFlightCommand& Command = Flight.GetCommand();
+    const double Floor = Flight.GetLimits().DriveFloor;
+    if (!Command.bDrive || Command.Throttle == 0.0 || Floor <= 0.0)
+    {
+        return false;
+    }
+    // Where the lever sends the ship, not where it is going this instant: at
+    // the floor the drive has cut the closing speed to nothing, so the
+    // velocity says nothing about which way it is being held. A heading that
+    // grazes the surface still closes, and the drive still holds it.
+    const FVector Pushed = Flight.GetUniverseOrientation().GetForwardVector() * FMath::Sign(Command.Throttle);
+    const bool bTowardSurface = (Pushed | AwayFromSurface) < 0.0;
+
+    // Room, not height either side of the floor: under the floor the drive
+    // has none, closes no further, and is as much at its floor as above it.
+    const double Room = FMath::Max(SurfaceCm - Floor, 0.0);
+    return bTowardSurface && Room <= FMath::Max(FloorBand, 0.0) * Floor;
+}
+
 FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState)
+{
+    return AltitudeLineText(ShipState, ShipState.IsInTransit() ? FSkySystem() : LocalSystem::Here(ShipState.GetWorld()));
+}
+
+FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState, const FSkySystem& Here)
 {
     if (ShipState.IsInTransit())
     {
         return Blank;
     }
-    const FSkySystem Here = LocalSystem::Current(ShipState.GetWorld());
     const FShipFlightState& Flight = ShipState.GetFlightState();
-    const FSkyNearestSurface Nearest = LocalSystem::NearestSurface(Here, Flight.GetUniversePosition());
+    const FUniversePosition Where = Flight.GetUniversePosition();
+    const FSkyNearestSurface Nearest = LocalSystem::NearestSurface(Here, Where);
     if (!Nearest.bEdge && !Here.Bodies.IsValidIndex(Nearest.Body))
     {
         return Blank;
     }
+    // Which way the surface falls away is asked only where the answer can
+    // matter -- inside the band, with the drive on -- so a HUD far from
+    // anything pays for no probes.
+    const double Band = CVarFloorBand.GetValueOnGameThread();
+    const double Floor = Flight.GetLimits().DriveFloor;
+    bool bAtFloor = false;
+    if (Flight.GetCommand().bDrive && Nearest.Distance - Floor <= FMath::Max(Band, 0.0) * Floor)
+    {
+        const FVector Away = ShipDrive::AwayFromSurface(
+            [&Here](const FUniversePosition& At) { return LocalSystem::NearestSurfaceDistance(Here, At); }, Where);
+        bAtFloor = DriveHoldsAtFloor(Flight, Nearest.Distance, Away, Band);
+    }
     const FString Surface = Nearest.bEdge ? FString() : Here.Bodies[Nearest.Body].Id.ToString();
-    return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, Flight.GetLimits().DriveFloor,
-                                          CVarFloorBand.GetValueOnGameThread()));
+    return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, bAtFloor));
 }

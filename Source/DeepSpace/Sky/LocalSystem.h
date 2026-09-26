@@ -54,6 +54,24 @@ namespace LocalSystem
      */
     DEEPSPACE_API FSkySystem Current(const UWorld* World);
 
+    /**
+     * Current without the neighbours: the star and its worlds, and the
+     * system's edge -- every surface there is to be near, and nothing else.
+     * For a consumer that asks how far the ship is from something, which the
+     * neighbours, light years off, never answer: the search out to 12 ly and
+     * the thirty stubs it makes are most of what Current costs, and a caller
+     * that asks every frame and throws them away pays for them every frame.
+     *
+     * Empty exactly when Current is.
+     */
+    DEEPSPACE_API FSkySystem Here(const UWorld* World);
+
+    /** Here of a system already asked for -- UUniverseSubsystem::GetSystemAt's
+     *  answer, which a caller that also needs the procgen system (the HUD's
+     *  place line) has in hand -- so the one frame generates it once. Empty
+     *  for an empty answer. Pure. */
+    DEEPSPACE_API FSkySystem Here(const TOptional<FStarSystem>& System);
+
     /** UShipSubsystem::IsInTransit(). False with no ship subsystem. */
     DEEPSPACE_API bool InTransit(const UWorld* World);
 
