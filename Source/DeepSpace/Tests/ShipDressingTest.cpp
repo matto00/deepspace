@@ -367,12 +367,14 @@ bool FShipDressingShapeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("one piece wears the same way every time it is asked"),
              ShipDressing::Wear(Seed, TEXT("desk_0"), Rules) == ShipDressing::Wear(Seed, TEXT("desk_0"), Rules));
 
-    // How many: Poisson(lambda x LivedIn). On a counter too big to reject
-    // anything, the mean number of piles is the kind's lambda, scaled.
-    FDressSurface Vast = DressingFixtures::Surface(TEXT("probe"), TEXT("counter.top"), 0, FVector(0, 0, 90), 0,
-                                                   FVector2D(3000, 3000), EDressEdge::NegX, EDressUse::PosY, 58);
+    // How many: Poisson(lambda x LivedIn). On a shelf too big to reject
+    // anything, the mean number of piles is the kind's lambda, scaled --
+    // squalid included. The rack's lambda is 2, so even at LivedIn 2 the cap
+    // of 8 trims the mean by only a few hundredths.
+    FDressSurface Vast = DressingFixtures::Surface(TEXT("probe"), TEXT("wall_rack.shelf_0"), 0, FVector(0, 0, 90), 0,
+                                                   FVector2D(3000, 3000), EDressEdge::NegX, EDressUse::Centre, 70);
     const double Lambda = Rules.FindKind(Vast.Kind)->Lambda;
-    for (const double LivedIn : { 0.5, 1.0 })
+    for (const double LivedIn : { 0.5, 1.0, 2.0 })
     {
         FShipDressingRules Scaled = Rules;
         Scaled.LivedIn = LivedIn;
