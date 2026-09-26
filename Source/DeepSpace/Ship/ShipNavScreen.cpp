@@ -15,7 +15,10 @@ namespace
 
     /** The volume's depth behind the face, and its gap from it, cm. The gap
      *  is what keeps the panel, not the volume, first along any trace that
-     *  lands on the glass. */
+     *  lands on the glass. It also means the mount must stand more than the
+     *  gap proud of whatever is behind it: the desk screen prop blocks
+     *  Visibility, and a volume starting behind the prop's face never takes
+     *  a trace. At the layout's 1 cm proud, the margin is half a centimetre. */
     constexpr float ReachDepthCm = 4.0f;
     constexpr float ReachGapCm = 0.5f;
 }
@@ -30,10 +33,15 @@ AShipNavScreen::AShipNavScreen()
 
     // The starting seat, to be moved by eye in the chart chair playtest.
     // They are per instance, set by build_hauler.py, so a nudge is a level
-    // rebuild and never a C++ one: back far enough to be on the starboard
-    // chair, at its cushion's height, and leaning in to read.
+    // rebuild and never a C++ one. From the mount at cockpit x 301 (nav spec
+    // B1), 126 cm back is the starboard pilot_seat's centre at x 175: the
+    // body on the chair, as the laptop's puts it on the bench, rather than
+    // on the cushion's front edge where the spec's 100 cm lands. 55 cm is
+    // the cushion's top. The eyes then lean well in, to read at 60 cm; the
+    // chair sits that far back because the desk is solid to the floor and
+    // knees need the room.
     bUsable = true;
-    UseDistanceCm = 100.0f;
+    UseDistanceCm = 126.0f;
     SeatHeightCm = 55.0f;
     ViewDistanceCm = 60.0f;
 

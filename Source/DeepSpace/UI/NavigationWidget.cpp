@@ -353,6 +353,13 @@ FText UNavigationWidget::GetRowText(int32 Index) const
     return FText::FromString(FString::Join(Parts, NavText::Separator));
 }
 
+bool UNavigationWidget::IsRowEnabled(int32 Index) const
+{
+    return RowButtons.IsValidIndex(Index) && RowButtons[Index]
+        && RowButtons[Index]->GetVisibility() != ESlateVisibility::Collapsed
+        && RowButtons[Index]->GetIsEnabled();
+}
+
 FText UNavigationWidget::GetHereText() const
 {
     return HereLine ? HereLine->GetText() : FText::GetEmpty();

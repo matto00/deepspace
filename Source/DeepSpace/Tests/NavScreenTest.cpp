@@ -105,6 +105,12 @@ namespace
         return false;
     }
 
+    double ChartRangeCm()
+    {
+        const IConsoleVariable* Range = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.RangeLy"));
+        return (Range ? Range->GetFloat() : 12.0f) * UniverseUnits::CmPerLightYear;
+    }
+
     /**
      * What the chart should list, asked of the universe directly rather than
      * through UShipSubsystem::GetChart: the systems within ds.Nav.RangeLy,
@@ -112,10 +118,8 @@ namespace
      */
     TArray<FStarSystemStub> Expected(const UUniverseSubsystem& Universe, const UShipSubsystem& Ship)
     {
-        const IConsoleVariable* Range = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.RangeLy"));
-        const double RangeCm = (Range ? Range->GetFloat() : 12.0f) * UniverseUnits::CmPerLightYear;
         const FUniversePosition Where = Ship.GetFlightState().GetUniversePosition();
-        TArray<FStarSystemStub> Near = Universe.GetSystemsNear(Where, RangeCm);
+        TArray<FStarSystemStub> Near = Universe.GetSystemsNear(Where, ChartRangeCm());
         if (const TOptional<FStarSystem> Here = Universe.GetSystemAt(Where))
         {
             Near.RemoveAll([&Here](const FStarSystemStub& Stub) { return Stub.Id == Here->Stub.Id; });
@@ -127,8 +131,36 @@ namespace
         return Near;
     }
 
+    /**
+     * Whether a ship arrived at From would find Home among its rows. Asked
+     * from the star's own position rather than the arrival point, which is
+     * a standoff of a few AU from it: against light-years of spacing that
+     * reorders nothing but an exact tie.
+     */
+    bool ChartFromListsHome(const UUniverseSubsystem& Universe, const FStarSystemStub& From, const FSystemId& Home)
+    {
+        TArray<FStarSystemStub> Near = Universe.GetSystemsNear(From.Position, ChartRangeCm());
+        Near.RemoveAll([&From](const FStarSystemStub& Stub) { return Stub.Id == From.Id; });
+        if (Near.Num() > UNavigationWidget::RowCount)
+        {
+            Near.SetNum(UNavigationWidget::RowCount);
+        }
+        return Near.ContainsByPredicate([&Home](const FStarSystemStub& Stub) { return Stub.Id == Home; });
+    }
+
+    int32 EnabledRows(const UNavigationWidget& Chart)
+    {
+        int32 Count = 0;
+        for (int32 Index = 0; Index < UNavigationWidget::RowCount; ++Index)
+        {
+            Count += Chart.IsRowEnabled(Index) ? 1 : 0;
+        }
+        return Count;
+    }
+
     /** Every row the chart shows is the expected system, in order, worded
-     *  as ds.Nav.Near words it. */
+     *  as ds.Nav.Near words it, marked visited exactly when the ship has
+     *  been there, and there to be pressed. */
     void CheckRows(FAutomationTestBase& Test, const UNavigationWidget& Chart, const UUniverseSubsystem& Universe,
                    const UShipSubsystem& Ship, const TCHAR* When)
     {
@@ -136,7 +168,11 @@ namespace
         Test.TestEqual(FString::Printf(TEXT("%s: the chart shows the six nearest, or all there are"), When),
                        Chart.GetShownRowCount(), Want.Num());
 
+        Test.TestEqual(FString::Printf(TEXT("%s: every row shown can be pressed"), When),
+                       EnabledRows(Chart), Want.Num());
+
         const FUniversePosition Where = Ship.GetFlightState().GetUniversePosition();
+        const FString VisitedColumn = FString(NavText::Separator) + TEXT("visited");
         for (int32 Index = 0; Index < Want.Num(); ++Index)
         {
             FString Row = Chart.GetRowText(Index).ToString();
@@ -148,6 +184,14 @@ namespace
                                           *Want[Index].Name, *Distance, *NavText::StarClass(Want[Index].Class), *Row),
                           Row.StartsWith(Want[Index].Name + NavText::Separator + Distance + NavText::Separator
                                          + NavText::StarClass(Want[Index].Class)));
+
+            // Visited is the ship's record, not the chart's guess: a row
+            // that says it of somewhere never reached is as wrong as one
+            // that forgets where the ship has been.
+            const bool bBeen = Ship.HasVisited(Want[Index].Id);
+            Test.TestEqual(FString::Printf(TEXT("%s: row %d (%s) reads visited only if the ship has been there "
+                                                "(it reads '%s')"), When, Index, *Want[Index].Name, *Row),
+                           Row.EndsWith(VisitedColumn), bBeen);
         }
         Test.TestTrue(FString::Printf(TEXT("%s: nothing past the last row"), When),
                       Chart.GetRowText(Want.Num()).IsEmpty());
@@ -258,6 +302,27 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
         return false;
     }
     CheckRows(*this, *Chart, *Universe, *Ship, TEXT("at the start"));
+    // Home is the only place the ship has been, and home is not a row: so
+    // no row reads visited, whatever the ship's record says.
+    for (int32 Index = 0; Index < UNavigationWidget::RowCount; ++Index)
+    {
+        const FString Row = Chart->GetRowText(Index).ToString();
+        TestFalse(FString::Printf(TEXT("at the start row %d is not visited (it reads '%s')"), Index, *Row),
+                  Row.EndsWith(FString(NavText::Separator) + TEXT("visited")));
+    }
+
+    // Somewhere to go from which home is still in sight, so that arriving
+    // shows a row that must read visited, not only rows that must not.
+    int32 DestinationRow = INDEX_NONE;
+    for (int32 Index = 0; Index < Near.Num() && DestinationRow == INDEX_NONE; ++Index)
+    {
+        DestinationRow = ChartFromListsHome(*Universe, Near[Index], Start) ? Index : INDEX_NONE;
+    }
+    if (!TestTrue(TEXT("some system in reach charts home among its six nearest"), DestinationRow != INDEX_NONE))
+    {
+        DestroyWorld(World);
+        return false;
+    }
     TestEqual(TEXT("nothing is plotted to start with"), PlottedRows(*Chart), 0);
     TestEqual(TEXT("no course"), Chart->GetCourseText().ToString(), FString(TEXT("None.")));
 
@@ -307,8 +372,8 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("a row that is not there plots nothing"), Ship->GetPlottedSystem().IsSet());
 
     // -- engaging, standing down, and every state the jump has ------------
-    Chart->SelectRow(1);
-    const FSystemId Destination = Near[1].Id;
+    Chart->SelectRow(DestinationRow);
+    const FSystemId Destination = Near[DestinationRow].Id;
     const FUniversePosition Parked = Ship->GetFlightState().GetUniversePosition();
     const FVector Toward = Ship->GetCourseDirection().Get(FVector::ForwardVector);
 
@@ -351,8 +416,10 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
                   FString(TEXT("Between stars.")));
         TestEqual(TEXT("and so does here"), Chart->GetHereText().ToString(), FString(TEXT("Between stars")));
         TestEqual(TEXT("the course is named with no bearing"), Chart->GetCourseText().ToString(),
-                  Near[1].Name + TEXT("."));
+                  Near[DestinationRow].Name + TEXT("."));
         TestFalse(TEXT("nothing can be engaged between stars"), Chart->IsEngageEnabled());
+        TestTrue(TEXT("the rows stay readable between stars"), Chart->GetShownRowCount() > 0);
+        TestEqual(TEXT("and none of them can be pressed"), EnabledRows(*Chart), 0);
         Chart->SelectRow(0);
         TestTrue(TEXT("nor replotted"), *Ship->GetPlottedSystem() == Destination);
     }
@@ -371,16 +438,20 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("and the jump is idle"), Chart->GetJumpText().ToString(), FString(TEXT("Idle.")));
         CheckRows(*this, *Chart, *Universe, *Ship, TEXT("on arrival"));
 
-        // Home, if it is still among the six nearest, is now somewhere you
-        // have been.
+        // Home, chosen above to be among the six nearest from here, is now a
+        // row, and somewhere you have been.
+        bool bHomeShown = false;
         for (int32 Index = 0; Index < UNavigationWidget::RowCount; ++Index)
         {
             const FString Row = Chart->GetRowText(Index).ToString().TrimStart();
             if (Row.StartsWith(Home->Stub.Name + NavText::Separator))
             {
-                TestTrue(TEXT("home is listed as visited"), Row.EndsWith(TEXT("visited")));
+                bHomeShown = true;
+                TestTrue(FString::Printf(TEXT("home is listed as visited (it reads '%s')"), *Row),
+                         Row.EndsWith(FString(NavText::Separator) + TEXT("visited")));
             }
         }
+        TestTrue(TEXT("home is among the rows on arrival"), bHomeShown);
     }
 
     // A word, never a number, in every state the jump has been in here.
@@ -485,14 +556,34 @@ bool FNavScreenChairTest::RunTest(const FString& Parameters)
         }
         TestEqual(TEXT("every part of the glass can be pointed at"), Blocked, 0);
 
-        // And the rim, just past the glass's edge, still finds the chart.
-        const FVector PanelHalf = FVector(0.0, Panel->GetDrawSize().X * Scale.X * 0.5, Panel->GetDrawSize().Y * Scale.X * 0.5);
-        const FVector Rim = Centre + Right * (PanelHalf.Y + 1.5) - Normal * 2.0;
-        FHitResult Hit;
-        World->LineTraceSingleByChannel(Hit, Centre + Right * (PanelHalf.Y + 1.5) + Normal * 60.0, Rim,
-                                        ECC_Visibility, FCollisionQueryParams(SCENE_QUERY_STAT(NavScreenRim), false));
-        TestTrue(TEXT("the rim is the reach volume's"), Hit.GetComponent() == Reach);
-        TestTrue(TEXT("which belongs to the chart"), Hit.GetActor() == Chart);
+        // The rim, on every side: an eye on the bezel still finds the chart,
+        // and one well off it does not, since the next screen along the desk
+        // is 15 cm away and must answer for itself.
+        const double HalfWidth = Panel->GetDrawSize().X * Scale.X * 0.5;
+        const double HalfHeight = Panel->GetDrawSize().Y * Scale.X * 0.5;
+        struct FSide { const TCHAR* Name; FVector Out; double Half; };
+        const FSide Sides[] = {
+            {TEXT("one side"), Right, HalfWidth},
+            {TEXT("the other side"), -Right, HalfWidth},
+            {TEXT("the top"), Up, HalfHeight},
+            {TEXT("the bottom"), -Up, HalfHeight},
+        };
+        for (const FSide& Side : Sides)
+        {
+            const auto Trace = [&](double PastEdgeCm)
+            {
+                const FVector At = Centre + Side.Out * (Side.Half + PastEdgeCm);
+                FHitResult Hit;
+                World->LineTraceSingleByChannel(Hit, At + Normal * 60.0, At - Normal * 2.0, ECC_Visibility,
+                                                FCollisionQueryParams(SCENE_QUERY_STAT(NavScreenRim), false));
+                return Hit;
+            };
+            const FHitResult OnBezel = Trace(1.5);
+            TestTrue(FString::Printf(TEXT("the bezel at %s is the reach volume's"), Side.Name),
+                     OnBezel.GetComponent() == Reach && OnBezel.GetActor() == Chart);
+            TestTrue(FString::Printf(TEXT("6 cm off %s is not the chart"), Side.Name),
+                     Trace(6.0).GetActor() != Chart);
+        }
     }
 
     // The player's own traces: E's prompt, and the pointer on the glass.
@@ -514,8 +605,11 @@ bool FNavScreenChairTest::RunTest(const FString& Parameters)
 
         const FTransform Seat = Chart->GetUseTransform();
         TestTrue(TEXT("on the chair"), FVector::Dist2D(Player->GetActorLocation(), Seat.GetLocation()) < 1.0);
-        TestTrue(TEXT("which is a metre back from the glass"),
-                 FMath::IsNearlyEqual(FVector::Dist2D(Seat.GetLocation(), Centre), 100.0, 0.5));
+        // 126 cm: from the mount at cockpit x 301 back to the starboard
+        // pilot_seat's centre at x 175, so the body is on the chair and not
+        // perched on its front edge.
+        TestTrue(TEXT("which is the chair's distance back from the glass"),
+                 FMath::IsNearlyEqual(FVector::Dist2D(Seat.GetLocation(), Centre), 126.0, 0.5));
         TestTrue(TEXT("at the chair's height"), FMath::IsNearlyEqual(Seat.GetLocation().Z, 55.0, 0.01));
         TestTrue(TEXT("facing the chart"),
                  FVector::DotProduct(Player->GetActorForwardVector(),

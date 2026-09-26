@@ -552,8 +552,11 @@ subclasses `AShipScreen` the way `AShipLaptop` does. It has `bUsable = true`,
 a `UBoxComponent` reach volume, and a `UInteractableComponent` whose handler
 calls `UseScreen`. The prompt is **"Sit at the chart"**. The panel is 68 cm at
 816×576 px (12 px/cm, the same density the laptop uses), with
-`UseDistanceCm ≈ 100` and `SeatHeightCm ≈ 55`, which puts the body on the
-chair, and `ViewDistanceCm ≈ 60`. These are `UPROPERTY` defaults set per
+`UseDistanceCm ≈ 126` and `SeatHeightCm ≈ 55`, which puts the body on the
+chair, and `ViewDistanceCm ≈ 60`. (The first draft said 100, which lands on
+the cushion's front edge: the starboard `pilot_seat` is centred 126 cm aft of
+the mount, at cockpit x 175, because the desk is solid to the floor and knees
+need the room. See B3.) These are `UPROPERTY` defaults set per
 instance by `build_hauler.py`, so tuning them is a level rebuild and not a C++
 one.
 
@@ -909,6 +912,48 @@ B3. **Level scripts.** `build_hauler.py` gains `place_nav_screen(actor_sub,
     ship)`, spawning `unreal.ShipNavScreen` labelled `hauler_nav_screen` with
     its seat tunables. `verify_level.py` checks that it sits within 1 cm of
     the layout and faces −X. *(0.5 h)*
+
+    **The hand-off to Track C, function by function** (conflict 14: the chart
+    author specifies, Track C edits these files). The actor landed on
+    `slice2/chart` as `unreal.ShipNavScreen`; its origin is the centre of the
+    panel's face, so the layout places the glass and not a casing.
+
+    - `hauler_layout.py`: `NAV_SCREEN = ("cockpit", (301, 285), 105, 0)`,
+      shaped like `LAPTOP` (room, (x, y) from the room's corner, z, yaw).
+      `generate()` resolves it with `resolve_point(plan, room, at, z)` into
+      `nav_screen_location` (world (1711, 85, 105) today) and passes the yaw
+      through as `nav_screen_yaw`; the `Ship` namedtuple gains both fields.
+    - `test_placement.py`: the location is inside the cockpit's footprint;
+      the yaw is 0 (faces −X); `|y − pilot seat y| ≤ 20` against the
+      *starboard* `pilot_seat` placement (cockpit (175, 270)), 15 cm today;
+      and the face is at least **1 cm** proud of the aft face of the desk
+      screen prop it covers — the `role == "screen"` box whose y-span
+      contains the mount's y, aft face `centre.x − size.x / 2` (1712 today).
+    - `build_hauler.py`, `place_nav_screen(actor_sub, ship)`, called beside
+      the laptop's placement:
+      `actor_sub.spawn_actor_from_class(unreal.ShipNavScreen,
+      unreal.Vector(*ship.nav_screen_location), unreal.Rotator(0, 0,
+      ship.nav_screen_yaw))`, labelled `TAG + "nav_screen"`, then
+      `set_editor_property` for `use_distance_cm = 126` (the seat lands on
+      the starboard chair's centre, cockpit x 175), `seat_height_cm = 55`
+      (the cushion's top) and `view_distance_cm = 60`. These three are the
+      chair playtest's knobs (B5); each nudge is this function and a level
+      rebuild. Nothing else is set: the panel's width, draw size, widget
+      class and reach volume are the class's.
+    - `verify_level.py`: add `("nav_screen", ship.nav_screen_location)` to the
+      within-`TOLERANCE` location loop; check the actor's yaw is 0 within a
+      degree (at yaw 0 its panel faces −X, per `AShipScreen::ConfigurePanel`); and
+      re-check, against the *built* desk screen prop's bounds, that the
+      actor's x is at least 1 cm less than the prop's aft face.
+
+    **Why the 1 cm is load-bearing.** The chart's reach volume — what E's
+    trace finds when the eye is on the bezel rather than the glass — starts
+    0.5 cm *behind* the face, so that it never sits in front of the glass and
+    steals the pointer. The desk screen prop behind the chart blocks
+    Visibility. If the mount creeps back until the volume starts behind the
+    prop's face, the prop takes every rim trace and the chart is reachable
+    only through its glass. The mount's X must stay more than 0.5 cm proud
+    of the prop; 1 cm is the layout's margin.
 B4. **[editor] Build, level, test.** In this order:
     1. `./rebuild.sh --force` (new classes)
     2. the `build_hauler.py` commandlet

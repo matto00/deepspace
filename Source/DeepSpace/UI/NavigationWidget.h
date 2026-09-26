@@ -52,6 +52,11 @@ public:
      *  for a row that is not showing. The plotted row starts with a marker. */
     FText GetRowText(int32 Index) const;
 
+    /** Whether row Index can be pressed: a showing row, and not between
+     *  stars. What the glass offers, which the ship's own refusal to replot
+     *  in transit does not show. */
+    bool IsRowEnabled(int32 Index) const;
+
     FText GetHereText() const;
 
     /** The jump as the chart words it: NavText::JumpWord. */
