@@ -4,6 +4,12 @@
 #   ./test.sh                     every DeepSpace test
 #   ./test.sh DeepSpace.Universe  one group
 #
+# -FORCELOGFLUSH: the verdict is read from the log, and without it the log is
+# flushed on a timer, so a run that exits promptly after its last test can
+# leave the final "Test Completed" line unwritten -- a passing or failing run
+# then reads as no verdict at all. It happened in slice 1 and again under a
+# mutant here, both times on the last test of the run.
+#
 # Waits its turn behind any other build or test run in any worktree (see
 # Tools/ue_lock.sh), so it is safe to call from parallel agents. The verdict
 # is read from this tree's own log -- Unreal writes it there, not to stdout.
@@ -37,7 +43,7 @@ fi
 ue_locked "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" "$ROOT/DeepSpace.uproject" \
     -ExecCmds="Automation RunTests $FILTER" \
     -TestExit="Automation Test Queue Empty" \
-    -unattended -nopause -nullrhi -nosplash -NoLiveCoding >/dev/null 2>&1
+    -unattended -nopause -nullrhi -nosplash -NoLiveCoding -FORCELOGFLUSH >/dev/null 2>&1
 
 pass=$(grep -c "Test Completed. Result={Success}" "$LOG" 2>/dev/null || true)
 fail=$(grep -E "Test Completed. Result=\{(Fail|Error)" "$LOG" 2>/dev/null || true)
