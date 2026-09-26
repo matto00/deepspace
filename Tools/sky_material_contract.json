@@ -1,0 +1,31 @@
+{
+  "comment": "Every name C++ drives in the sky's materials. Mirrors Source/DeepSpace/Sky/SkyMaterialContract.h; Tools/setup_sky_materials.py authors from it and DeepSpace.Sky.MaterialContract holds the header, this file and the built assets to the same lists. Keys under 'parameters' are roles the authoring script wires by; 'name' is the only place the Unreal name is written.",
+  "directory": "/Game/Materials/Sky",
+  "parameters": {
+    "colour":          { "name": "Colour",         "type": "vector" },
+    "light_direction": { "name": "LightDirection", "type": "vector" },
+    "rim":             { "name": "Rim",            "type": "vector" },
+    "brightness":      { "name": "Brightness",     "type": "scalar" },
+    "point_blend":     { "name": "PointBlend",     "type": "scalar" },
+    "mottle":          { "name": "Mottle",         "type": "scalar" },
+    "interior_light":  { "name": "InteriorLight",  "type": "scalar" },
+    "veil":            { "name": "Veil",           "type": "scalar" }
+  },
+  "materials": {
+    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "brightness", "point_blend", "mottle"] },
+    "M_SkyStar":      { "parameters": ["colour", "brightness"] },
+    "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
+    "M_SkyGlass":     { "parameters": [] }
+  },
+  "collections": {
+    "MPC_Sky": { "parameters": ["interior_light", "veil"], "pending": "slice 2: the glass veil" }
+  },
+  "constants": {
+    "lambert_disc_gain": 1.5,
+    "terminator_width": 0.05,
+    "mottle_scale": 0.04,
+    "rim_exponent": 5.0,
+    "glass_opacity": 0.12,
+    "glass_tint": [0.0, 0.004, 0.005]
+  }
+}

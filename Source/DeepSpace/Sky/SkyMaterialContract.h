@@ -51,4 +51,23 @@ namespace SkyMaterial
     inline constexpr int32 CustomDataGreen = 1;
     inline constexpr int32 CustomDataBlue = 2;
     inline constexpr int32 CustomDataBrightness = 3;
+
+    // Each asset's parameters, exactly: the test checks the JSON against
+    // these and every loaded asset against the JSON, so a parameter added on
+    // one side and not the other is a red test, not a silent no-op.
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle }; }
+    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim }; }
+    inline TArray<FName> StarScalars() { return { Brightness }; }
+    inline TArray<FName> StarVectors() { return { Colour }; }
+    inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
+
+    /**
+     * M_SkyBody's shaded term is this times saturate(N.L). A Lambert sphere's
+     * cosine averaged over its visible disc at full phase is 2/3, so the gain
+     * makes the disc's average exactly SkyProjection::LambertPhase -- the
+     * point term's brightness -- and a body keeps its total flux through the
+     * resolve. A graph constant, so the JSON carries it and the test holds
+     * the two to it.
+     */
+    inline constexpr double LambertDiscGain = 1.5;
 }
