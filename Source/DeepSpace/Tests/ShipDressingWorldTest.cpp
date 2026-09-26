@@ -9,7 +9,10 @@
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/StringOutputDevice.h"
 #include "Ship/ShipDressing.h"
+#include "Ship/ShipDressingConfig.h"
 #include "Ship/ShipDressingKeepOut.h"
 #include "Ship/ShipDressingSubsystem.h"
 #include "Ship/ShipDressingSurface.h"
@@ -353,6 +356,29 @@ bool FShipDressingWorldTest::RunTest(const FString& Parameters)
     SeedVar.Set(TEXT("-1"));
     TestEqual(TEXT("-1 goes back to the world's own seed"), Dressing->GetDressSeed(), Seed);
     TestTrue(TEXT("and its wear"), Wearing(WornA) == WornMaterial && Wearing(WornB) == WornMaterial);
+
+    // ds.Dress.Reload re-reads the file, not the cache, and redresses in
+    // place. An edit that lives only in the cache bares every tagged kind;
+    // the file has no such line, so a reload that read the file brings the
+    // ship back as it was, and one that read the cache leaves it bare.
+    {
+        ON_SCOPE_EXIT { UShipDressingConfig::ReloadFromIni(); };
+        const FString Section = UShipDressingConfig::StaticClass()->GetPathName();
+        GConfig->SetArray(*Section, TEXT("Kinds"),
+                          { TEXT("(Kind=\"counter.top\",Lambda=0)"), TEXT("(Kind=\"desk.top\",Lambda=0)"), TEXT("(Kind=\"wall_rack\",Lambda=0)") },
+                          GGameIni);
+        TestEqual(TEXT("the cache's edit is taken"), UShipDressingConfig::ApplyConfigCache().Num(), 0);
+        Dressing->Redress();
+        TestEqual(TEXT("and dresses the ship bare"), Dressing->GetInstanceCount(), 0);
+
+        FStringOutputDevice Out;
+        Out.SetAutoEmitLineTerminator(true);
+        IConsoleManager::Get().ProcessUserConsoleInput(TEXT("ds.Dress.Reload"), Out, World);
+        AddInfo(Out);
+        TestEqual(TEXT("ds.Dress.Reload reads DefaultGame.ini from disk and redresses: the ship is as it was"),
+                  Dressing->GetInstanceCount(), Expected.Num());
+        TestTrue(TEXT("and says it took the file"), Out.Contains(TEXT("taken")));
+    }
     return true;
 }
 

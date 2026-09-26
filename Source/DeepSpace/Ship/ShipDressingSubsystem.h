@@ -73,7 +73,10 @@ public:
      *  universe see the same mugs in the same places. */
     uint64 GetDressSeed() const;
 
-    /** The rules as they stand, with ds.Dress.LivedIn read into them now. */
+    /** The rules as they stand -- the code's, under whatever of the ini
+     *  UShipDressingConfig last took -- with ds.Dress.LivedIn read into them
+     *  now. Asked afresh at every dress, so ds.Dress.Reload needs to tell
+     *  nothing but the redress. */
     FShipDressingRules GetRules() const;
 
     /** The markers this world's level exports, read fresh, by tag. */

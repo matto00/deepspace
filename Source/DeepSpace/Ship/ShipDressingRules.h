@@ -6,7 +6,9 @@
  * Every number the dressing generator decides with, and the clutter it
  * decides between (lived-in decision 1c). A pure struct: no UObject, no
  * reflection, so ShipDressing::Dress can be tested with no world. The
- * defaults live in the constructor, in one place.
+ * defaults live in the constructor, in one place; UShipDressingConfig lays
+ * DefaultGame.ini's [/Script/DeepSpace.ShipDressingConfig] over them, and
+ * ds.Dress.Reload re-reads it in a running session.
  *
  * Tunables are here; guarantees are not. How many redraws before an item is
  * dropped, the Poisson cap, containment inside the surface, the excludes,
@@ -83,6 +85,21 @@ struct FDressKind
     /** Which templates, in what proportion. */
     TArray<FDressWeight> Mix;
 };
+
+/** The scalar tunables of type double, each an ini line of the same name:
+ *  UShipDressingConfig mirrors them, and its test holds the two lists equal. */
+#define DS_DRESS_SCALARS(X) \
+    X(AlongUseA)            \
+    X(AlongUseB)            \
+    X(AlongCentreA)         \
+    X(AlongCentreB)         \
+    X(BackA)                \
+    X(BackB)                \
+    X(StackChance)          \
+    X(WearA)                \
+    X(WearB)                \
+    X(ReplacedBelow)        \
+    X(FadedAbove)
 
 struct DEEPSPACE_API FShipDressingRules
 {

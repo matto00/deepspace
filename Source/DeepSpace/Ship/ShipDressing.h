@@ -103,6 +103,25 @@ namespace DressGuarantees
     /** LivedIn is clamped here. The busiest surface's 5 at 4x stays well
      *  inside Poisson's mean limit of 30. */
     inline constexpr double MaxLivedIn = 4.0;
+
+    /** No pile is taller than this many things, whatever StackCap says. The
+     *  clear trims it long before, on every surface the hauler has. */
+    inline constexpr int32 MaxStackCap = 8;
+}
+
+/**
+ * What the rules may be: the set of numbers and tables Dress can take
+ * without a check() firing or a mug sinking into its shelf. An ini outside
+ * it is refused whole by UShipDressingConfig, never clamped line by line --
+ * a clamped number is one nobody typed. The code defaults are inside it,
+ * and a test holds them there.
+ */
+namespace DressRuleDomain
+{
+    /** Every way these rules fall outside the domain, one line each, naming
+     *  the ini line or row, its value and what it must be. Empty when Dress
+     *  can take them. */
+    DEEPSPACE_API TArray<FString> Refusals(const FShipDressingRules& Rules);
 }
 
 namespace ShipDressing

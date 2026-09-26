@@ -1,5 +1,6 @@
 #include "Ship/ShipDressing.h"
 
+#include "Universe/GenPriors.h"
 #include "Universe/GenSeed.h"
 #include "Universe/GenStream.h"
 
@@ -280,4 +281,151 @@ EDressWear ShipDressing::Wear(uint64 InDressSeed, FStringView Piece, const FShip
         return EDressWear::Faded;
     }
     return EDressWear::Standard;
+}
+
+TArray<FString> DressRuleDomain::Refusals(const FShipDressingRules& Rules)
+{
+    TArray<FString> Out;
+    const auto Finite = [](double X) { return FMath::IsFinite(X); };
+
+    // Beta shapes share procgen's floor, for its reason: below a tenth both
+    // gamma draws underflow together and the position is 0/0.
+    const auto Shape = [&](const TCHAR* Name, double X)
+    {
+        if (!Finite(X) || X < GenPriorDomain::MinBetaShape)
+        {
+            Out.Add(FString::Printf(TEXT("%s=%g: a Beta shape, at least %g"), Name, X, GenPriorDomain::MinBetaShape));
+        }
+    };
+    Shape(TEXT("AlongUseA"), Rules.AlongUseA);
+    Shape(TEXT("AlongUseB"), Rules.AlongUseB);
+    Shape(TEXT("AlongCentreA"), Rules.AlongCentreA);
+    Shape(TEXT("AlongCentreB"), Rules.AlongCentreB);
+    Shape(TEXT("BackA"), Rules.BackA);
+    Shape(TEXT("BackB"), Rules.BackB);
+    Shape(TEXT("WearA"), Rules.WearA);
+    Shape(TEXT("WearB"), Rules.WearB);
+
+    const auto Proportion = [&](const TCHAR* Name, double X)
+    {
+        if (!Finite(X) || X < 0.0 || X > 1.0)
+        {
+            Out.Add(FString::Printf(TEXT("%s=%g: a proportion, from 0 to 1"), Name, X));
+        }
+    };
+    Proportion(TEXT("StackChance"), Rules.StackChance);
+    Proportion(TEXT("ReplacedBelow"), Rules.ReplacedBelow);
+    Proportion(TEXT("FadedAbove"), Rules.FadedAbove);
+    if (Rules.ReplacedBelow > Rules.FadedAbove)
+    {
+        Out.Add(FString::Printf(TEXT("ReplacedBelow=%g above FadedAbove=%g: a piece cannot be both"), Rules.ReplacedBelow, Rules.FadedAbove));
+    }
+    if (Rules.StackCap < 1 || Rules.StackCap > DressGuarantees::MaxStackCap)
+    {
+        Out.Add(FString::Printf(TEXT("StackCap=%d: from 1 to %d"), Rules.StackCap, DressGuarantees::MaxStackCap));
+    }
+
+    double Turns = 0.0;
+    for (int32 I = 0; I < UE_ARRAY_COUNT(Rules.TurnWeights); ++I)
+    {
+        const double W = Rules.TurnWeights[I];
+        if (!Finite(W) || W < 0.0)
+        {
+            Out.Add(FString::Printf(TEXT("TurnWeights[%d]=%g: a weight, not negative"), I, W));
+        }
+        Turns += Finite(W) && W > 0.0 ? W : 0.0;
+    }
+    if (Turns <= 0.0)
+    {
+        Out.Add(TEXT("TurnWeights: all four are zero, so nothing can be put down at any angle"));
+    }
+
+    // The templates first: the kinds are checked against them.
+    TSet<FName> Named;
+    bool bAnyTakesColour = false;
+    for (const FDressTemplate& Template : Rules.Templates)
+    {
+        const FString Name = Template.Name.ToString();
+        if (Template.Name.IsNone())
+        {
+            Out.Add(TEXT("Templates: a row has no Name"));
+            continue;
+        }
+        if (Named.Contains(Template.Name))
+        {
+            Out.Add(FString::Printf(TEXT("Templates %s: named twice"), *Name));
+        }
+        Named.Add(Template.Name);
+        bAnyTakesColour |= Template.TakesColour();
+        if (Template.Parts.IsEmpty())
+        {
+            Out.Add(FString::Printf(TEXT("Templates %s: has no Parts"), *Name));
+            continue;
+        }
+        double Bottom = TNumericLimits<double>::Max();
+        for (int32 I = 0; I < Template.Parts.Num(); ++I)
+        {
+            const FDressPart& Part = Template.Parts[I];
+            if (!Finite(Part.At.X) || !Finite(Part.At.Y) || !Finite(Part.At.Z)
+                || !Finite(Part.Size.X) || !Finite(Part.Size.Y) || !Finite(Part.Size.Z) || Part.Size.GetMin() <= 0.0)
+            {
+                Out.Add(FString::Printf(TEXT("Templates %s part %d: At and Size must be numbers, Size above zero on every axis"), *Name, I));
+                continue;
+            }
+            if (Part.Role.IsNone())
+            {
+                Out.Add(FString::Printf(TEXT("Templates %s part %d: has no Role, so no material"), *Name, I));
+            }
+            Bottom = FMath::Min(Bottom, Part.At.Z - 0.5 * Part.Size.Z);
+        }
+        // Dress stands everything on z = 0 and piles by Height(): a part below
+        // it goes through the shelf, one above leaves the whole thing hovering.
+        if (Bottom != TNumericLimits<double>::Max() && FMath::Abs(Bottom) > 0.01)
+        {
+            Out.Add(FString::Printf(TEXT("Templates %s: its lowest part's bottom is at z=%g; it must rest on z=0"), *Name, Bottom));
+        }
+    }
+
+    double ColourTotal = 0.0;
+    for (const FDressWeight& Colour : Rules.Colours)
+    {
+        if (Colour.Name.IsNone() || !Finite(Colour.Weight) || Colour.Weight < 0.0)
+        {
+            Out.Add(FString::Printf(TEXT("Colours %s=%g: a named colour with a weight, not negative"), *Colour.Name.ToString(), Colour.Weight));
+            continue;
+        }
+        ColourTotal += Colour.Weight;
+    }
+    if (bAnyTakesColour && ColourTotal <= 0.0)
+    {
+        Out.Add(TEXT("Colours: something wears fabric, and no colour has any weight"));
+    }
+
+    const double MaxLambda = FGenStream::MaxPoissonMean / DressGuarantees::MaxLivedIn;
+    for (const FDressKind& Kind : Rules.Kinds)
+    {
+        const FString Name = Kind.Kind.ToString();
+        if (Kind.Kind.IsNone())
+        {
+            Out.Add(TEXT("Kinds: a row has no Kind"));
+            continue;
+        }
+        if (!Finite(Kind.Lambda) || Kind.Lambda < 0.0 || Kind.Lambda > MaxLambda)
+        {
+            Out.Add(FString::Printf(TEXT("Kinds %s Lambda=%g: a mean count, from 0 to %g (Poisson's limit at the highest LivedIn)"),
+                                    *Name, Kind.Lambda, MaxLambda));
+        }
+        for (const FDressWeight& Entry : Kind.Mix)
+        {
+            if (!Named.Contains(Entry.Name))
+            {
+                Out.Add(FString::Printf(TEXT("Kinds %s: its mix names %s, which is no template"), *Name, *Entry.Name.ToString()));
+            }
+            if (!Finite(Entry.Weight) || Entry.Weight < 0.0)
+            {
+                Out.Add(FString::Printf(TEXT("Kinds %s: %s's weight %g, not negative"), *Name, *Entry.Name.ToString(), Entry.Weight));
+            }
+        }
+    }
+    return Out;
 }

@@ -3,6 +3,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/ShipDressing.h"
+#include "Ship/ShipDressingConfig.h"
 #include "Ship/ShipDressingRules.h"
 #include "Ship/ShipDressingSubsystem.h"
 #include "Tests/DressingTestFixtures.h"
@@ -494,7 +495,9 @@ bool FShipDressingShapeTest::RunTest(const FString& Parameters)
  */
 bool FShipDressingCatalogueTest::RunTest(const FString& Parameters)
 {
-    const FShipDressingRules Rules;
+    // The rules played, ini and all: a template added in DefaultGame.ini
+    // needs its materials as much as one written in code.
+    const FShipDressingRules Rules = GetDefault<UShipDressingConfig>()->GetRules();
 
     for (const EDressMesh Mesh : { EDressMesh::Cube, EDressMesh::Chamfer, EDressMesh::Cylinder })
     {

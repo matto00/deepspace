@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/OutputDevice.h"
+#include "Ship/ShipDressingConfig.h"
 #include "Ship/ShipDressingKeepOut.h"
 #include "Ship/ShipDressingSurface.h"
 #include "Universe/UniverseSubsystem.h"
@@ -79,6 +80,30 @@ namespace
         }
     }
 
+    /** The first tier of the tuning loop: an ini edit, then this, standing
+     *  where the difference shows. A refused read changes nothing and says
+     *  which line to fix. */
+    void ReloadCommand(const TArray<FString>&, UWorld* World, FOutputDevice& Out)
+    {
+        const TArray<FString> Refusals = UShipDressingConfig::ReloadFromIni();
+        if (!Refusals.IsEmpty())
+        {
+            Out.Log(TEXT("ds.Dress.Reload: DefaultGame.ini refused; the dressing is unchanged. Fix:"));
+            for (const FString& Refusal : Refusals)
+            {
+                Out.Logf(TEXT("  %s"), *Refusal);
+            }
+            return;
+        }
+        RedressEveryWorld(nullptr);
+        const UShipDressingConfig* Config = GetDefault<UShipDressingConfig>();
+        const UShipDressingSubsystem* Dressing = UShipDressingSubsystem::Get(World);
+        Out.Logf(TEXT("ds.Dress.Reload: DefaultGame.ini taken (%d kind, %d template and %d colour rows over the code's); %s"),
+                 Config->Kinds.Num(), Config->Templates.Num(), Config->Colours.Num(),
+                 Dressing ? *FString::Printf(TEXT("redressed, %d instances."), Dressing->GetInstanceCount())
+                          : TEXT("nothing is dressed here until Play."));
+    }
+
     void DescribeCommand(const TArray<FString>&, UWorld* World, FOutputDevice& Out)
     {
         const UShipDressingSubsystem* Dressing = UShipDressingSubsystem::Get(World);
@@ -100,6 +125,12 @@ namespace
         TEXT("Redress the ship in place. 'ds.Dress.Redress <seed>' dresses it as that root seed's universe would; ")
         TEXT("no argument goes back to the world's own."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&RedressCommand));
+
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ReloadCmd(
+        TEXT("ds.Dress.Reload"),
+        TEXT("Re-read the dressing's rules from Config/DefaultGame.ini ([/Script/DeepSpace.ShipDressingConfig]) ")
+        TEXT("and redress in place. No rebuild, no restart."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ReloadCommand));
 
     FAutoConsoleCommandWithWorldArgsAndOutputDevice DescribeCmd(
         TEXT("ds.Dress.Describe"),
@@ -158,7 +189,7 @@ uint64 UShipDressingSubsystem::GetDressSeed() const
 
 FShipDressingRules UShipDressingSubsystem::GetRules() const
 {
-    FShipDressingRules Rules;
+    FShipDressingRules Rules = GetDefault<UShipDressingConfig>()->GetRules();
     Rules.LivedIn = FMath::Clamp(static_cast<double>(CVarLivedIn.GetValueOnGameThread()), 0.0, DressGuarantees::MaxLivedIn);
     return Rules;
 }
