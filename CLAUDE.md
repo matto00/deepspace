@@ -318,8 +318,12 @@ changes by itself because it is asked of the position. `GetStartSystem` is the
 nearest system to the origin with a planet; under honest weights that is
 usually a red dwarf. Where the ship *starts* is not the universe's to decide
 (conflict 3): `UShipSubsystem::OnWorldBeginPlay` places it once, through
-`NavStart::OpeningPlacement` -- the largest planet 40,000 km dead ahead, its
-star to starboard. `ds.Nav.PlaceAtStart 0` leaves the ship where it is.
+`NavStart::OpeningPlacement` -- the largest planet dead ahead and its star to
+starboard. The distance is 40,000 km *per Earth radius* of that planet
+(`NavStart::OpeningDistanceCm`), so an Earth opens at 40,000 km and a Jupiter
+at about 450,000 km: the shot is framed as an angle, the same ~18 degree world
+for any planet, because a gas giant held at a fixed 40,000 km would open with
+the ship inside it. `ds.Nav.PlaceAtStart 0` leaves the ship where it is.
 
 **The priors are data.** Every number the generator draws with is a line in
 `[/Script/DeepSpace.ProcGenPriorsConfig]` of `DefaultGame.ini`, read through
