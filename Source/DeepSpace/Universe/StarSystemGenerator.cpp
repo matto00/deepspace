@@ -76,6 +76,31 @@ namespace
         return Stream.LogNormalBounded(Priors.RockyMassMedianOuter, Priors.RockyMassSigma, GenGuarantees::RockyMassMin, RockyMax);
     }
 
+    /**
+     * A giant's day, hours, from its own `day` stream.
+     *
+     * A giant keeps the spin it accreted with, and what that comes to is a
+     * product of many factors -- the angular momentum the disc fed it, how
+     * much its magnetic field braked it, how far it contracted since -- which
+     * is log-normal's definition. Centred on 12 h with a log spread of 0.35:
+     * Jupiter's 9.9 h and Saturn's 10.7 h sit just under the median, the ice
+     * giants' 16 and 17 h a sigma above it, and the young giants measured
+     * round other stars (beta Pictoris b, 8 h) inside it. Bounded at 5 h,
+     * well short of the ~3 h at which a Jupiter would fling itself apart,
+     * and at 30 h, beyond which a giant has been braked by something -- a
+     * close star's tides -- this generator does not model.
+     */
+    constexpr double GiantDayMedianHours = 12.0;
+    constexpr double GiantDaySigma = 0.35;
+    constexpr double GiantDayMinHours = 5.0;
+    constexpr double GiantDayMaxHours = 30.0;
+
+    double DrawGiantDay(uint64 PlanetSeed)
+    {
+        FGenStream Stream(GenSeed::Derive(PlanetSeed, GenSeed::Label("day")));
+        return Stream.LogNormalBounded(GiantDayMedianHours, GiantDaySigma, GiantDayMinHours, GiantDayMaxHours);
+    }
+
     /** Kind is decided by mass and temperature, and drawn only where both
      *  allow either of two answers (procgen decision 5). */
     bool IsTemperate(double MassEarth, double EquilibriumK)
@@ -233,6 +258,12 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
         FGenStream Phase(GenSeed::Derive(PlanetSeed, GenSeed::Label("phase")));
         Planet.PhaseRad = Phase.Unit() * 2.0 * UE_DOUBLE_PI;
 
+        // Its own stream, so drawing it moves no other quantity of any world.
+        if (Planet.Kind == EPlanetKind::GasGiant)
+        {
+            Planet.DayHours = DrawGiantDay(PlanetSeed);
+        }
+
         if (IsTemperate(MassEarth, Planet.EquilibriumK))
         {
             FGenStream Inhabited(GenSeed::Derive(PlanetSeed, GenSeed::Label("inhabited")));
@@ -254,4 +285,9 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
     }
 
     return System;
+}
+
+double FStarSystemGenerator::GenerateGiantDay(uint64 PlanetSeed)
+{
+    return DrawGiantDay(PlanetSeed);
 }

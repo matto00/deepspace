@@ -330,7 +330,7 @@ void AShipSky::RebuildFor(const FSkySystem& System)
                 Instance->SetVectorParameterValue(SkyMaterial::Rim, Body.Rim);
                 // A world's face is its own for as long as the proxy lives:
                 // set once, like its colour, and never per frame.
-                Instance->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Body.SurfaceSeed));
+                Instance->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Body.SurfaceSeed, Body.BeltPairs));
                 Instance->SetScalarParameterValue(SkyMaterial::Banding, ShipSky::Banding(Body.Surface));
             }
         }
@@ -670,11 +670,11 @@ double ShipSky::ManualExposureBias(double SceneEV100)
     return AutoExposureDefaultBias - SceneEV100;
 }
 
-FLinearColor ShipSky::SurfaceSeed(uint64 Seed)
+FLinearColor ShipSky::SurfaceSeed(uint64 Seed, double BeltPairs)
 {
     const auto Bits = [Seed](int32 Shift) { return static_cast<float>((Seed >> Shift) & 0xFFFFull) / 65536.0f; };
     const float Span = static_cast<float>(SkyMaterial::SurfaceOffsetSpan);
-    return FLinearColor(Bits(0) * Span, Bits(16) * Span, Bits(32) * Span, Bits(48));
+    return FLinearColor(Bits(0) * Span, Bits(16) * Span, Bits(32) * Span, static_cast<float>(FMath::Max(BeltPairs, 0.0)));
 }
 
 float ShipSky::Banding(ESkySurface Surface)

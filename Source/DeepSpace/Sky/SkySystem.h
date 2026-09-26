@@ -61,7 +61,31 @@ struct DEEPSPACE_API FSkyBody
      *  from, so that no two worlds wear the same one. Derived, never drawn:
      *  a look, not a fact about the world, so it moves no procgen stream. */
     uint64 SurfaceSeed = 0;
+
+    /** Giants: how many light-and-dark belt pairs it wears pole to pole,
+     *  from its day (SkyLook::BeltPairs). 0 for ground. */
+    double BeltPairs = 0.0;
 };
+
+/** What a world's facts look like from space, where the look is more than a
+ *  colour. Pure. */
+namespace SkyLook
+{
+    /** Jupiter's day, hours, and the belt pairs M_SkyBody gives a giant that
+     *  spins like it: the middle of the range the face was first tuned on. */
+    inline constexpr double JupiterDayHours = 9.925;
+    inline constexpr double JupiterBeltPairs = 8.0;
+
+    /**
+     * A giant's belts, from its day. Belts are the stripes between a giant's
+     * zonal jets, and how many jets a spinning atmosphere sorts itself into
+     * goes as the square root of its spin -- the Rhines scale, sqrt(U / beta)
+     * with beta = 2 Omega / R -- at a given size and wind. Every giant here
+     * is Jupiter-sized, so a day four times Jupiter's wears half its belts:
+     * JupiterBeltPairs * sqrt(JupiterDayHours / DayHours). 0 for no day.
+     */
+    DEEPSPACE_API double BeltPairs(double DayHours);
+}
 
 /** A neighbouring star: only ever a point, so a direction and a distance are
  *  all there is to draw. */

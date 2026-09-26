@@ -306,12 +306,12 @@ namespace ShipSky
     /**
      * What M_SkyBody's SurfaceSeed gets for a body of this seed: xyz where on
      * the noise its face is taken from, each in [0, SkyMaterial::
-     * SurfaceOffsetSpan), and w in [0, 1), which picks the shape a face can
-     * vary in -- how many belts a giant wears. Sixteen independent bits
-     * each, so every value is exact in a float and two seeds that differ
-     * anywhere make two faces.
+     * SurfaceOffsetSpan) from sixteen independent bits of Seed, so every
+     * value is exact in a float and two seeds that differ anywhere make two
+     * faces; and w the belt pairs a giant wears, FSkyBody::BeltPairs, which
+     * its day decided -- 0 for ground, which has none.
      */
-    DEEPSPACE_API FLinearColor SurfaceSeed(uint64 Seed);
+    DEEPSPACE_API FLinearColor SurfaceSeed(uint64 Seed, double BeltPairs);
 
     /** M_SkyBody's Banding: 1 for a giant's belts, 0 for ground. */
     DEEPSPACE_API float Banding(ESkySurface Surface);

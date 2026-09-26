@@ -76,6 +76,7 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         // By orbit index, which never renumbers (FStarSystem::Planets): a
         // world keeps its face however many planets are added outside it.
         Body.SurfaceSeed = GenSeed::Derive(System.Stub.Seed, SurfacePurpose, static_cast<uint64>(Index));
+        Body.BeltPairs = Look.Surface == ESkySurface::Banded ? SkyLook::BeltPairs(Planet.DayHours) : 0.0;
     }
 
     for (const FStarSystemStub& Stub : Neighbours)
@@ -95,4 +96,9 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         Neighbour.TemperatureK = Stub.TemperatureK;
     }
     return Sky;
+}
+
+double SkyLook::BeltPairs(double DayHours)
+{
+    return DayHours > 0.0 ? JupiterBeltPairs * FMath::Sqrt(JupiterDayHours / DayHours) : 0.0;
 }

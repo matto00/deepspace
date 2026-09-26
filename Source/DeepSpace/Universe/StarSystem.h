@@ -98,6 +98,11 @@ struct FPlanet
 
     /** 0 means nobody. */
     double Population = 0.0;
+
+    /** How long a day is, hours: one turn on its axis. Giants only, for now
+     *  -- 0 for rock, whose spin tides and impacts decide and nothing yet
+     *  reads. A giant's day sets how many belts it wears. */
+    double DayHours = 0.0;
 };
 
 /** What a star chart and a sky need, and nothing more: a dozen draws. The

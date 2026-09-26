@@ -148,7 +148,8 @@ namespace StarSystemGenerationTestLocal
     {
         return A.Id == B.Id && A.Designation == B.Designation && A.GivenName == B.GivenName && A.Kind == B.Kind
             && A.MassEarth == B.MassEarth && A.RadiusEarth == B.RadiusEarth && A.EquilibriumK == B.EquilibriumK
-            && A.SemiMajorAxisAU == B.SemiMajorAxisAU && A.PhaseRad == B.PhaseRad && A.Population == B.Population;
+            && A.SemiMajorAxisAU == B.SemiMajorAxisAU && A.PhaseRad == B.PhaseRad && A.Population == B.Population
+            && A.DayHours == B.DayHours;
     }
 
     bool SameSystem(const FStarSystem& A, const FStarSystem& B)
@@ -236,6 +237,12 @@ namespace StarSystemGenerationTestLocal
             if (!bKindOk)
             {
                 return FString::Printf(TEXT("planet %d is kind %d at %.3g Mearth and %.0f K"), I, int32(P.Kind), P.MassEarth, P.EquilibriumK);
+            }
+
+            // A giant has a day, bounded; rock has none drawn.
+            if (bGiant ? !(P.DayHours >= 5.0 && P.DayHours <= 30.0) : P.DayHours != 0.0)
+            {
+                return FString::Printf(TEXT("planet %d, kind %d, has a %.3g h day"), I, int32(P.Kind), P.DayHours);
             }
 
             // Somebody lives only where it is temperate, and only they are named.
@@ -369,6 +376,37 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
             // playtest meets one, and it is still an event.
             TestTrue(TEXT("somebody lives in a few per cent of systems"), Inhabited / N > 0.02 && Inhabited / N < 0.12);
         }
+    }
+
+    // -- a giant's day: log-normal about 12 h, not flat ---------------------------
+    // Twenty thousand giants' days, drawn exactly as Generate draws them. A
+    // log-normal is symmetric in log space about its median, and holds about
+    // two thirds of its draws within a sigma of it; a uniform day across the
+    // same [5, 30] would hold a third there and put its median at 17.5 h.
+    {
+        TArray<double> Logs;
+        int32 WithinSigma = 0;
+        constexpr int32 Giants = 20000;
+        for (int32 I = 0; I < Giants; ++I)
+        {
+            const double Day = FStarSystemGenerator::GenerateGiantDay(GenSeed::Derive(20260926, GenSeed::Label("giant"), I));
+            Logs.Add(FMath::Loge(Day));
+            WithinSigma += (Day >= 12.0 * FMath::Exp(-0.35) && Day <= 12.0 * FMath::Exp(0.35)) ? 1 : 0;
+        }
+        Logs.Sort();
+        const double Median = FMath::Exp(Logs[Giants / 2]);
+        double Mean = 0.0;
+        for (const double L : Logs) { Mean += L / Giants; }
+        double Variance = 0.0;
+        for (const double L : Logs) { Variance += FMath::Square(L - Mean) / Giants; }
+        const double Spread = FMath::Sqrt(Variance);
+        TestTrue(FString::Printf(TEXT("a giant's median day is 12 h (%.2f h)"), Median), FMath::Abs(Median / 12.0 - 1.0) < 0.02);
+        // The bounds sit 2.5 sigma out, which trims the spread by about 4%.
+        TestTrue(FString::Printf(TEXT("its log spread is the 0.35 asked for, less what the bounds trim (%.3f)"), Spread),
+            Spread > 0.31 && Spread < 0.355);
+        TestTrue(FString::Printf(TEXT("and two thirds of days lie within a sigma of it (%.3f)"), double(WithinSigma) / Giants),
+            double(WithinSigma) / Giants > 0.62);
+        TestTrue(TEXT("every day inside [5, 30] h"), FMath::Exp(Logs[0]) >= 5.0 && FMath::Exp(Logs.Last()) <= 30.0);
     }
 
     // -- independence: a tune moves only what depends on it ----------------------

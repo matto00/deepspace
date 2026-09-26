@@ -67,22 +67,23 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
 
     // -- The pure half --------------------------------------------------------
     {
-        // A world's face from its seed: offsets across the noise's span, a
-        // shape in [0, 1), every value exact, and every part of the seed
-        // mattering.
+        // A world's face from its seed: offsets across the noise's span,
+        // every value exact, and every part of the seed mattering -- and in
+        // w the belts its day gave it, carried exactly.
         {
             const uint64 Seed = 0x243F6A8885A308D3ull;
-            const FLinearColor Face = ShipSky::SurfaceSeed(Seed);
+            const FLinearColor Face = ShipSky::SurfaceSeed(Seed, 7.25);
             const float Span = static_cast<float>(SkyMaterial::SurfaceOffsetSpan);
             TestTrue(TEXT("a face's offset lies across the noise's span"),
                 Face.R >= 0.0f && Face.R < Span && Face.G >= 0.0f && Face.G < Span && Face.B >= 0.0f && Face.B < Span);
-            TestTrue(TEXT("and its shape in [0, 1)"), Face.A >= 0.0f && Face.A < 1.0f);
             TestEqual(TEXT("its x is the seed's low sixteen bits"), Face.R, static_cast<float>(0x08D3) / 65536.0f * Span);
-            TestEqual(TEXT("its shape the top sixteen"), Face.A, static_cast<float>(0x243F) / 65536.0f);
-            for (const int32 Shift : { 0, 16, 32, 48 })
+            TestEqual(TEXT("its z the third sixteen"), Face.B, static_cast<float>(0x6A88) / 65536.0f * Span);
+            TestEqual(TEXT("its belts, as its day made them"), Face.A, 7.25f);
+            TestEqual(TEXT("and ground wears none"), ShipSky::SurfaceSeed(Seed, 0.0).A, 0.0f);
+            for (const int32 Shift : { 0, 16, 32 })
             {
                 TestFalse(FString::Printf(TEXT("a seed differing only in bit %d is another face"), Shift + 3),
-                    ShipSky::SurfaceSeed(Seed ^ (1ull << (Shift + 3))) == Face);
+                    ShipSky::SurfaceSeed(Seed ^ (1ull << (Shift + 3)), 7.25) == Face);
             }
             TestEqual(TEXT("belts for a giant"), ShipSky::Banding(ESkySurface::Banded), 1.0f);
             TestEqual(TEXT("ground for rock"), ShipSky::Banding(ESkySurface::Rocky), 0.0f);
@@ -329,7 +330,7 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
                 TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
                 TestTrue(TEXT("its own face, exactly"),
-                    Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed));
+                    Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed, True.BeltPairs));
                 TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);
             }
         }

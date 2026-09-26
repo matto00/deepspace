@@ -32,6 +32,11 @@ struct DEEPSPACE_API FStarSystemGenerator
      *  a system with planets draws one number per candidate. */
     static int32 GeneratePlanetCount(uint64 SystemSeed, const FGenPriors& Priors);
 
+    /** A giant's day, hours, as Generate draws it for the planet whose seed
+     *  this is: log-normal about 12 h in [5, 30]. Public so the distribution
+     *  can be tested on its own, over more giants than a corpus holds. */
+    static double GenerateGiantDay(uint64 PlanetSeed);
+
     /** The whole system. Its star and name agree with the stub's because
      *  they come from the same streams. */
     static FStarSystem Generate(const FStarSystemStub& Stub, const FGenPriors& Priors);
