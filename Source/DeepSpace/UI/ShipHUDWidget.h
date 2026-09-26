@@ -67,6 +67,14 @@ public:
      */
     static FVector NoseCaretWorldPoint(const FVector& CameraLocation);
 
+    /**
+     * Shows the caret where the nose projects into this HUD's view, or hides
+     * it: with no course, no pilot, no camera to project through, or the
+     * nose off the edge of the view. Called every frame by NativeTick, and
+     * public so a headless test can ask the built widget what it decided.
+     */
+    void PlaceNoseCaret(const UShipSubsystem* ShipState);
+
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
 
@@ -83,7 +91,6 @@ private:
     UTextBlock* MakeReadout(const FText& Content, const FLinearColor& Colour, float Size);
     void PlaceCorner(UWidget* Widget, const FVector2D& Anchor, const FVector2D& Offset);
     void SetTarget(ETarget NewTarget);
-    void PlaceNoseCaret(const UShipSubsystem* ShipState);
 
     ADeepSpaceCharacter* Player() const;
     UShipSubsystem* Ship() const;

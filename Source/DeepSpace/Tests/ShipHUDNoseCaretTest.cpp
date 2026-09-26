@@ -1,3 +1,7 @@
+#include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
@@ -48,9 +52,29 @@ bool FShipHUDNoseCaretTest::RunTest(const FString& Parameters)
     APawn* Pilot = Test.World->SpawnActor<APawn>();
     APawn* Crew = Test.World->SpawnActor<APawn>();
 
+    // The caret is part of the HUD the player is given: a ring on the HUD's
+    // canvas, placed by its slot, and built hidden. The widget is made
+    // directly, as the screens' tests make theirs; with no player to own it
+    // there is no camera to project through, which is exactly the case in
+    // which it must stay hidden whatever the ship says.
+    UShipHUDWidget* HUD = NewObject<UShipHUDWidget>(Test.World);
+    HUD->Initialize();
+    HUD->TakeWidget();
+    UWidget* Caret = HUD->WidgetTree ? HUD->WidgetTree->FindWidget(UShipHUDWidget::NoseCaretName) : nullptr;
+    if (!TestTrue(TEXT("the HUD is built with a caret, a ring"), Cast<UBorder>(Caret) != nullptr)
+        || !TestTrue(TEXT("on the HUD's canvas, where a slot can place it"),
+               Cast<UCanvasPanelSlot>(Caret->Slot) != nullptr && Caret->GetParent() == HUD->WidgetTree->RootWidget))
+    {
+        return false;
+    }
+    TestEqual(TEXT("built hidden"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
+
     // When it shows: flying, with somewhere to aim.
     Ship->SetPilot(Pilot);
     TestFalse(TEXT("with no course there is no caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+    Caret->SetVisibility(ESlateVisibility::HitTestInvisible);
+    HUD->PlaceNoseCaret(Ship);
+    TestEqual(TEXT("and the HUD hides the one it has"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
 
     const TArray<FStarSystemStub> Chart = Ship->GetChart();
     if (!TestTrue(TEXT("the chart has somewhere to go"), Chart.Num() > 0) || !TestTrue(TEXT("and it plots"), Ship->PlotCourse(Chart[0].Id)))
@@ -58,6 +82,9 @@ bool FShipHUDNoseCaretTest::RunTest(const FString& Parameters)
         return false;
     }
     TestTrue(TEXT("plotted, the pilot has a caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+    Caret->SetVisibility(ESlateVisibility::HitTestInvisible);
+    HUD->PlaceNoseCaret(Ship);
+    TestEqual(TEXT("but a HUD with no camera to project through shows none"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
     TestFalse(TEXT("anyone else aboard does not: they are not aiming"), UShipHUDWidget::ShowsNoseCaret(*Ship, Crew));
     TestFalse(TEXT("and nobody does from no pawn"), UShipHUDWidget::ShowsNoseCaret(*Ship, nullptr));
     Ship->ClearPilot();

@@ -649,6 +649,33 @@ bool FSkyEclipseTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("and hides its true share of the sun, %.3g"), 1.0 - Frame.SunVisibleFraction),
             FMath::IsNearlyEqual(1.0 - Frame.SunVisibleFraction, FMath::Square(RockView.AngularRadius / SunRadius), 1e-12));
     }
+
+    // Two bodies over the star at once hide what both hide: shares are
+    // summed, never the larger taken, so a second moon crossing always
+    // darkens the deck further. Two moons side by side on the sun's face,
+    // apart from each other and wholly inside its disc, where the sum is
+    // exact and the larger share is half of it.
+    {
+        FSkySystem Pair = Fixture;
+        const FUniversePosition Ship = SkyTestFixtures::Opening();
+        const FVector Sunward = (Star.Position - Ship).GetSafeNormal();
+        const FVector Side = FVector::CrossProduct(Sunward, FVector::UpVector).GetSafeNormal();
+        const double SunRadius = SkyProjection::Project(Fixture, Ship, Params).Bodies[SkyTestFixtures::StarIndex].AngularRadius;
+        const double Distance = 1.0e10;
+        for (const double Sign : { -1.0, 1.0 })
+        {
+            const FVector Direction = (Sunward + Side * (Sign * FMath::Tan(0.5 * SunRadius))).GetSafeNormal();
+            Pair.Bodies.Add(MakeBody(Sign < 0.0 ? TEXT("West") : TEXT("East"), Ship + Direction * Distance,
+                0.3 * SunRadius * Distance, ESkyBodyKind::Moon));
+        }
+        const FSkyFrame Frame = SkyProjection::Project(Pair, Ship, Params);
+        const double Sun = Frame.Bodies[SkyTestFixtures::StarIndex].AngularRadius;
+        const double West = FMath::Square(Frame.Bodies[Frame.Bodies.Num() - 2].AngularRadius / Sun);
+        const double East = FMath::Square(Frame.Bodies.Last().AngularRadius / Sun);
+        TestTrue(FString::Printf(TEXT("each moon hides a real share (%.4f, %.4f)"), West, East), West > 0.05 && East > 0.05);
+        TestTrue(FString::Printf(TEXT("and together they hide both shares, %.4f"), 1.0 - Frame.SunVisibleFraction),
+            FMath::IsNearlyEqual(1.0 - Frame.SunVisibleFraction, West + East, 1e-9));
+    }
     return true;
 }
 

@@ -13,6 +13,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Ship/ShipCounterFrame.h"
+#include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
@@ -456,15 +457,24 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("lit, the glass reflects the room as brightly as the lights are fed"), Read(SkyMaterial::InteriorLight), Fed);
             TestEqual(TEXT("at ds.Sky.Veil, read at use"), Read(SkyMaterial::Veil), 0.4f);
 
-            // Starved, the lights dim, and so does their reflection.
-            const float Weight = Ship->GetConsumerWeight(ShipPower::Lights);
-            Ship->SetConsumerWeight(ShipPower::Lights, 0.0f);
+            // Part-starved, the lights dim, and the reflection follows them
+            // all the way down rather than only at the ends. A module drawing
+            // most of the reactor off the top leaves the lights short but not
+            // dark: a weight of 0 would take them out of the split entirely,
+            // and a satisfaction of exactly 0 cannot tell following from any
+            // curve that merely shares the endpoints.
+            UShipModuleDataAsset* Hog = NewObject<UShipModuleDataAsset>();
+            Hog->ModuleId = TEXT("Test.VeilHog");
+            Hog->PowerDraw = 0.6f * Ship->GetReactorOutput();
+            TestTrue(TEXT("a heavy module installs"), Ship->InstallModule(Hog));
             Ship->Tick(0.016f);
             Sky->SyncToShip();
             const float Starved = Ship->GetConsumerSatisfaction(ShipPower::Lights);
-            TestTrue(FString::Printf(TEXT("starving the lights dims them (%.3f from %.3f)"), Starved, Fed), Starved < Fed);
-            TestEqual(TEXT("and the reflection with them"), Read(SkyMaterial::InteriorLight), Starved);
-            Ship->SetConsumerWeight(ShipPower::Lights, Weight);
+            TestTrue(FString::Printf(TEXT("a heavy draw dims the lights part way (%.3f from %.3f)"), Starved, Fed),
+                Starved > 0.1f && Starved < 0.9f * Fed);
+            TestEqual(TEXT("and the reflection dims exactly with them"), Read(SkyMaterial::InteriorLight), Starved);
+            Ship->RemoveModule(Hog);
+            Ship->Tick(0.016f);
 
             Ship->SetLightsOn(false);
             Ship->Tick(0.016f);
