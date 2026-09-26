@@ -84,19 +84,22 @@ namespace ShipDriveLever
 
     /**
      * The eased position one Dt on, toward Target (decision 4): it moves at
-     * (Target - Position) / EaseSeconds, never faster than MaxRate notches a
-     * second, never past Target, and arrives within SettleNotches.
+     * Thrust x clamp((Target - Position) / EaseSeconds, -MaxRate, +MaxRate),
+     * never past Target, and arrives within SettleNotches.
+     *
+     * Thrust is the boosters' thrust fraction, 0..1, and it scales the whole
+     * law: the rate limit and the time constant alike, so a quarter thrust
+     * takes exactly four times as long to make any change, and makes it.
+     * MaxRate is therefore the full-thrust rate, ds.Drive.Response, and must
+     * never be pre-scaled by thrust: that would slow the ship by thrust
+     * squared, sixteen times at a quarter. Scaling the rate alone would slow
+     * only the rate-limited part, and a one-notch tap, which never reaches the
+     * limit, not at all.
      *
      * The linear part is solved exactly, not stepped, so a long Dt cannot
      * overshoot and the result does not depend on how time was chopped.
-     *
-     * Starved boosters: pass Dt x the thrust fraction and the unscaled rate,
-     * and every change takes exactly 1/thrust as long, the rate-limited and
-     * the exponential part alike -- a quarter thrust reaches any notch in
-     * four times the time, and reaches it. Scaling MaxRate alone slows only
-     * the rate-limited part.
      */
-    DEEPSPACE_API double Ease(double Position, double Target, double Dt, double MaxRate);
+    DEEPSPACE_API double Ease(double Position, double Target, double Dt, double MaxRate, double Thrust);
 
     /**
      * Ctrl's tap (decision 3): the notch below the ship's present speed,

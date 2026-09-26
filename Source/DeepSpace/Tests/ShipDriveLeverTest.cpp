@@ -20,15 +20,31 @@ namespace
     }
 
     /** Ease from From toward To for Seconds in frames of Frame seconds. */
-    double EaseFor(double From, double To, double Seconds, double Frame, double Rate)
+    double EaseFor(double From, double To, double Seconds, double Frame, double Rate, double Thrust = 1.0)
     {
         double P = From;
         const int32 Frames = FMath::RoundToInt32(Seconds / Frame);
         for (int32 Index = 0; Index < Frames; ++Index)
         {
-            P = ShipDriveLever::Ease(P, To, Frame, Rate);
+            P = ShipDriveLever::Ease(P, To, Frame, Rate, Thrust);
         }
         return P;
+    }
+
+    /** Seconds, in frames of Frame, for the ease from From to cover Share of
+     *  the way to To; negative if it never does in a minute. */
+    double SecondsToShare(double From, double To, double Share, double Frame, double Rate, double Thrust)
+    {
+        double P = From;
+        for (int32 Index = 1; Index <= FMath::RoundToInt32(60.0 / Frame); ++Index)
+        {
+            P = ShipDriveLever::Ease(P, To, Frame, Rate, Thrust);
+            if ((P - From) / (To - From) >= Share)
+            {
+                return Index * Frame;
+            }
+        }
+        return -1.0;
     }
 
     /** Repeats a hold of Seconds produces at a frame rate. */
@@ -159,8 +175,11 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("ten notches above a ship at notch 5, Ctrl lands on notch 4"), TapDown(15, 5.0), 4);
         TestEqual(TEXT("and a ship between 5 and 6 lands on 5"), TapDown(15, 5.3), 5);
         TestEqual(TEXT("in steady flight Ctrl is one notch down"), TapDown(7, 7.0), 6);
-        TestEqual(TEXT("from a hair under the notch too"), TapDown(7, 7.0 - 1.0e-12), 6);
+        TestEqual(TEXT("from a hair under the notch too, the lever on it"), TapDown(7, 7.0 - 1.0e-12), 6);
         TestEqual(TEXT("and a hair over"), TapDown(7, 7.0 + 1.0e-12), 6);
+        // With the lever away from the ship, only the tolerance decides: a ship
+        // held a rounding error over notch 5 is at notch 5, and Ctrl is notch 4.
+        TestEqual(TEXT("under the cap a rounding error over notch 5, Ctrl is notch 4, not 5"), TapDown(Top, 5.0 + 1.0e-12), 4);
         TestEqual(TEXT("held at exactly a notch's speed under the cap, Ctrl still slows"),
                   TapDown(Top, PositionOf(20.0 * Km)), 4);
         TestEqual(TEXT("spooling up, Ctrl stops the climb where it is"), TapDown(12, 8.6), 8);
@@ -170,8 +189,12 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
 
         TestEqual(TEXT("spooling down after X, Shift stops the fall where it is"), TapUp(0, 10.5, Top), 11);
         TestEqual(TEXT("in steady flight Shift is one notch up"), TapUp(7, 7.0, Top), 8);
-        TestEqual(TEXT("from a hair under the notch too"), TapUp(7, 7.0 - 1.0e-12, Top), 8);
+        TestEqual(TEXT("from a hair under the notch too, the lever on it"), TapUp(7, 7.0 - 1.0e-12, Top), 8);
         TestEqual(TEXT("and a hair over"), TapUp(7, 7.0 + 1.0e-12, Top), 8);
+        // And the mirror: spooling down after X, a rounding error under notch
+        // 10, Shift is notch 11 -- not 10, which would speed the ship by nothing.
+        TestEqual(TEXT("spooling down a rounding error under notch 10, Shift is notch 11, not a swallowed tap"),
+                  TapUp(0, 10.0 - 1.0e-12, Top), 11);
         TestEqual(TEXT("at STOP, Shift is the bottom notch"), TapUp(0, 0.0, Top), 1);
         TestEqual(TEXT("under the cap, Shift is one notch up the lever, not below it"), TapUp(Top, Capped, Top), Top);
         TestEqual(TEXT("at the top, Shift stays at the top"), TapUp(Top, static_cast<double>(Top), Top), Top);
@@ -260,7 +283,7 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
                 const int32 Steps = FMath::CeilToInt32(20.0 / Step);
                 for (int32 Index = 0; Index < Steps; ++Index)
                 {
-                    const double Next = Ease(P, Move.Value, Step, DefaultResponse);
+                    const double Next = Ease(P, Move.Value, Step, DefaultResponse, 1.0);
                     bNeverPast &= Move.Value >= Move.Key ? Next <= Move.Value : Next >= Move.Value;
                     bNeverPast &= Move.Value >= Move.Key ? Next >= P : Next <= P;
                     bWithinRate &= FMath::Abs(Next - P) <= DefaultResponse * Step * (1.0 + 1e-12);
@@ -286,7 +309,7 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
         double AtRest = -1.0;
         for (int32 Index = 1; Index <= 20 * 120 && AtRest < 0.0; ++Index)
         {
-            P = Ease(P, 0.0, Frame, DefaultResponse);
+            P = Ease(P, 0.0, Frame, DefaultResponse, 1.0);
             if (UnderCruise < 0.0 && SpeedAt(P) < 20000.0)
             {
                 UnderCruise = Index * Frame;
@@ -301,19 +324,33 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("and exactly at rest in about nine (%.2f s)"), AtRest), AtRest > 8.0 && AtRest < 9.5);
         TestEqual(TEXT("rest is rest: SpeedAt is exactly 0"), SpeedAt(P), 0.0);
 
-        // Starved boosters: time scaled by thrust (the documented way to feed
-        // it) takes exactly four times as long to reach any notch.
-        const double Full = EaseFor(0.0, 18.0, 2.0, Frame, DefaultResponse);
-        double Starved = 0.0;
-        for (int32 Index = 0; Index < 8 * 120; ++Index)
-        {
-            Starved = Ease(Starved, 18.0, Frame * 0.25, DefaultResponse);
-        }
-        TestTrue(TEXT("a quarter thrust is where full thrust was in a quarter of the time"),
-                 FMath::IsNearlyEqual(Starved, Full, 1e-9));
-        TestEqual(TEXT("no response, no motion"), Ease(3.0, 9.0, 1.0, 0.0), 3.0);
-        TestEqual(TEXT("no time, no motion"), Ease(3.0, 9.0, 0.0, DefaultResponse), 3.0);
-        TestEqual(TEXT("at the target, stays"), Ease(9.0, 9.0, 1.0, DefaultResponse), 9.0);
+        // Starved boosters (decision 4): thrust scales the whole law, so a
+        // quarter thrust makes every change in exactly four times the time.
+        // Not sixteen, which a rate pre-scaled by thrust would give, and not
+        // the 1.4 of scaling the rate alone, under which a one-notch tap --
+        // inside the rate limit throughout -- would hardly slow at all.
+        const double TapFull = SecondsToShare(4.0, 5.0, 0.95, Frame, DefaultResponse, 1.0);
+        const double TapQuarter = SecondsToShare(4.0, 5.0, 0.95, Frame, DefaultResponse, 0.25);
+        TestTrue(FString::Printf(TEXT("a one-notch tap at a quarter thrust takes four times as long (%.3f s against %.3f s)"),
+                                 TapQuarter, TapFull),
+                 TapFull > 0.0 && FMath::Abs(TapQuarter - 4.0 * TapFull) <= 4.0 * Frame);
+        const double SweepFull = SecondsToShare(0.0, 18.0, 1.0, Frame, DefaultResponse, 1.0);
+        const double SweepQuarter = SecondsToShare(0.0, 18.0, 1.0, Frame, DefaultResponse, 0.25);
+        TestTrue(FString::Printf(TEXT("and STOP to 1 c, four times as long and arriving (%.3f s against %.3f s)"),
+                                 SweepQuarter, SweepFull),
+                 SweepFull > 0.0 && FMath::Abs(SweepQuarter - 4.0 * SweepFull) <= 4.0 * Frame);
+        TestTrue(TEXT("at the same frame rate, a quarter thrust for 8 s is where full thrust was at 2 s"),
+                 FMath::IsNearlyEqual(EaseFor(0.0, 18.0, 8.0, Frame, DefaultResponse, 0.25),
+                                      EaseFor(0.0, 18.0, 2.0, Frame, DefaultResponse, 1.0), 1e-9));
+        TestTrue(TEXT("and never moves faster than a quarter of the response"),
+                 FMath::Abs(Ease(0.0, 18.0, Frame, DefaultResponse, 0.25)) <= 0.25 * DefaultResponse * Frame * (1.0 + 1e-12)
+                 && Ease(0.0, 18.0, Frame, DefaultResponse, 0.25) > 0.0);
+        TestEqual(TEXT("no thrust, no motion"), Ease(3.0, 9.0, 1.0, DefaultResponse, 0.0), 3.0);
+        TestTrue(TEXT("and more than full thrust is full thrust"),
+                 Ease(3.0, 9.0, Frame, DefaultResponse, 4.0) == Ease(3.0, 9.0, Frame, DefaultResponse, 1.0));
+        TestEqual(TEXT("no response, no motion"), Ease(3.0, 9.0, 1.0, 0.0, 1.0), 3.0);
+        TestEqual(TEXT("no time, no motion"), Ease(3.0, 9.0, 0.0, DefaultResponse, 1.0), 3.0);
+        TestEqual(TEXT("at the target, stays"), Ease(9.0, 9.0, 1.0, DefaultResponse, 1.0), 9.0);
     }
 
     // The cruise sweep, with its detent at zero (decision 2).

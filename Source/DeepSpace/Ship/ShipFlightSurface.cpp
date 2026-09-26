@@ -94,7 +94,9 @@ double ShipFlight::MaySpeed(double D, double BrakingAccel, double HoldSeconds, d
     {
         return 0.0;
     }
-    const double Hold = HoldSeconds > 0.0 ? D / HoldSeconds : Never;
+    // No hold is the braking curve alone, not no cap: an unset hold must
+    // never be the term that wins the max.
+    const double Hold = HoldSeconds > 0.0 ? D / HoldSeconds : 0.0;
     const double Brake = FMath::Sqrt(BrakingOf(BrakingAccel) * D);
     const double May = FMath::Max(Hold, Brake);
     return Step > 0.0 ? FMath::Min(May, D / Step) : May;
@@ -134,7 +136,7 @@ double ShipFlight::SecondsToFloor(double D, double Speed, double BrakingAccel, d
     // braking knee and on the braking curve below it.
     const double N = FMath::Max(HoldSeconds, 0.0);
     const double KneeSpeed = Braking * N;
-    const double Binds = Speed > KneeSpeed ? Speed * N : Speed * Speed / Braking;
+    const double Binds = N > 0.0 && Speed > KneeSpeed ? Speed * N : Speed * Speed / Braking;
     if (D <= Binds)
     {
         return SecondsOnCap(D, Braking, N);

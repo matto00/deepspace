@@ -87,14 +87,14 @@ namespace
      * substep at 120 Hz. Records the distance left and the speed at every
      * whole second, and returns the time to the floor.
      */
-    double Fly(double From, double Lever, TArray<TPair<double, double>>& EverySecond)
+    double Fly(double From, double Lever, TArray<TPair<double, double>>& EverySecond, double HoldSeconds = Hold)
     {
         double D = From;
         double T = 0.0;
         int32 Substeps = 0;
         while (D > 1.0e-6 && Substeps < 100 * 1000 * 1000)
         {
-            const double V = FMath::Min(Lever, ShipFlight::MaySpeed(D, Boost, Hold, Step));
+            const double V = FMath::Min(Lever, ShipFlight::MaySpeed(D, Boost, HoldSeconds, Step));
             if (Substeps % 120 == 0)
             {
                 EverySecond.Add({ D, V });
@@ -144,6 +144,26 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
                  D.Get(0.0) >= Distance - FloorRadius - 1.0
                  && D.Get(0.0) <= FMath::Sqrt((Distance - FloorRadius) * (Distance + FloorRadius)) + 1.0);
         TestFalse(FString::Printf(TEXT("just outside the limb from %.3g cm is a miss"), Distance),
+                  RayToFloor(World, Ship, Outside).IsSet());
+    }
+
+    // The limb from the far side of a system, where the precision is: from
+    // 30 AU and from the 138 AU of procgen's longest leg, a billionth of the
+    // floor radius (0.64 cm) either side of an Earth's limb. Distance^2 -
+    // Along^2 there is two numbers of 1e29 to 1e31 agreeing to their last
+    // digits, and misplaces the ray by hundreds of metres to kilometres; the
+    // cross product keeps it to a fraction of a centimetre.
+    for (const double Distance : { 30.0 * AU, 138.0 * AU })
+    {
+        const FUniversePosition Ship = World.Centre + Out() * Distance;
+        const FVector In = Aimed(Ship, World.Centre, FloorRadius * (1.0 - 1.0e-9));
+        const FVector Outside = Aimed(Ship, World.Centre, FloorRadius * (1.0 + 1.0e-9));
+        const TOptional<double> D = RayToFloor(World, Ship, In);
+        TestTrue(FString::Printf(TEXT("a billionth inside the limb from %.0f AU is a hit"), Distance / AU), D.IsSet());
+        const double Landed = LandsAt(Ship, In, D.Get(0.0), World.Centre);
+        TestTrue(FString::Printf(TEXT("and it lands on the floor sphere to a centimetre (%.3f cm off)"), Landed - FloorRadius),
+                 D.IsSet() && FMath::Abs(Landed - FloorRadius) < 1.0);
+        TestFalse(FString::Printf(TEXT("a billionth outside it from %.0f AU is a miss"), Distance / AU),
                   RayToFloor(World, Ship, Outside).IsSet());
     }
 
@@ -248,6 +268,19 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("under it, nothing"), MaySpeed(-5.0, Boost, Hold, Step), 0.0);
         TestTrue(TEXT("no boosters: the hold alone"), FMath::IsNearlyEqual(MaySpeed(1.0e4, 0.0, Hold, Step), 1.0e4 / Hold, 1e-12));
 
+        // No hold (ds.Drive.HoldSeconds 0 or less) is the braking curve alone:
+        // still a cap, never none.
+        for (const double NoHold : { 0.0, -1.0 })
+        {
+            TestTrue(FString::Printf(TEXT("a hold of %.0f s: far out, the braking curve, not D / step"), NoHold),
+                     FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, NoHold, Step), FMath::Sqrt(2.0 * BrakingMargin * Boost * 1.0e11), 1e-6));
+            TestTrue(TEXT("and with no substep bound either, still the braking curve"),
+                     FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, NoHold, 0.0), FMath::Sqrt(2.0 * BrakingMargin * Boost * 1.0e11), 1e-6));
+            TestTrue(TEXT("near in, the same braking curve as with a hold"),
+                     FMath::IsNearlyEqual(MaySpeed(1.0e4, Boost, NoHold, Step), MaySpeed(1.0e4, Boost, Hold, Step), 1e-12));
+            TestEqual(TEXT("with no boosters as well, no closing at all"), MaySpeed(1.0e4, 0.0, NoHold, Step), 0.0);
+        }
+
         bool bIncreasing = true;
         bool bContinuous = true;
         bool bStepBound = true;
@@ -315,6 +348,32 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
                 Worst = FMath::Max(Worst, FMath::Abs(Eta - (Total - Second)));
             }
             AddInfo(FString::Printf(TEXT("%s: flown in %.1f s; the ETA's worst disagreement %.3f s"), Case.Name, Total, Worst));
+            TestTrue(FString::Printf(TEXT("%s: flown in %.1f s, and the ETA agrees to 0.5 s from every second (worst %.3f s)"),
+                                     Case.Name, Total, Worst),
+                     Worst < 0.5 && EverySecond.Num() > 5);
+        }
+
+        // No hold: it holds Speed to d1 = v^2 / (1.6 a), then brakes, 2 d1 / v.
+        for (const double NoHold : { 0.0, -1.0 })
+        {
+            const double V = 2.0e4;
+            const double D1 = V * V / (2.0 * BrakingMargin * Boost);
+            TestTrue(FString::Printf(TEXT("a hold of %.0f s: held to the braking curve, then braking"), NoHold),
+                     FMath::IsNearlyEqual(SecondsToFloor(1.0e6, V, Boost, NoHold), (1.0e6 - D1) / V + 2.0 * D1 / V, 1e-9));
+            TestTrue(TEXT("and under the braking curve already, braking alone"),
+                     FMath::IsNearlyEqual(SecondsToFloor(1.0e4, V, Boost, NoHold), 2.0 * FMath::Sqrt(1.0e4 / (2.0 * BrakingMargin * Boost)), 1e-9));
+        }
+        for (const FCase& Case : { FCase{ TEXT("no hold, 10 km at cruise's 200 m/s"), 1.0e6, 2.0e4 },
+                                   FCase{ TEXT("no hold, 250,000 km at 1 c"), 2.5e10, C } })
+        {
+            TArray<TPair<double, double>> EverySecond;
+            const double Total = Fly(Case.From, Case.Lever, EverySecond, 0.0);
+            double Worst = 0.0;
+            for (int32 Second = 0; Second < EverySecond.Num(); ++Second)
+            {
+                const double Eta = SecondsToFloor(EverySecond[Second].Key, EverySecond[Second].Value, Boost, 0.0);
+                Worst = FMath::Max(Worst, FMath::Abs(Eta - (Total - Second)));
+            }
             TestTrue(FString::Printf(TEXT("%s: flown in %.1f s, and the ETA agrees to 0.5 s from every second (worst %.3f s)"),
                                      Case.Name, Total, Worst),
                      Worst < 0.5 && EverySecond.Num() > 5);

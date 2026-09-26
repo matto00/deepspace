@@ -96,8 +96,12 @@ namespace ShipFlight
      * so fast that one substep of Step seconds would carry it past.
      *
      * BrakingAccel is the boosters' present acceleration, cm/s^2, of which
-     * BrakingMargin is planned on. A HoldSeconds or a Step of zero or less
-     * drops that term. 0 at D of zero or less.
+     * BrakingMargin is planned on. A HoldSeconds of zero or less drops the
+     * hold, leaving the braking curve alone: still a cap, one that lets the
+     * ship close at full lever until it must brake. A Step of zero or less
+     * drops the substep bound. 0 at D of zero or less, and with neither a
+     * hold nor any braking, which only a CVar can arrange: boosters degrade
+     * to a quarter thrust and never to none.
      */
     DEEPSPACE_API double MaySpeed(double D, double BrakingAccel, double HoldSeconds, double Step);
 
@@ -115,6 +119,10 @@ namespace ShipFlight
      * (2 x BrakingMargin x BrakingAccel x HoldSeconds^2, 1,024 m at full
      * boosters), then it brakes, 2 x HoldSeconds from the knee. Above the
      * knee: (D - Speed N) / Speed + N ln(Speed N / knee) + 2N.
+     *
+     * With a HoldSeconds of zero or less, the braking curve alone, as
+     * MaySpeed: it holds Speed until d1 = Speed^2 / (2 x BrakingMargin x
+     * BrakingAccel), then brakes, 2 d1 / Speed.
      *
      * At the present speed, which is what "live" means: while the lever is
      * still spooling up it overstates. 0 at D of zero or less; infinite at

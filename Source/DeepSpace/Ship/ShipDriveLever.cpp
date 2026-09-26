@@ -110,9 +110,12 @@ double ShipDriveLever::PositionOf(double SpeedCmPerSecond)
     return Below + FMath::Loge(SpeedCmPerSecond / Speed(Below)) / FMath::Loge(Speed(Below + 1) / Speed(Below));
 }
 
-double ShipDriveLever::Ease(double Position, double Target, double Dt, double MaxRate)
+double ShipDriveLever::Ease(double Position, double Target, double Dt, double MaxRate, double Thrust)
 {
+    // Thrust scales the whole law, so it is the same as time running slower:
+    // the ease below runs on the ship's own clock, Dt x Thrust.
     const double Rate = FMath::Max(MaxRate, 0.0);
+    Dt *= FMath::Clamp(Thrust, 0.0, 1.0);
     if (!(Dt > 0.0) || Rate <= 0.0 || Position == Target)
     {
         return Position == Target ? Target : Position;
