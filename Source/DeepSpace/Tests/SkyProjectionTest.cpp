@@ -475,7 +475,7 @@ bool FSkyProjectionTest::RunTest(const FString& Parameters)
         const FSkyFrame Frame = SkyProjection::Project(Fixture, SkyTestFixtures::Opening(), Params);
         TestTrue(TEXT("from the opening the sun is off to +Y"), AngleBetween(Frame.SunDirection, FVector(0.0, 1.0, 0.0)) < 1.0e-9);
         TestTrue(TEXT("a Sun at 1 AU gives irradiance 1"), RelativeError(Frame.SunIrradiance, 1.0) < 1.0e-9);
-        TestEqual(TEXT("nothing is eclipsed until the eclipse term lands"), Frame.SunVisibleFraction, 1.0);
+        TestEqual(TEXT("from the opening nothing is in front of the sun"), Frame.SunVisibleFraction, 1.0);
 
         FSkySystem Starless;
         Starless.Bodies.Add(MakeBody(TEXT("Rogue"), FUniversePosition() + FVector(1.0e10, 0.0, 0.0), 6.4e8));
@@ -485,6 +485,169 @@ bool FSkyProjectionTest::RunTest(const FString& Parameters)
 
         const FSkyFrame Empty = SkyProjection::Project(FSkySystem(), FUniversePosition(), Params);
         TestEqual(TEXT("an empty system projects to nothing"), Empty.Bodies.Num(), 0);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FSkyEclipseTest,
+    "DeepSpace.Sky.Eclipse",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * Parking behind a planet darkens the ship (sky decision 5), and nothing
+ * else does: the disc arithmetic, then the sun seen from inside a planet's
+ * shadow, at its edge, beside it, and with a planet lined up behind the
+ * star rather than in front of it.
+ */
+bool FSkyEclipseTest::RunTest(const FString& Parameters)
+{
+    using SkyProjection::DiscOverlapFraction;
+
+    // Discs, in the plane.
+    {
+        TestEqual(TEXT("apart, nothing is covered"), DiscOverlapFraction(3.0, 1.0, 1.0), 0.0);
+        TestEqual(TEXT("touching, nothing is covered"), DiscOverlapFraction(2.0, 1.0, 1.0), 0.0);
+        TestEqual(TEXT("a larger disc centred on it covers it"), DiscOverlapFraction(0.0, 1.0, 2.0), 1.0);
+        TestEqual(TEXT("and still does off-centre, while it lies inside"), DiscOverlapFraction(0.9, 1.0, 2.0), 1.0);
+        TestTrue(TEXT("a disc half the radius inside it covers a quarter"),
+            FMath::IsNearlyEqual(DiscOverlapFraction(0.2, 1.0, 0.5), 0.25, 1e-15));
+
+        // Two equal discs cover half of each other at 0.80794550659903 radii
+        // apart: the root of 2 acos(d / 2) - (d / 2) sqrt(4 - d^2) = pi / 2.
+        const double Half = 0.8079455065990344;
+        TestTrue(FString::Printf(TEXT("equal discs at the half-overlap separation cover half (%.12f)"), DiscOverlapFraction(Half, 1.0, 1.0)),
+            FMath::IsNearlyEqual(DiscOverlapFraction(Half, 1.0, 1.0), 0.5, 1e-9));
+
+        // The lens belongs to both discs: A's share of it times A's area is
+        // B's share times B's. A slip in either segment breaks this for
+        // unequal discs, where the known values above cannot see it.
+        double WorstSymmetry = 0.0;
+        for (const double A : { 0.3, 1.0, 2.5 })
+        {
+            for (const double B : { 0.2, 1.0, 1.7 })
+            {
+                for (double S = 0.0; S <= A + B; S += (A + B) / 37.0)
+                {
+                    const double Lens = DiscOverlapFraction(S, A, B) * A * A;
+                    WorstSymmetry = FMath::Max(WorstSymmetry, FMath::Abs(Lens - DiscOverlapFraction(S, B, A) * B * B));
+                }
+            }
+        }
+        TestTrue(FString::Printf(TEXT("the lens is the same area seen from either disc (worst %.3g)"), WorstSymmetry), WorstSymmetry < 1e-12);
+
+        // Sliding apart, the cover only falls, and it meets both ends with no
+        // step: fully covered and wholly clear are where the lens begins and
+        // ends, not a jump. A sun half a degree across at a limb 10 degrees
+        // in, the case the deck will show.
+        const double Sun = FMath::DegreesToRadians(0.27);
+        const double Limb = FMath::DegreesToRadians(10.0);
+        double Previous = 1.0;
+        bool bMonotone = true;
+        for (int32 Step = 0; Step <= 400; ++Step)
+        {
+            const double S = (Limb - Sun) + 2.0 * Sun * Step / 400.0;
+            const double Cover = DiscOverlapFraction(S, Sun, Limb);
+            bMonotone &= Cover <= Previous + 1e-15;
+            Previous = Cover;
+        }
+        TestTrue(TEXT("sliding a sun off a limb, the cover only falls"), bMonotone);
+        TestTrue(TEXT("from wholly covered with no step"), DiscOverlapFraction(Limb - Sun + 1e-12, Sun, Limb) > 1.0 - 1e-6);
+        TestTrue(TEXT("to wholly clear with no step"), DiscOverlapFraction(Limb + Sun - 1e-12, Sun, Limb) < 1e-6);
+        const double OnLimb = DiscOverlapFraction(Limb, Sun, Limb);
+        TestTrue(FString::Printf(TEXT("with its centre on the limb, a small sun is about half covered (%.4f)"), OnLimb),
+            OnLimb < 0.5 && OnLimb > 0.49);
+
+        // Angles only: a far sun's micro-radians behave as a near one's
+        // degrees.
+        const double Scale = 1.0e-6;
+        TestTrue(TEXT("the arithmetic holds at micro-radians"),
+            FMath::IsNearlyEqual(DiscOverlapFraction(Half * Scale, Scale, Scale), 0.5, 1e-9)
+            && FMath::IsNearlyEqual(DiscOverlapFraction(Limb * Scale, Sun * Scale, Limb * Scale), OnLimb, 1e-9));
+    }
+
+    // The sun, from where the ship is.
+    const FSkyViewParams Params;
+    const FSkySystem Fixture = SkyTestFixtures::System();
+    const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
+    const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+    const FVector Shadow = (Home.Position - Star.Position).GetSafeNormal();
+    const FVector Across = FVector::CrossProduct(Shadow, FVector::UpVector).GetSafeNormal();
+    const double Behind = Home.Radius + 1.0e10;     // 100,000 km past the planet's centre
+    const auto VisibleFrom = [&](double Offset)
+    {
+        return SkyProjection::Project(Fixture, Home.Position + Shadow * Behind + Across * Offset, Params).SunVisibleFraction;
+    };
+    {
+        TestEqual(TEXT("in open sky the whole sun shows"),
+            SkyProjection::Project(Fixture, SkyTestFixtures::Opening(), Params).SunVisibleFraction, 1.0);
+        TestEqual(TEXT("parked squarely behind a planet, none of it does"), VisibleFrom(0.0), 0.0);
+        TestEqual(TEXT("and on the planet's day side, all of it"),
+            SkyProjection::Project(Fixture, Home.Position + Shadow * -Behind, Params).SunVisibleFraction, 1.0);
+
+        // Out of the shadow sideways: dark, then a penumbra, then light, and
+        // never back.
+        double Previous = 0.0;
+        bool bMonotone = true;
+        for (int32 Step = 0; Step <= 300; ++Step)
+        {
+            const double Visible = VisibleFrom(3.0 * Home.Radius * Step / 300.0);
+            bMonotone &= Visible >= Previous;
+            Previous = Visible;
+        }
+        TestTrue(TEXT("stepping out of the shadow the sun only grows"), bMonotone);
+        TestEqual(TEXT("and three radii out it is whole"), Previous, 1.0);
+
+        // Where the star's centre sits on the planet's limb -- found by
+        // bisection on where the ship is, not on anything the projection
+        // reports -- half the sun is behind the planet.
+        const auto LimbGap = [&](double Offset)
+        {
+            const FUniversePosition Ship = Home.Position + Shadow * Behind + Across * Offset;
+            const FVector ToHome = Home.Position - Ship;
+            const FVector ToStar = Star.Position - Ship;
+            return AngleBetween(ToHome, ToStar) - FMath::Asin(Home.Radius / ToHome.Size());
+        };
+        double Low = 0.0;
+        double High = 3.0 * Home.Radius;
+        for (int32 Iteration = 0; Iteration < 80; ++Iteration)
+        {
+            const double Middle = 0.5 * (Low + High);
+            (LimbGap(Middle) < 0.0 ? Low : High) = Middle;
+        }
+        const double AtLimb = VisibleFrom(0.5 * (Low + High));
+        TestTrue(FString::Printf(TEXT("with the star's centre on the planet's limb, about half the sun shows (%.4f)"), AtLimb),
+            FMath::Abs(AtLimb - 0.5) < 0.02);
+    }
+
+    // A planet lined up behind the star hides nothing: the eclipse follows
+    // the depth order the picture is drawn in, not the discs alone.
+    {
+        const FSkyBody& Giant = Fixture.Bodies[SkyTestFixtures::GiantIndex];
+        const FVector Line = (Giant.Position - Star.Position).GetSafeNormal();
+        const FUniversePosition Ship = Star.Position + Line * -AU;
+        const FSkyFrame Frame = SkyProjection::Project(Fixture, Ship, Params);
+        const FSkyBodyView& StarView = Frame.Bodies[SkyTestFixtures::StarIndex];
+        const FSkyBodyView& GiantView = Frame.Bodies[SkyTestFixtures::GiantIndex];
+        TestTrue(TEXT("the giant's disc lies on the star's"),
+            DiscOverlapFraction(AngleBetween(StarView.Direction, GiantView.Direction), StarView.AngularRadius, GiantView.AngularRadius) > 0.0);
+        TestEqual(TEXT("but from behind it, so the whole sun shows"), Frame.SunVisibleFraction, 1.0);
+    }
+
+    // A body drawn as a point is drawn larger than it is; it hides only what
+    // it truly covers. A 1 km rock 100,000 km sunward is a two-pixel point
+    // and a speck against the sun.
+    {
+        FSkySystem Rock = Fixture;
+        const FUniversePosition Ship = SkyTestFixtures::Opening();
+        const FVector Sunward = (Star.Position - Ship).GetSafeNormal();
+        Rock.Bodies.Add(MakeBody(TEXT("Rock"), Ship + Sunward * 1.0e10, 1.0e5, ESkyBodyKind::Moon));
+        const FSkyFrame Frame = SkyProjection::Project(Rock, Ship, Params);
+        const FSkyBodyView& RockView = Frame.Bodies.Last();
+        const double SunRadius = Frame.Bodies[SkyTestFixtures::StarIndex].AngularRadius;
+        TestTrue(TEXT("the rock is drawn larger than it is"), RockView.DrawnAngularRadius > 10.0 * RockView.AngularRadius);
+        TestTrue(FString::Printf(TEXT("and hides its true share of the sun, %.3g"), 1.0 - Frame.SunVisibleFraction),
+            FMath::IsNearlyEqual(1.0 - Frame.SunVisibleFraction, FMath::Square(RockView.AngularRadius / SunRadius), 1e-12));
     }
     return true;
 }

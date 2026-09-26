@@ -35,6 +35,43 @@ double SkyProjection::LambertPhase(double Alpha)
     return (FMath::Sin(A) + (UE_DOUBLE_PI - A) * FMath::Cos(A)) / UE_DOUBLE_PI;
 }
 
+double SkyProjection::DiscOverlapFraction(double Separation, double RadiusA, double RadiusB)
+{
+    const double S = FMath::Abs(Separation);
+    const double A = FMath::Max(RadiusA, 0.0);
+    const double B = FMath::Max(RadiusB, 0.0);
+    if (A <= 0.0)
+    {
+        // A disc with no area: covered exactly when its centre is.
+        return S < B ? 1.0 : 0.0;
+    }
+    if (B <= 0.0 || S >= A + B)
+    {
+        return 0.0;
+    }
+    if (S <= B - A)
+    {
+        return 1.0;
+    }
+    if (S <= A - B)
+    {
+        return (B * B) / (A * A);
+    }
+
+    // The lens is two circular segments either side of the common chord: X
+    // and Y are the chord's distances from each centre, H its half-length.
+    // Each is written as products of sums and differences of the radii and
+    // the separation, so a small sun at a large planet's limb, where S and B
+    // agree to many digits, does not lose them all to one subtraction; and
+    // the angles are atan2 of the chord, not arc-cosines, which near a
+    // grazing contact have no digits left.
+    const double X = ((S - B) * (S + B) + A * A) / (2.0 * S);
+    const double Y = ((S - A) * (S + A) + B * B) / (2.0 * S);
+    const double H = FMath::Sqrt(FMath::Max((A + B - S) * (S - A + B) * (S + A - B) * (S + A + B), 0.0)) / (2.0 * S);
+    const double Lens = A * A * FMath::Atan2(H, X) + B * B * FMath::Atan2(H, Y) - S * H;
+    return FMath::Clamp(Lens / (UE_DOUBLE_PI * A * A), 0.0, 1.0);
+}
+
 double SkyProjection::Compress(double Ratio, double Gamma)
 {
     return Ratio > 0.0 ? FMath::Pow(Ratio, Gamma) : 0.0;
@@ -174,6 +211,28 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
         const double Distance = ToStar.Size();
         Frame.SunDirection = Distance > 0.0 ? ToStar / Distance : FVector::ZeroVector;
         Frame.SunIrradiance = Compress(IrradianceRatio(*Star, Distance), Params.FluxGamma);
+
+        // The eclipse: whatever is stacked in front of the star, by the same
+        // order the picture is drawn in, takes its share of the disc, at the
+        // true angular sizes -- a planet inflated to a two-pixel point hides
+        // no more sun than it really does. Shares are summed, which counts
+        // twice the rare sliver where a moon and its planet both cross the
+        // star at once: the deck goes a shade darker than it should for
+        // the seconds that lasts, and never lighter.
+        const FSkyBodyView& StarView = Frame.Bodies[StarIndex];
+        double Covered = 0.0;
+        for (const int32 Index : Frame.DepthOrder)
+        {
+            if (Index == StarIndex)
+            {
+                break;
+            }
+            const FSkyBodyView& View = Frame.Bodies[Index];
+            const double Separation = FMath::Atan2(FVector::CrossProduct(View.Direction, StarView.Direction).Size(),
+                                                   FVector::DotProduct(View.Direction, StarView.Direction));
+            Covered += DiscOverlapFraction(Separation, StarView.AngularRadius, View.AngularRadius);
+        }
+        Frame.SunVisibleFraction = FMath::Clamp(1.0 - Covered, 0.0, 1.0);
     }
     return Frame;
 }
