@@ -402,6 +402,17 @@ number or a table, not a rule, and numbers are data:
   chosen for the same reason. The tables (mixes, colour weights, templates)
   mirror as arrays of small `USTRUCT` rows declared in the config's header,
   never in the rules' header, so the pure struct carries no reflection.
+  *As built:* the tables are **overlays by name**, not whole mirrors. A
+  `Kinds`, `Templates` or `Colours` row replaces the code's entry of the same
+  name or adds a new one, and a `Kinds` row with no `Mix` keeps the code's
+  mix, so moving one λ is one line. An ini array key replaces the whole
+  array it names, so mirroring the tables whole would have made a one-mug
+  tune restate the catalogue. What the ini may say is held to
+  `DressRuleDomain` (`ShipDressing.h`): a Beta shape under 0.1, a λ over
+  7.5, a mix naming no template, a part that does not rest on z = 0 or an
+  unknown mesh refuses the whole read, and the rules in use stay, as
+  procgen's priors do. `ds.Dress.Reload` shares `GameIniReload` with
+  `ds.Universe.ReloadPriors`.
 - **Guarantees stay in code, not in the ini.** These are the Poisson `Max` of
   8, the eight redraws before an item is dropped, containment inside
   `[half, L − half]`, the excludes, and `Clear`. No ini edit may be able to
