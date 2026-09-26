@@ -40,18 +40,6 @@ namespace SliceChooseTestLocal
 {
     using namespace SkyTestWorld;
 
-    /** A screen as the tests make one: a widget component builds its widget
-     *  through the game instance, which a hand-made world has not got, so
-     *  it is made directly. What is under test is the screen and the ship. */
-    template <typename TWidget>
-    TWidget* MakeScreen(UWorld* World)
-    {
-        TWidget* Widget = NewObject<TWidget>(World);
-        Widget->Initialize();
-        Widget->TakeWidget();
-        return Widget;
-    }
-
     /**
      * The button in Screen whose click runs Handler: found by what its
      * OnClicked is bound to, not by where it sits in the tree, so pressing it
@@ -486,6 +474,9 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         Entry.RatedLight = Entry.Light->GetLightColor();
         Built.Add(Entry);
     }
+    // The laptop the split is set at, placed before play as the level places
+    // it, so its widget is the one its panel makes.
+    AShipLaptop* LaptopScreen = Test.World->SpawnActor<AShipLaptop>(FVector(0.0, 300.0, 75.0), FRotator::ZeroRotator);
 
     Test.BeginPlay();
     UShipLightingSubsystem* Lighting = Test.World->GetSubsystem<UShipLightingSubsystem>();
@@ -519,7 +510,15 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
                          FRotationMatrix::MakeFromX(-Test.Ship->GetCourseDirection().Get(FVector::XAxisVector)).ToQuat());
     Test.Ship->SetJumpEngaged(true);
 
-    UPowerAllocationWidget* Laptop = MakeScreen<UPowerAllocationWidget>(Test.World);
+    UPowerAllocationWidget* Laptop = LaptopScreen
+        ? Cast<UPowerAllocationWidget>(LaptopScreen->GetScreen()->GetUserWidgetObject()) : nullptr;
+    if (!TestNotNull(TEXT("the laptop's panel made the power split"), Laptop))
+    {
+        return false;
+    }
+    // Its component's first tick is where it takes the widget, and the
+    // widget builds its rows.
+    LaptopScreen->GetScreen()->TickComponent(0.016f, LEVELTICK_All, nullptr);
     Laptop->SetRowWeight(ShipPower::Engine, UPowerAllocationWidget::MaxWeight);
     Laptop->SetRowWeight(ShipPower::Boosters, UPowerAllocationWidget::MaxWeight);
     Laptop->SetRowWeight(ShipPower::Lights, 0.1f);

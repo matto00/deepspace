@@ -3,6 +3,7 @@
 #include "Components/WidgetInteractionComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Player/DeepSpaceCharacter.h"
@@ -67,8 +68,11 @@ namespace
         return World;
     }
 
+    /** Play ends before the world goes; a world whose actors never began
+     *  play ignores it. */
     void DestroyWorld(UWorld* World)
     {
+        World->EndPlay(EEndPlayReason::RemovedFromWorld);
         GEngine->DestroyWorldContext(World);
         World->DestroyWorld(false);
     }
@@ -79,18 +83,13 @@ namespace
         World->BeginPlay();
     }
 
-    /**
-     * The chart's widget. A widget component builds its widget through the
-     * game instance, which a hand-made world has not got, so under the suite
-     * it is made directly; what is under test is the screen's relationship
-     * with the ship, not Unreal's plumbing for putting it on a quad.
-     */
-    UNavigationWidget* MakeChart(UWorld* World)
+    /** The same, and then every actor's BeginPlay, which a world with no
+     *  game mode never dispatches by itself: the call its game state would
+     *  make. A chart's widget component makes its widget there. */
+    void BeginPlayForActors(UWorld* World)
     {
-        UNavigationWidget* Widget = NewObject<UNavigationWidget>(World);
-        Widget->Initialize();
-        Widget->TakeWidget();
-        return Widget;
+        BeginPlay(World);
+        World->GetWorldSettings()->NotifyBeginPlay();
     }
 
     bool HasNumber(const FString& Text)
@@ -256,12 +255,15 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     // builds its widget and its collision body in BeginPlay, and one spawned
     // into a running world never does.
     AShipNavScreen* Screen = World->SpawnActor<AShipNavScreen>(FVector(300.0, 0.0, 105.0), FRotator::ZeroRotator);
-    BeginPlay(World);
+    // A second chart, as though there were another in the ship. Neither is
+    // special, and neither is told what the other did.
+    AShipNavScreen* OtherScreen = World->SpawnActor<AShipNavScreen>(FVector(300.0, 200.0, 105.0), FRotator::ZeroRotator);
+    BeginPlayForActors(World);
 
     UShipSubsystem* Ship = World->GetSubsystem<UShipSubsystem>();
     const UUniverseSubsystem* Universe = World->GetSubsystem<UUniverseSubsystem>();
-    if (!TestNotNull(TEXT("the chart spawns"), Screen) || !TestNotNull(TEXT("the world has a ship"), Ship)
-        || !TestNotNull(TEXT("and a universe"), Universe))
+    if (!TestNotNull(TEXT("the chart spawns"), Screen) || !TestNotNull(TEXT("and the other"), OtherScreen)
+        || !TestNotNull(TEXT("the world has a ship"), Ship) || !TestNotNull(TEXT("and a universe"), Universe))
     {
         DestroyWorld(World);
         return false;
@@ -269,14 +271,20 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the chart's panel shows the navigation widget"),
              Screen->GetScreen()->GetWidgetClass() == UNavigationWidget::StaticClass());
 
+    // The widgets the panels made, not ones made beside them: what is under
+    // test is the chart the level places.
     UNavigationWidget* Chart = Cast<UNavigationWidget>(Screen->GetScreen()->GetUserWidgetObject());
-    if (!Chart)
+    UNavigationWidget* Other = Cast<UNavigationWidget>(OtherScreen->GetScreen()->GetUserWidgetObject());
+    if (!TestNotNull(TEXT("the chart's panel made its widget"), Chart)
+        || !TestNotNull(TEXT("and so did the other's"), Other))
     {
-        Chart = MakeChart(World);
+        DestroyWorld(World);
+        return false;
     }
-    // A second chart, as though there were another in the ship. Neither is
-    // special, and neither is told what the other did.
-    UNavigationWidget* Other = MakeChart(World);
+    // A panel takes its widget on its component's first tick, which is when
+    // the widget builds its tree.
+    Screen->GetScreen()->TickComponent(0.016f, LEVELTICK_All, nullptr);
+    OtherScreen->GetScreen()->TickComponent(0.016f, LEVELTICK_All, nullptr);
 
     Ship->Tick(0.1f);
     Chart->RefreshFromShip();
