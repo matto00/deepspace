@@ -151,6 +151,52 @@ namespace ProcGenCorpusTestLocal
             Num(Planet.Population, NonFinite)}, TEXT("\t"));
     }
 
+    /** What every column of one row must hold, by column name, worked out
+     *  here from the system rather than read from the writer: the Python reads
+     *  by name, so a cell under the wrong header, or a quantity in the wrong
+     *  unit, would be read as something else without a complaint. Planet -1
+     *  is an empty system's only row. */
+    TMap<FString, FString> ExpectedRow(const FStarSystem& System, double DistanceLy, int32 PlanetIndex)
+    {
+        const FStar& Star = System.Star;
+        const bool bAny = System.Planets.IsValidIndex(PlanetIndex);
+        const FPlanet Planet = bAny ? System.Planets[PlanetIndex] : FPlanet();
+        const auto G = [](double Value) { return FString::Printf(TEXT("%.6g"), Value); };
+        return {
+            {TEXT("system"), System.Stub.Name},
+            {TEXT("sector_x"), FString::Printf(TEXT("%lld"), static_cast<long long>(System.Stub.Id.Sector.X))},
+            {TEXT("sector_y"), FString::Printf(TEXT("%lld"), static_cast<long long>(System.Stub.Id.Sector.Y))},
+            {TEXT("sector_z"), FString::Printf(TEXT("%lld"), static_cast<long long>(System.Stub.Id.Sector.Z))},
+            {TEXT("slot"), FString::FromInt(System.Stub.Id.Slot)},
+            {TEXT("distance_ly"), G(DistanceLy)},
+            {TEXT("star_class"), SystemDescription::ClassName(Star.Class)},
+            {TEXT("star_mass_solar"), G(Star.MassSolar)},
+            {TEXT("star_luminosity_solar"), G(Star.LuminositySolar)},
+            {TEXT("star_temperature_k"), G(Star.TemperatureK)},
+            {TEXT("habitable_inner_au"), G(Star.HabitableInnerAU)},
+            {TEXT("habitable_outer_au"), G(Star.HabitableOuterAU)},
+            {TEXT("frost_line_au"), G(Star.FrostLineAU)},
+            {TEXT("planet_count"), FString::FromInt(System.Planets.Num())},
+            {TEXT("planet"), FString::FromInt(bAny ? PlanetIndex : -1)},
+            {TEXT("designation"), bAny ? Planet.Designation : FString()},
+            {TEXT("given_name"), bAny ? Planet.GivenName : FString()},
+            {TEXT("kind"), bAny ? SystemDescription::KindName(Planet.Kind) : TEXT("")},
+            {TEXT("semi_major_axis_au"), bAny ? G(Planet.SemiMajorAxisAU) : FString()},
+            {TEXT("mass_earth"), bAny ? G(Planet.MassEarth) : FString()},
+            {TEXT("radius_earth"), bAny ? G(Planet.RadiusEarth) : FString()},
+            {TEXT("equilibrium_k"), bAny ? G(Planet.EquilibriumK) : FString()},
+            {TEXT("population"), bAny ? G(Planet.Population) : FString()}};
+    }
+
+    /** One row a TSV line must be, to be read. */
+    struct FRowToCheck
+    {
+        FString What;
+        int32 Line = 0;
+        int32 System = 0;
+        int32 Planet = -1;
+    };
+
     /** The planet columns of a system with no planets: planet -1, the rest
      *  empty, so the system is still one row and a count of rows per system
      *  still sees it. */
@@ -223,13 +269,23 @@ bool FProcGenCorpusTest::RunTest(const FString& Parameters)
     // -- the TSV ---------------------------------------------------------------
     int32 NonFinite = 0;
     int32 Rows = 0;
+    // Rows read back by name: home's first, the nearest neighbour's first --
+    // the first with a distance that is not zero whatever its unit -- the
+    // furthest system's last, and the first inhabited world's, which is the
+    // first row where given_name and population are not empty or zero.
+    TArray<FRowToCheck> ToCheck;
     FString Tsv = FString::Join(Columns, TEXT("\t")) + TEXT("\n");
     Tsv.Reserve(Near.Num() * 4 * 160);
-    for (const FStarSystemStub& Stub : Near)
+    for (int32 S = 0; S < Near.Num(); ++S)
     {
+        const FStarSystemStub& Stub = Near[S];
         const FStarSystem System = Galaxy.GenerateSystem(Stub);
         const double DistanceLy = Home->Stub.Position.DistanceTo(Stub.Position) / UniverseUnits::CmPerLightYear;
         const FString Prefix = SystemColumns(System, DistanceLy, NonFinite) + TEXT("\t");
+        if (S == 0 || S == 1)
+        {
+            ToCheck.Add({S == 0 ? TEXT("home") : TEXT("the nearest neighbour"), Rows + 1, S, System.Planets.IsEmpty() ? -1 : 0});
+        }
         if (System.Planets.IsEmpty())
         {
             Tsv += Prefix + NoPlanetColumns() + TEXT("\n");
@@ -237,10 +293,20 @@ bool FProcGenCorpusTest::RunTest(const FString& Parameters)
         }
         for (const FPlanet& Planet : System.Planets)
         {
+            if (Planet.Population > 0.0 && !ToCheck.ContainsByPredicate([](const FRowToCheck& Row) { return Row.What.StartsWith(TEXT("the first inhabited")); }))
+            {
+                ToCheck.Add({TEXT("the first inhabited world"), Rows + 1, S, Planet.Id.Planet});
+            }
             Tsv += Prefix + PlanetColumns(Planet, NonFinite) + TEXT("\n");
             ++Rows;
         }
+        if (S == Near.Num() - 1)
+        {
+            ToCheck.Add({TEXT("the furthest system"), Rows, S, System.Planets.Num() - 1});
+        }
     }
+    TestTrue(TEXT("the corpus has somebody living in it, so the population column is read somewhere it is not zero"),
+        ToCheck.ContainsByPredicate([](const FRowToCheck& Row) { return Row.What.StartsWith(TEXT("the first inhabited")); }));
     TestEqual(TEXT("nothing in the corpus is NaN or infinite"), NonFinite, 0);
 
     const FString TsvPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir(), TEXT("procgen_corpus.tsv"));
@@ -266,46 +332,30 @@ bool FProcGenCorpusTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("every line has the contract's columns"), Ragged, 0);
         TestEqual(TEXT("every system is in the file, the empty ones too"), SystemsSeen, Near.Num());
 
-        // The first line is home, and every column holds what its name says:
-        // the Python reads by name, so a cell written under the wrong header
-        // would be read as the wrong quantity without a complaint.
-        if (Lines.Num() > 1)
+        // Every column of each row to check holds what its name says. The
+        // expected distance is worked out again here, so a writer that used
+        // another unit, or put the distance under another header, fails on
+        // every row but home's, where it is zero either way.
+        for (const FRowToCheck& Row : ToCheck)
         {
+            if (!TestTrue(Row.What + TEXT("'s row is in the file"), Lines.IsValidIndex(Row.Line)))
+            {
+                continue;
+            }
             TArray<FString> Cells;
-            Lines[1].ParseIntoArray(Cells, TEXT("\t"), /*InCullEmpty*/ false);
-            const FStar& Star = Home->Star;
-            const bool bAny = !Home->Planets.IsEmpty();
-            const FPlanet Planet = bAny ? Home->Planets[0] : FPlanet();
-            const auto G = [](double Value) { return FString::Printf(TEXT("%.6g"), Value); };
-            const TMap<FString, FString> Expected = {
-                {TEXT("system"), Home->Stub.Name},
-                {TEXT("sector_x"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.X))},
-                {TEXT("sector_y"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.Y))},
-                {TEXT("sector_z"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.Z))},
-                {TEXT("slot"), FString::FromInt(Home->Stub.Id.Slot)},
-                {TEXT("distance_ly"), TEXT("0")},
-                {TEXT("star_class"), SystemDescription::ClassName(Star.Class)},
-                {TEXT("star_mass_solar"), G(Star.MassSolar)},
-                {TEXT("star_luminosity_solar"), G(Star.LuminositySolar)},
-                {TEXT("star_temperature_k"), G(Star.TemperatureK)},
-                {TEXT("habitable_inner_au"), G(Star.HabitableInnerAU)},
-                {TEXT("habitable_outer_au"), G(Star.HabitableOuterAU)},
-                {TEXT("frost_line_au"), G(Star.FrostLineAU)},
-                {TEXT("planet_count"), FString::FromInt(Home->Planets.Num())},
-                {TEXT("planet"), bAny ? TEXT("0") : TEXT("-1")},
-                {TEXT("designation"), bAny ? Planet.Designation : FString()},
-                {TEXT("given_name"), bAny ? Planet.GivenName : FString()},
-                {TEXT("kind"), bAny ? SystemDescription::KindName(Planet.Kind) : TEXT("")},
-                {TEXT("semi_major_axis_au"), bAny ? G(Planet.SemiMajorAxisAU) : FString()},
-                {TEXT("mass_earth"), bAny ? G(Planet.MassEarth) : FString()},
-                {TEXT("radius_earth"), bAny ? G(Planet.RadiusEarth) : FString()},
-                {TEXT("equilibrium_k"), bAny ? G(Planet.EquilibriumK) : FString()},
-                {TEXT("population"), bAny ? G(Planet.Population) : FString()}};
-            TestEqual(TEXT("every column has an expected value for home"), Expected.Num(), Columns.Num());
+            Lines[Row.Line].ParseIntoArray(Cells, TEXT("\t"), /*InCullEmpty*/ false);
+            const FStarSystem System = Galaxy.GenerateSystem(Near[Row.System]);
+            const double DistanceLy = Home->Stub.Position.DistanceTo(Near[Row.System].Position) / UniverseUnits::CmPerLightYear;
+            if (Row.System > 0)
+            {
+                TestTrue(Row.What + TEXT(" is some way from home"), DistanceLy > 0.0);
+            }
+            const TMap<FString, FString> Expected = ExpectedRow(System, DistanceLy, Row.Planet);
+            TestEqual(TEXT("every column has an expected value"), Expected.Num(), Columns.Num());
             for (int32 C = 0; C < Columns.Num() && C < Cells.Num(); ++C)
             {
                 const FString* Want = Expected.Find(Columns[C]);
-                TestTrue(FString::Printf(TEXT("home's %s is '%s' (wrote '%s')"), *Columns[C], Want ? **Want : TEXT("?"), *Cells[C]),
+                TestTrue(FString::Printf(TEXT("%s's %s is '%s' (wrote '%s')"), *Row.What, *Columns[C], Want ? **Want : TEXT("?"), *Cells[C]),
                     Want && *Want == Cells[C]);
             }
         }
