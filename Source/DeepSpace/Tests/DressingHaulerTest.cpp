@@ -333,11 +333,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 /**
  * ds.Dress.LivedIn at 0.3, 1 and 2 -- freshly moved in, lived in, squalid --
  * each gives a count a person would believe, on every root tried. The
- * number of piles is Poisson with the sum of the surfaces' means, so each
- * ship must lie within four of its standard deviations of that mean, less
- * what full surfaces refuse; the three must be in order, on average and
- * ship by ship; freshly moved in leaves some surface bare; and squalid
- * still leaves no surface past its cap.
+ * number of piles is Poisson with the sum of the surfaces' means, less what
+ * full surfaces refuse: so each ship lies within four of its standard
+ * deviations of that mean, and the average over the roots within two
+ * standard errors above it and not far below; the three are in order, on
+ * average and ship by ship; freshly moved in leaves some surface bare; and
+ * squalid still leaves no surface past its cap.
  */
 bool FDressingHaulerLivedInTest::RunTest(const FString& Parameters)
 {
@@ -355,6 +356,7 @@ bool FDressingHaulerLivedInTest::RunTest(const FString& Parameters)
     FDressedHauler Ship(TEXT("DressingHaulerLivedIn"), Markers);
     const double Levels[] = { 0.3, 1.0, 2.0 };
     double MeanPiles[3] = { 0.0, 0.0, 0.0 };
+    double MeanExpected[3] = { 0.0, 0.0, 0.0 };
     int32 OutOfOrder = 0, NoneBare = 0, PastCap = 0, Implausible = 0, Undrawn = 0;
     for (const int32 Root : Roots)
     {
@@ -383,6 +385,7 @@ bool FDressingHaulerLivedInTest::RunTest(const FString& Parameters)
                                         Root, Levels[L], Count, Plan.Num(), Expected, Floor, Expected + Spread));
             }
             MeanPiles[L] += Count / static_cast<double>(UE_ARRAY_COUNT(Roots));
+            MeanExpected[L] = Expected;
             OutOfOrder += Count <= Last;
             Last = Count;
 
@@ -404,6 +407,17 @@ bool FDressingHaulerLivedInTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("every level on every root draws exactly its plan"), Undrawn, 0);
     TestEqual(TEXT("every ship's count at 0.3, 1 and 2 is one Poisson would give"), Implausible, 0);
     TestEqual(TEXT("and on every root 0.3 < 1 < 2"), OutOfOrder, 0);
+    // Averaged over the roots, the count is the rules' mean less what full
+    // surfaces refuse: never more than the mean allows (two standard errors
+    // over it), and never so much less that the rules stop describing the
+    // ship. Squalid fills surfaces, which is where the floor's slack goes.
+    for (int32 L = 0; L < 3; ++L)
+    {
+        const double StandardError = FMath::Sqrt(MeanExpected[L] / UE_ARRAY_COUNT(Roots));
+        TestTrue(FString::Printf(TEXT("at LivedIn %.1f the mean count, %.1f, is what the rules' mean of %.1f gives, less what will not fit"),
+                                 Levels[L], MeanPiles[L], MeanExpected[L]),
+                 MeanPiles[L] <= MeanExpected[L] + 2.0 * StandardError && MeanPiles[L] >= 0.55 * MeanExpected[L]);
+    }
     TestTrue(TEXT("on average, lived in is about three times freshly moved in"),
              MeanPiles[1] > 2.0 * MeanPiles[0] && MeanPiles[1] < 4.5 * MeanPiles[0]);
     TestTrue(TEXT("and squalid is busier than lived in, but not past twice"),
