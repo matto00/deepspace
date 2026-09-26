@@ -317,6 +317,20 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
         Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::SetThrottleInput);
         Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ClearThrottleInput);
     }
+    if (DriveAction)
+    {
+        Input->BindAction(DriveAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::ToggleDrive);
+    }
+}
+
+void ADeepSpaceCharacter::ToggleDrive()
+{
+    // The subsystem is the gate: only the pilot moves the lever, and the
+    // lever's position is the ship's, never a copy kept here.
+    if (UShipSubsystem* Ship = UShipSubsystem::Get(this))
+    {
+        Ship->SetDriveEngaged(this, !Ship->IsDriveEngaged());
+    }
 }
 
 void ADeepSpaceCharacter::SetFlightInput(const FVector& Attitude, float ThrottleRate)

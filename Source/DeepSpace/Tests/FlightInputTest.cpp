@@ -68,6 +68,22 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         Player->SetFlightInput(FVector::ZeroVector, -1.0f);
         Player->Tick(100.0f);
         TestEqual(TEXT("and stops full astern"), Player->GetThrottle(), -1.0f);
+
+        // The drive key is a second lever: pressed, it flips, and it stays
+        // flipped through every frame of flying that follows.
+        TestFalse(TEXT("the drive starts off"), Ship->IsDriveEngaged());
+        Player->PressDrive();
+        TestTrue(TEXT("the pilot's drive key engages the drive"), Ship->IsDriveEngaged());
+        Player->SetFlightInput(FVector(0.0, 1.0, 0.0), 1.0f);
+        Player->Tick(0.5f);
+        TestTrue(TEXT("and flying on does not disengage it"), Ship->IsDriveEngaged());
+        Player->PressDrive();
+        TestFalse(TEXT("pressed again it is off"), Ship->IsDriveEngaged());
+
+        // Nobody else's key moves it.
+        Ship->ClearPilot();
+        Player->PressDrive();
+        TestFalse(TEXT("a player who is not the pilot cannot engage the drive"), Ship->IsDriveEngaged());
     }
 
     GEngine->DestroyWorldContext(World);
