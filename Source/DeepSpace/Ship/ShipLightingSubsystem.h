@@ -4,7 +4,23 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "ShipLightingSubsystem.generated.h"
 
+class UMaterialInstanceDynamic;
 class UPointLightComponent;
+
+namespace ShipLighting
+{
+    /**
+     * The actor tag on every lamp panel: the glowing boxes whose emissive
+     * belongs to the lights under them. Applied by Tools/build_hauler.py to
+     * each box of a `lamp_<room>` role. Not a power consumer -- the panels
+     * are the Lights consumer's, seen -- so it is not in ShipPower.
+     */
+    DEEPSPACE_API extern const FName LampsTag;
+
+    /** The vector parameter a lamp panel's material glows with
+     *  (M_ShipEmissive, built by Tools/build_hauler.py). */
+    DEEPSPACE_API extern const FName LampColourParameter;
+}
 
 /**
  * Makes the ship's lights answer to its power allocation.
@@ -18,6 +34,9 @@ class UPointLightComponent;
  *
  * The lights degrade and never fail. Under-fed they dim; well under-fed they
  * warm and flicker, like a fixture browning out, rather than switching off.
+ * The lamp panels above them, found by `Power.Lamps`, do exactly the same
+ * with their glow, so a starved room never has panels that go on shining
+ * as if nothing had happened.
  * There is no alarm and no threshold that breaks anything: a dark ship is a
  * thing the player reads instantly and fixes if they care to.
  */
@@ -32,7 +51,7 @@ public:
     virtual TStatId GetStatId() const override;
 
     /**
-     * Re-finds the tagged lights and re-reads their rated intensity.
+     * Re-finds the tagged lights and lamp panels, and re-reads their ratings.
      *
      * Called once when play begins. Public because a test spawns its lights
      * itself, and because the runtime generator will one day build the ship
@@ -43,6 +62,10 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "Lighting")
     int32 GetLightCount() const;
+
+    /** Panel materials driven, one per glowing material slot. */
+    UFUNCTION(BlueprintPure, Category = "Lighting")
+    int32 GetLampCount() const;
 
     /** Below this satisfaction the lights warm and start to flicker. */
     static constexpr float BrownOutBelow = 1.0f / 3.0f;
@@ -66,6 +89,19 @@ private:
     };
 
     TArray<FShipLight> Lights;
+
+    /** One glowing material slot of a lamp panel. */
+    struct FShipLamp
+    {
+        TWeakObjectPtr<UMaterialInstanceDynamic> Material;
+
+        /** The panel's rated glow, read from the material the level gave
+         *  it -- never from the dynamic instance, which holds whatever this
+         *  subsystem last wrote. */
+        FLinearColor RatedColour = FLinearColor::White;
+    };
+
+    TArray<FShipLamp> Lamps;
 
     /** Advances with time; the flicker is a function of it, not of random
      *  draws, so the same allocation always looks the same way. */
