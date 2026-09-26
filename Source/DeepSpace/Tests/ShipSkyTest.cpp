@@ -9,9 +9,11 @@
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Ship/ShipCounterFrame.h"
+#include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
@@ -410,6 +412,73 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 Data[SkyMaterial::CustomDataBrightness] > Data[SkyMaterial::StarfieldCustomData + SkyMaterial::CustomDataBrightness]);
         }
     }
+
+    // Parked in a planet's shadow the deck goes dark: the sun stays where it
+    // is and gives nothing. Out of it, the light is back, with no memory of
+    // having gone.
+    {
+        const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
+        const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+        const FVector Shadow = (Home.Position - Star.Position).GetSafeNormal();
+        FScopedCVar Lux(TEXT("ds.Sky.SunLux"), 50.0f);
+
+        Ship->PlaceShip(Home.Position + Shadow * (Home.Radius + 1.0e10), FQuat::Identity);
+        Test.Frame->SyncToShip();
+        Sky->DrawFrom(Fixture);
+        TestEqual(TEXT("behind the planet none of the sun shows"), Sky->GetLastFrame().SunVisibleFraction, 0.0);
+        TestTrue(TEXT("and the sunlight on the deck is gone"), Sky->GetSun()->Intensity == 0.0f && Sky->GetLastFrame().SunIrradiance > 0.5);
+
+        Ship->PlaceShip(Home.Position + Shadow * -(Home.Radius + 1.0e10), FQuat::Identity);
+        Test.Frame->SyncToShip();
+        Sky->DrawFrom(Fixture);
+        TestTrue(TEXT("on its day side the sun is whole again, and lights the deck"),
+            Sky->GetLastFrame().SunVisibleFraction == 1.0 && Sky->GetSun()->Intensity > 40.0f);
+    }
+
+    // The veil: the room's light and the reflection's strength, into MPC_Sky
+    // every frame, asked of the ship and stored nowhere. With the lights off
+    // the glass reflects nothing and every star shows.
+    {
+        UMaterialParameterCollectionInstance* Collection = Sky->SkyParameters
+            ? Test.World->GetParameterCollectionInstance(Sky->SkyParameters) : nullptr;
+        if (TestNotNull(TEXT("the sky writes into MPC_Sky, as place_sky assigns it"), Collection))
+        {
+            const auto Read = [Collection](FName Name)
+            {
+                float Value = -1.0f;
+                Collection->GetScalarParameterValue(Name, Value);
+                return Value;
+            };
+            FScopedCVar Veil(TEXT("ds.Sky.Veil"), 0.4f);
+            Ship->SetLightsOn(true);
+            Sky->SyncToShip();
+            const float Fed = Ship->GetConsumerSatisfaction(ShipPower::Lights);
+            TestEqual(TEXT("lit, the glass reflects the room as brightly as the lights are fed"), Read(SkyMaterial::InteriorLight), Fed);
+            TestEqual(TEXT("at ds.Sky.Veil, read at use"), Read(SkyMaterial::Veil), 0.4f);
+
+            // Starved, the lights dim, and so does their reflection.
+            const float Weight = Ship->GetConsumerWeight(ShipPower::Lights);
+            Ship->SetConsumerWeight(ShipPower::Lights, 0.0f);
+            Ship->Tick(0.016f);
+            Sky->SyncToShip();
+            const float Starved = Ship->GetConsumerSatisfaction(ShipPower::Lights);
+            TestTrue(FString::Printf(TEXT("starving the lights dims them (%.3f from %.3f)"), Starved, Fed), Starved < Fed);
+            TestEqual(TEXT("and the reflection with them"), Read(SkyMaterial::InteriorLight), Starved);
+            Ship->SetConsumerWeight(ShipPower::Lights, Weight);
+
+            Ship->SetLightsOn(false);
+            Ship->Tick(0.016f);
+            Sky->SyncToShip();
+            TestEqual(TEXT("lights off, the glass reflects nothing"), Read(SkyMaterial::InteriorLight), 0.0f);
+            Ship->SetLightsOn(true);
+            Ship->Tick(0.016f);
+            Sky->SyncToShip();
+            TestEqual(TEXT("and lights on, the room is back in the glass"), Read(SkyMaterial::InteriorLight),
+                Ship->GetConsumerSatisfaction(ShipPower::Lights));
+        }
+    }
+    Ship->PlaceShip(SkyTestFixtures::Opening(), FQuat::Identity);
+    Test.Frame->SyncToShip();
 
     // A different system replaces the proxies rather than adding to them.
     {
