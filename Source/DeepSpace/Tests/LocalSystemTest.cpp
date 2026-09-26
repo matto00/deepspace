@@ -169,6 +169,12 @@ bool FLocalSystemTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("a day four times as long, half as many"),
                 FMath::IsNearlyEqual(FSkySystem::FromSystem(Giant, Stubs).Bodies[2].BeltPairs, 0.5 * SkyLook::JupiterBeltPairs, 1e-12));
             TestEqual(TEXT("rock wears no belts"), Sky.Bodies[1].BeltPairs, 0.0);
+
+            // Craters where the ground keeps them: bare rock all of them,
+            // water and cloud none, and a giant none.
+            TestEqual(TEXT("bare rock keeps every crater"), Sky.Bodies[1].Cratering, 1.0);
+            TestEqual(TEXT("an ocean world keeps none"), Sky.Bodies[2].Cratering, 0.0);
+            TestEqual(TEXT("nor does a giant"), FSkySystem::FromSystem(Giant, Stubs).Bodies[2].Cratering, 0.0);
         }
         if (TestEqual(TEXT("one neighbour: the system itself is left out"), Sky.Neighbours.Num(), 1))
         {

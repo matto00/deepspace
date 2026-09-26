@@ -289,6 +289,9 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     // that is never written cannot match them by agreeing with the asset.
     const FScopedCVar FaceMottle(TEXT("ds.Sky.Mottle"), 0.123f);
     const FScopedCVar FaceDetail(TEXT("ds.Sky.SurfaceDetail"), 0.456f);
+    const FScopedCVar FaceRelief(TEXT("ds.Sky.Relief"), 0.321f);
+    const FScopedCVar FaceCraters(TEXT("ds.Sky.Craters"), 0.5f);
+    Fixture.Bodies[SkyTestFixtures::HomeIndex].Cratering = 0.25;
     Sky->DrawFrom(Fixture);
 
     {
@@ -329,6 +332,9 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its colour"), Instance->K2_GetVectorParameterValue(SkyMaterial::Colour).Equals(True.Colour));
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
                 TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
+                TestEqual(TEXT("its relief, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Relief), 0.321f);
+                TestEqual(TEXT("its craters: what the world has kept, times the knob"),
+                    Instance->K2_GetScalarParameterValue(SkyMaterial::Cratering), 0.125f);
                 TestTrue(TEXT("its own face, exactly"),
                     Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed, True.BeltPairs));
                 TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);

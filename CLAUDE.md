@@ -426,6 +426,30 @@ on any other, and on any `SkyLight`, `SkyAtmosphere`, cloud or fog. When a
 planet crosses the sun, the deck darkens by the fraction covered
 (`SunVisibleFraction`; the eclipse).
 
+**The bodies are drawn with `SM_SkyBody`, never the engine Sphere.** The
+Sphere is 32 segments round, and its polygon showed on the limb from
+10,000 km down -- where the limb's curvature is how near the world is.
+`SM_SkyBody` is an equal-angle cube sphere built from code
+(`Sky/SkySphereMesh.h`, through `UDeepSpaceEditorScripting::BuildSkySphere`,
+by `setup_sky_materials.py`): 224 cells a face at LOD 0, with six coarser LODs
+switching at the screen size where each would stand half a 4K pixel inside
+the limb. It is centre-origin with the Sphere's 50 cm radius, so the
+projection is unchanged. `DeepSpace.Sky.BodyMesh` holds the asset to the
+arithmetic. The counter-frame's points stay on the engine Sphere.
+
+**A world's face and relief are one noise.** `M_SkyBody`'s detail bands are
+simplex noise with its gradient: the value brightens the face (behind the
+`surface_max_swing` clamp, the half-float guard) and the gradient tilts a
+per-pixel normal -- the sphere's own, from object space, so no mesh facet
+shows in the shading. Each band's height goes with its wavelength, so every
+scale the screen holds has the same slope. Rocky worlds add Voronoi craters
+in bands stepping by four (the count wider than D goes as D^-2), fewer in the
+basins, scaled by the look's `Cratering` (bare rock 1, ice 0.5, terrestrial
+0.15, ocean and giants 0). A giant's belts come from its day
+(`FPlanet::DayHours`, log-normal about 12 h, drawn by the generator), by the
+Rhines scale (`SkyLook::BeltPairs`). Relief shows where the light is low, as
+real relief does: a world under a high sun still looks smooth.
+
 **Exposure is fixed, and the sky owns it.** Auto exposure is Unreal's
 simulated eye adaptation: it rescales the picture toward a middle grey, which
 would make a lit galley and a dark cockpit look alike and wash out the
@@ -690,6 +714,8 @@ tests that assert it.
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.15, 1.0, 0.675 | `ShipSky.cpp` |
+| `ds.Sky.SurfaceDetail`, `.Relief`, `.Craters` | 0.3, 0.2, 1 | `ShipSky.cpp` |
+| `ds.HUD.FloorBand` | 0.05 of the floor | `ShipHUDWidget.cpp` -- DRIVE FLOOR shows only while the drive holds the ship there |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.04 | `ShipScreen.cpp` |
