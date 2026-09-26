@@ -24,9 +24,9 @@ namespace
         TEXT("Seconds for the jump to wind from cold with the engine fully fed."),
         ECVF_Default);
 
-    // 380 W is what the stock hauler has spare once its modules draw off the
-    // top (1000 W reactor, 620 W of modules), so an engine-first split really
-    // does wind at full speed. At 800 W it could not: the best any split
+    // 380 W: small enough that an engine-first split winds at full speed on
+    // the stock hauler, which has 780 W left once its modules draw off the
+    // top. At the old 800 W against a 1000 W reactor the best any split
     // reached was 48% fed, and ds.Nav.ChargeSeconds was a number no player
     // could ever see. DeepSpace.Ship.JumpCanWindAtFullSpeed holds it there.
     TAutoConsoleVariable<float> CVarWindingWant(

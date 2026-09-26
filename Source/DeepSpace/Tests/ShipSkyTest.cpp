@@ -502,7 +502,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             // curve that merely shares the endpoints.
             UShipModuleDataAsset* Hog = NewObject<UShipModuleDataAsset>();
             Hog->ModuleId = TEXT("Test.VeilHog");
-            Hog->PowerDraw = 0.6f * Ship->GetReactorOutput();
+            // Most of whatever the reactor has left after what is already
+            // installed, so it stays "most of the headroom" on any loadout.
+            float Installed = 0.0f;
+            for (const UShipModuleDataAsset* Module : Ship->GetInstalledModules())
+            {
+                Installed += Module->PowerDraw;
+            }
+            Hog->PowerDraw = 0.8f * (Ship->GetReactorOutput() - Installed);
             TestTrue(TEXT("a heavy module installs"), Ship->InstallModule(Hog));
             Ship->Tick(0.016f);
             Sky->SyncToShip();

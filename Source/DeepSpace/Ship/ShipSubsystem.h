@@ -55,6 +55,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Ship")
     bool InstallModule(UShipModuleDataAsset* Module);
 
+    /** What is installed, as installed; ask rather than keep a copy. */
+    const TArray<TObjectPtr<UShipModuleDataAsset>>& GetInstalledModules() const { return InstalledModules; }
+
     /** Returns false if the module is null or was not installed. */
     UFUNCTION(BlueprintCallable, Category = "Ship")
     bool RemoveModule(UShipModuleDataAsset* Module);
@@ -283,8 +286,17 @@ private:
 
     bool bLightsOn = true;
 
-    /** Placeholder reactor rating for milestone 1. Becomes a module later. */
-    static constexpr float DefaultReactorOutput = 1000.0f;
+    /**
+     * Placeholder reactor rating. Becomes a module later. Sized so the stock
+     * ship is whole at rest: its modules (620 W) plus the lights (300) and
+     * the boosters (450) come to 1370 W, so at the default split nothing is
+     * dimmed while nothing is being asked of the ship. The split bites when
+     * the jump winds or a module is added -- the first playtest found the
+     * lights at 63% on a quiet ship under the old 1000 W, which read as
+     * broken rather than strained (developer's ruling, 2026-09-26).
+     * DeepSpace.Ship.JumpCanWindAtFullSpeed holds it.
+     */
+    static constexpr float DefaultReactorOutput = 1400.0f;
 
     /**
      * What each consumer would use given everything it asked for. They sum

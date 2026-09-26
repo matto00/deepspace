@@ -163,12 +163,14 @@ bool FJumpWindsTest::RunTest(const FString& Parameters)
         Default->PlaceShip(Default->GetFlightState().GetUniversePosition(),
                            FRotationMatrix::MakeFromX(-*Dir).ToQuat());
     }
-    // What the split does to the lights, on the ship the game flies. Idle at
-    // 1:1:1 the lights share the 380 W with the boosters; engaging the jump
-    // splits it three ways, and the lights go into their brown-out while it
-    // winds -- the ship straining, never failing -- and come back after.
+    // What the split does to the lights, on the ship the game flies. At rest
+    // the stock ship is whole -- the reactor is sized for it (developer's
+    // ruling) -- and engaging the jump splits what is left three ways, so the
+    // lights dim while it winds: the ship straining, never failing.
     Default->Tick(0.01f);
     const float LightsIdle = Default->GetConsumerSatisfaction(ShipPower::Lights);
+    TestEqual(TEXT("at rest at the default split, the lights are whole"), LightsIdle, 1.0f, 1e-4f);
+    TestEqual(TEXT("and so are the boosters"), Default->GetConsumerSatisfaction(ShipPower::Boosters), 1.0f, 1e-4f);
     TestTrue(TEXT("the jump engages at the default split"), Default->SetJumpEngaged(true));
     Default->Tick(0.01f);
     const float LightsWinding = Default->GetConsumerSatisfaction(ShipPower::Lights);

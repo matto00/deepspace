@@ -1,3 +1,4 @@
+#include "Tests/StockShip.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -133,6 +134,10 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     UWorld* World = MakeWorld(TEXT("JumpTestWorld"));
     BeginPlay(World);
     UShipSubsystem* Ship = World->GetSubsystem<UShipSubsystem>();
+    if (Ship)
+    {
+        TestTrue(TEXT("the stock loadout installs"), StockShip::Install(Ship) > 0);
+    }
     const UUniverseSubsystem* Universe = World->GetSubsystem<UUniverseSubsystem>();
     if (!TestNotNull(TEXT("the world has a ship"), Ship) || !TestNotNull(TEXT("and a universe"), Universe))
     {
@@ -228,11 +233,9 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("and winds"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Winding));
     TestEqual(TEXT("wanting ds.Nav.WindingWant"), Ship->GetConsumerWant(ShipPower::Engine), UShipSubsystem::GetWindingWant());
 
-    // What the split does to the lights while it winds is measured on the
-    // stock ship, in DeepSpace.Ship.JumpCanWindAtFullSpeed: this world has a
-    // bare reactor and no modules, where the engine -- capped at its winding
-    // want -- cannot take enough to dim anything, and a claim about the split
-    // made here would describe a ship nobody flies.
+    // What the split does to the lights while it winds is measured in
+    // DeepSpace.Ship.JumpCanWindAtFullSpeed; this ship carries the stock
+    // loadout too, so what follows is true of the ship the game flies.
     // What is taken off the top, before any split: the total draw less every
     // consumer's share, so it moves with the fold and not with the split.
     const auto OffTheTop = [Ship]()
@@ -245,6 +248,9 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
         return Ship->GetPowerDraw() - Shares;
     };
     const float UnfoldedDraw = OffTheTop();
+    // What the lights get winding at 1:1:1 with no fold draw: on the stock
+    // ship, less than whole -- the jump is what is being asked of it.
+    const float WindingLights = Ship->GetConsumerSatisfaction(ShipPower::Lights);
     {
         // The fold's draw, off the top, is the only lever that dims them at
         // the default split -- and it goes when the winding does, with the
@@ -271,16 +277,16 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("winding again, the fold's draw is back"), OffTheTop(), UnfoldedDraw + 350.0f);
     }
     Ship->Tick(0.1f);
-    TestEqual(TEXT("and with no fold draw they are fed again"),
-              Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+    TestEqual(TEXT("and with no fold draw they are back where the split alone puts them"),
+              Ship->GetConsumerSatisfaction(ShipPower::Lights), WindingLights);
 
     // A weight of zero is a legitimate way to live: the drive still finishes,
     // only slower -- ChargeSeconds / StarvedRate at worst.
     Ship->SetConsumerWeight(ShipPower::Engine, 0.0f);
     const double Starved = TickUntil(Ship, 600.0, 1.0, [Ship] { return Ship->GetJumpCharge() >= 1.0f; });
     TestTrue(TEXT("a zero-weight engine still reaches full charge"), Ship->GetJumpCharge() >= 1.0f);
-    TestTrue(TEXT("slower than a fed one would"), Starved > 90.0);
-    TestTrue(TEXT("and within ChargeSeconds / StarvedRate"), Starved <= 90.0 / 0.2 + 1.0);
+    TestTrue(TEXT("slower than a fed one would"), Starved > FShipFlightState::JumpChargeSeconds);
+    TestTrue(TEXT("and within ChargeSeconds / StarvedRate"), Starved <= FShipFlightState::JumpChargeSeconds / 0.2 + 1.0);
 
     // Charged and misaligned, it holds at ready for as long as it takes, and
     // nothing escalates. Holding, it wants nothing, so the lights recover.

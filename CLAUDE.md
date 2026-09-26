@@ -479,7 +479,7 @@ speed.
 **The jump has three levers, each left where it is set**: the course (the
 chart, or `ds.Nav.Plot`), the heading (the helm; the HUD's bearing words, and
 the nose caret on the teal course marker), and engage (the chart, or
-`ds.Nav.Engage`). Engaged, the engine asks for `ds.Nav.WindingWant` (800 W) and
+`ds.Nav.Engage`). Engaged, the engine asks for `ds.Nav.WindingWant` (380 W) and
 the charge winds at a rate the watts it actually gets scale. Starved, it still
 winds at `ds.Nav.StarvedRate` of full; it never stops. It asks for nothing
 otherwise, so staying put is never taxed. Once plotted, engaged, charged, and
@@ -654,7 +654,7 @@ ds.Universe.Describe        where am I: the system the ship is in
 ds.Sky.Goto 1 40000         40,000 km over body 1, facing it (0 is the star; index or name)
 ds.Nav.Near                 the chart, numbered, nearest first
 ds.Nav.Plot 0               plot row 0
-ds.Nav.ChargeSeconds 5      wind from cold in 5 s, not 90, for every jump after
+ds.Nav.ChargeSeconds 5      wind from cold in 5 s, not 45, for every jump after
 ds.Nav.Engage               engage (ds.Nav.Engage 0 stands down); aim, and it fires by itself
 ```
 
@@ -673,8 +673,8 @@ tests that assert it.
 
 | CVar | Default | Lives in |
 |---|---|---|
-| `ds.Nav.ChargeSeconds` | 90 s | `ShipSubsystem.cpp`, from `FShipFlightState::JumpChargeSeconds` (`ShipFlightState.h`) |
-| `ds.Nav.WindingWant` | 800 W | `ShipSubsystem.cpp` |
+| `ds.Nav.ChargeSeconds` | 45 s (settled 2026-09-26) | `ShipSubsystem.cpp`, from `FShipFlightState::JumpChargeSeconds` (`ShipFlightState.h`) |
+| `ds.Nav.WindingWant` | 380 W (settled 2026-09-26) | `ShipSubsystem.cpp` |
 | `ds.Nav.StarvedRate` | 0.2 | `ShipSubsystem.cpp` |
 | `ds.Nav.FoldDraw` | 0 W | `ShipSubsystem.cpp` |
 | `ds.Nav.TransitSeconds` | 6 s | `ShipSubsystem.cpp`, from `FNavTuning` (`ShipNavState.h`) |

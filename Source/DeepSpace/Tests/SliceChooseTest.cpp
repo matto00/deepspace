@@ -1,4 +1,5 @@
 #include "Core/DeepSpaceGameMode.h"
+#include "Tests/StockShip.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
@@ -157,6 +158,7 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
     }
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
+    TestTrue(TEXT("the stock loadout installs"), StockShip::Install(Ship) > 0);
     UShipHumComponent* Hum = Reactor->GetHum();
     UWidgetComponent* ChartPanel = ChartScreen->GetScreen();
     UWidgetComponent* LaptopPanel = LaptopScreen->GetScreen();
@@ -598,11 +600,9 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("and the glass reflects the room as brightly as the lights are fed (worst %.5f out)"), WorstGlass),
              WorstGlass < 1e-6f);
 
-    // The lever to the lights, and everything with it. Lights-first, not the
-    // default 1:1:1: on the stock ship the default split feeds the lights
-    // about 63% even idle, because the boosters' want and theirs together
-    // exceed the 380 W the modules leave -- so "fed again" is a split that
-    // feeds them, which is the promise the lamps have to keep.
+    // The lever to the lights, and everything with it: a split that feeds
+    // them, whatever the reactor's margin at the default happens to be, is
+    // the promise the lamps have to keep.
     Laptop->SetRowWeight(ShipPower::Lights, 1.0f);
     Laptop->SetRowWeight(ShipPower::Engine, 0.0f);
     Laptop->SetRowWeight(ShipPower::Boosters, 0.0f);

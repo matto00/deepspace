@@ -1,3 +1,4 @@
+#include "Tests/StockShip.h"
 #include "AudioDevice.h"
 #include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
@@ -137,6 +138,10 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
     World->GetWorldSettings()->NotifyBeginPlay();
 
     UShipSubsystem* Ship = World->GetSubsystem<UShipSubsystem>();
+    if (Ship)
+    {
+        TestTrue(TEXT("the stock loadout installs"), StockShip::Install(Ship) > 0);
+    }
     if (!TestNotNull(TEXT("the world has a ship"), Ship)
         || !TestNotNull(TEXT("a reactor hum"), Reactor) || !TestNotNull(TEXT("an air hum"), Air)
         || !TestNotNull(TEXT("and another room's"), OtherAir))

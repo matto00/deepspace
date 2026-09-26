@@ -1,3 +1,4 @@
+#include "Tests/StockShip.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/PointLight.h"
@@ -29,6 +30,10 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
     Context.SetCurrentWorld(World);
 
     UShipSubsystem* Ship = World->GetSubsystem<UShipSubsystem>();
+    if (Ship)
+    {
+        TestTrue(TEXT("the stock loadout installs"), StockShip::Install(Ship) > 0);
+    }
     UShipLightingSubsystem* Lighting = World->GetSubsystem<UShipLightingSubsystem>();
 
     if (TestNotNull(TEXT("the world has a ship"), Ship)
@@ -53,6 +58,12 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         Lighting->Refresh();
         TestEqual(TEXT("only the tagged light is the ship's"), Lighting->GetLightCount(), 1);
 
+        // At rest the stock ship is whole: the reactor is sized for it
+        // (developer's ruling, 2026-09-26).
+        Ship->Tick(0.016f);
+        TestEqual(TEXT("at rest, an even split feeds the lights fully"),
+                  Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+
         // An idle jump drive wants nothing, and so takes part in no split:
         // staying put costs the ship nothing (nav decision 4). Satisfied, not
         // starved -- a thing switched off is not a thing working badly.
@@ -73,9 +84,12 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         Ship->Tick(0.016f);
         TestTrue(TEXT("a winding engine wants power"), Ship->GetConsumerWant(ShipPower::Engine) > 0.0f);
 
-        // Fed, a light burns at its rating. The default even split leaves
-        // the lights fully satisfied because they want the least.
-        TestEqual(TEXT("an even split feeds the lights fully"),
+        // Winding, the even split no longer covers everything on the stock
+        // ship; leaning it on the lights does. Fed, a light burns at its rating.
+        TestTrue(TEXT("winding at an even split, the lights are short"),
+                 Ship->GetConsumerSatisfaction(ShipPower::Lights) < 1.0f);
+        Ship->SetConsumerWeight(ShipPower::Lights, 4.0f);
+        TestEqual(TEXT("leaned on the lights, they are fed fully"),
                   Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
         Lighting->Tick(0.016f);
         TestEqual(TEXT("a fed light burns at its rating"), Bulb->Intensity, Rated);
