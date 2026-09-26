@@ -168,12 +168,60 @@ bool FChartAsksOnChangeTest::RunTest(const FString& Parameters)
               NavText::Course(Destination.Name, Ship->GetCourseDirectionShipLocal(), Ship->GetJumpConeRadians()) + TEXT("."));
     TestNotEqual(TEXT("and not the old one"), Chart->GetCourseText().ToString(), Before);
 
+    // -- ds.Nav.ConeDeg tuned in play: the same bearing, a different word ---
+    // The course a dozen degrees off the nose reads in degrees under the
+    // design's cone and as dead ahead under a cone wide enough to hold it,
+    // with the ship not turned at all: only the cone can have changed it.
+    {
+        const FVector Toward = Ship->GetCourseDirection().Get(FVector::ForwardVector);
+        const FVector Nose = FQuat(FVector::UpVector, FMath::DegreesToRadians(12.0)) * Toward;
+        const FQuat Off = FRotationMatrix::MakeFromX(Nose).ToQuat();
+        Ship->PlaceShip(Parked, Off);
+        Look();
+        const FString Narrow = Chart->GetCourseText().ToString();
+        {
+            FScopedCVar Wider(TEXT("ds.Nav.ConeDeg"), 20.0f);
+            Course = Chart->GetCourseAsked();
+            Look();
+            TestTrue(TEXT("a wider cone asks for the course"), Chart->GetCourseAsked() > Course);
+            TestEqual(TEXT("which reads the ship's answer under the wider cone"), Chart->GetCourseText().ToString(),
+                      NavText::Course(Destination.Name, Ship->GetCourseDirectionShipLocal(), Ship->GetJumpConeRadians()) + TEXT("."));
+            TestNotEqual(TEXT("and not what it read under the narrower one"), Chart->GetCourseText().ToString(), Narrow);
+        }
+        Look();
+        TestEqual(TEXT("the cone put back, the course reads as it did"), Chart->GetCourseText().ToString(), Narrow);
+        Ship->PlaceShip(Parked, Turned);
+        Look();
+    }
+
     // -- a small move: a cruise's worth, nothing the rows can show -----------
     Systems = Chart->GetSystemsAsked();
     Ship->PlaceShip(Parked + FVector(1.0e5 * UniverseUnits::CmPerKm, 0.0, 0.0), Turned);
     Look();
     TestEqual(TEXT("a hundred thousand km asks for no systems"), Chart->GetSystemsAsked(), Systems);
     RowsAreTheShips(*this, *Chart, *Ship, TEXT("moved a little"));
+
+    // -- a walk in small steps: the rows never fall behind a displayed tenth
+    // Four thousandths of a light year a step, a tenth of a light year and
+    // more in all: some row's distance crosses a tenth on the way, and on
+    // every step the rows must read what the ship answers -- so the chart
+    // may let the ship move no more than a step's worth before asking.
+    {
+        const FVector Toward = (Destination.Position - Parked).GetSafeNormal();
+        const TArray<FString> Setting = RowTexts(*Chart);
+        bool bKept = true;
+        for (int32 Step = 1; Step <= 30 && bKept; ++Step)
+        {
+            Ship->PlaceShip(Parked + Toward * (4.0e-3 * Step) * UniverseUnits::CmPerLightYear, Turned);
+            Look();
+            bKept = RowsAreTheShips(*this, *Chart, *Ship, *FString::Printf(TEXT("walked %d steps"), Step));
+        }
+        TestTrue(TEXT("and some row read differently by the end of the walk"), RowTexts(*Chart) != Setting);
+        Ship->PlaceShip(Parked, Turned);
+        Look();
+        RowsAreTheShips(*this, *Chart, *Ship, TEXT("walked back"));
+        Systems = Chart->GetSystemsAsked();
+    }
 
     // -- a large move, still in the system: the drive's reach ---------------
     const TArray<FString> Near = RowTexts(*Chart);
