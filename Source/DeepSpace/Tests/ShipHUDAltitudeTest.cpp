@@ -1,6 +1,8 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/TextBlock.h"
 #include "GameFramework/Pawn.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipSubsystem.h"
@@ -173,6 +175,21 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("the neighbours change nothing the altitude says"),
                 UShipHUDWidget::AltitudeLineText(*Ship, LocalSystem::Current(World)).ToString(),
                 UShipHUDWidget::AltitudeLineText(*Ship).ToString());
+            // And the corner itself draws it: the built HUD, ticked, shows
+            // the line the static seam gives.
+            UShipHUDWidget* HUD = NewObject<UShipHUDWidget>(World);
+            HUD->Initialize();
+            HUD->TakeWidget();
+            HUD->NativeTick(FGeometry(), 0.016f);
+            const FString Expected = UShipHUDWidget::AltitudeLineText(*Ship).ToString();
+            bool bDrawn = false;
+            HUD->WidgetTree->ForEachWidget([&](UWidget* Widget)
+            {
+                const UTextBlock* Block = Cast<UTextBlock>(Widget);
+                bDrawn |= Block && Block->GetText().ToString() == Expected;
+            });
+            TestTrue(FString::Printf(TEXT("the HUD's corner reads '%s'"), *Expected), bDrawn && Expected.Contains(TEXT(" ABOVE ")));
+
             TestTrue(TEXT("and Here carries none of them"), LocalSystem::Here(World).Neighbours.IsEmpty()
                 && LocalSystem::Here(World).Bodies.Num() == Here.Bodies.Num());
         }
