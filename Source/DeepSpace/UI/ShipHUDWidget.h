@@ -5,6 +5,7 @@
 #include "ShipHUDWidget.generated.h"
 
 class ADeepSpaceCharacter;
+class APawn;
 class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
@@ -44,6 +45,28 @@ public:
      */
     static FText DriveLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
 
+    /**
+     * The nose caret (nav decision 3): a ring on the HUD where the ship's nose
+     * meets the sky, which sits on the teal course marker exactly when the
+     * ship is aligned, however the pilot's head is turned. Built with the
+     * layout and found again by this name, so it is not a member.
+     */
+    static const FName NoseCaretName;
+
+    /** Whether Viewer sees the caret: only while they fly the ship, with a
+     *  course plotted, and not between stars, where there is no marker to
+     *  put it on. Asked of the ship every frame. */
+    static bool ShowsNoseCaret(const UShipSubsystem& Ship, const APawn* Viewer);
+
+    /**
+     * The world point the caret is projected from: along the ship's nose from
+     * the camera. The ship is the origin and its transform is identity (ADR
+     * 0005), so the nose is world +X wherever the ship points, and a point
+     * taken from the camera has no parallax -- the caret is a direction, like
+     * the marker on the dome it is put on.
+     */
+    static FVector NoseCaretWorldPoint(const FVector& CameraLocation);
+
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
 
@@ -60,6 +83,7 @@ private:
     UTextBlock* MakeReadout(const FText& Content, const FLinearColor& Colour, float Size);
     void PlaceCorner(UWidget* Widget, const FVector2D& Anchor, const FVector2D& Offset);
     void SetTarget(ETarget NewTarget);
+    void PlaceNoseCaret(const UShipSubsystem* ShipState);
 
     ADeepSpaceCharacter* Player() const;
     UShipSubsystem* Ship() const;
