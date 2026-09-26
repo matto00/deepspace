@@ -25,7 +25,10 @@ public class DeepSpace : ModuleRules
 		// missing #include that a unity blob silently supplies from a neighbour.
 		bUseUnity = false;
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "UMG" });
+		// AudioMixer: the ship's hum is a USynthComponent synthesising in C++,
+		// with no sound assets and no MetaSound graph (lived-in decision 9). It
+		// is public because UShipHumComponent's header derives from it.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "UMG", "AudioMixer" });
 
 		// Json: the movement-contract test reads Tools/movement_contract.json.
 		// Slate/SlateCore: the ship's screens are real Slate built in C++ -- the
