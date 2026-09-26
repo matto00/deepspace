@@ -265,6 +265,50 @@ bool FProcGenCorpusTest::RunTest(const FString& Parameters)
         }
         TestEqual(TEXT("every line has the contract's columns"), Ragged, 0);
         TestEqual(TEXT("every system is in the file, the empty ones too"), SystemsSeen, Near.Num());
+
+        // The first line is home, and every column holds what its name says:
+        // the Python reads by name, so a cell written under the wrong header
+        // would be read as the wrong quantity without a complaint.
+        if (Lines.Num() > 1)
+        {
+            TArray<FString> Cells;
+            Lines[1].ParseIntoArray(Cells, TEXT("\t"), /*InCullEmpty*/ false);
+            const FStar& Star = Home->Star;
+            const bool bAny = !Home->Planets.IsEmpty();
+            const FPlanet Planet = bAny ? Home->Planets[0] : FPlanet();
+            const auto G = [](double Value) { return FString::Printf(TEXT("%.6g"), Value); };
+            const TMap<FString, FString> Expected = {
+                {TEXT("system"), Home->Stub.Name},
+                {TEXT("sector_x"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.X))},
+                {TEXT("sector_y"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.Y))},
+                {TEXT("sector_z"), FString::Printf(TEXT("%lld"), static_cast<long long>(Home->Stub.Id.Sector.Z))},
+                {TEXT("slot"), FString::FromInt(Home->Stub.Id.Slot)},
+                {TEXT("distance_ly"), TEXT("0")},
+                {TEXT("star_class"), SystemDescription::ClassName(Star.Class)},
+                {TEXT("star_mass_solar"), G(Star.MassSolar)},
+                {TEXT("star_luminosity_solar"), G(Star.LuminositySolar)},
+                {TEXT("star_temperature_k"), G(Star.TemperatureK)},
+                {TEXT("habitable_inner_au"), G(Star.HabitableInnerAU)},
+                {TEXT("habitable_outer_au"), G(Star.HabitableOuterAU)},
+                {TEXT("frost_line_au"), G(Star.FrostLineAU)},
+                {TEXT("planet_count"), FString::FromInt(Home->Planets.Num())},
+                {TEXT("planet"), bAny ? TEXT("0") : TEXT("-1")},
+                {TEXT("designation"), bAny ? Planet.Designation : FString()},
+                {TEXT("given_name"), bAny ? Planet.GivenName : FString()},
+                {TEXT("kind"), bAny ? SystemDescription::KindName(Planet.Kind) : TEXT("")},
+                {TEXT("semi_major_axis_au"), bAny ? G(Planet.SemiMajorAxisAU) : FString()},
+                {TEXT("mass_earth"), bAny ? G(Planet.MassEarth) : FString()},
+                {TEXT("radius_earth"), bAny ? G(Planet.RadiusEarth) : FString()},
+                {TEXT("equilibrium_k"), bAny ? G(Planet.EquilibriumK) : FString()},
+                {TEXT("population"), bAny ? G(Planet.Population) : FString()}};
+            TestEqual(TEXT("every column has an expected value for home"), Expected.Num(), Columns.Num());
+            for (int32 C = 0; C < Columns.Num() && C < Cells.Num(); ++C)
+            {
+                const FString* Want = Expected.Find(Columns[C]);
+                TestTrue(FString::Printf(TEXT("home's %s is '%s' (wrote '%s')"), *Columns[C], Want ? **Want : TEXT("?"), *Cells[C]),
+                    Want && *Want == Cells[C]);
+            }
+        }
     }
 
     // -- the descriptions ------------------------------------------------------
