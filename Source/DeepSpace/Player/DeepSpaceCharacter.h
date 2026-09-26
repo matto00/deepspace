@@ -321,12 +321,16 @@ private:
     void FrameUsedScreen();
 
     /**
-     * Where to stand up from a screen: the capsule's centre, on the floor,
-     * with a standing capsule clear of everything. StandingFeet if it still
-     * fits; else the nearest of a few rings round it that fits and can be
-     * reached from it without passing through anything. Unset if none does.
+     * Where to stand up from a screen: the capsule's centre, on the floor
+     * under the seat, with a standing capsule clear of everything.
+     * StandingFeet if that is floor and still fits; else the nearest spot on
+     * a few rings round it that is floor, fits, and a standing capsule can be
+     * swept to from it. Unset if none does.
      */
     TOptional<FVector> FindStandingSpot() const;
+
+    /** Tells the camera manager this frame's view is a cut, not a move. */
+    void MarkCameraCut() const;
 
     /** Re-runs the reach trace and updates FocusedInteractable. */
     void UpdateFocusedInteractable();

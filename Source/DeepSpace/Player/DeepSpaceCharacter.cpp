@@ -33,8 +33,8 @@ namespace
     constexpr int32 StandDirections = 12;
 
     // A spot counts as floor only if something is under it within this of
-    // the height the player left: higher is standing on something, lower is
-    // a hole or the far side of a hull.
+    // the floor under the seat: higher is standing on something, lower is a
+    // hole or the far side of a hull.
     constexpr float StandFloorAboveCm = 5.0f;
     constexpr float StandFloorBelowCm = 15.0f;
 
@@ -554,7 +554,11 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
         Pointer->InteractionSource = EWidgetInteractionSource::Mouse;
     }
 
-    FrameUsedScreen();
+    // The camera goes to the screen now, in the same frame the cut is
+    // marked, rather than on the next tick: a cut marked a frame early is
+    // spent on a frame that did not jump, and the jump then smears.
+    PlaceCamera(0.0f, Screen->GetViewTransform().Rotator());
+    MarkCameraCut();
 
     // The framed camera sits in front of the face, which is behind the body's
     // own arms: left visible they fill both sides of the screen. Nobody looks
@@ -589,9 +593,10 @@ void ADeepSpaceCharacter::StopUsingScreen()
     else if (StandingFeet.IsSet())
     {
         // Nowhere near fits a body. Where they came from is still the least
-        // wrong place: it was floor a moment ago, and the movement component
-        // pushes a capsule out of whatever has arrived since. The chair is
-        // not -- that is the one answer known to be wrong.
+        // wrong place: a standing body fitted there a moment ago, and the
+        // movement component pushes a capsule out of whatever has arrived
+        // since. It may be up on something they climbed; the seat itself is
+        // never the answer -- that is the one known to be wrong.
         UE_LOG(LogTemp, Warning, TEXT("StopUsingScreen: no clear floor near %s; standing where the player sat down from"),
                *StandingFeet->ToCompactString());
         SetActorLocation(*StandingFeet + FVector(0.0f, 0.0f, HalfHeight + StandFloorClearanceCm),
@@ -636,6 +641,23 @@ void ADeepSpaceCharacter::StopUsingScreen()
     // travel from the screen to the body through whatever lies between.
     bEyeHeightSettled = false;
     PlaceCamera(0.0f, FRotator(0.0f, Facing.Yaw, 0.0f));
+    MarkCameraCut();
+}
+
+void ADeepSpaceCharacter::MarkCameraCut() const
+{
+    // Sitting and standing move the view up to 60 cm in one frame. Temporal
+    // AA and motion blur read the previous frame to build this one, and
+    // across a jump that history is of somewhere else: the frame smears. The
+    // camera manager's cut flag is how the engine is told the history is
+    // void; it clears itself once the frame has been drawn.
+    if (const APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        if (PC->PlayerCameraManager)
+        {
+            PC->PlayerCameraManager->SetGameCameraCutThisFrame();
+        }
+    }
 }
 
 ADeepSpaceCharacter::FFramingView ADeepSpaceCharacter::ResolveFramingView(
@@ -685,7 +707,7 @@ void ADeepSpaceCharacter::FrameUsedScreen()
 TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
 {
     const UWorld* World = GetWorld();
-    if (!World || !StandingFeet.IsSet())
+    if (!World || !StandingFeet.IsSet() || !UsedScreen)
     {
         return {};
     }
@@ -699,14 +721,20 @@ TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
     const FCollisionQueryParams Params(SCENE_QUERY_STAT(StandUpFromScreen), false, this);
     const FVector Feet = *StandingFeet;
 
-    // Where a standing capsule's centre goes over At, if At is floor at the
-    // height the player left. Not "the nearest thing below": a box top is
-    // something below, and standing on the chair is the bug.
+    // Floor is measured from the floor under the seat, never from the height
+    // the feet were at. Jump is bound, and a player who climbed onto the
+    // chair and sat down from there left their feet on its cushion: measured
+    // from the feet, the cushion is floor, and they stood up on top of it.
+    const double FloorZ = UsedScreen->GetUseFloorZ();
+
+    // Where a standing capsule's centre goes over At, if At is floor. Not
+    // "the nearest thing below": a box top is something below, and standing
+    // on the chair is the bug.
     auto CentreOver = [&](const FVector2D& At) -> TOptional<FVector>
     {
         FHitResult Floor;
-        const FVector Top(At.X, At.Y, Feet.Z + StandFloorAboveCm);
-        const FVector Bottom(At.X, At.Y, Feet.Z - StandFloorBelowCm);
+        const FVector Top(At.X, At.Y, FloorZ + StandFloorAboveCm);
+        const FVector Bottom(At.X, At.Y, FloorZ - StandFloorBelowCm);
         if (!World->LineTraceSingleByChannel(Floor, Top, Bottom, ECC_Pawn, Params) || Floor.bStartPenetrating)
         {
             return {};
@@ -726,10 +754,19 @@ TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
     }
 
     // A ring spot must be reachable from the one the player left, or the
-    // search would happily stand them on the far side of a bulkhead. Whatever
-    // now occupies the remembered spot is left out of that test: a trace that
-    // starts inside a thing says nothing about walls.
-    const FVector From(Feet.X, Feet.Y, Feet.Z + HalfHeight + StandFloorClearanceCm);
+    // search would happily stand them on the far side of a bulkhead. Reached
+    // by a body, not a line: a standing capsule swept along the floor, so a
+    // table, a bench or a gap narrower than a body is in the way, as it is
+    // to walking. Swept from the floor at the remembered spot, not from the
+    // feet, which may have been up on the furniture. Whatever occupies that
+    // start is left out -- a sweep that starts inside a thing says nothing
+    // about walls -- and that includes the chair a player climbed onto.
+    //
+    // It cannot step up, where walking steps 45 cm: a spot past a raised
+    // threshold is refused though a body could walk to it. That errs toward
+    // a nearer ring or the remembered spot, never toward the far side of
+    // something, and the ship's decks are flat.
+    const FVector From(Feet.X, Feet.Y, FloorZ + HalfHeight + StandFloorClearanceCm);
     FCollisionQueryParams PathParams = Params;
     {
         TArray<FOverlapResult> Occupants;
@@ -765,7 +802,7 @@ TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
             const FVector2D At = Home2D + FVector2D(FMath::Cos(Yaw), FMath::Sin(Yaw)) * Distance;
             const TOptional<FVector> Centre = CentreOver(At);
             if (Centre && Fits(*Centre) &&
-                !World->LineTraceTestByChannel(From, *Centre, ECC_Pawn, PathParams))
+                !World->SweepTestByChannel(From, *Centre, FQuat::Identity, ECC_Pawn, Standing, PathParams))
             {
                 return Centre;
             }

@@ -9,13 +9,15 @@ namespace
     // Read where it is used and never cached, like every playtest knob: a
     // nudge is a console command, not a rebuild.
     //
-    // 4% at each edge: the panel fills 92% of the frame on its tighter axis.
-    // Enough that the bezel is plainly inside the view with some of the room
-    // round it -- you are sitting at a screen, not looking through one -- and
-    // little enough that the laptop, which read right at the old fixed 52
-    // degrees, comes out at about 57 rather than somewhere else entirely.
+    // 2% at each edge: the panel, casing and all, fills 96% of the frame on
+    // its tighter axis. That is the one framing the developer has approved:
+    // the laptop read right at the old fixed 52 degrees, and at 52 its whole
+    // 30 x 20 cm lid is in view with 2% of the frame clear above and below.
+    // The bezel is inside the view with a sliver of the room round it -- you
+    // are sitting at a screen, not looking through one. 4% put the laptop
+    // at 54 degrees even with its lid measured right, and the room crept in.
     TAutoConsoleVariable<float> CVarFrameMargin(
-        TEXT("ds.Screen.FrameMargin"), 0.04f,
+        TEXT("ds.Screen.FrameMargin"), 0.02f,
         TEXT("Fraction of the view left clear at each edge of a screen you are sat at, on its tighter axis."),
         ECVF_Default);
 
@@ -103,6 +105,13 @@ FTransform AShipScreen::GetUseTransform() const
     return FTransform((-Flat).Rotation(), Seat);
 }
 
+double AShipScreen::GetUseFloorZ() const
+{
+    // Derived from the seat rather than assumed to be 0, so that if the seat
+    // ever learns to find its floor, the floor stood up onto follows it.
+    return GetUseTransform().GetLocation().Z - SeatHeightCm;
+}
+
 FTransform AShipScreen::GetViewTransform() const
 {
     const FTransform Panel = Screen ? Screen->GetComponentTransform() : GetActorTransform();
@@ -143,7 +152,7 @@ float AShipScreen::FitFieldOfView(const FVector2D& FramedSizeCm, float DistanceC
 FVector2D AShipScreen::GetFramedSizeCm() const
 {
     const double Height = DrawSizePixels.X > 0.0 ? PanelWidthCm * DrawSizePixels.Y / DrawSizePixels.X : 0.0;
-    return FVector2D(PanelWidthCm + 2.0 * BezelCm, Height + 2.0 * BezelCm);
+    return FVector2D(PanelWidthCm + 2.0 * BezelCm.X, Height + 2.0 * BezelCm.Y);
 }
 
 float AShipScreen::GetUseFieldOfView(float ViewportAspect, EAspectRatioAxisConstraint Constraint, float CameraAspect) const
