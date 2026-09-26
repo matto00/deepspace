@@ -1,9 +1,9 @@
 #include "Ship/ShipLightingSubsystem.h"
 
+#include "Components/MeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "Components/MeshComponent.h"
 #include "GameFramework/Actor.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
