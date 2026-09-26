@@ -241,6 +241,13 @@ MAP_SCREEN = ("cockpit", (301, 200), 105, 0)
 # to hold the two equal.
 MAP_SCREEN_WIDTH = 68
 
+# The map's draw size, pixels: AShipMapScreen's DrawSizePixels (system map
+# spec, 600 x 424). With the width it fixes the panel's height, 48 cm, which
+# is what check_map_sightline samples the corners of. test_placement.py holds
+# it equal to the C++ too.
+MAP_DRAW_SIZE = (600, 424)
+MAP_SCREEN_HEIGHT = MAP_SCREEN_WIDTH * MAP_DRAW_SIZE[1] / float(MAP_DRAW_SIZE[0])
+
 # How far the eyes lean in, cm, when the chart chair zooms the map (decision
 # 13): the chart's 60, so choosing one screen or the other frames the same
 # way. build_hauler.py sets it on the placed map; verify_level.py checks it.
@@ -282,14 +289,26 @@ PLAYER_START = ("bunk", (200, 150), 100)
 # starboard seat stays decorative.
 PILOT_SEAT = ("cockpit", (175, 130), 0)
 
-# Where the pilot's eyes are, seated at the helm: over the helm's seat, 170
-# cm up. (room, (x, y) from the room's corner, z), shaped like PLAYER_START.
-# It is the eye the C++ tests look from (SkyTestWorld::PilotEye), and
-# test_placement.py reads that header to hold the two equal, so the layout's
-# checks from the helm -- the map in clear view, the glass ahead and a wall
-# aft -- are about the same eye the sky and the target bracket are tested
-# from.
-PILOT_EYE = (PILOT_SEAT[0], PILOT_SEAT[1], 170)
+# Where the pilot's eyes are, seated at the helm, from the helm seat's anchor
+# on the floor, cm: (forward, starboard, up) in the seat's own frame. It is
+# measured, not chosen: DeepSpace.Player.SeatedEyeIsPilotEye sits the real
+# character in a helm seat, plays the sitting idle and reads where
+# PlaceCamera puts the eyes -- 19 cm forward of the anchor, 2 cm to port and
+# 125 cm up, moving less than a centimetre through the idle. It was 170, a
+# standing eye; from there the nose line cleared the port desk screen, and
+# from the real one it did not.
+SEATED_EYE = (19, -2, 125)
+
+# Where the pilot's eyes are, seated at the helm: the helm seat's point plus
+# SEATED_EYE. (room, (x, y) from the room's corner, z), shaped like
+# PLAYER_START. It is the eye the C++ tests look from (SkyTestWorld::PilotEye),
+# and test_placement.py reads that header to hold the two equal, so the
+# layout's checks from the helm -- the map in clear view, the glass ahead and
+# a wall aft -- are about the same eye the sky and the target bracket are
+# tested from. The helm faces yaw 0, so the seat's frame is the room's.
+PILOT_EYE = (PILOT_SEAT[0],
+             (PILOT_SEAT[1][0] + SEATED_EYE[0], PILOT_SEAT[1][1] + SEATED_EYE[1]),
+             SEATED_EYE[2])
 
 SLIDE_ROOM = "corridor"
 

@@ -11,8 +11,10 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Player/DeepSpaceCharacter.h"
+#include "Ship/PilotSeat.h"
 #include "Ship/ShipDressingSubsystem.h"
 #include "Tests/HaulerDressingMarkers.h"
+#include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -340,6 +342,69 @@ bool FCameraDoesNotDiveWhenLookingDownTest::RunTest(const FString& Parameters)
     }
 
     DropWorld(World);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FSeatedEyeIsPilotEyeTest,
+    "DeepSpace.Player.SeatedEyeIsPilotEye",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSeatedEyeIsPilotEyeTest::RunTest(const FString& Parameters)
+{
+    // SkyTestWorld::PilotEye is the eye every helm test looks from, and the
+    // layout's checks from the helm -- the map in view, the glass along the
+    // nose -- look from the same point. It was a standing height, 170 cm,
+    // and a seated pilot's eye is some 45 cm lower: from there the nose
+    // line met the port desk screen before the glass, and the layout's
+    // check passed only because the eye was in the wrong place. So sit the
+    // real character in a helm seat, play the idle it sits in, and measure
+    // where PlaceCamera puts its eyes through the whole clip.
+    UWorld* World = MakeWorld(TEXT("SeatedEyeTestWorld"));
+    ON_SCOPE_EXIT { DropWorld(World); };
+    const TCHAR* SittingIdle = TEXT("/Game/Characters/DeepSpace/Anims/RTG_sitting_idle.RTG_sitting_idle");
+    ADeepSpaceCharacter* Character = PoseCharacter(*this, World, SittingIdle);
+    APilotSeat* Seat = World->SpawnActor<APilotSeat>(SkyTestWorld::HelmSeat, FRotator::ZeroRotator);
+    if (!Character || !TestNotNull(TEXT("the helm seat spawns"), Seat))
+    {
+        return false;
+    }
+    Character->SitIn(Seat);
+    if (!TestTrue(TEXT("the character is seated"), Character->IsSeated()))
+    {
+        return false;
+    }
+
+    // Looking level along the nose, the pose SitIn sets. A long step lets
+    // the eye's height damping settle onto each frame's head.
+    const FRotator Level(0.0f, Seat->GetSeatTransform().Rotator().Yaw, 0.0f);
+    USkeletalMeshComponent* Mesh = Character->GetMesh();
+    const UAnimSequence* Idle = LoadObject<UAnimSequence>(nullptr, SittingIdle);
+    const float Length = Idle ? Idle->GetPlayLength() : 0.0f;
+    constexpr int32 Samples = 40;
+    FVector Sum = FVector::ZeroVector;
+    FBox Range(ForceInit);
+    for (int32 I = 0; I <= Samples; ++I)
+    {
+        Mesh->SetPosition(Length * I / Samples);
+        EvaluatePose(Mesh);
+        Character->PlaceCamera(10.0f, Level);
+        const FVector Eye = Character->GetEyeLocation();
+        Sum += Eye;
+        Range += Eye;
+    }
+    const FVector Mean = Sum / (Samples + 1);
+    const FVector& Want = SkyTestWorld::PilotEye;
+    AddInfo(FString::Printf(TEXT("seated eye through the idle: mean (%.1f, %.1f, %.1f), z %.1f to %.1f; PilotEye (%.1f, %.1f, %.1f)"),
+                            Mean.X, Mean.Y, Mean.Z, Range.Min.Z, Range.Max.Z, Want.X, Want.Y, Want.Z));
+
+    TestTrue(TEXT("the clip has a length to sample"), Length > 0.0f);
+    TestTrue(FString::Printf(TEXT("PilotEye is the seated eye, to a centimetre (off by %.1f cm)"), FVector::Dist(Mean, Want)),
+             Mean.Equals(Want, 1.0));
+    TestTrue(TEXT("the idle keeps the eye within PilotEyeBob of it, up and down"),
+             Range.Min.Z >= Want.Z - SkyTestWorld::PilotEyeBob && Range.Max.Z <= Want.Z + SkyTestWorld::PilotEyeBob);
+    TestTrue(TEXT("and within PilotEyeBob of it sideways"),
+             (Range.Max - Range.Min).X <= 2.0 * SkyTestWorld::PilotEyeBob && (Range.Max - Range.Min).Y <= 2.0 * SkyTestWorld::PilotEyeBob);
     return true;
 }
 

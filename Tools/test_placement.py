@@ -533,35 +533,91 @@ def test_the_map_covers_the_middle_desk_screen_one_cm_proud_and_level():
     assert L.MAP_SCREEN_WIDTH <= prop.size[1] - 2, (L.MAP_SCREEN_WIDTH, prop.size)
 
 
+def _map_screen_source():
+    """Every source file that mentions AShipMapScreen, header and body, and
+    their text joined, so the width is found wherever stage 1b sets it.
+    Pending while no file names the class; the moment one does, this is a
+    real check, and a class with no PanelWidthCm in it fails."""
+    import glob
+    found = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "Source/DeepSpace/**/*.[hc]*"), recursive=True)):
+        with open(path) as f:
+            text = f.read()
+        if "AShipMapScreen" in text and "/Tests/" not in path:
+            found.append((path, text))
+    if not found:
+        raise Pending("no source outside Tests/ names AShipMapScreen yet (stage 1b)")
+    return "\n".join(text for _, text in found)
+
+
 def test_the_map_width_is_the_one_the_cpp_draws():
-    path = os.path.join(ROOT, "Source/DeepSpace/Ship/ShipMapScreen.cpp")
-    if not os.path.exists(path):
-        raise Pending("Ship/ShipMapScreen.cpp is not in this tree yet")
-    with open(path) as f:
-        cpp = f.read()
-    assert "PanelWidthCm = %d.0f;" % L.MAP_SCREEN_WIDTH in cpp, L.MAP_SCREEN_WIDTH
+    import re
+    cpp = _map_screen_source()
+    widths = re.findall(r"PanelWidthCm\s*=\s*([\d.]+)f?\s*;", cpp)
+    assert widths, "AShipMapScreen's source sets no PanelWidthCm"
+    assert {float(w) for w in widths} == {float(L.MAP_SCREEN_WIDTH)}, (widths, L.MAP_SCREEN_WIDTH)
+
+
+def test_the_map_draw_size_is_the_one_the_cpp_draws():
+    # The panel's height is its width scaled by the draw size, and
+    # check_map_sightline samples the corners at that height.
+    import re
+    cpp = _map_screen_source()
+    sizes = re.findall(r"DrawSizePixels\s*=\s*FVector2D\(\s*([\d.]+)f?\s*,\s*([\d.]+)f?\s*\)", cpp)
+    assert sizes, "AShipMapScreen's source sets no DrawSizePixels"
+    assert {(float(a), float(b)) for a, b in sizes} == {tuple(float(v) for v in L.MAP_DRAW_SIZE)}, \
+        (sizes, L.MAP_DRAW_SIZE)
+
+
+def _sky_test_world():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Tests/SkyTestWorld.h")) as f:
+        return f.read()
+
+
+def _header_vector(header, name):
+    import re
+    found = re.search(name + r"\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", header)
+    assert found, "no %s in SkyTestWorld.h" % name
+    return tuple(float(v) for v in found.groups())
 
 
 def test_the_pilot_eye_is_the_one_the_cpp_tests_look_from():
     # SkyTestWorld::PilotEye is where DeepSpace.Sky and the target bracket's
-    # glass trace are tested from; the layout's helm checks must be about
-    # the same eye.
-    import re
-    with open(os.path.join(ROOT, "Source/DeepSpace/Tests/SkyTestWorld.h")) as f:
-        header = f.read()
-    found = re.search(r"PilotEye\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", header)
-    assert found, "no PilotEye in SkyTestWorld.h"
+    # glass trace are tested from, and DeepSpace.Player.SeatedEyeIsPilotEye
+    # holds it to where the seated character's eyes really are; the layout's
+    # helm checks must be about the same eye, from the same seat.
+    header = _sky_test_world()
     ship = L.generate()
-    assert tuple(float(v) for v in found.groups()) == tuple(float(v) for v in ship.pilot_eye), \
-        (found.groups(), ship.pilot_eye)
+    assert _header_vector(header, "PilotEye") == tuple(float(v) for v in ship.pilot_eye), \
+        (_header_vector(header, "PilotEye"), ship.pilot_eye)
+    assert _header_vector(header, "HelmSeat") == tuple(float(v) for v in ship.pilot_seat_location), \
+        (_header_vector(header, "HelmSeat"), ship.pilot_seat_location)
 
 
-def test_the_pilot_eye_is_over_the_helm_seat_and_under_the_ceiling():
+def test_the_eye_tolerance_is_the_one_the_cpp_measures_against():
+    import re
+    import validate_hauler as V
+    found = re.search(r"PilotEyeBob\s*=\s*([\d.]+)\s*;", _sky_test_world())
+    assert found, "no PilotEyeBob in SkyTestWorld.h"
+    assert float(found.group(1)) == V.SEATED_EYE_BOB, (found.group(1), V.SEATED_EYE_BOB)
+
+
+def test_the_pilot_eye_is_a_seated_eye_over_the_helm_seat():
+    # A seated eye, not a standing one: a standing eye (MM_Idle's camera
+    # peaks at 166 cm) is how a seated-helm check came to look from 170 cm,
+    # over a desk screen the real pilot sees the nose through. On a 55 cm
+    # seat an adult's eye is some 70 cm up; the measured one is 125.
     ship = L.generate()
     seat = ship.pilot_seat_location
-    assert ship.pilot_eye[:2] == seat[:2], (ship.pilot_eye, seat)
+    ex, ey, ez = ship.pilot_eye
     assert L.PILOT_EYE[0] == L.PILOT_SEAT[0] == "cockpit"
-    assert 0 < ship.pilot_eye[2] < ship.plan.room("cockpit").height
+    assert ship.pilot_seat_yaw == 0, "SEATED_EYE is added in the room's frame; turn it with the seat"
+    assert (ex - seat[0], ey - seat[1], ez - seat[2]) == tuple(float(v) for v in L.SEATED_EYE), \
+        (ship.pilot_eye, seat, L.SEATED_EYE)
+    # Over the seat: within its 60 x 60 cm footprint, forward of its back.
+    assert abs(ex - seat[0]) < 30 and abs(ey - seat[1]) < 30, (ship.pilot_eye, seat)
+    # Seated height: well under a standing eye, well over the cushion.
+    assert 110 <= ez - seat[2] <= 140, ez
 
 
 def test_the_glass_tag_is_the_one_the_cpp_traces_for():

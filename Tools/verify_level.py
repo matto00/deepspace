@@ -311,6 +311,12 @@ def check_nav_screen(ship, every, actors):
     return failures
 
 
+# How far a desk screen's glass stands proud of its prop, cm, at the least,
+# and the float noise the check forgives on that boundary.
+PROUD_CM = 1.0
+PROUD_EPSILON_CM = 1e-3
+
+
 def check_proud(ship, actors, screen, location, name):
     """A desk screen's glass stands at least 1 cm proud of the built desk
     screen prop behind it. Its reach and its pointer traces start at the
@@ -328,7 +334,11 @@ def check_proud(ship, actors, screen, location, name):
     origin, extent = prop.get_actor_bounds(False)
     aft_face = origin.x - extent.x
     x = screen.get_actor_location().x
-    if aft_face - x < 1.0:
+    # The layout puts both panels exactly 1 cm proud, so the built value sits
+    # on the boundary, and get_actor_bounds on a scaled SM_Cube carries
+    # float noise: a strict 1.0 would go red with nothing changed. A
+    # thousandth of a centimetre is noise; a panel sunk back is not.
+    if aft_face - x < PROUD_CM - PROUD_EPSILON_CM:
         return ["the %s's glass is at x %.2f, %.2f cm proud of the desk screen at %.2f; it "
                 "must be at least 1" % (name, x, aft_face - x, aft_face)]
     return []

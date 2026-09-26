@@ -250,7 +250,8 @@ the prop blocks `Visibility`, and a panel sunk into it hands every trace to
 the prop.
 
 **Drawn at the resolution it is seen at: 600 x 424 px, not the chart's 816 x
-576.** The helm's eye (`SkyTestWorld::PilotEye`, (1585, -70, 170)) is 158 cm
+576.** The helm's eye (`SkyTestWorld::PilotEye`, (1585, -70, 170) as first written;
+see the correction below) is 158 cm
 from the panel's centre, 29 degrees to starboard and 24 degrees down, well
 inside the seated view limits (100 degrees of yaw, 70 of pitch). From there
 the 68 cm panel spans 68 x cos 29° / 158 = 0.376 rad, **21.6 degrees, about
@@ -263,6 +264,24 @@ drop out as the head moves, and text would lose strokes. At 600 x 424
 the helm (0.96 across, 1.0 down). **Every size in decision 3 is therefore a
 size in helm pixels.** Standing close, the panel is magnified instead: soft,
 never aliased.
+
+> **Correction (stage 1c review, 2026-09-26): the helm's eye was a standing
+> one.** `PilotEye` (1585, -70, 170) is where a *standing* character's eyes
+> are. `DeepSpace.Player.SeatedEyeIsPilotEye` now measures the seated eye --
+> the real character in a helm seat, the sitting idle, `PlaceCamera` -- and
+> it is **(1604, -72, 125)**: 19 cm forward of the seat, 45 cm lower. From
+> there the panel's centre is **131 cm** off, 34 degrees to starboard and 9
+> down; the panel spans **24.8 degrees, about 661 px**, across and **20.8
+> degrees, about 556 px**, high. So at 600 x 424 the map is *magnified* at
+> the helm, 1.10 times across and 1.31 up -- softer, but magnification does
+> not shimmer, which was the reason for leaving 816 x 576 (now minified only
+> 1.23 and 1.04). Whether the draw size should rise (the panel's 68:48 at
+> ~788 x 556 would map one to one) is stage 1b's call, settled by
+> `Eyes.MapFromHelm`, which captures from `PilotEye` and so from the right
+> eye now. The same measurement showed the nose line from the real eye met
+> the port desk screen before the glass; the port screen is now 30 cm tall,
+> its top 15 cm under the eye (see `Tools/props.py`), pending the
+> developer's word on the level.
 
 **Rejected: the chart's 816 x 576, with fatter strokes** (rings of 2.5-3 px,
 dots of 10 px or more). That treats the symptom. Minified 1.42 times with no

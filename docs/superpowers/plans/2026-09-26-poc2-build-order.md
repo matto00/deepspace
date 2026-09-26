@@ -98,6 +98,18 @@ and `check_blueprints.py`. `test_placement.py` reads `ShipMapScreen.cpp`'s
 width and `SkyTestWorld.h`'s `PilotEye`, so it passes only once 1b is in:
 merge 1b, then 1c.
 
+*As built:* until a source file outside `Tests/` names `AShipMapScreen`, the
+map's width and draw-size tests report **PEND**, and `./test.sh` names every
+pending test rather than counting it as passed; they become real checks, and
+fail on a class that sets no `PanelWidthCm` or `DrawSizePixels`, the moment
+1b's class is in the tree. The review of 1c found `PILOT_EYE` was a standing
+eye; 1c therefore also touches `SkyTestWorld.h` (`PilotEye` is now the
+measured seated eye, with `HelmSeat` and `PilotEyeBob`),
+`FirstPersonBodyTest.cpp` (`DeepSpace.Player.SeatedEyeIsPilotEye`, which
+measures it) and `Tools/props.py` (the port desk screen lowered so the nose
+line from that eye meets the glass). The level rebuild that applies the
+lowered screen is the same one owed after 1b.
+
 ### Stage 1 ownership check
 
 | File | Owner |

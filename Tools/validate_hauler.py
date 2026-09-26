@@ -326,27 +326,39 @@ def check_map_sightline(grid, ship, failures):
     """The air from the helm's eye to the map's glass is empty: the pilot
     reads and clicks the map from the helm without leaving it (system map
     spec, decisions 1 and 2), so a prop on that line would hide it and the
-    pointer would find the prop first. Sampled every 10 cm along the line,
-    from the eye to 5 cm short of the glass, as check_chart is for the chart
-    chair; the last 5 cm is the cell the desk screen behind the glass is in."""
+    pointer would find the prop first. The rows run across the whole panel,
+    so the lines to its four corners are sampled as well as the line to its
+    centre: a prop that hid one corner would hide a row. Every 10 cm along
+    each line, from the eye to 5 cm short of the glass, as check_chart is for
+    the chart chair; the last 5 cm is the cell the desk screen behind the
+    glass is in."""
     eye = ship.pilot_eye
-    glass = ship.map_screen_location
-    length = sum((glass[a] - eye[a]) ** 2 for a in range(3)) ** 0.5
-    along = 0.0
-    while along < length - 5:
-        point = [eye[a] + (glass[a] - eye[a]) * along / length for a in range(3)]
-        i, j, k = grid.cell_of(*point)
-        if grid.solid[grid.index(i, j, k)]:
-            failures.append("Something solid at (%.0f, %.0f, %.0f) stands between the helm's "
-                            "eye and the map." % tuple(point))
-            return
-        along += CELL
+    x, y, z = ship.map_screen_location
+    half_w, half_h = L.MAP_SCREEN_WIDTH / 2.0, L.MAP_SCREEN_HEIGHT / 2.0
+    # The map faces aft (yaw 0), so its face spans y and z.
+    points = [("centre", (x, y, z))] + [
+        ("%s %s corner" % (vert, side), (x, y + dy, z + dz))
+        for vert, dz in (("upper", half_h), ("lower", -half_h))
+        for side, dy in (("port", -half_w), ("starboard", half_w))]
+    for name, glass in points:
+        length = sum((glass[a] - eye[a]) ** 2 for a in range(3)) ** 0.5
+        along = 0.0
+        while along < length - 5:
+            point = [eye[a] + (glass[a] - eye[a]) * along / length for a in range(3)]
+            i, j, k = grid.cell_of(*point)
+            if grid.solid[grid.index(i, j, k)]:
+                failures.append("Something solid at (%.0f, %.0f, %.0f) stands between the helm's "
+                                "eye and the map's %s." % (tuple(point) + (name,)))
+                break
+            along += CELL
 
 
 # How far the target bracket's glass trace looks, cm (system map spec,
 # decision 7: 30 m). A trace that meets nothing within it counts as open sky,
 # so a wall further off than this from the helm would show the bracket
-# through it.
+# through it. The C++ trace does not exist until stage 2; when
+# ShipTargetMarker lands, test_placement must read its length from there, as
+# it does PanelWidthCm and the tags, rather than trust this copy.
 GLASS_TRACE_CM = 3000
 
 
@@ -376,21 +388,36 @@ def first_hit(boxes, origin, direction):
     return hit, best
 
 
+# How far, cm, the seated pilot's eye may stray up or down from PILOT_EYE and
+# the nose line must still leave through the glass: SkyTestWorld's
+# PilotEyeBob, which test_placement holds equal to this. The sitting idle
+# moves the eye under a centimetre; the rest is margin, so a retargeted idle
+# or a slouch does not put the nose back behind a desk screen unnoticed.
+SEATED_EYE_BOB = 5.0
+
+
 def check_helm_glass(ship, failures):
     """From the helm's eye, the ship's nose is through the glass and its
     tail is through a wall. The target bracket is drawn only where a trace
-    from the eye meets the glass first (system map spec, decision 7), and
-    DeepSpace.Ship.TargetSeenThroughGlass proves that trace against a fixture
-    of exactly this shape: glass ahead of PilotEye, a wall aft. This holds
-    the real hull to the fixture."""
-    fore, _ = first_hit(ship.boxes, ship.pilot_eye, (1, 0, 0))
-    if fore is None or fore.role != "glass":
-        failures.append("Looking along the nose from the helm's eye %s meets %s before any "
-                        "glass." % (ship.pilot_eye, "nothing" if fore is None else "'%s'" % fore.label))
-    aft, distance = first_hit(ship.boxes, ship.pilot_eye, (-1, 0, 0))
+    from the eye meets the glass first (system map spec, decision 7), so
+    anything the ship is pointed at must be seen through glass, not behind
+    a desk screen: the nose line is looked along from the eye and from
+    SEATED_EYE_BOB above and below it. Aft, the helm looks through the
+    cockpit's open doorway down the corridor, and the first wall is the
+    stern's, some 24 m off -- not the close wall the stage-2 C++ fixture
+    will model -- so the aft sample checks that the stern is inside the
+    glass trace's reach and not glass."""
+    eye = ship.pilot_eye
+    for dz in (0.0, SEATED_EYE_BOB, -SEATED_EYE_BOB):
+        at = (eye[0], eye[1], eye[2] + dz)
+        fore, _ = first_hit(ship.boxes, at, (1, 0, 0))
+        if fore is None or fore.role != "glass":
+            failures.append("Looking along the nose from the helm's eye %s meets %s before any "
+                            "glass." % (at, "nothing" if fore is None else "'%s'" % fore.label))
+    aft, distance = first_hit(ship.boxes, eye, (-1, 0, 0))
     if aft is None or aft.role == "glass":
         failures.append("Looking aft from the helm's eye %s meets %s, not a wall."
-                        % (ship.pilot_eye, "nothing" if aft is None else "the glass '%s'" % aft.label))
+                        % (eye, "nothing" if aft is None else "the glass '%s'" % aft.label))
     elif distance > GLASS_TRACE_CM:
         failures.append("The wall aft of the helm's eye, '%s', is %.0f cm off, beyond the "
                         "glass trace's %d: the bracket would be drawn through it."
