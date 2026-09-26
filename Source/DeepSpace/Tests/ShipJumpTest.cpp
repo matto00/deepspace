@@ -237,13 +237,42 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     Ship->Tick(0.1f);
     TestTrue(TEXT("at 1:1:4 they dim while it winds"), Ship->GetConsumerSatisfaction(ShipPower::Lights) < 0.9f);
     Ship->SetConsumerWeight(ShipPower::Engine, 1.0f);
+    // What is taken off the top, before any split: the total draw less every
+    // consumer's share, so it moves with the fold and not with the split.
+    const auto OffTheTop = [Ship]()
+    {
+        float Shares = 0.0f;
+        for (const FName Consumer : Ship->GetPowerConsumers())
+        {
+            Shares += Ship->GetConsumerShare(Consumer);
+        }
+        return Ship->GetPowerDraw() - Shares;
+    };
+    const float UnfoldedDraw = OffTheTop();
     {
         // The fold's draw, off the top, is the only lever that dims them at
-        // the default split -- and it goes when the winding does.
+        // the default split -- and it goes when the winding does, with the
+        // CVar still set: a draw that stayed while the drive holds would tax
+        // standing still (nav decision 4).
         FScopedCVar Fold(TEXT("ds.Nav.FoldDraw"), 350.0f);
         Ship->Tick(0.1f);
+        TestEqual(TEXT("winding, the fold draws ds.Nav.FoldDraw off the top"),
+                  OffTheTop(), UnfoldedDraw + 350.0f);
         TestTrue(TEXT("ds.Nav.FoldDraw 350 dims the lights at 1:1:1"),
                  Ship->GetConsumerSatisfaction(ShipPower::Lights) < 0.9f);
+
+        TestTrue(TEXT("standing the jump down is allowed while it winds"), Ship->SetJumpEngaged(false));
+        Ship->Tick(0.1f);
+        TestNotEqual(TEXT("and it stops winding"), static_cast<int32>(Ship->GetJumpState()),
+                     static_cast<int32>(EJumpState::Winding));
+        TestEqual(TEXT("not winding, the fold draws nothing though the CVar is 350"),
+                  OffTheTop(), UnfoldedDraw);
+        TestEqual(TEXT("so the lights are fully fed again"),
+                  Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+
+        TestTrue(TEXT("and engaging again"), Ship->SetJumpEngaged(true));
+        Ship->Tick(0.1f);
+        TestEqual(TEXT("winding again, the fold's draw is back"), OffTheTop(), UnfoldedDraw + 350.0f);
     }
     Ship->Tick(0.1f);
     TestEqual(TEXT("and with no fold draw they are fed again"),
@@ -267,6 +296,13 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("and the serial has not moved"), Ship->GetJumpSerial(), 0);
     TestEqual(TEXT("at ready the drive wants nothing"), Ship->GetConsumerWant(ShipPower::Engine), 0.0f);
     TestEqual(TEXT("so at 1:1:4 the lights recover"), Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+    {
+        // Holding at ready is not winding, so the fold takes nothing either.
+        FScopedCVar Fold(TEXT("ds.Nav.FoldDraw"), 350.0f);
+        Ship->Tick(0.1f);
+        TestEqual(TEXT("at ready the fold draws nothing though the CVar is 350"), OffTheTop(), UnfoldedDraw);
+        TestEqual(TEXT("and the lights stay fed"), Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+    }
     Ship->SetConsumerWeight(ShipPower::Engine, 1.0f);
 
     // Aimed, and under way at a quarter throttle: the arrival must keep
