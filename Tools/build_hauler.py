@@ -69,7 +69,37 @@ PANELLED = {
     "furniture": ((0.70, 0.71, 0.72), (0.58, 0.59, 0.60), 60,  0.35),
     "trim":      (TEAL,               (0.03, 0.40, 0.40), 60,  0.35),
     "seal":      ((0.40, 0.42, 0.45), (0.05, 0.45, 0.45), 40,  0.40),
+    # The skirting boots and trolleys leave on every bulkhead: dark,
+    # grey-green, rough (lived-in decision 12).
+    "kick":      ((0.20, 0.23, 0.21), (0.14, 0.16, 0.15), 60,  0.75),
+    # Wear, drawn per furniture piece at world start by the dressing
+    # subsystem, which swaps a whole piece to one of these. Faded is bleached
+    # and yellowed by years of the same lamps; replaced is a newer panel in a
+    # slightly different, cooler grey, because it was swapped out.
+    "furniture_faded":    ((0.78, 0.77, 0.73), (0.68, 0.67, 0.64), 60, 0.55),
+    "furniture_replaced": ((0.66, 0.70, 0.74), (0.54, 0.58, 0.62), 60, 0.25),
 }
+
+# The dressing's plain roles: what clutter is made of, selected by name at
+# runtime by UShipDressingSubsystem (MI_Ship_<role>), so they are authored
+# here although nothing in the level wears them -- ADR 0006's runtime path,
+# pre-authored instances selected and parameterised. Seam equals surface: a
+# plain colour, with no new material asset. (colour, roughness)
+PLAIN = {
+    "ceramic":      ((0.82, 0.80, 0.74), 0.30),
+    "metal":        ((0.50, 0.52, 0.55), 0.35),
+    "rubber":       ((0.08, 0.08, 0.09), 0.90),
+    "paper":        ((0.86, 0.83, 0.72), 0.80),
+    # The ship's issue colours, drab on purpose: the few bright things
+    # aboard are the personal ones.
+    "fabric_olive": ((0.24, 0.27, 0.14), 0.85),
+    "fabric_navy":  ((0.08, 0.11, 0.22), 0.85),
+    "fabric_rust":  ((0.45, 0.17, 0.08), 0.85),
+    "fabric_ochre": ((0.65, 0.45, 0.10), 0.85),
+    "paint_red":    ((0.55, 0.07, 0.05), 0.50),
+    "paint_yellow": ((0.80, 0.60, 0.05), 0.50),
+}
+PANELLED.update({role: (colour, colour, 60, roughness) for role, (colour, roughness) in PLAIN.items()})
 # Emissive roles: an unlit colour, brighter than 1 to read as a light source.
 # Each room's lamp panels glow its mood, so the panel and the light under it
 # are one colour, taken from one number.
@@ -211,6 +241,13 @@ def spawn_box(actor_sub, box, mesh, material):
     # instance and never moves it.
     if box.role.startswith("lamp_"):
         actor.set_editor_property("tags", [unreal.Name(PL.LAMPS_TAG)])
+    # Every furniture part may wear, and wears with the rest of its piece:
+    # the dressing subsystem draws one bucket per Piece.<prop>_<n> and swaps
+    # the material of every part carrying it. The draw is seeded, so the
+    # layout has no say in it; this only says which parts are one piece.
+    if box.role == "furniture" and box.label.startswith("prop_"):
+        actor.set_editor_property("tags", [unreal.Name(PL.WEAR_TAG),
+                                           unreal.Name(PL.PIECE_TAG_PREFIX + PL.piece_of(box.label))])
     # The sunlight on the deck is the shape of the windows, which it can only
     # be if the glass in them casts no shadow (sky decision 5).
     if box.role == "glass":
@@ -325,6 +362,50 @@ def place_nav_screen(actor_sub, ship):
     return chart
 
 
+DRESS_EDGES = {"-x": unreal.DressEdge.NEG_X, "+x": unreal.DressEdge.POS_X}
+DRESS_USES = {"centre": unreal.DressUse.CENTRE, "+y": unreal.DressUse.POS_Y, "-y": unreal.DressUse.NEG_Y}
+
+
+def place_surfaces(actor_sub, ship):
+    """Where the dressing may leave things: one AShipDressingSurface per
+    surface the layout exports, tagged Dress.Surface (lived-in decision 1b).
+    The markers carry data and no logic (ADR 0002); UShipDressingSubsystem
+    finds them by the tag at world start and dresses them in C++. They are
+    written in the same run as the furniture they lie on, so the two cannot
+    disagree without verify_level.py failing."""
+    for m in ship.surfaces:
+        actor = actor_sub.spawn_actor_from_class(
+            unreal.ShipDressingSurface, unreal.Vector(*m.location), unreal.Rotator(0, 0, m.yaw))
+        actor.set_actor_label(TAG + m.label)
+        actor.set_editor_property("tags", [unreal.Name(PL.SURFACE_TAG)])
+        actor.set_editor_property("room", unreal.Name(m.room))
+        actor.set_editor_property("kind", unreal.Name(m.kind))
+        actor.set_editor_property("ordinal", int(m.ordinal))
+        actor.set_editor_property("size", unreal.Vector2D(float(m.size[0]), float(m.size[1])))
+        actor.set_editor_property("back", DRESS_EDGES[m.back])
+        actor.set_editor_property("use", DRESS_USES[m.use])
+        actor.set_editor_property("clear", float(m.clear))
+        actor.set_editor_property("excludes", [
+            unreal.Box2D(min=unreal.Vector2D(float(lo[0]), float(lo[1])),
+                         max=unreal.Vector2D(float(hi[0]), float(hi[1])))
+            for lo, hi in m.excludes])
+
+
+def place_keep_outs(actor_sub, ship):
+    """What the dressing may never touch, as AShipDressingKeepOut boxes
+    tagged Dress.KeepOut: each door's and the console's keep-clear zone, the
+    slide run, the crawlway. validate_hauler.py cannot see runtime clutter,
+    so ShipDressing::Dress enforces these itself."""
+    for k in ship.keep_outs:
+        centre = [(k.lo[a] + k.hi[a]) / 2.0 for a in range(3)]
+        actor = actor_sub.spawn_actor_from_class(
+            unreal.ShipDressingKeepOut, unreal.Vector(*centre), unreal.Rotator(0, 0, 0))
+        actor.set_actor_label(TAG + k.label)
+        actor.set_editor_property("tags", [unreal.Name(PL.KEEP_OUT_TAG)])
+        actor.set_editor_property("reason", unreal.Name(k.label[len("keepout_"):]))
+        actor.set_editor_property("size", unreal.Vector(*[float(k.hi[a] - k.lo[a]) for a in range(3)]))
+
+
 HUM_KINDS = {"reactor": unreal.ShipHumKind.REACTOR, "air": unreal.ShipHumKind.AIR}
 
 
@@ -359,6 +440,8 @@ def build():
 
     place_lights(actor_sub, ship.lights)
     place_hum_sources(actor_sub, ship)
+    place_surfaces(actor_sub, ship)
+    place_keep_outs(actor_sub, ship)
     sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
     place_counter_frame(actor_sub, sphere)
     place_sky(actor_sub, sphere)
@@ -405,12 +488,14 @@ def build():
 
     summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights (%d practical, "
                "shadowed), %d lamp boxes tagged %s, %d glass panes casting no shadow, "
-               "%d hum sources, one chart, one counter-frame, one sky."
+               "%d hum sources, %d dressing surfaces, %d keep-outs, %d furniture parts "
+               "tagged %s, one chart, one counter-frame, one sky."
                % (removed, len(ship.boxes), len(ship.lights),
                   sum(1 for light in ship.lights if light.shadows),
                   sum(1 for box in ship.boxes if box.role.startswith("lamp_")), PL.LAMPS_TAG,
                   sum(1 for box in ship.boxes if box.role == "glass"),
-                  len(ship.hum_sources)))
+                  len(ship.hum_sources), len(ship.surfaces), len(ship.keep_outs),
+                  sum(1 for box in ship.boxes if box.role == "furniture"), PL.WEAR_TAG))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)

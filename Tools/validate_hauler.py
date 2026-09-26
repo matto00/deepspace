@@ -22,6 +22,18 @@ Method: rasterise every box onto a 10 cm grid, sampling at cell centres. Then
     in 2D, allowing a one-cell step, to test reachability per posture.
 
 The capsule's width matters: without it a single-cell crack reads as walkable.
+
+Model -- what the grid represents, and what it does not:
+
+  * walls, floors, ceilings and furniture, sampled at cell centres;
+  * no dressing at all. Surface clutter is generated in C++ at world start
+    (ShipDressing::Dress), has no collision, and is not in the layout this
+    reads. The intent it would have broken -- doors, the console, the slide
+    run, the crawlway, the floor -- is enforced by the generator against the
+    keep-outs the layout exports, and proved by DeepSpace.Ship.Dressing.Corpus;
+  * a step of one cell, where the engine allows 45 cm: the player can climb
+    the 45 cm airlock bench seat and this says they cannot. That errs towards
+    under-reporting reach, the conservative direction.
 """
 
 import os

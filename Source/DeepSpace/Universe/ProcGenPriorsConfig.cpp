@@ -1,7 +1,6 @@
 #include "Universe/ProcGenPriorsConfig.h"
 
-#include "Misc/ConfigCacheIni.h"
-#include "Misc/ConfigContext.h"
+#include "Core/GameIniReload.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUniverse, Log, All);
 
@@ -66,14 +65,8 @@ void UProcGenPriorsConfig::AcceptOrRefuse()
 
 TArray<FString> UProcGenPriorsConfig::ReloadFromIni()
 {
-    // ReloadConfig alone reads the config cache, which was filled from disk
-    // at start-up and would hand back the numbers the session began with.
-    // The file on disk is the one the developer just edited, so the Game
-    // branch is re-read first, as UObject::UpdateSingleSectionOfConfigFile
-    // does after writing it. Nothing is written back: this only reads.
-    FConfigContext Context = FConfigContext::ForceReloadIntoGConfig();
-    Context.bWriteDestIni = false;
-    Context.Load(*GetDefault<UProcGenPriorsConfig>()->GetClass()->ClassConfigName.ToString());
+    // The file, not the cache: the cache still holds the session's start.
+    GameIniReload::RereadFromDisk(StaticClass());
 
     return ApplyConfigCache();
 }

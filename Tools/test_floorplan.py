@@ -12,7 +12,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from floorplan import (CELL, SLAB, LINTEL, Door, FloorPlan, PlanError, Room,
+from floorplan import (CELL, KICK, SLAB, LINTEL, Door, FloorPlan, PlanError, Room,
                        Seal, Window, merge_rectangles)
 
 
@@ -89,6 +89,51 @@ def test_seal_is_solid():
     plan = FloorPlan([A], seals=[Seal("a", "port", 60, 200)])
     assert any(b.role == "seal" for b in plan.boxes())
     assert solid_at(plan, 50, -5, 100)
+
+
+def test_every_wall_has_a_kick_band_at_its_foot():
+    # Every plain wall column: the kick from under the floor to KICK, the
+    # wall from there up, and nothing else. A kick that stopped short would
+    # leave a gap in the hull; one that ran up the whole wall is no skirting.
+    plan = FloorPlan([A, B])
+    for cell, segments in plan.columns.items():
+        top = plan.wall_height[cell] + SLAB
+        assert segments == [(-SLAB, KICK, "kick"), (KICK, top, "wall")], (cell, segments)
+    kick = walls(plan, "kick")
+    assert kick and all(b.centre[2] == (KICK - SLAB) / 2.0 and b.size[2] == KICK + SLAB
+                        for b in kick), kick
+    assert solid_at(plan, -5, 50, KICK / 2.0)
+    # And it covers every wall cell exactly once, as the wall above it does.
+    covered = sum(b.size[0] * b.size[1] / CELL ** 2 for b in kick)
+    assert covered == len(plan.wall_height), (covered, len(plan.wall_height))
+
+
+def test_a_door_keeps_its_threshold_and_no_kick():
+    # Nothing to scuff where there is no wall: a doorway's column is the
+    # threshold under the floor, open air, then the lintel.
+    plan = FloorPlan([A, B], doors=[Door("a", "b", 60, 200, centre=50)])
+    door = [op for op in plan.openings if op[0] == "door"][0]
+    for cell in door[1]:
+        roles = [role for _, _, role in plan.columns[cell]]
+        assert "kick" not in roles and plan.columns[cell][0] == (-SLAB, 0, "wall"), plan.columns[cell]
+    assert not solid_at(plan, 105, 50, KICK / 2.0)
+
+
+def test_a_window_sill_keeps_its_kick():
+    plan = FloorPlan([A], windows=[Window("a", "fore", 60, 100, 180)])
+    window = [op for op in plan.openings if op[0] == "window"][0]
+    for cell in window[1]:
+        assert plan.columns[cell][:3] == [(-SLAB, KICK, "kick"), (KICK, 100, "wall"),
+                                          (100, 180, "glass")], plan.columns[cell]
+
+
+def test_a_sill_below_the_kick_is_rejected():
+    try:
+        FloorPlan([A], windows=[Window("a", "fore", 60, KICK - CELL, 180)])
+    except PlanError as e:
+        assert "sill/head out of range" in str(e)
+    else:
+        raise AssertionError("expected PlanError")
 
 
 def test_merge_tiles_exactly():

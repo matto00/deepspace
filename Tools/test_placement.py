@@ -13,10 +13,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (LAMPS_TAG, LIGHTS_TAG, SKY_DIRECTORY, Mood, Mount, Place, Practical, kelvin_to_rgb,
-                       lamp_emissive, lamp_role, resolve_lights, resolve_mount,
-                       resolve_point, resolve_practicals, resolve_props, sky_asset,
-                       LIGHT_SPACING)
+from placement import (KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
+                       SURFACE_TAG, WEAR_TAG, Mood, Mount, Place, Practical, kelvin_to_rgb,
+                       lamp_emissive, lamp_role, piece_of, resolve_lights, resolve_mount,
+                       resolve_point, resolve_practicals, resolve_props, resolve_surfaces,
+                       sky_asset, LIGHT_SPACING)
 
 ROOM = Room("r", 1000, 2000, 400, 300, 250)
 PLAN = FloorPlan([ROOM])
@@ -114,9 +115,53 @@ def test_unknown_prop_and_room_are_rejected():
 
 
 def test_every_template_prop_fits_a_generous_room():
+    # Each where it hangs: a ceiling prop up against the ceiling, a wall prop
+    # with its outline's -x edge on the room's aft wall, anything else on the
+    # floor in the middle.
     big = FloorPlan([Room("big", 0, 0, 3000, 3000, 500)])
     for name in P.PROPS:
-        resolve_props(big, [Place(name, "big", (1500, 1500))])
+        anchor = P.ANCHOR.get(name)
+        if anchor == "ceiling":
+            place = Place(name, "big", (1500, 1500), elevation=500 - P.height(name))
+        elif anchor == "wall":
+            place = Place(name, "big", (-P.footprint(name)[0][0], 1500))
+        else:
+            place = Place(name, "big", (1500, 1500))
+        resolve_props(big, [place])
+
+
+# -- anchoring ---------------------------------------------------------------
+
+def test_a_counter_floating_in_the_room_is_rejected():
+    # ADR 0008's probe found exactly this: a wall prop in the middle of the
+    # floor validates as sound, so the anchor has to be checked on its own.
+    try:
+        # Turned along the room's length: 300 cm of counter in a 400 cm room,
+        # touching neither end nor either side.
+        resolve_props(PLAN, [Place("counter", "r", (200, 150), facing=90)])
+    except PlanError as e:
+        assert "touches no wall" in str(e), e
+    else:
+        raise AssertionError("expected PlanError")
+
+
+def test_a_ceiling_panel_on_the_floor_is_rejected():
+    try:
+        resolve_props(PLAN, [Place("overhead_panel", "r", (200, 150))])
+    except PlanError as e:
+        assert "touches no ceiling" in str(e), e
+    else:
+        raise AssertionError("expected PlanError")
+
+
+def test_a_counter_against_its_wall_is_accepted():
+    resolve_props(PLAN, [Place("counter", "r", (30, 150))])
+    resolve_props(PLAN, [Place("overhead_panel", "r", (200, 150), elevation=ROOM.height - 22)])
+
+
+def test_every_anchor_names_a_prop():
+    assert set(P.ANCHOR) <= set(P.PROPS), set(P.ANCHOR) - set(P.PROPS)
+    assert set(P.ANCHOR.values()) <= {"ceiling", "wall"}
 
 
 def test_lights_follow_the_grid_spacing():
@@ -435,6 +480,235 @@ def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
     # It is on the desk's starboard half, never over the helm's side.
     helm_y = resolve_point(ship.plan, L.PILOT_SEAT[0], L.PILOT_SEAT[1])[1]
     assert y0 > helm_y
+
+
+# -- dressing surfaces ---------------------------------------------------------
+
+def _surface(ship, kind, ordinal=0):
+    found = [m for m in ship.surfaces if m.kind == kind and m.ordinal == ordinal]
+    assert len(found) == 1, (kind, ordinal, [m.label for m in ship.surfaces])
+    return found[0]
+
+
+def _world_rect(m):
+    """A surface marker's plan outline, world."""
+    (lo, hi) = P.rotate_rect((-m.size[0] / 2.0, -m.size[1] / 2.0),
+                             (m.size[0] / 2.0, m.size[1] / 2.0), m.yaw)
+    x, y, _ = m.location
+    return (x + lo[0], y + lo[1]), (x + hi[0], y + hi[1])
+
+
+def _local(m, point):
+    """A world (x, y) in a surface marker's own frame."""
+    (x, y, _), _ = P.rotate((point[0] - m.location[0], point[1] - m.location[1], 0), (0, 0, 0),
+                            (360 - m.yaw) % 360)
+    return x, y
+
+
+def test_every_accepted_kind_is_a_surface_and_every_room_says_what_it_takes():
+    kinds = {"%s.%s" % (prop, s.name) for prop, surfaces in P.SURFACES.items() for s in surfaces}
+    for room, accepted in L.ROOM_DRESSING.items():
+        assert set(accepted) <= kinds, (room, set(accepted) - kinds)
+    assert set(L.ROOM_DRESSING) == {r.name for r in L.ROOMS}
+
+
+def test_the_corridor_and_the_crawlway_take_nothing():
+    # The slide run and the crouch-only height are what those rooms are for.
+    assert L.ROOM_DRESSING["corridor"] == () and L.ROOM_DRESSING["crawlway"] == ()
+    ship = L.generate()
+    assert not [m for m in ship.surfaces if m.room in ("corridor", "crawlway")]
+
+
+def test_every_surface_the_rooms_accept_is_exported_once():
+    ship = L.generate()
+    want = sorted((p.room, "%s.%s" % (p.prop, s.name)) for p in L.PLACEMENTS
+                  for s in P.SURFACES.get(p.prop, ())
+                  if "%s.%s" % (p.prop, s.name) in L.ROOM_DRESSING[p.room])
+    got = sorted((m.room, m.kind) for m in ship.surfaces)
+    assert got == want, (got, want)
+    labels = [m.label for m in ship.surfaces]
+    assert len(labels) == len(set(labels)), labels
+    keys = [(m.room, m.kind, m.ordinal) for m in ship.surfaces]
+    assert len(keys) == len(set(keys)), keys
+
+
+def test_surfaces_are_read_from_placements_so_the_counter_is_dressed():
+    # The counter is a practical. Given FURNITURE, it and its affinity-4 top
+    # would vanish from the ship without a single error.
+    ship = L.generate()
+    counter = _surface(ship, "counter.top")
+    (place,) = [p for p in L.PLACEMENTS if p.prop == "counter"]
+    x, y, _ = resolve_point(ship.plan, place.room, place.at)
+    assert counter.location[:2] == (x, y) and counter.location[2] == 90
+
+
+def test_every_surface_lies_on_its_prop_at_its_props_height():
+    # Inside the prop's own plan outline, and level with the top of one of its
+    # parts, so nothing is dressed onto air beside the table or into its top.
+    ship = L.generate()
+    for m in ship.surfaces:
+        prop = m.kind.split(".")[0]
+        parts = [b for b in ship.boxes if b.label.startswith("prop_%s_%d_" % (prop, m.ordinal))]
+        assert parts, m.label
+        (x0, y0), (x1, y1) = _world_rect(m)
+        assert x0 >= min(b.centre[0] - b.size[0] / 2.0 for b in parts) - 1e-6, m.label
+        assert x1 <= max(b.centre[0] + b.size[0] / 2.0 for b in parts) + 1e-6, m.label
+        assert y0 >= min(b.centre[1] - b.size[1] / 2.0 for b in parts) - 1e-6, m.label
+        assert y1 <= max(b.centre[1] + b.size[1] / 2.0 for b in parts) + 1e-6, m.label
+        tops = [b.centre[2] + b.size[2] / 2.0 for b in parts]
+        assert any(abs(t - m.location[2]) < 0.01 for t in tops), (m.label, m.location[2], tops)
+
+
+def test_nothing_stands_in_a_surfaces_free_column():
+    # The column above a surface, up to its clear, less its excludes, holds no
+    # part of any prop: not a lamp's base or arm, not the next shelf, not the
+    # uppers over the counter. What clutter may fill is genuinely empty.
+    ship = L.generate()
+    props = [b for b in ship.boxes if b.label.startswith("prop_")]
+    for m in ship.surfaces:
+        (x0, y0), (x1, y1) = _world_rect(m)
+        z0, z1 = m.location[2], m.location[2] + m.clear
+        for b in props:
+            lo = [b.centre[a] - b.size[a] / 2.0 for a in range(3)]
+            hi = [b.centre[a] + b.size[a] / 2.0 for a in range(3)]
+            ix = (max(lo[0], x0), min(hi[0], x1))
+            iy = (max(lo[1], y0), min(hi[1], y1))
+            iz = (max(lo[2], z0), min(hi[2], z1))
+            if min(ix[1] - ix[0], iy[1] - iy[0], iz[1] - iz[0]) <= 1e-6:
+                continue
+            a = _local(m, (ix[0], iy[0]))
+            c = _local(m, (ix[1], iy[1]))
+            lo2 = (min(a[0], c[0]), min(a[1], c[1]))
+            hi2 = (max(a[0], c[0]), max(a[1], c[1]))
+            assert any(e[0][0] - 1e-6 <= lo2[0] and e[0][1] - 1e-6 <= lo2[1]
+                       and hi2[0] <= e[1][0] + 1e-6 and hi2[1] <= e[1][1] + 1e-6
+                       for e in m.excludes), "%s stands in %s's free column" % (b.label, m.label)
+
+
+def test_a_lamp_moved_takes_its_exclude_with_it():
+    # The rule, not a list: every placement resting on a surface is excluded
+    # by its footprint plus the margin. Move the desk lamp and the exclude
+    # follows it; take it away and the desk is free.
+    plan = FloorPlan(L.ROOMS, L.DOORS, L.WINDOWS, L.SEALS)
+    lamp = [p for p in L.PLACEMENTS if p.prop == "desk_lamp"][0]
+    rest = [p for p in L.PLACEMENTS if p is not lamp]
+    moved = lamp._replace(at=(lamp.at[0], lamp.at[1] - 60))
+    def desk(placements):
+        return [m for m in resolve_surfaces(plan, placements, L.ROOM_DRESSING)
+                if m.kind == "desk.top"][0]
+    here, there, gone = desk(rest + [lamp]), desk(rest + [moved]), desk(rest)
+    assert len(here.excludes) == 1 and len(there.excludes) == 1 and gone.excludes == ()
+    # The desk is turned half round, so world -y is the desk's +y.
+    assert abs(there.excludes[0][1][1] - min(60.0, here.excludes[0][1][1] + 60)) < 1e-6, \
+        (here.excludes, there.excludes)
+
+
+def test_the_galley_table_carries_the_laptops_exclude():
+    # Its footprint plus the margin, and the strip on its user's side right
+    # to the table's edge: nothing between the reader and the screen.
+    ship = L.generate()
+    table = _surface(ship, "galley_table.top")
+    lx, ly, _ = ship.laptop_location
+    corners = []
+    (fx0, fy0), (fx1, fy1) = L.LAPTOP_FOOTPRINT
+    for fx, fy in ((fx0, fy0), (fx1, fy1)):
+        (wx, wy, _), _ = P.rotate((fx, fy, 0), (0, 0, 0), ship.laptop_yaw)
+        corners.append(_local(table, (lx + wx, ly + wy)))
+    lo = (min(c[0] for c in corners), min(c[1] for c in corners))
+    hi = (max(c[0] for c in corners), max(c[1] for c in corners))
+    m = L.DRESS_MARGIN
+    covering = [e for e in table.excludes
+                if e[0][0] <= lo[0] - m + 1e-6 and e[0][1] <= lo[1] - m + 1e-6
+                and e[1][0] >= hi[0] + m - 1e-6 and e[1][1] >= hi[1] + m - 1e-6]
+    assert covering, (table.excludes, lo, hi)
+    # The user sits on the laptop's -X side: world -y here, so the strip
+    # reaches the table's edge on that side.
+    user_edge = _local(table, (lx, ly - 1000))
+    edge = -table.size[0] / 2.0 if user_edge[0] < 0 else table.size[0] / 2.0
+    assert any(abs(e[0][0] - edge) < 1e-6 or abs(e[1][0] - edge) < 1e-6 for e in covering), \
+        (covering, edge)
+
+
+def test_the_chart_exclude_reaches_the_cockpit_desk():
+    # Plan conflict 16, resolved onto the surface it lies over.
+    ship = L.generate()
+    wing = _surface(ship, "cockpit_desk.wing_stbd")
+    assert wing.excludes, wing
+    port = _surface(ship, "cockpit_desk.wing_port")
+    assert port.excludes == (), port
+
+
+def test_the_laptop_footprint_is_the_cpp_laptops():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipLaptop.cpp")) as f:
+        cpp = f.read()
+    (x0, y0), (x1, y1) = L.LAPTOP_FOOTPRINT
+    assert "BaseSize(%d.0f, %d.0f" % (-2 * x0, y1 - y0) in cpp, L.LAPTOP_FOOTPRINT
+
+
+def test_a_non_ascii_room_or_kind_is_rejected():
+    plan = FloorPlan([Room("r\u00e9", 0, 0, 400, 300, 250)])
+    try:
+        resolve_surfaces(plan, [Place("desk", "r\u00e9", (100, 100))], {"r\u00e9": ("desk.top",)})
+    except PlanError as e:
+        assert "ASCII" in str(e)
+    else:
+        raise AssertionError("expected PlanError")
+
+
+def test_every_surface_is_well_above_the_floor():
+    # Surface clutter never touches the floor. The C++ refuses anything below
+    # its guarantee; the layout should never ask.
+    ship = L.generate()
+    assert all(m.location[2] >= 20 for m in ship.surfaces), \
+        [(m.label, m.location[2]) for m in ship.surfaces]
+
+
+def test_every_surface_is_turned_in_quarter_turns_with_edges_it_knows():
+    ship = L.generate()
+    for m in ship.surfaces:
+        assert m.yaw in (0, 90, 180, 270) and m.back in ("+x", "-x") \
+            and m.use in ("centre", "+y", "-y"), m
+
+
+def test_keep_outs_are_every_door_the_console_the_slide_run_and_the_crawlway():
+    ship = L.generate()
+    labels = [k.label for k in ship.keep_outs]
+    doors = [k for k in ship.keep_clear if k[0] != "console"]
+    assert labels.count("keepout_console") == 1
+    assert len([l for l in labels if l.startswith("keepout_door_")]) == len(doors) == len(L.DOORS)
+    for zone in ship.keep_clear:
+        assert any(k.lo == zone[1] and k.hi == zone[2] for k in ship.keep_outs), zone
+    for label, room in (("keepout_slide_run", L.SLIDE_ROOM), ("keepout_crawlway", "crawlway")):
+        (k,) = [k for k in ship.keep_outs if k.label == label]
+        r = ship.plan.room(room)
+        assert k.lo == (r.x, r.y, 0) and k.hi == (r.x + r.w, r.y + r.d, r.height), k
+    assert len(labels) == len(set(labels))
+
+
+def test_the_dressing_tags_are_the_ones_the_cpp_finds():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipDressingTypes.cpp")) as f:
+        cpp = f.read()
+    for name, tag in (("SurfaceTag", SURFACE_TAG), ("KeepOutTag", KEEP_OUT_TAG),
+                      ("WearTag", WEAR_TAG), ("PieceTagPrefix", PIECE_TAG_PREFIX)):
+        assert '%s(TEXT("%s"))' % (name, tag) in cpp, (name, tag)
+
+
+def test_every_exported_kind_has_rules_in_the_cpp():
+    # A kind the generator has no rules for is dressed with nothing, silently.
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipDressingRules.cpp")) as f:
+        cpp = f.read()
+    for m in L.generate().surfaces:
+        prop = m.kind.split(".")[0]
+        assert 'Kind(TEXT("%s")' % m.kind in cpp or 'Kind(TEXT("%s")' % prop in cpp, m.kind
+
+
+def test_every_furniture_part_is_a_piece():
+    ship = L.generate()
+    for b in ship.boxes:
+        if b.role == "furniture":
+            assert b.label.startswith("prop_"), b.label
+    assert piece_of("prop_cockpit_desk_0_3") == "cockpit_desk_0"
+    assert piece_of("prop_bed_0_0") == "bed_0"
 
 
 # -- the hum -----------------------------------------------------------------
