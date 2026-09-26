@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "Universe/GalaxyGenerator.h"
 #include "Universe/GenPriors.h"
+#include "Universe/GenStream.h"
 #include "Universe/ProcGenPriorsConfig.h"
 #include "Universe/StarSystemGenerator.h"
 #include "Universe/SystemNames.h"
@@ -64,6 +65,68 @@ namespace StarSystemGenerationTestLocal
         P.GiantMassMedian = 2500.0;
         P.GiantMassSigma = 2.0;
         P.InhabitedChance = 1.0;
+        return P;
+    }
+
+    /** Every prior at the low edge of what GenPriorDomain lets an ini hold:
+     *  the smallest suns, the thinnest Beta, the most planets, every median a
+     *  hair above zero and every spread none. Decision 14's promise is that
+     *  no ini line can break an invariant; this and DomainCeiling are the
+     *  corners that promise is hardest to keep at. */
+    FGenPriors DomainFloor()
+    {
+        FGenPriors P;
+        P.ClassWeightM = 1.0;
+        P.ClassWeightK = P.ClassWeightG = P.ClassWeightF = P.ClassWeightA = P.ClassWeightB = 0.0;
+        P.ClassBandBetaA = P.ClassBandBetaB = GenPriorDomain::MinBetaShape;
+        P.PlanetCountMean = FGenStream::MaxPoissonMean;
+        P.InnermostMedianFactor = 1e-9;
+        P.InnermostSigma = 0.0;
+        P.HillSpacingMedian = 1e-9;
+        P.HillSpacingSigma = 0.0;
+        P.RockyMassMedianInner = P.RockyMassMedianOuter = 1e-9;
+        P.RockyMassSigma = 0.0;
+        P.GiantChanceMax = P.GiantChancePerSolarMass = 0.0;
+        P.GiantMassMedian = 1e-9;
+        P.GiantMassSigma = 0.0;
+        P.OceanFraction = 0.0;
+        P.InhabitedChance = 1.0;
+        P.PopulationMedian = 1e-9;
+        P.PopulationSigma = 0.0;
+        P.PopulationMin = P.PopulationMax = 1.0;
+        // The floor of this one is an empty galaxy, which is not a set of
+        // systems to test; the ceiling packs the sectors instead.
+        P.SystemsPerSector = FGenStream::MaxPoissonMean;
+        return P;
+    }
+
+    /** Every prior at the high edge, or far out along it where the domain
+     *  has none: the biggest suns, the widest spreads, the outermost first
+     *  orbit, giants round every star, and everyone inhabited. */
+    FGenPriors DomainCeiling()
+    {
+        FGenPriors P;
+        P.ClassWeightB = 1.0;
+        P.ClassWeightM = P.ClassWeightK = P.ClassWeightG = P.ClassWeightF = P.ClassWeightA = 0.0;
+        P.ClassBandBetaA = P.ClassBandBetaB = 1e6;
+        P.PlanetCountMean = FGenStream::MaxPoissonMean;
+        P.InnermostMedianFactor = GenPriorDomain::MaxInnermostMedianFactor;
+        P.InnermostSigma = 50.0;
+        P.HillSpacingMedian = 1e9;
+        P.HillSpacingSigma = 50.0;
+        P.RockyMassMedianInner = P.RockyMassMedianOuter = 1e9;
+        P.RockyMassSigma = 50.0;
+        P.GiantChanceMax = 1.0;
+        P.GiantChancePerSolarMass = 1e9;
+        P.GiantMassMedian = 1e9;
+        P.GiantMassSigma = 50.0;
+        P.OceanFraction = 1.0;
+        P.InhabitedChance = 1.0;
+        P.PopulationMedian = 1e12;
+        P.PopulationSigma = 50.0;
+        P.PopulationMin = 1.0;
+        P.PopulationMax = 1e15;
+        P.SystemsPerSector = FGenStream::MaxPoissonMean;
         return P;
     }
 
@@ -224,9 +287,13 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("enough systems to test"), All.Num(), SystemCount);
 
     // -- invariants, under the defaults, the ini's, and priors pushed to the edge
-    // The ini's are the universe actually played. They ship equal to the
-    // defaults, but a tune in progress is exactly when an invariant is most
-    // likely to be broken, so they are checked as they stand.
+    // The ini's are the universe actually played; a tune in progress is
+    // exactly when an invariant is most likely to be broken, so they are
+    // checked as they stand. While the ini holds the code defaults that pass
+    // repeats the first -- it earns its place the day it does not. The domain's
+    // corners are what make it more than that: every one of these is a set
+    // the ini is allowed to hold, so an invariant any accepted tune could
+    // break breaks here first.
     struct FPriorSet
     {
         const TCHAR* Name;
@@ -235,10 +302,16 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
     const FPriorSet Sets[] = {
         {TEXT("default priors"), FGenPriors{}},
         {TEXT("the ini's priors"), GetDefault<UProcGenPriorsConfig>()->ToPriors()},
-        {TEXT("stress priors"), StressPriors()}};
+        {TEXT("stress priors"), StressPriors()},
+        {TEXT("the domain's floor"), DomainFloor()},
+        {TEXT("the domain's ceiling"), DomainCeiling()}};
 
     for (const FPriorSet& Set : Sets)
     {
+        const TArray<FString> Refused = GenPriorDomain::Refusals(Set.Priors);
+        TestEqual(FString::Printf(TEXT("%s: an ini could hold these (%s)"), Set.Name, *FString::Join(Refused, TEXT("; "))),
+            Refused.Num(), 0);
+
         int32 Violations = 0;
         int32 Differs = 0;
         FString First;

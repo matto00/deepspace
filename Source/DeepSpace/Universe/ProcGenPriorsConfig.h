@@ -32,14 +32,31 @@ public:
      *  have one source and a line missing from the ini falls back to it. */
     UProcGenPriorsConfig();
 
-    /** The pure struct the generator takes. */
+    /** The pure struct the generator takes. On the class default object it
+     *  is always a set GenPriorDomain accepted: a refused read never lands. */
     FGenPriors ToPriors() const;
 
     /** Re-reads Config/DefaultGame.ini from disk into the config cache, then
-     *  this class's section into the class default object. What
-     *  ds.Universe.ReloadPriors does: a tune inside one running session, no
-     *  rebuild and no restart. */
-    static void ReloadFromIni();
+     *  applies it as ApplyConfigCache does. What ds.Universe.ReloadPriors
+     *  does: a tune inside one running session, no rebuild and no restart.
+     *  Returns the refusals, empty if the file was taken. */
+    static TArray<FString> ReloadFromIni();
+
+    /** Reads this class's section of the config cache, as it stands, into
+     *  the class default object: every prior back to its code default first,
+     *  so a line deleted from the ini falls back as it would at start-up, then
+     *  the lines present. If the result is outside GenPriorDomain the whole
+     *  read is refused and the priors in use before it stay, each wrong line
+     *  logged. Returns the refusals, empty if the read was taken. */
+    static TArray<FString> ApplyConfigCache();
+
+    /** Why the class default's last read of the ini was refused, one line per
+     *  wrong prior; empty if it was taken. A refusal at start-up leaves the
+     *  code defaults in use, and this is where it says so. */
+    const TArray<FString>& GetRefusals() const { return Refusals; }
+
+    virtual void PostInitProperties() override;
+    virtual void PostReloadConfig(FProperty* PropertyThatWasLoaded) override;
 
     UPROPERTY(Config) double ClassWeightM;
     UPROPERTY(Config) double ClassWeightK;
@@ -78,4 +95,16 @@ public:
     UPROPERTY(Config) double PopulationMax;
 
     UPROPERTY(Config) double SystemsPerSector;
+
+private:
+    /** Take what the ini just put into the properties, or put back the last
+     *  set that was taken. Only the class default reads the ini. */
+    void AcceptOrRefuse();
+
+    /** The last set taken: code defaults until the ini is. Not a UPROPERTY,
+     *  so nothing but AcceptOrRefuse writes it -- not the ini, and not a
+     *  reset to code defaults ahead of a read. */
+    FGenPriors Accepted;
+
+    TArray<FString> Refusals;
 };

@@ -153,8 +153,18 @@ namespace
     void ReloadPriors(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
     {
         const FGenPriors Before = GetDefault<UProcGenPriorsConfig>()->ToPriors();
-        UProcGenPriorsConfig::ReloadFromIni();
+        const TArray<FString> Refusals = UProcGenPriorsConfig::ReloadFromIni();
         const FGenPriors After = GetDefault<UProcGenPriorsConfig>()->ToPriors();
+
+        if (!Refusals.IsEmpty())
+        {
+            Out.Log(TEXT("ds.Universe.ReloadPriors: DefaultGame.ini refused; the priors in use are unchanged. Fix:"));
+            for (const FString& Refusal : Refusals)
+            {
+                Out.Logf(TEXT("  %s"), *Refusal);
+            }
+            return;
+        }
 
         int32 Changed = 0;
 #define DS_REPORT_PRIOR(Name)                                                                   \

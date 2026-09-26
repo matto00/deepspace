@@ -126,15 +126,19 @@ bool FProcGenPriorsTest::RunTest(const FString& Parameters)
     }
 
     // -- DefaultGame.ini: every prior a line, in the class's own section, ------
-    // and every line the honest default (the developer's ruling, 2026-09-25).
-    // Read from the config cache directly, not through the class: a section
-    // header nothing matches leaves the class at FGenPriors{} too, which would
-    // pass for the ini's values while no line of the ini was being read.
+    // and the class default holding what each line says. Read from the config
+    // cache directly, not through the class: a section header nothing matches
+    // leaves the class at FGenPriors{} too, which would pass for the ini's
+    // values while no line of the ini was being read. The values themselves
+    // are not pinned -- the ini is where a tune lives, and a tune is not a
+    // failure.
     {
         const FString SectionName = Section();
         TestEqual(TEXT("the class reads the section DefaultGame.ini names"), SectionName,
             FString(TEXT("/Script/DeepSpace.ProcGenPriorsConfig")));
         const UProcGenPriorsConfig* Defaults = GetDefault<UProcGenPriorsConfig>();
+        TestEqual(TEXT("the shipped ini is taken, not refused: ") + FString::Join(Defaults->GetRefusals(), TEXT("; ")),
+            Defaults->GetRefusals().Num(), 0);
 
 #define DS_CHECK_INI(Name)                                                                                 \
         {                                                                                                  \
@@ -142,13 +146,29 @@ bool FProcGenPriorsTest::RunTest(const FString& Parameters)
             if (TestTrue(TEXT(#Name " has a line in the priors section of DefaultGame.ini"),              \
                     GConfig->GetDouble(*SectionName, TEXT(#Name), FromIni, GGameIni)))                     \
             {                                                                                              \
-                TestEqual(TEXT(#Name ": the ini ships the honest default"), FromIni, CodeDefaults.Name);  \
                 TestEqual(TEXT(#Name ": the class default read the ini"), Defaults->Name, FromIni);       \
             }                                                                                              \
         }
         DS_GEN_PRIORS(DS_CHECK_INI)
 #undef DS_CHECK_INI
+
+        // The developer's ruling (2026-09-25) is honest weights: the solar
+        // neighbourhood's order, dimmest commonest. A tune of how much is a
+        // tune; flattening towards yellow suns is a new ruling, and this line
+        // changes with it.
+        const FGenPriors Ini = Defaults->ToPriors();
+        TestTrue(TEXT("the ini's weights are honest: each class commoner than the next brighter one"),
+            Ini.ClassWeightM > Ini.ClassWeightK && Ini.ClassWeightK > Ini.ClassWeightG && Ini.ClassWeightG > Ini.ClassWeightF
+            && Ini.ClassWeightF > Ini.ClassWeightA && Ini.ClassWeightA > Ini.ClassWeightB);
+
+        // A line deleted from the ini falls back to its code default, so the
+        // code defaults must be a set the generator can take.
+        const TArray<FString> CodeRefusals = GenPriorDomain::Refusals(CodeDefaults);
+        TestEqual(TEXT("the code defaults are inside the domain: ") + FString::Join(CodeRefusals, TEXT("; ")), CodeRefusals.Num(), 0);
     }
+
+    // What the file on disk says, taken: every later section puts it back.
+    const FGenPriors FromFile = GetDefault<UProcGenPriorsConfig>()->ToPriors();
 
     FTestWorld Test(TEXT("ProcGenPriorsTestWorld"));
     UUniverseSubsystem* Universe = Test.World->GetSubsystem<UUniverseSubsystem>();
@@ -156,7 +176,7 @@ bool FProcGenPriorsTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    const FString Asked = Difference(Universe->GetPriors(), GetDefault<UProcGenPriorsConfig>()->ToPriors());
+    const FString Asked = Difference(Universe->GetPriors(), FromFile);
     TestTrue(TEXT("the universe's priors are the config's: ") + Asked, Asked.IsEmpty());
 
     const FUniversePosition Origin;
@@ -191,17 +211,107 @@ bool FProcGenPriorsTest::RunTest(const FString& Parameters)
         IConsoleManager::Get().ProcessUserConsoleInput(TEXT("ds.Universe.ReloadPriors"), Out, Test.World);
         AddInfo(TEXT("ds.Universe.ReloadPriors:\n") + Out);
 
-        const FString Back = Difference(Universe->GetPriors(), CodeDefaults);
+        const FString Back = Difference(Universe->GetPriors(), FromFile);
         TestTrue(TEXT("after the reload the priors are the file's again: ") + Back, Back.IsEmpty());
         TestTrue(TEXT("and it says which moved"), Out.Contains(TEXT("ClassWeightB")) && Out.Contains(TEXT("ClassWeightM")));
         TestFalse(TEXT("and only those"), Out.Contains(TEXT("InhabitedChance")));
 
         const TArray<FStarSystemStub> Honest = Universe->GetSystemsNear(Origin, Radius);
-        TestTrue(TEXT("and red dwarfs are most of the sky again"), CountClass(Honest, EStarClass::M) * 2 > Honest.Num());
+        TestTrue(TEXT("and there is not a blue sky any more"), CountClass(Honest, EStarClass::B) < Honest.Num());
 
         FStringOutputDevice Again;
         IConsoleManager::Get().ProcessUserConsoleInput(TEXT("ds.Universe.ReloadPriors"), Again, Test.World);
         TestTrue(TEXT("a second reload has nothing to report"), Again.Contains(TEXT("already in use")));
+    }
+
+    // -- an ini outside the domain is refused, and the universe goes on -------
+    // Procgen decision 14: an ini edit must not be able to break an invariant,
+    // and before the priors were ini lines the samplers' check()s were only
+    // programmer asserts. Each of these reached one of them -- an editor
+    // crash at start-up or on the sky's next frame. Now each is refused
+    // whole, the priors in use stay, and it says which line is wrong.
+    {
+        AddExpectedMessagePlain(TEXT("ProcGenPriorsConfig] refused: "), ELogVerbosity::Warning,
+            EAutomationExpectedMessageFlags::Contains, 0);
+
+        struct FOutOfDomain
+        {
+            const TCHAR* Named;
+            TArray<TPair<const TCHAR*, const TCHAR*>> Lines;
+        };
+        const FOutOfDomain Cases[] = {
+            {TEXT("ClassWeightM"), {{TEXT("ClassWeightM"), TEXT("-0.76")}}},
+            {TEXT("total"), {{TEXT("ClassWeightM"), TEXT("0")}, {TEXT("ClassWeightK"), TEXT("0")}, {TEXT("ClassWeightG"), TEXT("0")},
+                             {TEXT("ClassWeightF"), TEXT("0")}, {TEXT("ClassWeightA"), TEXT("0")}, {TEXT("ClassWeightB"), TEXT("0")}}},
+            {TEXT("ClassBandBetaA"), {{TEXT("ClassBandBetaA"), TEXT("0")}}},
+            {TEXT("ClassBandBetaB"), {{TEXT("ClassBandBetaB"), TEXT("0.01")}}},
+            {TEXT("PlanetCountMean"), {{TEXT("PlanetCountMean"), TEXT("31")}}},
+            {TEXT("PlanetCountMean"), {{TEXT("PlanetCountMean"), TEXT("-1")}}},
+            {TEXT("SystemsPerSector"), {{TEXT("SystemsPerSector"), TEXT("40")}}},
+            {TEXT("InnermostMedianFactor"), {{TEXT("InnermostMedianFactor"), TEXT("0")}}},
+            {TEXT("InnermostMedianFactor"), {{TEXT("InnermostMedianFactor"), TEXT("1e300")}}},
+            {TEXT("InnermostSigma"), {{TEXT("InnermostSigma"), TEXT("nan")}}},
+            {TEXT("HillSpacingMedian"), {{TEXT("HillSpacingMedian"), TEXT("0")}}},
+            {TEXT("RockyMassSigma"), {{TEXT("RockyMassSigma"), TEXT("-0.9")}}},
+            {TEXT("GiantChanceMax"), {{TEXT("GiantChanceMax"), TEXT("1.5")}}},
+            {TEXT("GiantMassMedian"), {{TEXT("GiantMassMedian"), TEXT("-100")}}},
+            {TEXT("OceanFraction"), {{TEXT("OceanFraction"), TEXT("-0.1")}}},
+            {TEXT("InhabitedChance"), {{TEXT("InhabitedChance"), TEXT("8")}}},
+            {TEXT("PopulationMin"), {{TEXT("PopulationMin"), TEXT("0")}}},
+            {TEXT("PopulationMin"), {{TEXT("PopulationMin"), TEXT("1e9")}}},
+            {TEXT("PopulationMax"), {{TEXT("PopulationMax"), TEXT("inf")}}}};
+
+        const FString SectionName = Section();
+        for (const FOutOfDomain& Case : Cases)
+        {
+            TArray<FString> Typed;
+            TArray<TPair<FString, FString>> Was;
+            for (const TPair<const TCHAR*, const TCHAR*>& Line : Case.Lines)
+            {
+                FString Old;
+                GConfig->GetString(*SectionName, Line.Key, Old, GGameIni);
+                Was.Emplace(Line.Key, Old);
+                GConfig->SetString(*SectionName, Line.Key, Line.Value, GGameIni);
+                Typed.Add(FString::Printf(TEXT("%s=%s"), Line.Key, Line.Value));
+            }
+            const FString Label = FString::Join(Typed, TEXT(" "));
+
+            const TArray<FString> Refused = UProcGenPriorsConfig::ApplyConfigCache();
+            const FString Why = FString::Join(Refused, TEXT("; "));
+            TestTrue(FString::Printf(TEXT("%s is refused, naming %s (said: %s)"), *Label, Case.Named, *Why),
+                !Refused.IsEmpty() && Why.Contains(Case.Named));
+            TestEqual(TEXT("and the refusal is kept for asking"), GetDefault<UProcGenPriorsConfig>()->GetRefusals().Num(), Refused.Num());
+            const FString Kept = Difference(Universe->GetPriors(), FromFile);
+            TestTrue(FString::Printf(TEXT("%s: the priors in use are the file's still: %s"), *Label, *Kept), Kept.IsEmpty());
+
+            const TOptional<FStarSystem> Home = Universe->GetSystem(Universe->GetStartSystem());
+            TestTrue(Label + TEXT(": the universe still has a home"), Home.IsSet() && !Home->Planets.IsEmpty());
+            TestTrue(Label + TEXT(": and a sky"), Universe->GetSystemsNear(Origin, Radius).Num() > 10);
+
+            for (const TPair<FString, FString>& Line : Was)
+            {
+                GConfig->SetString(*SectionName, *Line.Key, *Line.Value, GGameIni);
+            }
+            const TArray<FString> Put = UProcGenPriorsConfig::ApplyConfigCache();
+            TestEqual(Label + TEXT(" put back: taken again"), Put.Num(), 0);
+        }
+    }
+
+    // -- a line deleted from the ini falls back to its code default -----------
+    // As it would at start-up, not to whatever the last read left: a reload
+    // that kept the old value would make the ini's absence mean two things.
+    {
+        const FString SectionName = Section();
+        const double Tuned = CodeDefaults.ClassWeightM * 0.5;
+        GConfig->SetDouble(*SectionName, TEXT("ClassWeightM"), Tuned, GGameIni);
+        UProcGenPriorsConfig::ApplyConfigCache();
+        TestEqual(TEXT("a tuned line is read"), Universe->GetPriors().ClassWeightM, Tuned);
+
+        TestTrue(TEXT("the line can be taken out of the cache"), GConfig->RemoveKey(*SectionName, TEXT("ClassWeightM"), GGameIni));
+        const TArray<FString> Refused = UProcGenPriorsConfig::ApplyConfigCache();
+        TestEqual(TEXT("an ini missing a line is still taken"), Refused.Num(), 0);
+        TestEqual(TEXT("and the missing prior is its code default, not the tune before it"),
+            Universe->GetPriors().ClassWeightM, CodeDefaults.ClassWeightM);
     }
 
     return true;

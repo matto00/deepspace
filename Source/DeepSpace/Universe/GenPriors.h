@@ -7,10 +7,9 @@
  * decision 14). The defaults here are the only code defaults there are;
  * UProcGenPriorsConfig initialises its ini mirror from FGenPriors{} and copies
  * back with ToPriors(), so a tune is an edit to Config/DefaultGame.ini and
- * ds.Universe.ReloadPriors in a running session, never a rebuild. The ini
- * ships these same values, every one a line; DeepSpace.Universe.Priors holds
- * the two equal, so a tune that settles is written back here as well, the way
- * a settled CVar is.
+ * ds.Universe.ReloadPriors in a running session, never a rebuild. The ini is
+ * the one source of the numbers played: these are only what a line missing
+ * from it falls back to, and a tune never needs writing back here.
  *
  * A plain struct, not a USTRUCT: generated reflection code has no business in
  * the pure layer. Natural units throughout (procgen decision 7).
@@ -169,4 +168,34 @@ namespace GenGuarantees
     inline constexpr double BarrenBelowEarthMasses = 0.3;
     inline constexpr double BarrenAboveK = 320.0;
     inline constexpr double IceBelowK = 180.0;
+}
+
+/**
+ * The domain each prior must lie in for the sampler it feeds, and the check
+ * that stands between an ini line and the generator (procgen decision 14).
+ * Before the priors were ini lines, GenStream's check()s were programmer
+ * asserts; now a typo would reach them, and a check() is a crash. So a set of
+ * priors is refused whole, here, before any of it is drawn with.
+ *
+ * Bounds are what the samplers and the arithmetic after them need, not what
+ * is plausible: a tune may make a strange universe, never a broken one.
+ */
+namespace GenPriorDomain
+{
+    /** Below about a tenth, Beta(a, b) is two spikes at 0 and 1, and both of
+     *  its gamma draws underflow to zero together often enough to give 0/0 --
+     *  a star with no mass. At a tenth that needs a uniform draw under 1e-30,
+     *  which never comes. */
+    inline constexpr double MinBetaShape = 0.1;
+
+    /** The innermost orbit's median, AU per sqrt(L). The default is 0.2; at
+     *  a hundred a sunlike star's first world is three times further out than
+     *  Neptune. The ceiling is not taste: it is what keeps eleven Hill-spaced
+     *  orbits beyond it finite numbers. */
+    inline constexpr double MaxInnermostMedianFactor = 100.0;
+
+    /** Every way these priors fall outside the domain, one line each, naming
+     *  the ini line, its value and what it must be. Empty when the generator
+     *  can take them. */
+    TArray<FString> Refusals(const FGenPriors& Priors);
 }
