@@ -147,7 +147,11 @@ bool FHumVoiceTest::RunTest(const FString& Parameters)
         {
             FShipHumVoice Voice(Rate, 3u, Tonal);
             Voice.SetTargets(Inputs(0.0f, 0.0f));
-            TArray<float> Samples = Render(Voice, 1.0);
+            // Not on a whole second: at 48 Hz every partial crosses zero on
+            // the second, exactly where an unsmoothed step or a phase reset
+            // makes no step at all. At 1.37 s the third partial is near its
+            // crest and the fundamental near its trough.
+            TArray<float> Samples = Render(Voice, 1.37);
             Voice.SetTargets(Inputs(1.0f, 0.0f));
             Samples.Append(Render(Voice, 1.0));
 
