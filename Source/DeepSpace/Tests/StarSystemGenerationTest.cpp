@@ -14,7 +14,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     "DeepSpace.Universe.SystemGeneration",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace
+// Named, never anonymous: the unity build pastes every test file into one
+// translation unit, where each file's anonymous namespace is the same one
+// and a second SameStub is a redefinition.
+namespace StarSystemGenerationTestLocal
 {
     constexpr int32 SystemCount = 5000;
 
@@ -214,6 +217,8 @@ namespace
 
 bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
 {
+    using namespace StarSystemGenerationTestLocal;
+
     const TArray<FStarSystemStub> All = Stubs(20260925, FGenPriors{});
     TestEqual(TEXT("enough systems to test"), All.Num(), SystemCount);
 

@@ -2,10 +2,13 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/StringOutputDevice.h"
 #include "Universe/GalaxyGenerator.h"
 #include "Universe/UniverseSubsystem.h"
 #include "Universe/UniverseUnits.h"
+#include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -14,7 +17,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     "DeepSpace.Universe.Subsystem",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace
+// Named, never anonymous: the unity build pastes every test file into one
+// translation unit, where each file's anonymous namespace is the same one
+// and a second SameStub is a redefinition.
+namespace UniverseSubsystemTestLocal
 {
     /** A throwaway game world: world subsystems are created with it, which is
      *  the only way to get a real UUniverseSubsystem. It never begins play --
@@ -40,6 +46,8 @@ namespace
 
 bool FUniverseSubsystemTest::RunTest(const FString& Parameters)
 {
+    using namespace UniverseSubsystemTestLocal;
+
     // -- -UniverseSeed= is read by hand, because a Config property is not ------
     {
         TestEqual(TEXT("no flag: the configured seed"), UUniverseSubsystem::ResolveSeed(20260925, TEXT("-nullrhi -unattended")), uint64(20260925));
@@ -58,6 +66,31 @@ bool FUniverseSubsystemTest::RunTest(const FString& Parameters)
         return false;
     }
     TestEqual(TEXT("Get finds it through the world"), UUniverseSubsystem::Get(First.World), Universe);
+
+    // -- the seed is DefaultGame.ini's, carried through the Config property ----
+    // The C++ default is zero so that a section that never loads, or an int64
+    // Config property that does not read, cannot pass for the real seed.
+    {
+        int64 IniSeed = 0;
+        const bool bInIni = GConfig->GetInt64(TEXT("/Script/DeepSpace.UniverseSubsystem"), TEXT("UniverseSeed"), IniSeed, GGameIni);
+        TestTrue(TEXT("DefaultGame.ini sets UniverseSeed in the subsystem's section"), bInIni);
+        TestNotEqual(TEXT("and it is not the C++ default"), IniSeed, int64(0));
+
+        const FInt64Property* Property = FindFProperty<FInt64Property>(UUniverseSubsystem::StaticClass(), TEXT("UniverseSeed"));
+        if (TestNotNull(TEXT("UniverseSeed is a reflected int64"), Property))
+        {
+            TestEqual(TEXT("the class default read the ini's seed"),
+                Property->GetPropertyValue_InContainer(GetDefault<UUniverseSubsystem>()), IniSeed);
+            TestEqual(TEXT("and so did the live subsystem"), Property->GetPropertyValue_InContainer(Universe), IniSeed);
+        }
+
+        TestEqual(TEXT("the root seed is the configured one, resolved against this command line"),
+            Universe->GetRootSeed(), UUniverseSubsystem::ResolveSeed(IniSeed, FCommandLine::Get()));
+        if (!FString(FCommandLine::Get()).Contains(TEXT("UniverseSeed=")))
+        {
+            TestEqual(TEXT("with no -UniverseSeed=, the root seed is the ini's"), Universe->GetRootSeed(), static_cast<uint64>(IniSeed));
+        }
+    }
 
     const FGalaxyGenerator Reference(Universe->GetRootSeed(), Universe->GetPriors());
 

@@ -10,7 +10,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     "DeepSpace.Universe.Galaxy",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace
+// Named, never anonymous: the unity build pastes every test file into one
+// translation unit, where each file's anonymous namespace is the same one
+// and a second SameStub is a redefinition.
+namespace GalaxyGeneratorTestLocal
 {
     constexpr uint64 Root = 20260925;
     constexpr int64 PerSector = FGalaxyGenerator::ChunksPerSector;
@@ -29,6 +32,8 @@ namespace
 
 bool FGalaxyGeneratorTest::RunTest(const FString& Parameters)
 {
+    using namespace GalaxyGeneratorTestLocal;
+
     const FGalaxyGenerator Galaxy(Root, FGenPriors{});
     const double Ly = UniverseUnits::CmPerLightYear;
 
@@ -198,7 +203,7 @@ bool FGalaxyGeneratorTest::RunTest(const FString& Parameters)
         }
     }
 
-    // -- the start: deterministic, has a planet, nothing nearer does ------------
+    // -- the start at the default priors: deterministic, and home has a planet
     {
         const FSystemId Start = Galaxy.StartSystem();
         TestTrue(TEXT("StartSystem is deterministic"), Start == FGalaxyGenerator(Root, FGenPriors{}).StartSystem());
@@ -208,34 +213,71 @@ bool FGalaxyGeneratorTest::RunTest(const FString& Parameters)
         {
             const FStarSystem System = Galaxy.GenerateSystem(*Stub);
             TestTrue(TEXT("the start system has a planet"), System.Planets.Num() > 0);
-
-            const double Distance = FUniversePosition().DistanceTo(Stub->Position);
-            int32 NearerWithPlanets = 0;
-            for (const FStarSystemStub& Other : Galaxy.FindSystemsWithin(FUniversePosition(), Distance))
-            {
-                if (Other.Id != Start && FStarSystemGenerator::GeneratePlanetCount(Other.Seed, FGenPriors{}) > 0)
-                {
-                    ++NearerWithPlanets;
-                }
-            }
-            TestEqual(TEXT("nothing with a planet is nearer the origin"), NearerWithPlanets, 0);
             TestTrue(TEXT("the start star is in the start system"),
                 Galaxy.FindSystemAt(Stub->Position, FStarSystem::InSystemRadiusCm).IsSet()
                 && Galaxy.FindSystemAt(Stub->Position, FStarSystem::InSystemRadiusCm)->Id == Start);
 
             AddInfo(FString::Printf(TEXT("start: %s, %.2f ly from the origin, %d planets"),
-                *Stub->Name, Distance / Ly, System.Planets.Num()));
+                *Stub->Name, FUniversePosition().DistanceTo(Stub->Position) / Ly, System.Planets.Num()));
         }
+    }
 
-        // Other universes have other homes, each with a planet.
+    // -- home is the nearest system with a planet, checked where that decides --
+    // At the default mean of four planets only e^-4, one system in fifty, is
+    // barren, so the nearest star is nearly always home and a StartSystem that
+    // never looked at planets would pass. At 0.3 three systems in four are
+    // barren: home is usually not the nearest star and often lies beyond the
+    // first ring of sectors, so the planet test has something to get wrong.
+    // Stopping the ring search too early goes wrong only when a nearer home
+    // hides in the next ring, which takes homes further out still: at 0.05,
+    // nineteen systems in twenty are barren and home is several rings away.
+    {
+        constexpr int32 SparseSeeds = 120;
+        int32 Unfound = 0;
+        int32 Wrong = 0;
         int32 WithoutPlanets = 0;
-        for (uint64 Seed = 1; Seed <= 12; ++Seed)
+        int32 PassedBarren = 0;
+        int32 PastFirstRing = 0;
+        for (uint64 Seed = 1; Seed <= SparseSeeds; ++Seed)
         {
-            const FGalaxyGenerator Other(Seed, FGenPriors{});
-            const TOptional<FStarSystemStub> Home = Other.GenerateStub(Other.StartSystem());
-            WithoutPlanets += (Home && Other.GenerateSystem(*Home).Planets.Num() > 0) ? 0 : 1;
+            FGenPriors Barren;
+            Barren.PlanetCountMean = Seed % 2 == 0 ? 0.3 : 0.05;
+            const FGalaxyGenerator Sparse(Seed, Barren);
+
+            // Brute force: the whole neighbourhood, nearest first, and the
+            // first system in it with a planet.
+            TOptional<FSystemId> Expected;
+            int32 BarrenNearer = 0;
+            for (const FStarSystemStub& Stub : Sparse.FindSystemsWithin(FUniversePosition(), 40.0 * Ly))
+            {
+                if (FStarSystemGenerator::GeneratePlanetCount(Stub.Seed, Barren) > 0)
+                {
+                    Expected = Stub.Id;
+                    break;
+                }
+                ++BarrenNearer;
+            }
+            if (!Expected.IsSet())
+            {
+                ++Unfound;
+                continue;
+            }
+
+            const FSystemId Start = Sparse.StartSystem();
+            Wrong += Start == *Expected ? 0 : 1;
+            PassedBarren += BarrenNearer > 0 ? 1 : 0;
+
+            const TOptional<FStarSystemStub> Home = Sparse.GenerateStub(Start);
+            WithoutPlanets += (Home && Sparse.GenerateSystem(*Home).Planets.Num() > 0) ? 0 : 1;
+            PastFirstRing += (Home && FUniversePosition().DistanceTo(Home->Position) > FGalaxyGenerator::SectorSizeCm) ? 1 : 0;
         }
-        TestEqual(TEXT("seeds 1-12 all start at a system with a planet"), WithoutPlanets, 0);
+        AddInfo(FString::Printf(TEXT("barren priors: %d of %d homes pass a nearer barren system, %d lie past the first ring"),
+            PassedBarren, SparseSeeds, PastFirstRing));
+        TestEqual(TEXT("every barren universe has a home within 40 ly"), Unfound, 0);
+        TestEqual(TEXT("StartSystem is the nearest system with a planet"), Wrong, 0);
+        TestEqual(TEXT("and that system is generated with a planet"), WithoutPlanets, 0);
+        TestTrue(TEXT("the check decides something: homes pass nearer barren systems"), PassedBarren >= SparseSeeds / 4);
+        TestTrue(TEXT("and some homes lie past the first ring of sectors"), PastFirstRing >= SparseSeeds / 8);
     }
 
     return true;

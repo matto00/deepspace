@@ -13,7 +13,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     "DeepSpace.Universe.Stream",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace
+// Named, never anonymous: the unity build pastes every test file into one
+// translation unit, where each file's anonymous namespace is the same one
+// and a second SameStub is a redefinition.
+namespace GenStreamTestLocal
 {
     constexpr int32 Draws = 100000;
 
@@ -152,6 +155,8 @@ namespace
 
 bool FGenStreamTest::RunTest(const FString& Parameters)
 {
+    using namespace GenStreamTestLocal;
+
     // -- the known-value table's stream rows, typed in from the spec ----------
     {
         // SplitMix64's published reference sequence from seed 0: checked

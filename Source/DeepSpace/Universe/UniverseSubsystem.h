@@ -85,9 +85,12 @@ private:
     /** Built per query from the two numbers below; see the class comment. */
     FGalaxyGenerator MakeGalaxy() const;
 
+    /** The universe is DefaultGame.ini's, never this default's. Zero is
+     *  nobody's universe: a default equal to the ini's seed would make a
+     *  section that never loads indistinguishable from one that does. */
     UPROPERTY(Config)
-    int64 UniverseSeed = 20260925;
+    int64 UniverseSeed = 0;
 
-    uint64 RootSeed = 20260925;
+    uint64 RootSeed = 0;
     FGenPriors Priors;
 };
