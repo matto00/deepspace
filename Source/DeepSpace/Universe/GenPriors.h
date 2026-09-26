@@ -6,7 +6,11 @@
  * Every tunable number the generator draws with: the priors (procgen
  * decision 14). The defaults here are the only code defaults there are;
  * UProcGenPriorsConfig initialises its ini mirror from FGenPriors{} and copies
- * back with ToPriors(), so a tune is an ini edit and never a rebuild.
+ * back with ToPriors(), so a tune is an edit to Config/DefaultGame.ini and
+ * ds.Universe.ReloadPriors in a running session, never a rebuild. The ini
+ * ships these same values, every one a line; DeepSpace.Universe.Priors holds
+ * the two equal, so a tune that settles is written back here as well, the way
+ * a settled CVar is.
  *
  * A plain struct, not a USTRUCT: generated reflection code has no business in
  * the pure layer. Natural units throughout (procgen decision 7).
@@ -93,6 +97,33 @@ struct FGenPriors
      *  ten. */
     double SystemsPerSector = 0.5;
 };
+
+/**
+ * Every field of FGenPriors, once. UProcGenPriorsConfig copies through this
+ * list in both directions and the priors test walks it, so a prior added to
+ * the struct and not to the list fails to compile (the static_assert below)
+ * rather than silently never reaching the ini.
+ */
+#define DS_GEN_PRIORS(X) \
+    X(ClassWeightM) X(ClassWeightK) X(ClassWeightG) X(ClassWeightF) X(ClassWeightA) X(ClassWeightB) \
+    X(ClassBandBetaA) X(ClassBandBetaB) \
+    X(PlanetCountMean) \
+    X(InnermostMedianFactor) X(InnermostSigma) \
+    X(HillSpacingMedian) X(HillSpacingSigma) \
+    X(RockyMassMedianInner) X(RockyMassMedianOuter) X(RockyMassSigma) \
+    X(GiantChanceMax) X(GiantChancePerSolarMass) X(GiantMassMedian) X(GiantMassSigma) \
+    X(OceanFraction) \
+    X(InhabitedChance) \
+    X(PopulationMedian) X(PopulationSigma) X(PopulationMin) X(PopulationMax) \
+    X(SystemsPerSector)
+
+#define DS_GEN_PRIORS_COUNT_ONE(Name) + 1
+inline constexpr int32 NumGenPriors = 0 DS_GEN_PRIORS(DS_GEN_PRIORS_COUNT_ONE);
+#undef DS_GEN_PRIORS_COUNT_ONE
+
+static_assert(sizeof(FGenPriors) == NumGenPriors * sizeof(double),
+    "FGenPriors has a field DS_GEN_PRIORS does not list: add it there, to "
+    "UProcGenPriorsConfig and to Config/DefaultGame.ini, or it can never be tuned");
 
 /**
  * The numbers an ini edit must not be able to move, because an invariant

@@ -18,11 +18,14 @@ struct FGalaxyGenerator;
  * command line, the console. The generator behind it is a pure function of
  * (root seed, priors, id) and knows none of that.
  *
- * It holds the root seed and the priors and nothing else -- not a start
+ * It holds the root seed and nothing else -- not the priors, which it asks
+ * of UProcGenPriorsConfig's class default on every query, not a start
  * system, not a current system, not a cache, not even a generator, which is
  * two numbers and is built per query. So nothing here can go stale, dangle,
- * or disagree with the ship (procgen decisions 12 and 13). Consumers ask and
- * never keep a copy, the discipline ADR 0003 set for ship state.
+ * or disagree with the ship (procgen decisions 12 and 13), and
+ * ds.Universe.ReloadPriors reaches every world without telling any of them.
+ * Consumers ask and never keep a copy, the discipline ADR 0003 set for ship
+ * state.
  *
  * It places nothing. Where the ship starts is UShipSubsystem's, written once
  * (plan conflict 3). A plain UWorldSubsystem, not a tickable one: nothing
@@ -37,20 +40,18 @@ public:
     /** Convenience accessor. Returns nullptr if there is no world. */
     static UUniverseSubsystem* Get(const UObject* WorldContext);
 
-    /** Resolves the root seed with ResolveSeed(UniverseSeed, FCommandLine::Get())
-     *  and takes the priors. Every query below works from here on: none needs
-     *  begin-play, so another subsystem's OnWorldBeginPlay may ask in any
-     *  order.
-     *
-     *  Slice 1: the priors are FGenPriors{}, compile-time constants. Slice 2
-     *  reads them from GetDefault<UProcGenPriorsConfig>() here instead, and
-     *  adds ReloadPriors and ds.Universe.ReloadPriors; no caller changes. */
+    /** Resolves the root seed with ResolveSeed(UniverseSeed, FCommandLine::Get()).
+     *  Every query below works from here on: none needs begin-play, so
+     *  another subsystem's OnWorldBeginPlay may ask in any order. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
     /** World-level, per docs/vision.md: shareable, and a bug report is a
      *  number. */
     uint64 GetRootSeed() const;
 
+    /** The ini's priors as they are now: [/Script/DeepSpace.ProcGenPriorsConfig]
+     *  in DefaultGame.ini, through UProcGenPriorsConfig. Asked, never kept, so
+     *  ds.Universe.ReloadPriors changes the next answer and every one after. */
     FGenPriors GetPriors() const;
 
     // Every query returns a value the caller owns. Nothing here hands out a
@@ -92,5 +93,4 @@ private:
     int64 UniverseSeed = 0;
 
     uint64 RootSeed = 0;
-    FGenPriors Priors;
 };

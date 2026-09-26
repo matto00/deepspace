@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "Universe/GalaxyGenerator.h"
 #include "Universe/GenPriors.h"
+#include "Universe/ProcGenPriorsConfig.h"
 #include "Universe/StarSystemGenerator.h"
 #include "Universe/SystemNames.h"
 #include "Universe/UniverseUnits.h"
@@ -110,7 +111,7 @@ namespace StarSystemGenerationTestLocal
 
     /** Every property a system must have whatever the priors, measured from
      *  the output. Returns the first violation, or empty. */
-    FString Violation(const FStarSystem& System)
+    FString Violation(const FStarSystem& System, const FGenPriors& Priors)
     {
         const FStar& Star = System.Star;
         if (!Finite(Star.MassSolar) || !Finite(Star.LuminositySolar) || !Finite(Star.RadiusSolar) || !Finite(Star.TemperatureK)
@@ -179,7 +180,7 @@ namespace StarSystemGenerationTestLocal
             {
                 return FString::Printf(TEXT("planet %d has a given name without a population, or the reverse"), I);
             }
-            if (P.Population > 0.0 && (!bTemperate || P.Population < 200.0 || P.Population > 5.0e8))
+            if (P.Population > 0.0 && (!bTemperate || P.Population < Priors.PopulationMin || P.Population > Priors.PopulationMax))
             {
                 return FString::Printf(TEXT("planet %d has %.0f people at kind %d"), I, P.Population, int32(P.Kind));
             }
@@ -222,13 +223,19 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
     const TArray<FStarSystemStub> All = Stubs(20260925, FGenPriors{});
     TestEqual(TEXT("enough systems to test"), All.Num(), SystemCount);
 
-    // -- invariants, under the defaults and under priors pushed to the edge ----
+    // -- invariants, under the defaults, the ini's, and priors pushed to the edge
+    // The ini's are the universe actually played. They ship equal to the
+    // defaults, but a tune in progress is exactly when an invariant is most
+    // likely to be broken, so they are checked as they stand.
     struct FPriorSet
     {
         const TCHAR* Name;
         FGenPriors Priors;
     };
-    const FPriorSet Sets[] = {{TEXT("default priors"), FGenPriors{}}, {TEXT("stress priors"), StressPriors()}};
+    const FPriorSet Sets[] = {
+        {TEXT("default priors"), FGenPriors{}},
+        {TEXT("the ini's priors"), GetDefault<UProcGenPriorsConfig>()->ToPriors()},
+        {TEXT("stress priors"), StressPriors()}};
 
     for (const FPriorSet& Set : Sets)
     {
@@ -249,7 +256,7 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
             {
                 ++Differs;
             }
-            const FString Problem = Violation(System);
+            const FString Problem = Violation(System, Set.Priors);
             if (!Problem.IsEmpty() && Violations++ == 0)
             {
                 First = FString::Printf(TEXT("%s: %s"), *System.Stub.Name, *Problem);
