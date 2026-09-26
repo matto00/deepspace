@@ -162,6 +162,17 @@ namespace SkyProjection
      */
     DEEPSPACE_API double DiscOverlapFraction(double Separation, double RadiusA, double RadiusB);
 
+    /**
+     * The lowest altitude a body of RadiusCm is drawn from, cm: the larger of
+     * MinRenderedAltitude and MinRenderedAltitudeOfRadius of the radius --
+     * 10 km under a radius of 6,250 km, 1.6e-3 R above it: 10.2 km over an
+     * Earth, 112 km over a Jupiter. Nearer than this the proxy stops growing, so it is
+     * where the picture stops being honest, and the flight law's floor over
+     * a world is never under it (flight-feel decision 6): the one function
+     * both ask, so the two floors cannot drift apart.
+     */
+    DEEPSPACE_API double RenderedFloor(double RadiusCm, const FSkyViewParams& Params);
+
     /** Ratio ^ Gamma: how irradiance spans are squeezed into a screen. */
     DEEPSPACE_API double Compress(double Ratio, double Gamma);
 
