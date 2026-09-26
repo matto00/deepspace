@@ -34,6 +34,17 @@ namespace NavText
      *  window shows, rather than by its letter. */
     DEEPSPACE_API FString StarClass(EStarClass Class);
 
+    /** A world by what it is made of, in procgen's own taxonomy and lower
+     *  case: "barren", "terrestrial", "ocean", "ice", "gas giant". What the
+     *  map's rows call each world. */
+    DEEPSPACE_API FString WorldKind(EPlanetKind Kind);
+
+    /** A world by name: its designation, "Kessa II", or for an inhabited
+     *  world its given name and then the designation, "Halden · Kessa II" --
+     *  the given name is what the people there call it, and the designation
+     *  is still how it is found. */
+    DEEPSPACE_API FString WorldName(const FPlanet& Planet);
+
     /** A system by name and colour, as the HUD and the chart name where the
      *  ship is: "Kessa · red dwarf". */
     DEEPSPACE_API FString Place(const FString& Name, EStarClass Class);
