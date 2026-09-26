@@ -355,6 +355,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             // Its face is set at build, not at resolve: a point is the same
             // world, and the belts are already on it when it grows.
             TestTrue(TEXT("the giant wears belts"), Instance && Instance->K2_GetScalarParameterValue(SkyMaterial::Banding) == 1.0f);
+            // As many as its day gave it: the count rides in the face's w,
+            // and a w of 0 is a giant drawn with no belts at all.
+            const FSkyBody& TrueGiant = Fixture.Bodies[SkyTestFixtures::GiantIndex];
+            TestTrue(TEXT("the fixture giant has belts to carry"), TrueGiant.BeltPairs > 1.0);
+            TestEqual(TEXT("and the material wears as many belts as its day gave it"),
+                Instance ? Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed).A : -1.0f, static_cast<float>(TrueGiant.BeltPairs));
+            TestTrue(TEXT("on its own face, exactly"), Instance
+                && Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(TrueGiant.SurfaceSeed, TrueGiant.BeltPairs));
             const UStaticMeshComponent* HomeProxy = Sky->GetProxy(SkyTestFixtures::HomeIndex);
             UMaterialInstanceDynamic* HomeInstance = HomeProxy ? Cast<UMaterialInstanceDynamic>(HomeProxy->GetMaterial(0)) : nullptr;
             TestTrue(TEXT("and a face of its own, not the home planet's"), Instance && HomeInstance

@@ -73,6 +73,10 @@ namespace SkyTestFixtures
         Giant.Albedo = 0.5;
         Giant.Surface = ESkySurface::Banded;
         Giant.SurfaceSeed = 0x13198A2E03707344ull;
+        // The belts a 12 h day wears, the median giant's: not a whole number
+        // and not Jupiter's 8, so a material that took any default instead
+        // cannot pass for this one.
+        Giant.BeltPairs = SkyLook::BeltPairs(12.0);
 
         // Home's moon, at the Moon's distance, on the far side from the star.
         FSkyBody& Moon = System.Bodies.AddDefaulted_GetRef();

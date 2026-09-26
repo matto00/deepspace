@@ -175,6 +175,16 @@ bool FLocalSystemTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("bare rock keeps every crater"), Sky.Bodies[1].Cratering, 1.0);
             TestEqual(TEXT("an ocean world keeps none"), Sky.Bodies[2].Cratering, 0.0);
             TestEqual(TEXT("nor does a giant"), FSkySystem::FromSystem(Giant, Stubs).Bodies[2].Cratering, 0.0);
+
+            // And between them, what each kind of ground has erased: weather
+            // and plates leave an Earth a handful, ice resurfaces about half.
+            // Exact, so no kind can quietly keep bare rock's every crater.
+            FStarSystem Kinds = System;
+            Kinds.Planets[0].Kind = EPlanetKind::Terrestrial;
+            Kinds.Planets[1].Kind = EPlanetKind::Ice;
+            const FSkySystem KindsSky = FSkySystem::FromSystem(Kinds, Stubs);
+            TestEqual(TEXT("an Earth keeps a handful, softened"), KindsSky.Bodies[1].Cratering, 0.15);
+            TestEqual(TEXT("ice keeps about half"), KindsSky.Bodies[2].Cratering, 0.5);
         }
         if (TestEqual(TEXT("one neighbour: the system itself is left out"), Sky.Neighbours.Num(), 1))
         {
