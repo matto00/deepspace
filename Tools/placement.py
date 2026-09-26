@@ -55,6 +55,14 @@ LIGHTS_TAG = "Power.Lights"
 # a browned-out room. test_placement.py reads the C++ to hold them equal.
 LAMPS_TAG = "Power.Lamps"
 
+# The actor tag every glass box carries: the cockpit's panes and the galley's
+# window. The target bracket is drawn only where the target can be seen
+# through the glass, and its trace counts a hit on an actor with this tag as
+# the glass, not a wall (system map spec, decision 7). ShipTags::Glass in C++;
+# test_placement.py reads the C++ to hold them equal. A pane without it hides
+# the bracket; anything else with it would show the bracket through a wall.
+GLASS_TAG = "Sky.Glass"
+
 # The sky's assets, as the level build assigns them and the verifier checks
 # them. Named from Tools/sky_material_contract.json, the list the materials
 # are authored from and SkyMaterialContract.h mirrors, so no path is typed

@@ -322,6 +322,81 @@ def check_chart(grid, ship, failures):
         step -= CELL
 
 
+def check_map_sightline(grid, ship, failures):
+    """The air from the helm's eye to the map's glass is empty: the pilot
+    reads and clicks the map from the helm without leaving it (system map
+    spec, decisions 1 and 2), so a prop on that line would hide it and the
+    pointer would find the prop first. Sampled every 10 cm along the line,
+    from the eye to 5 cm short of the glass, as check_chart is for the chart
+    chair; the last 5 cm is the cell the desk screen behind the glass is in."""
+    eye = ship.pilot_eye
+    glass = ship.map_screen_location
+    length = sum((glass[a] - eye[a]) ** 2 for a in range(3)) ** 0.5
+    along = 0.0
+    while along < length - 5:
+        point = [eye[a] + (glass[a] - eye[a]) * along / length for a in range(3)]
+        i, j, k = grid.cell_of(*point)
+        if grid.solid[grid.index(i, j, k)]:
+            failures.append("Something solid at (%.0f, %.0f, %.0f) stands between the helm's "
+                            "eye and the map." % tuple(point))
+            return
+        along += CELL
+
+
+# How far the target bracket's glass trace looks, cm (system map spec,
+# decision 7: 30 m). A trace that meets nothing within it counts as open sky,
+# so a wall further off than this from the helm would show the bracket
+# through it.
+GLASS_TRACE_CM = 3000
+
+
+def first_hit(boxes, origin, direction):
+    """The box a ray from `origin` along the unit axis `direction` enters
+    first, and how far along it does, or (None, None) if it leaves every box
+    behind. Slab test on the exact boxes rather than the grid, because the
+    grid does not know what a cell is made of and this asks whether it is
+    glass."""
+    best, hit = None, None
+    for b in boxes:
+        near_t, far_t = 0.0, float("inf")
+        for a in range(3):
+            lo = b.centre[a] - b.size[a] / 2.0
+            hi = b.centre[a] + b.size[a] / 2.0
+            if direction[a] == 0:
+                if not lo <= origin[a] <= hi:
+                    break
+                continue
+            t0, t1 = (lo - origin[a]) / direction[a], (hi - origin[a]) / direction[a]
+            near_t, far_t = max(near_t, min(t0, t1)), min(far_t, max(t0, t1))
+            if near_t > far_t:
+                break
+        else:
+            if best is None or near_t < best:
+                best, hit = near_t, b
+    return hit, best
+
+
+def check_helm_glass(ship, failures):
+    """From the helm's eye, the ship's nose is through the glass and its
+    tail is through a wall. The target bracket is drawn only where a trace
+    from the eye meets the glass first (system map spec, decision 7), and
+    DeepSpace.Ship.TargetSeenThroughGlass proves that trace against a fixture
+    of exactly this shape: glass ahead of PilotEye, a wall aft. This holds
+    the real hull to the fixture."""
+    fore, _ = first_hit(ship.boxes, ship.pilot_eye, (1, 0, 0))
+    if fore is None or fore.role != "glass":
+        failures.append("Looking along the nose from the helm's eye %s meets %s before any "
+                        "glass." % (ship.pilot_eye, "nothing" if fore is None else "'%s'" % fore.label))
+    aft, distance = first_hit(ship.boxes, ship.pilot_eye, (-1, 0, 0))
+    if aft is None or aft.role == "glass":
+        failures.append("Looking aft from the helm's eye %s meets %s, not a wall."
+                        % (ship.pilot_eye, "nothing" if aft is None else "the glass '%s'" % aft.label))
+    elif distance > GLASS_TRACE_CM:
+        failures.append("The wall aft of the helm's eye, '%s', is %.0f cm off, beyond the "
+                        "glass trace's %d: the bracket would be drawn through it."
+                        % (aft.label, distance, GLASS_TRACE_CM))
+
+
 def main():
     try:
         ship = L.generate()
@@ -335,6 +410,8 @@ def main():
     check_components(ship.boxes, failures)
     check_console(grid, ship, failures)
     check_chart(grid, ship, failures)
+    check_map_sightline(grid, ship, failures)
+    check_helm_glass(ship, failures)
     check_keep_clear(ship, failures)
     by_stand = check_reachability(grid, ship, failures)
     check_slide_run(grid, ship, by_stand, failures)
@@ -349,7 +426,8 @@ def main():
         return 1
     print("\nPASS: plan consistent, hull sealed, one piece, every region reachable in "
           "its posture, crawlway crouch-only, %d cm slide run clear, doors and console "
-          "unobstructed, the chart in clear view of its chair." % L.SLIDE_RUN)
+          "unobstructed, the chart in clear view of its chair, the map in clear view of "
+          "the helm, glass ahead of the helm and a wall behind it." % L.SLIDE_RUN)
     return 0
 
 
