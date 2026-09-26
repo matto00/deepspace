@@ -518,9 +518,18 @@ bool FSliceLoopPointStarsTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("doubling ds.Sky.Radiance doubles the dome on the next frame"),
                  FMath::IsNearlyEqual(CustomData(Dome, Bright, SkyMaterial::CustomDataBrightness), 2.0f * Drawn, 1e-5f));
     }
-    // Settled back before the next tuning: Radiance going back to 3 moves
-    // the brightness key, and a rebuild on its account would resize the dome
-    // whether or not the size is keyed at all.
+    // Settled back before each next tuning: Radiance going back to 3 moves
+    // the brightness key, and a rebuild on its account would re-light and
+    // resize the dome whether or not the next tuning is keyed at all.
+    Test.Step(0.0f);
+    {
+        // Flux 1 compresses to 1 at any gamma, so only the brightest star
+        // shows this one move.
+        FScopedCVar Honest(TEXT("ds.Sky.FluxGamma"), 1.0f);
+        Test.Step(0.0f);
+        TestTrue(TEXT("ds.Sky.FluxGamma 1 draws the brightest star at its honest flux on the next frame"),
+                 FMath::IsNearlyEqual(CustomData(Dome, Bright, SkyMaterial::CustomDataBrightness), static_cast<float>(F * 0.03), 1e-4f));
+    }
     Test.Step(0.0f);
     {
         // What the CVar's own help suggests when two-pixel points shimmer
