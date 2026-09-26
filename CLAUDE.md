@@ -559,14 +559,28 @@ screen test must.
 
 **Sat at any screen, the view is fitted to it, never a fixed angle.**
 `AShipScreen::FitFieldOfView` picks the field of view that shows the whole
-panel, bezel (`BezelCm`) included, with `ds.Screen.FrameMargin` clear at the
-edges of its tighter axis. It has to model the engine's aspect rule: under the
+panel, bezel included -- `BezelCm` is per axis, X each side and Y top and
+bottom, because the laptop's lid is not evenly wider than its glass -- with
+`ds.Screen.FrameMargin` (2%) clear at the edges of its tighter axis. That puts
+the laptop at the 52 degrees the developer approved. It has to model the engine's aspect rule: under the
 default `AspectRatio_MaintainYFOV` a camera's field of view is horizontal *at
 the camera's 16:9*, and a narrower window loses width, so an angle that frames
 a panel at 16:9 cuts its sides off at 4:3. `DeepSpace.Ship.ScreenFraming`
-checks both screens through the engine's own projection. **Standing up
-returns the body to where it stood**, or the nearest clear floor within
-1.2 m that it can reach without passing through anything -- never the chair
+checks both screens through the engine's own projection.
+
+**Standing up returns the body to where it stood, if that was floor.** Floor
+means something under the spot from 5 cm above to 15 cm below the floor under
+the seat (`AShipScreen::GetUseFloorZ`) -- never the height the feet were at,
+since Jump is bound and a player can sit down from on top of the chair. The
+spot must also fit a standing capsule. Otherwise it is the first spot, on
+four rings 30 cm apart out to 1.2 m, twelve directions each and the side away
+from the seat first, that is floor by the same measure, fits a standing
+capsule, and can be reached by sweeping a standing capsule along the floor
+from the remembered spot, ignoring whatever occupies that spot. The sweep
+cannot step up, so a spot past a raised lip is refused. If no spot passes,
+the body goes back where it stood and a warning is logged. Sitting and
+standing each mark a camera cut (`SetGameCameraCutThisFrame`), so temporal AA
+and motion blur do not smear the frame the view jumps
 (`DeepSpace.Ship.ScreenStandUp`).
 
 ## The dressing
@@ -692,7 +706,7 @@ tests that assert it.
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.15, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
-| `ds.Screen.FrameMargin` | 0.04 | `ShipScreen.cpp` |
+| `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
 | `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |
 
 Tunables that are not CVars: the universe's seed and priors, and the
