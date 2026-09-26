@@ -15,8 +15,16 @@
 # the tests pass and look like a survivor. So the diff is checked, the build
 # must succeed, and the library must be newer than the edit, before any
 # verdict is read. The file is always restored, and the working tree must be
-# clean of it afterwards. Rebuild before trusting the library again: the
-# last build contained the mutant.
+# clean of it afterwards.
+#
+# The build is FORCED, both ways. UBT's incremental check has been seen to
+# relink without recompiling a file that had just been restored with git
+# checkout, leaving the mutant's object in the library: a "clean" rebuild that
+# still ran mutated code, and a later mutant that was never compiled at all,
+# so its test "survived". The edited file's object is deleted before each
+# build -- every object, for a header -- and the build log must name the file
+# as compiled. The library is rebuilt clean the same way before exit, so
+# nothing is left to remember.
 set -u
 cd "$(dirname "$0")/.."
 F=$1; OLD=$2; NEW=$3; FILTER=$4
@@ -33,11 +41,36 @@ open(f,"w").write(s.replace(old,new))
 PY
 git diff --quiet -- "$F" && { echo "MUTANT NOT IN FILE"; exit 2; }
 echo "diff: $(git diff -- "$F" | grep -E '^[+-][^+-]' | tr '\n' ' ' | cut -c1-200)"
-if ! ./build.sh > Saved/mutant-build.log 2>&1; then
-    echo "MUTANT DID NOT COMPILE -- verdict meaningless"; git checkout -q -- "$F"; exit 2
+OBJ=Intermediate/Build/Linux/x64/UnrealEditor/Development/DeepSpace
+# Build with F's object gone, and prove F was compiled. Returns non-zero if
+# the build failed or did not compile F.
+forced_build() {
+    case "$F" in
+        *.cpp) rm -f "$OBJ/$(basename "$F").o" ;;
+        *)     rm -f "$OBJ"/*.cpp.o ;;
+    esac
+    ./build.sh > "$1" 2>&1 || return 1
+    case "$F" in
+        *.cpp) grep -qF "Compile $(basename "$F")" "$1" ;;
+        *)     grep -q "\] Compile " "$1" ;;
+    esac
+}
+restore() {
+    git checkout -q -- "$F"
+    if forced_build Saved/mutant-restore.log; then
+        git diff --quiet -- "$F" && echo "restored clean, library rebuilt from the restored source"
+    else
+        echo "!!! RESTORE REBUILD FAILED -- the library may still hold the mutant; run ./build.sh"
+    fi
+}
+if ! forced_build Saved/mutant-build.log; then
+    if grep -q "Result: Succeeded" Saved/mutant-build.log; then
+        echo "MUTANT NOT COMPILED -- the build did not compile $(basename "$F"); verdict meaningless"
+    else
+        echo "MUTANT DID NOT COMPILE -- verdict meaningless"
+    fi
+    restore; exit 2
 fi
-lib=Binaries/Linux/libUnrealEditor-DeepSpace.so
-[[ $lib -nt $F ]] || { echo "LIBRARY OLDER THAN MUTANT -- not rebuilt"; git checkout -q -- "$F"; exit 2; }
 if ./test.sh "$FILTER" > Saved/mutant-test.log 2>&1; then
     echo "SURVIVED: $FILTER stayed GREEN under the mutant  <-- vacuous"
     verdict=1
@@ -52,5 +85,5 @@ else
     grep -E "passed:|no tests ran" Saved/mutant-test.log | head -3
     verdict=2
 fi
-git checkout -q -- "$F"; git diff --quiet -- "$F" && echo "restored clean"
+restore
 exit $verdict
