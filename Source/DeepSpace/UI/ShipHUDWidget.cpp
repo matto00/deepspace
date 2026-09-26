@@ -290,7 +290,7 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
             ? Universe->GetSystemAt(ShipState->GetFlightState().GetUniversePosition())
             : TOptional<FStarSystem>();
         PlaceLine->SetText(ShipState->IsInTransit() ? FText::FromString(NavText::Jump(EJumpState::Transit))
-                           : Here ? FText::FromString(Here->Stub.Name + NavText::Separator + NavText::StarClass(Here->Star.Class))
+                           : Here ? FText::FromString(NavText::Place(Here->Stub.Name, Here->Star.Class))
                                   : Blank);
     }
 

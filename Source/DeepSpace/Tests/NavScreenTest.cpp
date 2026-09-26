@@ -172,7 +172,7 @@ namespace
                        EnabledRows(Chart), Want.Num());
 
         const FUniversePosition Where = Ship.GetFlightState().GetUniversePosition();
-        const FString VisitedColumn = FString(NavText::Separator) + TEXT("visited");
+        const FString VisitedColumn = FString(NavText::Separator) + NavText::Visited(true);
         for (int32 Index = 0; Index < Want.Num(); ++Index)
         {
             FString Row = Chart.GetRowText(Index).ToString();
@@ -292,8 +292,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("here is the start system, its colour, and that it is visited"),
               Chart->GetHereText().ToString(),
-              Home->Stub.Name + NavText::Separator + NavText::StarClass(Home->Star.Class)
-                  + NavText::Separator + TEXT("visited"));
+              NavText::Place(Home->Stub.Name, Home->Star.Class, true));
 
     const TArray<FStarSystemStub> Near = Expected(*Universe, *Ship);
     if (!TestTrue(TEXT("there are at least five places to go from the start"), Near.Num() >= 5))
@@ -308,7 +307,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     {
         const FString Row = Chart->GetRowText(Index).ToString();
         TestFalse(FString::Printf(TEXT("at the start row %d is not visited (it reads '%s')"), Index, *Row),
-                  Row.EndsWith(FString(NavText::Separator) + TEXT("visited")));
+                  Row.EndsWith(FString(NavText::Separator) + NavText::Visited(true)));
     }
 
     // Somewhere to go from which home is still in sight, so that arriving
@@ -324,7 +323,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
         return false;
     }
     TestEqual(TEXT("nothing is plotted to start with"), PlottedRows(*Chart), 0);
-    TestEqual(TEXT("no course"), Chart->GetCourseText().ToString(), FString(TEXT("None.")));
+    TestEqual(TEXT("no course"), Chart->GetCourseText().ToString(), NavText::NoCourse() + TEXT("."));
 
     // -- engaging needs a course ----------------------------------------
     TestFalse(TEXT("with no course the toggle cannot be pressed"), Chart->IsEngageEnabled());
@@ -345,9 +344,13 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     const TOptional<FVector> Bearing = Ship->GetCourseDirectionShipLocal();
     if (TestTrue(TEXT("a plotted course has a bearing"), Bearing.IsSet()))
     {
+        // Joined as the HUD joins its line, with NavText's separator: the
+        // chart once put its own dash here.
         TestEqual(TEXT("the course reads as the helm reads it"), Chart->GetCourseText().ToString(),
-                  Near[2].Name + TEXT(" — ") + NavText::Bearing(*Bearing, Ship->GetJumpConeRadians())
-                      + TEXT("."));
+                  NavText::Course(Near[2].Name, Bearing, Ship->GetJumpConeRadians()) + TEXT("."));
+        TestTrue(TEXT("and joins it as the helm does"),
+                 NavText::Jump(EJumpState::Idle, Near[2].Name, *Bearing, Ship->GetJumpConeRadians())
+                     .EndsWith(Chart->GetCourseText().ToString().LeftChop(1)));
     }
 
     // The other chart was not told; it asks, and agrees.
@@ -365,7 +368,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and this chart follows"), RowIsPlotted(*Chart, 4) && PlottedRows(*Chart) == 1);
     Chart->SelectRow(4);
     TestFalse(TEXT("choosing the plotted row clears the course"), Ship->GetPlottedSystem().IsSet());
-    TestEqual(TEXT("and the chart says so"), Chart->GetCourseText().ToString(), FString(TEXT("None.")));
+    TestEqual(TEXT("and the chart says so"), Chart->GetCourseText().ToString(), NavText::NoCourse() + TEXT("."));
 
     Chart->SelectRow(UNavigationWidget::RowCount);
     Chart->SelectRow(-1);
@@ -416,7 +419,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
                   FString(TEXT("Between stars.")));
         TestEqual(TEXT("and so does here"), Chart->GetHereText().ToString(), FString(TEXT("Between stars")));
         TestEqual(TEXT("the course is named with no bearing"), Chart->GetCourseText().ToString(),
-                  Near[DestinationRow].Name + TEXT("."));
+                  NavText::Course(Near[DestinationRow].Name, {}, Ship->GetJumpConeRadians()) + TEXT("."));
         TestFalse(TEXT("nothing can be engaged between stars"), Chart->IsEngageEnabled());
         TestTrue(TEXT("the rows stay readable between stars"), Chart->GetShownRowCount() > 0);
         TestEqual(TEXT("and none of them can be pressed"), EnabledRows(*Chart), 0);
@@ -432,9 +435,8 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
     if (TestTrue(TEXT("the jump arrives"), !Ship->IsInTransit() && There.IsSet()))
     {
         TestEqual(TEXT("here is where the jump went, visited"), Chart->GetHereText().ToString(),
-                  There->Stub.Name + NavText::Separator + NavText::StarClass(There->Star.Class)
-                      + NavText::Separator + TEXT("visited"));
-        TestEqual(TEXT("the course is spent"), Chart->GetCourseText().ToString(), FString(TEXT("None.")));
+                  NavText::Place(There->Stub.Name, There->Star.Class, true));
+        TestEqual(TEXT("the course is spent"), Chart->GetCourseText().ToString(), NavText::NoCourse() + TEXT("."));
         TestEqual(TEXT("and the jump is idle"), Chart->GetJumpText().ToString(), FString(TEXT("Idle.")));
         CheckRows(*this, *Chart, *Universe, *Ship, TEXT("on arrival"));
 
@@ -448,7 +450,7 @@ bool FNavigationScreenTest::RunTest(const FString& Parameters)
             {
                 bHomeShown = true;
                 TestTrue(FString::Printf(TEXT("home is listed as visited (it reads '%s')"), *Row),
-                         Row.EndsWith(FString(NavText::Separator) + TEXT("visited")));
+                         Row.EndsWith(FString(NavText::Separator) + NavText::Visited(true)));
             }
         }
         TestTrue(TEXT("home is among the rows on arrival"), bHomeShown);

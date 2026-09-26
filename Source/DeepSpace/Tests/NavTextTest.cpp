@@ -1,5 +1,6 @@
 #include "Misc/AutomationTest.h"
 #include "UI/NavText.h"
+#include "Universe/UniverseUnits.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -106,6 +107,36 @@ bool FNavTextTest::RunTest(const FString& Parameters)
         }
         TestEqual(TEXT("each class is worded differently"), Words.Num(), NumStarClasses);
         TestEqual(TEXT("an M star is a red dwarf"), NavText::StarClass(EStarClass::M), FString(TEXT("red dwarf")));
+    }
+
+    // The chart's words, pinned here so that the chart, the HUD and
+    // ds.Nav.Near, which all ask NavText, say exactly these.
+    {
+        TestEqual(TEXT("a place is its name and its colour"),
+                  NavText::Place(TEXT("Kessa"), EStarClass::M), FString(TEXT("Kessa · red dwarf")));
+        TestEqual(TEXT("and the chart adds that you have been"),
+                  NavText::Place(TEXT("Kessa"), EStarClass::M, true), FString(TEXT("Kessa · red dwarf · visited")));
+        TestEqual(TEXT("and nothing when you have not"),
+                  NavText::Place(TEXT("Kessa"), EStarClass::M, false), FString(TEXT("Kessa · red dwarf")));
+        TestEqual(TEXT("visited is the word"), NavText::Visited(true), FString(TEXT("visited")));
+        TestTrue(TEXT("and somewhere not yet visited says nothing, never 'unvisited'"), NavText::Visited(false).IsEmpty());
+
+        TestEqual(TEXT("a distance is light years to a tenth"),
+                  NavText::Distance(4.24 * UniverseUnits::CmPerLightYear), FString(TEXT("4.2 ly")));
+        TestEqual(TEXT("and rounds as it reads"),
+                  NavText::Distance(11.96 * UniverseUnits::CmPerLightYear), FString(TEXT("12.0 ly")));
+
+        TestEqual(TEXT("no course is None"), NavText::NoCourse(), FString(TEXT("None")));
+        TestEqual(TEXT("a course is its name and its bearing, joined as every line is"),
+                  NavText::Course(TEXT("Kessa"), FVector::ForwardVector, Cone), FString(TEXT("Kessa · dead ahead")));
+        TestEqual(TEXT("in the helm's bearing words"),
+                  NavText::Course(TEXT("Kessa"), FromAngles(12.0, 0.0), Cone),
+                  FString(TEXT("Kessa · ")) + NavText::Bearing(FromAngles(12.0, 0.0), Cone));
+        TestEqual(TEXT("with no bearing, the name alone"),
+                  NavText::Course(TEXT("Kessa"), TOptional<FVector>(), Cone), FString(TEXT("Kessa")));
+        TestTrue(TEXT("the chart's course is the tail of the HUD's line"),
+                 NavText::Jump(EJumpState::Ready, TEXT("Kessa"), FromAngles(12.0, 3.0), Cone)
+                     .EndsWith(NavText::Course(TEXT("Kessa"), FromAngles(12.0, 3.0), Cone)));
     }
 
     return true;
