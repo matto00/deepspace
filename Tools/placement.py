@@ -10,7 +10,9 @@ given relative to a room's minimum corner instead, and move with the room.
 No `unreal` import.
 """
 
+import json
 import math
+import os
 from collections import namedtuple
 
 import props as P
@@ -46,6 +48,29 @@ Practical = namedtuple("Practical", "place radius intensity")
 # ShipPower::Lights in C++: one identifier for the power consumer and for the
 # actors that answer to it. test_placement.py reads the C++ to hold them equal.
 LIGHTS_TAG = "Power.Lights"
+
+# The sky's assets, as the level build assigns them and the verifier checks
+# them. Named from Tools/sky_material_contract.json, the list the materials
+# are authored from and SkyMaterialContract.h mirrors, so no path is typed
+# twice; test_placement.py reads the C++ to hold the two equal.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sky_material_contract.json")) as _f:
+    SKY_DIRECTORY = json.load(_f)["directory"]
+
+
+def sky_package(name):
+    """Where a sky asset lives: /Game/Materials/Sky/M_SkyStar."""
+    return "%s/%s" % (SKY_DIRECTORY, name)
+
+
+def sky_asset(name):
+    """A sky asset's object path, as Unreal reports a material's path name:
+    /Game/Materials/Sky/M_SkyStar.M_SkyStar."""
+    return "%s.%s" % (sky_package(name), name)
+
+
+# The one mesh everything outside the hull is drawn with: centre-pivoted,
+# though nothing that uses it assumes so.
+SPHERE = "/Engine/BasicShapes/Sphere"
 
 LIGHT_SPACING = 300     # cm; rooms get ceil(size / spacing) lights per axis
 LAMP_SIZE = 60          # cm; the emissive ceiling panel under each light

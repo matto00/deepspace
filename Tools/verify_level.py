@@ -32,8 +32,8 @@ LIGHTS_TAG = PL.LIGHTS_TAG
 def main():
     ship = L.generate()
     unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(MAP_PATH)
-    actors = {a.get_actor_label(): a for a in
-              unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()}
+    every = list(unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors())
+    actors = {a.get_actor_label(): a for a in every}
     failures = []
 
     for box in ship.boxes:
@@ -137,19 +137,12 @@ def main():
     if stars:
         failures.append("%d star actors remain; the starfield is generated in C++ now" % len(stars))
 
-    frame = actors.get(TAG + "counterframe")
-    if frame is None:
-        failures.append("MISSING counterframe")
-    else:
-        p = frame.get_actor_location()
-        if max(abs(p.x), abs(p.y), abs(p.z)) > TOLERANCE:
-            failures.append("counterframe is at (%.1f, %.1f, %.1f), not the origin" % (p.x, p.y, p.z))
-        r = frame.get_actor_rotation()
-        if max(abs(r.pitch), abs(r.yaw), abs(r.roll)) > TOLERANCE:
-            failures.append("counterframe is rotated (%.1f, %.1f, %.1f), not at identity"
-                            % (r.pitch, r.yaw, r.roll))
+    failures += check_counter_frame(every)
+    failures += check_sky(every)
+    failures += check_glass(ship, actors)
 
-    lines = ["Checked %d boxes and %d lights (%d practical) against the layout."
+    lines = ["Checked %d boxes and %d lights (%d practical) against the layout, "
+             "the counter-frame, the sky and the glass."
              % (len(ship.boxes), len(ship.lights),
                 sum(1 for light in ship.lights if light.shadows)), ""]
     if failures:
@@ -161,6 +154,96 @@ def main():
         lines.append("PASS: the built level matches the layout within %.1f cm." % TOLERANCE)
     with open(os.path.join(unreal.Paths.project_saved_dir(), "verify_level.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def path_of(asset):
+    return asset.get_path_name() if asset else "nothing"
+
+
+def of_class(every, cls):
+    """Actors found by what they are, never by what they are called."""
+    return [a for a in every if isinstance(a, cls)]
+
+
+def check_counter_frame(every):
+    """One counter-frame, at the origin and unrotated -- the rotation is
+    applied at runtime and a built-in one would be silently composed with it
+    -- with the dome on M_SkyStarfield and the motes on M_SkyStar. Any other
+    dome material ignores each star's colour and brightness, so every star
+    draws alike; any other mote material has no Brightness, so the fade pops
+    and the course marker cannot be tinted. Neither shows under -nullrhi."""
+    failures = []
+    frames = of_class(every, unreal.ShipCounterFrame)
+    if len(frames) != 1:
+        return ["%d counter-frames, want exactly one" % len(frames)]
+    frame = frames[0]
+    p = frame.get_actor_location()
+    if max(abs(p.x), abs(p.y), abs(p.z)) > TOLERANCE:
+        failures.append("counterframe is at (%.1f, %.1f, %.1f), not the origin" % (p.x, p.y, p.z))
+    r = frame.get_actor_rotation()
+    if max(abs(r.pitch), abs(r.yaw), abs(r.roll)) > TOLERANCE:
+        failures.append("counterframe is rotated (%.1f, %.1f, %.1f), not at identity"
+                        % (r.pitch, r.yaw, r.roll))
+    for layer, want in (("distant_stars", PL.sky_asset("M_SkyStarfield")),
+                        ("near_stars", PL.sky_asset("M_SkyStar"))):
+        component = frame.get_editor_property(layer)
+        got = path_of(component.get_material(0))
+        if got != want:
+            failures.append("counterframe %s draws with %s, not %s" % (layer, got, want))
+        mesh = path_of(component.get_editor_property("static_mesh"))
+        if mesh != "%s.Sphere" % PL.SPHERE:
+            failures.append("counterframe %s is %s, not the engine sphere" % (layer, mesh))
+    return failures
+
+
+def check_sky(every):
+    """One AShipSky with its assets; no sun and no sky light but its own
+    (sky decision 5). A second DirectionalLight would light the deck from a
+    direction no star is in."""
+    failures = []
+    skies = of_class(every, unreal.ShipSky)
+    if len(skies) != 1:
+        failures.append("%d skies, want exactly one" % len(skies))
+    for sky in skies[:1]:
+        for slot, want in (("body_mesh", "%s.Sphere" % PL.SPHERE),
+                           ("body_material", PL.sky_asset("M_SkyBody")),
+                           ("star_material", PL.sky_asset("M_SkyStar")),
+                           ("point_star_material", PL.sky_asset("M_SkyStarfield"))):
+            got = path_of(sky.get_editor_property(slot))
+            if got != want:
+                failures.append("sky %s is %s, not %s" % (slot, got, want))
+        # The veil's collection lands in slice 2; once it exists it must be
+        # assigned, or the glass never answers the lights.
+        if unreal.EditorAssetLibrary.does_asset_exist(PL.sky_package("MPC_Sky")):
+            got = path_of(sky.get_editor_property("sky_parameters"))
+            if got != PL.sky_asset("MPC_Sky"):
+                failures.append("sky sky_parameters is %s, not %s" % (got, PL.sky_asset("MPC_Sky")))
+    for cls in (unreal.DirectionalLight, unreal.SkyLight, unreal.SkyAtmosphere,
+                unreal.VolumetricCloud, unreal.ExponentialHeightFog):
+        for actor in of_class(every, cls):
+            failures.append("%s (%s) remains; the sky owns the only light from outside"
+                            % (actor.get_actor_label(), cls.__name__))
+    return failures
+
+
+def check_glass(ship, actors):
+    """Every pane on M_SkyGlass, casting no shadow: the sunlight on the deck
+    is the shape of the windows only if the glass lets it through."""
+    failures = []
+    want = PL.sky_asset("M_SkyGlass")
+    for box in ship.boxes:
+        if box.role != "glass":
+            continue
+        actor = actors.get(TAG + box.label)
+        if actor is None:
+            continue                        # reported as MISSING already
+        component = actor.static_mesh_component
+        got = path_of(component.get_material(0))
+        if got != want:
+            failures.append("%s wears %s, not %s" % (box.label, got, want))
+        if component.get_editor_property("cast_shadow"):
+            failures.append("%s casts a shadow, so no sunlight comes through it" % box.label)
+    return failures
 
 
 main()
