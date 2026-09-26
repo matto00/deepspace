@@ -1,0 +1,132 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Universe/StarSystem.h"
+
+/**
+ * What the jump is doing, as a word for screens (plan conflict 7: the fold
+ * is "the jump"; "the drive" is the in-system one). Never a number: there is
+ * no percentage, no bar and no countdown anywhere, because a number that
+ * fills is a clock to watch.
+ */
+enum class EJumpState : uint8
+{
+    /** Not engaged. The charge holds wherever it was left. */
+    Idle,
+    /** Engaged, charge below full. */
+    Winding,
+    /** Engaged and charged, holding for alignment for as long as it takes. */
+    Ready,
+    /** Between stars. */
+    Transit,
+};
+
+/** What a step of the nav state asks its owner to do. */
+enum class ENavEvent : uint8
+{
+    None,
+    /** The fold opened this step: spend the charge. */
+    TransitBegan,
+    /** The transit ended this step: put the ship at the arrival point. */
+    Arrived,
+};
+
+/** Filled from the ds.Nav.* console variables every tick; the defaults are
+ *  the starting values. Pure data, so the state machine never reads a CVar. */
+struct FNavTuning
+{
+    /**
+     * Alignment is a cone round the ship's +X. 8 degrees, because a released
+     * full-rate turn at cruise limits carries on for w^2/2a = 4.6 degrees, and
+     * the cone's full width has to be wider than that for "let go when it
+     * says dead ahead" to land inside it (nav decision 3).
+     */
+    double ConeRadians = 8.0 * UE_DOUBLE_PI / 180.0;
+
+    /** Long enough to register that you have gone somewhere, short enough
+     *  that it is spectacle and not waiting. */
+    double TransitSeconds = 6.0;
+};
+
+namespace ShipNav
+{
+    /** Angle between the ship's nose and a direction in ship axes, radians,
+     *  0..pi. The one test of "aligned": the jump and the HUD's "dead ahead"
+     *  both ask this, so they can never disagree about it. */
+    DEEPSPACE_API double OffBoresight(const FVector& ShipLocalDir);
+}
+
+/**
+ * The jump's decisions, and nothing else: pure, headless, next to
+ * FShipPowerState and FShipFlightState. It decides; the subsystem acts.
+ *
+ * Three levers, each of which stays where it is left (nav decision 2): the
+ * course (Plot), the heading (the helm; an input here, not state), and
+ * engage. Once all three are set and the charge is full, the jump fires by
+ * itself. There is no confirm, because a final button would make the player
+ * come back and service the drive on its schedule.
+ *
+ * It holds no current system -- which system the ship is in is asked of its
+ * position (plan conflict 1) -- and no charge, which is the flight state's.
+ * Nothing in here changes with time except the transit itself: an engaged,
+ * misaligned drive holds at ready indefinitely, and nothing escalates.
+ */
+struct DEEPSPACE_API FShipNavState
+{
+public:
+    /** False in transit. Refusing the system the ship is already in is the
+     *  subsystem's job, since only it can ask which system that is. */
+    bool Plot(const FSystemId& Id);
+
+    /** Also stands the jump down: an engaged jump with nowhere to go would
+     *  draw power for nothing. Ignored in transit. */
+    void ClearPlot();
+
+    const TOptional<FSystemId>& GetPlotted() const;
+
+    /** False, and nothing changes, in transit, or engaging with no course
+     *  plotted. Standing down is always allowed outside transit. */
+    bool SetEngaged(bool bOn);
+    bool IsEngaged() const;
+
+    /**
+     * Advance. Charge and alignment are inputs, not state: the flight state
+     * owns the charge and the subsystem owns the geometry.
+     *
+     * Holding, returns TransitBegan exactly when engaged, plotted, charged
+     * (>= 1) and within the cone. In transit, counts to TransitSeconds and
+     * then returns Arrived, having moved the course into LastArrival, marked
+     * it visited, cleared the course and engage, and bumped the serial.
+     */
+    ENavEvent Step(double DeltaSeconds, double JumpCharge, double OffBoresightRadians,
+                   const FNavTuning& Tuning);
+
+    /** The word for screens. Idle unless engaged; Winding until the charge
+     *  is full; Ready from then until the fold opens. */
+    EJumpState GetJumpState(double JumpCharge) const;
+
+    bool IsInTransit() const;
+
+    /** 0..1 through the transit, against the TransitSeconds of the latest
+     *  step; 0 outside it. For the streaks, never for a screen. */
+    double GetTransitProgress() const;
+
+    /** Bumps on every arrival. What the sky and the counter-frame rebuild
+     *  on: a cache key, never an answer. */
+    int32 GetJumpSerial() const;
+
+    const TOptional<FSystemId>& GetLastArrival() const;
+
+    void MarkVisited(const FSystemId& Id);
+    bool HasVisited(const FSystemId& Id) const;
+
+private:
+    TOptional<FSystemId> Plotted;
+    TOptional<FSystemId> LastArrival;
+    TSet<FSystemId> Visited;
+    bool bEngaged = false;
+    bool bInTransit = false;
+    double TransitElapsed = 0.0;
+    double TransitSeconds = FNavTuning().TransitSeconds;
+    int32 JumpSerial = 0;
+};

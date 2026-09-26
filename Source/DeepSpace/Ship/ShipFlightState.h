@@ -21,6 +21,22 @@ struct DEEPSPACE_API FShipFlightLimits
     /** How hard the ship changes turn rate, radians/s^2, per body axis. */
     FVector AngularAcceleration = FVector(0.25, 0.25, 0.40);
 
+    /**
+     * The in-system drive's time constant, seconds (sky decision 8). At full
+     * throttle the drive closes a tenth of the remaining room every 1.5 s,
+     * so distance falls exponentially and a planet's disc grows by the same
+     * factor every second: from 1 AU to a 40,000 km orbit is ln(3,740) x 15 s,
+     * about two minutes -- "a minute or two to close with a world". Boosters
+     * on a thin allocation stretch it; the subsystem divides it by their
+     * thrust fraction, so a starved ship arrives slowly and always arrives.
+     */
+    double DriveTau = 15.0;
+
+    /** Where the drive's room runs out, cm above the nearest surface: 100 km.
+     *  Below it the drive hands back to cruise, so it cannot be flown into a
+     *  planet, and 200 m/s is the edge of landing's regime. */
+    double DriveFloor = 1.0e7;
+
     static FShipFlightLimits Cruise();
 };
 
@@ -36,6 +52,12 @@ struct DEEPSPACE_API FShipFlightCommand
     /** Fraction of MaxAngularRate per body axis, -1..1: X pitch, Y yaw, Z roll.
      *  Held, not persistent. */
     FVector AttitudeRate = FVector::ZeroVector;
+
+    /** The in-system drive's lever. Persistent, like the throttle: set the
+     *  approach, walk to the galley, and watch the world arrive. A caller
+     *  building a fresh command must carry this over from GetCommand(), or
+     *  every attitude input would disengage the drive. */
+    bool bDrive = false;
 };
 
 /**
@@ -52,7 +74,9 @@ public:
     void SetLimits(const FShipFlightLimits& NewLimits);
     const FShipFlightLimits& GetLimits() const;
 
-    /** Clamped on the way in. */
+    /** Clamped on the way in. Disengaging the drive clamps the speed to
+     *  MaxSpeed: the drive has no inertia, and a ship still doing 34 c after
+     *  the lever is off would be a second drive nobody asked for. */
     void SetCommand(const FShipFlightCommand& NewCommand);
     const FShipFlightCommand& GetCommand() const;
 
@@ -60,6 +84,23 @@ public:
      *  leaves the seat: a ship nobody is flying does not keep turning, but a
      *  cruise the player set and walked away from is the point. */
     void ReleaseAttitude();
+
+    /**
+     * The drive's input: the distance to the nearest surface, cm, which the
+     * subsystem reads once a frame from LocalSystem::NearestSurfaceDistance
+     * (0 in transit, so the drive gives only cruise). An input like the
+     * command, not something the flight state works out: it knows nothing of
+     * what is out there.
+     *
+     * Read once a frame while the state substeps at 120 Hz. At full throttle
+     * a 60 Hz frame closes 0.1% of the room, and even the two-second catch-up
+     * cap closes 13%, so a stale room cannot carry the ship through a floor.
+     */
+    void SetDriveRoom(double NearestSurfaceDistanceCm);
+
+    /** Room the drive has left to close, cm: the nearest surface less
+     *  DriveFloor, never negative. 0 means the drive is at cruise speed. */
+    double GetDriveRoom() const;
 
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
@@ -97,18 +138,33 @@ public:
     void SetUniverseTransform(const FUniversePosition& NewPosition, const FQuat& NewOrientation);
 
     /**
-     * The jump drive winds up, 0..1, at a rate scaled by how well the engine
-     * is being fed. Power affects *time to ready* and nothing else: there is
-     * no discharge, no decay and no way to fail a charge, so an engine on a
-     * thin allocation is slow to jump and never broken.
+     * The jump winds up, 0..1, at a rate scaled by how well the engine is
+     * being fed. Power affects *time to ready* and nothing else: there is no
+     * discharge, no decay and no way to fail a charge, so an engine on a
+     * thin allocation is slow to jump and never broken. Whether it winds at
+     * all is the caller's: the subsystem calls this only while the jump is
+     * engaged, and otherwise the charge simply holds.
      *
-     * Nothing consumes the charge yet -- hyperjumps are a later milestone.
-     * It exists now because it is the engine's whole answer to being
-     * under-powered, and inventing it later would mean inventing the
-     * consumer later too.
+     * SecondsFromCold is a parameter so that ds.Nav.ChargeSeconds can move
+     * it in play; this struct never reads a console variable.
      */
-    void ChargeJumpDrive(double DeltaSeconds, double Satisfaction);
+    void ChargeJumpDrive(double DeltaSeconds, double Satisfaction,
+                         double SecondsFromCold = JumpChargeSeconds);
     double GetJumpCharge() const;
+
+    /** The fold has opened: the charge is spent, all of it. */
+    void SpendJumpCharge();
+
+    /**
+     * The jump's arrival, and the fourth write path into the flight state
+     * after the command, the attitude release and the tick. A translation
+     * and nothing else: orientation, velocity and angular velocity are left
+     * exactly as they were, because the arrival point lies on the line to the
+     * star, so the star is still where the nose was -- and turning the ship
+     * would turn the distant dome, the one thing a jump must not move (nav
+     * decision 5). Called from exactly one place in UShipSubsystem.
+     */
+    void JumpTo(const FUniversePosition& Arrival);
 
     /** Seconds from cold to ready with the engine fully fed. */
     static constexpr double JumpChargeSeconds = 90.0;
@@ -124,6 +180,9 @@ private:
     FVector LastLinearAcceleration = FVector::ZeroVector;
 
     double JumpCharge = 0.0;
+
+    /** Last nearest-surface distance the subsystem reported, cm. */
+    double DriveSurfaceDistance = 0.0;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;

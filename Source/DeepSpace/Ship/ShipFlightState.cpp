@@ -17,6 +17,11 @@ const FShipFlightLimits& FShipFlightState::GetLimits() const
 
 void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
 {
+    if (Command.bDrive && !NewCommand.bDrive && Velocity.SizeSquared() > FMath::Square(Limits.MaxSpeed))
+    {
+        Velocity = Velocity.GetSafeNormal() * Limits.MaxSpeed;
+    }
+    Command.bDrive = NewCommand.bDrive;
     Command.Throttle = FMath::Clamp(NewCommand.Throttle, -1.0, 1.0);
     Command.AttitudeRate = FVector(
         FMath::Clamp(NewCommand.AttitudeRate.X, -1.0, 1.0),
@@ -29,19 +34,46 @@ const FShipFlightCommand& FShipFlightState::GetCommand() const
     return Command;
 }
 
-void FShipFlightState::ChargeJumpDrive(double DeltaSeconds, double Satisfaction)
+void FShipFlightState::ChargeJumpDrive(double DeltaSeconds, double Satisfaction, double SecondsFromCold)
 {
     if (DeltaSeconds <= 0.0)
     {
         return;
     }
-    const double Rate = FMath::Clamp(Satisfaction, 0.0, 1.0) / JumpChargeSeconds;
+    // A non-positive time from cold means "instantly", which is what a
+    // tuning value of 0 would be asked to mean; never a division by zero.
+    if (SecondsFromCold <= 0.0)
+    {
+        JumpCharge = Satisfaction > 0.0 ? 1.0 : JumpCharge;
+        return;
+    }
+    const double Rate = FMath::Clamp(Satisfaction, 0.0, 1.0) / SecondsFromCold;
     JumpCharge = FMath::Clamp(JumpCharge + Rate * DeltaSeconds, 0.0, 1.0);
 }
 
 double FShipFlightState::GetJumpCharge() const
 {
     return JumpCharge;
+}
+
+void FShipFlightState::SpendJumpCharge()
+{
+    JumpCharge = 0.0;
+}
+
+void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
+{
+    Position = Arrival.Normalised();
+}
+
+void FShipFlightState::SetDriveRoom(double NearestSurfaceDistanceCm)
+{
+    DriveSurfaceDistance = FMath::Max(0.0, NearestSurfaceDistanceCm);
+}
+
+double FShipFlightState::GetDriveRoom() const
+{
+    return FMath::Max(0.0, DriveSurfaceDistance - Limits.DriveFloor);
 }
 
 void FShipFlightState::ReleaseAttitude()
@@ -91,6 +123,26 @@ void FShipFlightState::SubStep(double FixedDelta)
         // Every substep, not occasionally: quaternion integration walks off the
         // unit sphere and nothing downstream would notice until it was bad.
         Orientation.Normalize();
+    }
+
+    if (Command.bDrive)
+    {
+        // The drive. Speed is a fraction of the room per second, so distance
+        // to the nearest surface falls exponentially with no easing curve, and
+        // a world swells from a point to a disc with no moment of change. It
+        // never goes slower than cruise would: out of room, below the floor or
+        // in transit, the drive is simply cruise along the nose.
+        //
+        // No inertia, deliberately: velocity is set, not chased. So it reports
+        // no acceleration -- a ship going from 200 m/s to 34 c in one substep
+        // would otherwise report an acceleration that would throw anything
+        // that ever reads it through a bulkhead.
+        const double Tau = FMath::Max(Limits.DriveTau, UE_DOUBLE_SMALL_NUMBER);
+        const double DriveSpeed = Command.Throttle * FMath::Max(Limits.MaxSpeed, GetDriveRoom() / Tau);
+        Velocity = Orientation.GetForwardVector() * DriveSpeed;
+        LastLinearAcceleration = FVector::ZeroVector;
+        Position += Velocity * FixedDelta;
+        return;
     }
 
     // Velocity, chasing the commanded cruise along the ship's nose. Limiting
