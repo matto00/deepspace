@@ -67,6 +67,27 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
 
     // -- The pure half --------------------------------------------------------
     {
+        // A world's face from its seed: offsets across the noise's span, a
+        // shape in [0, 1), every value exact, and every part of the seed
+        // mattering.
+        {
+            const uint64 Seed = 0x243F6A8885A308D3ull;
+            const FLinearColor Face = ShipSky::SurfaceSeed(Seed);
+            const float Span = static_cast<float>(SkyMaterial::SurfaceOffsetSpan);
+            TestTrue(TEXT("a face's offset lies across the noise's span"),
+                Face.R >= 0.0f && Face.R < Span && Face.G >= 0.0f && Face.G < Span && Face.B >= 0.0f && Face.B < Span);
+            TestTrue(TEXT("and its shape in [0, 1)"), Face.A >= 0.0f && Face.A < 1.0f);
+            TestEqual(TEXT("its x is the seed's low sixteen bits"), Face.R, static_cast<float>(0x08D3) / 65536.0f * Span);
+            TestEqual(TEXT("its shape the top sixteen"), Face.A, static_cast<float>(0x243F) / 65536.0f);
+            for (const int32 Shift : { 0, 16, 32, 48 })
+            {
+                TestFalse(FString::Printf(TEXT("a seed differing only in bit %d is another face"), Shift + 3),
+                    ShipSky::SurfaceSeed(Seed ^ (1ull << (Shift + 3))) == Face);
+            }
+            TestEqual(TEXT("belts for a giant"), ShipSky::Banding(ESkySurface::Banded), 1.0f);
+            TestEqual(TEXT("ground for rock"), ShipSky::Banding(ESkySurface::Rocky), 0.0f);
+        }
+
         // Exposure, against the engine's own arithmetic rather than this
         // file's: the HDR visualisation reports log2((average / 0.18) /
         // LuminanceMax), LuminanceMax is 1 at the default lens attenuation,
@@ -263,6 +284,10 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     Test.Frame->SyncToShip();
     Sky->RebuildFor(Fixture);
     TestEqual(TEXT("one proxy per body"), Sky->GetProxyCount(), Fixture.Bodies.Num());
+    // The face's knobs at values no material default holds, so an instance
+    // that is never written cannot match them by agreeing with the asset.
+    const FScopedCVar FaceMottle(TEXT("ds.Sky.Mottle"), 0.123f);
+    const FScopedCVar FaceDetail(TEXT("ds.Sky.SurfaceDetail"), 0.456f);
     Sky->DrawFrom(Fixture);
 
     {
@@ -299,9 +324,13 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its brightness, as given, in the scene's unit"),
                     FMath::IsNearlyEqual(Instance->K2_GetScalarParameterValue(SkyMaterial::Brightness), static_cast<float>(View.Brightness) * Radiance, 1e-4f));
                 TestEqual(TEXT("resolved: a disc"), Instance->K2_GetScalarParameterValue(SkyMaterial::PointBlend), 0.0f);
-                TestEqual(TEXT("its mottle"), Instance->K2_GetScalarParameterValue(SkyMaterial::Mottle), CVarFloat(TEXT("ds.Sky.Mottle")));
+                TestEqual(TEXT("its mottle, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Mottle), 0.123f);
                 TestTrue(TEXT("its colour"), Instance->K2_GetVectorParameterValue(SkyMaterial::Colour).Equals(True.Colour));
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
+                TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
+                TestTrue(TEXT("its own face, exactly"),
+                    Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed));
+                TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);
             }
         }
 
@@ -315,6 +344,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("a point is drawn ds.Sky.PointPixels across"), FMath::IsNearlyEqual(Seen, 3.0 * Sky->GetPixelAngle(), 1e-3 * Seen));
             UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Giant->GetMaterial(0));
             TestTrue(TEXT("and as a point"), Instance && Instance->K2_GetScalarParameterValue(SkyMaterial::PointBlend) == 1.0f);
+
+            // Its face is set at build, not at resolve: a point is the same
+            // world, and the belts are already on it when it grows.
+            TestTrue(TEXT("the giant wears belts"), Instance && Instance->K2_GetScalarParameterValue(SkyMaterial::Banding) == 1.0f);
+            const UStaticMeshComponent* HomeProxy = Sky->GetProxy(SkyTestFixtures::HomeIndex);
+            UMaterialInstanceDynamic* HomeInstance = HomeProxy ? Cast<UMaterialInstanceDynamic>(HomeProxy->GetMaterial(0)) : nullptr;
+            TestTrue(TEXT("and a face of its own, not the home planet's"), Instance && HomeInstance
+                && !Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed).Equals(HomeInstance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed)));
         }
     }
 

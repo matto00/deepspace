@@ -23,6 +23,11 @@
 
 enum class ESkyBodyKind : uint8 { Star, Planet, Moon };
 
+/** What a world's face is made of, as far as its look goes: ground that
+ *  holds features where they formed -- basins, highlands, craters -- or
+ *  cloud tops that the world's own spin has combed into belts. */
+enum class ESkySurface : uint8 { Rocky, Banded };
+
 struct DEEPSPACE_API FSkyBody
 {
     /** A label for logs and component names, not an identity. */
@@ -48,6 +53,14 @@ struct DEEPSPACE_API FSkyBody
 
     /** Atmosphere rim; black means none. */
     FLinearColor Rim = FLinearColor::Black;
+
+    /** Planets and moons: which kind of face M_SkyBody draws. */
+    ESkySurface Surface = ESkySurface::Rocky;
+
+    /** Planets and moons: where on the noise this world's face is taken
+     *  from, so that no two worlds wear the same one. Derived, never drawn:
+     *  a look, not a fact about the world, so it moves no procgen stream. */
+    uint64 SurfaceSeed = 0;
 };
 
 /** A neighbouring star: only ever a point, so a direction and a distance are

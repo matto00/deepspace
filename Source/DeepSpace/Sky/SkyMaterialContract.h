@@ -27,13 +27,17 @@ namespace SkyMaterial
     inline const TCHAR* const ParametersPath = TEXT("/Game/Materials/Sky/MPC_Sky.MPC_Sky");
 
     // M_SkyBody: planets and moons.
-    //   vectors Colour, LightDirection, Rim; scalars Brightness, PointBlend, Mottle.
+    //   vectors Colour, LightDirection, Rim, SurfaceSeed;
+    //   scalars Brightness, PointBlend, Mottle, Detail, Banding.
     inline const FName Colour = TEXT("Colour");                 // vector: albedo colour, or the star's
     inline const FName LightDirection = TEXT("LightDirection"); // vector: world space, body toward its star
     inline const FName Rim = TEXT("Rim");                       // vector: atmosphere rim, black for none
     inline const FName Brightness = TEXT("Brightness");         // scalar: per-pixel emission scale
     inline const FName PointBlend = TEXT("PointBlend");         // scalar: 1 a point, 0 a shaded disc
-    inline const FName Mottle = TEXT("Mottle");                 // scalar: noise amplitude
+    inline const FName Mottle = TEXT("Mottle");                 // scalar: the coarse face's amplitude
+    inline const FName Detail = TEXT("Detail");                 // scalar: the fine bands' amplitude
+    inline const FName Banding = TEXT("Banding");               // scalar: 0 rocky ground, 1 a giant's belts
+    inline const FName SurfaceSeed = TEXT("SurfaceSeed");       // vector: xyz noise offset, w shape; ShipSky::SurfaceSeed
 
     // M_SkyStar: the local star, the motes, navigation's course marker.
     //   vector Colour; scalar Brightness.
@@ -55,8 +59,8 @@ namespace SkyMaterial
     // Each asset's parameters, exactly: the test checks the JSON against
     // these and every loaded asset against the JSON, so a parameter added on
     // one side and not the other is a red test, not a silent no-op.
-    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle }; }
-    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim }; }
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding }; }
+    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed }; }
     inline TArray<FName> StarScalars() { return { Brightness }; }
     inline TArray<FName> StarVectors() { return { Colour }; }
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
@@ -70,4 +74,20 @@ namespace SkyMaterial
      * the two to it.
      */
     inline constexpr double LambertDiscGain = 1.5;
+
+    /**
+     * M_SkyBody's face multiplies the shaded disc by 1 + swing, and the
+     * graph clamps the swing to this whatever Mottle and Detail are set to:
+     * a world is never more than 1.9 times its smooth disc, nor darker than
+     * a tenth of it. The bound is what keeps the surface detail from being
+     * the thing that finds the half-float ceiling the sky already stays a
+     * decade under (ds.Sky.StarSurface). A graph constant, held like the
+     * gain.
+     */
+    inline constexpr double SurfaceMaxSwing = 0.9;
+
+    /** How many noise units SurfaceSeed's offset spans on each axis: far
+     *  more than the coarse band's cycle, so two offsets are two unrelated
+     *  faces rather than one face slid a little. */
+    inline constexpr double SurfaceOffsetSpan = 256.0;
 }

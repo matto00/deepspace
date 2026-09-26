@@ -303,6 +303,19 @@ namespace ShipSky
      */
     DEEPSPACE_API double ManualExposureBias(double SceneEV100);
 
+    /**
+     * What M_SkyBody's SurfaceSeed gets for a body of this seed: xyz where on
+     * the noise its face is taken from, each in [0, SkyMaterial::
+     * SurfaceOffsetSpan), and w in [0, 1), which picks the shape a face can
+     * vary in -- how many belts a giant wears. Sixteen independent bits
+     * each, so every value is exact in a float and two seeds that differ
+     * anywhere make two faces.
+     */
+    DEEPSPACE_API FLinearColor SurfaceSeed(uint64 Seed);
+
+    /** M_SkyBody's Banding: 1 for a giant's belts, 0 for ground. */
+    DEEPSPACE_API float Banding(ESkySurface Surface);
+
     /** Index of the body named or numbered by Which in System, INDEX_NONE if
      *  none: a number is an index, anything else is a body's Id. */
     DEEPSPACE_API int32 FindBody(const FSkySystem& System, const FString& Which);
