@@ -128,6 +128,8 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
             Player->UseScreen(Chart);
             TestTrue(TEXT("sitting at the chart puts the body on its chair"),
                      Player->IsUsingScreen() && Player->GetActorLocation().Z > ChartSeat.Z);
+            // A frame seated: the camera goes out to frame the screen.
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
             Player->StopUsingScreen();
             CheckStanding(*this, TEXT("chart, spot free"), World, Player, ChartSeat);
@@ -146,9 +148,12 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         if (TestNotNull(TEXT("the player spawns again"), Player))
         {
             Player->UseScreen(Chart);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
-            // Something arrives where they were standing while they read.
-            AActor* Taken = SpawnBlock(World, FVector(Stood, 100.0), FVector(40.0, 40.0, 100.0));
+            // Something arrives where they were standing while they read --
+            // clear of the floor, like a shelf or a hung locker, so the
+            // floor is still there and only the body's room is taken.
+            AActor* Taken = SpawnBlock(World, FVector(Stood, 115.0), FVector(40.0, 40.0, 85.0));
             AActor* Bulkhead = SpawnBlock(World, FVector(BulkheadFace - 5.0, 0.0, 150.0), FVector(5.0, 600.0, 150.0));
 
             Player->StopUsingScreen();
@@ -176,6 +181,7 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
             Player->UseScreen(Laptop);
             TestTrue(TEXT("sitting at the laptop puts the body on its bench"),
                      Player->IsUsingScreen() && Player->GetActorLocation().Z > LaptopSeat.Z);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
             Player->StopUsingScreen();
             CheckStanding(*this, TEXT("laptop"), World, Player, LaptopSeat);
