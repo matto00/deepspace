@@ -4,6 +4,7 @@
 #include "Brushes/SlateColorBrush.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
@@ -45,11 +46,13 @@ namespace
 
     // A row's columns, in the list's 322 px: the target's mark, the numeral
     // (or a given name), the kind, and the distance right-aligned. The
+    // numeral's is 40 px, not the spec's 34: "VIII" at size 14 is 36 px wide,
+    // and the first render check cut it to "V". The
     // distance is the widest thing the list prints, "1,496 THOUSAND KM",
     // which is why the orrery is 256 px and not larger.
     constexpr float MarkColumn = 12.0f;
-    constexpr float NameColumn = 34.0f;
-    constexpr float KindColumn = 100.0f;
+    constexpr float NameColumn = 40.0f;
+    constexpr float KindColumn = 94.0f;
     constexpr float DistanceColumn = 176.0f;
 
     // The chart's button colours, from the ship's palette: the map is the
@@ -87,7 +90,14 @@ UButton* USystemMapWidget::MakeRowButton(UWidget* Content)
     Style.SetNormalPadding(FMargin(2.0f, 0.0f));
     Style.SetPressedPadding(FMargin(2.0f, 0.0f));
     Button->SetStyle(Style);
-    Button->SetContent(Content);
+    // Across the button's whole width: a button centres its content by
+    // default, which lays each row's columns out at its own width and no
+    // two rows line up.
+    if (UButtonSlot* Cell = Cast<UButtonSlot>(Button->SetContent(Content)))
+    {
+        Cell->SetHorizontalAlignment(HAlign_Fill);
+        Cell->SetVerticalAlignment(VAlign_Center);
+    }
     return Button;
 }
 
