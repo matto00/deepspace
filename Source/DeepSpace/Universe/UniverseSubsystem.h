@@ -38,9 +38,13 @@ public:
     static UUniverseSubsystem* Get(const UObject* WorldContext);
 
     /** Resolves the root seed with ResolveSeed(UniverseSeed, FCommandLine::Get())
-     *  and reads the priors from GetDefault<UProcGenPriorsConfig>(). Every
-     *  query below works from here on: none needs begin-play, so another
-     *  subsystem's OnWorldBeginPlay may ask in any order. */
+     *  and takes the priors. Every query below works from here on: none needs
+     *  begin-play, so another subsystem's OnWorldBeginPlay may ask in any
+     *  order.
+     *
+     *  Slice 1: the priors are FGenPriors{}, compile-time constants. Slice 2
+     *  reads them from GetDefault<UProcGenPriorsConfig>() here instead, and
+     *  adds ReloadPriors and ds.Universe.ReloadPriors; no caller changes. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
     /** World-level, per docs/vision.md: shareable, and a bug report is a
@@ -69,12 +73,6 @@ public:
      *  (the developer's ruling, 2026-09-25: home is what the generator
      *  honestly makes, which is usually a red dwarf). */
     FSystemId GetStartSystem() const;
-
-    /** Re-reads the ini section and replaces the priors, so a prior can be
-     *  tuned inside one running session (ds.Universe.ReloadPriors). Safe
-     *  because nothing ever held a reference to anything built from the old
-     *  ones. */
-    void ReloadPriors();
 
     /** -UniverseSeed= from CommandLine if present, else ConfigSeed.
      *  UPROPERTY(Config) does not read the command line by itself, so
