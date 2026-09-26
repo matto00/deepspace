@@ -22,11 +22,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
  * sixtieth of a second at all, and the brown-out that should read as a
  * fixture running unwell freezes into a plain dim light.
  *
- * Measured the way the eye would: over a minute at sixty frames a second,
- * the light must change every frame, swing as far as a starved light does,
- * and never jump further in one frame than the wobble's own rates allow --
- * including the frame where the phase comes round, which a phase kept at
- * the wrong period would show as a jump.
+ * Over a minute, stepped far finer than any frame, the light must keep
+ * changing, swing as far as a starved light does, and never jump further
+ * in one step than the wobble's own rates allow -- including the step where
+ * the phase comes round, which a phase kept at the wrong period shows as a
+ * jump.
  */
 bool FLampFlickerAfterDaysTest::RunTest(const FString& Parameters)
 {
@@ -69,10 +69,12 @@ bool FLampFlickerAfterDaysTest::RunTest(const FString& Parameters)
         Lighting->Tick(1000.0f);
     }
 
-    // Sixty-four seconds: longer than the wobble's whole period, so however
-    // the phase is kept, the moment it comes round is among these frames.
-    constexpr float Frame = 1.0f / 60.0f;
-    constexpr int32 Frames = 64 * 60;
+    // Sixty-four seconds, longer than the wobble's whole period, so however
+    // the phase is kept, the moment it comes round is among these steps. A
+    // millisecond apart, finer than any frame, so that a jump where it comes
+    // round stands out against how far the wobble can move in one step.
+    constexpr float Frame = 0.001f;
+    constexpr int32 Frames = 64 * 1000;
     int32 Unchanged = 0;
     float Dimmest = TNumericLimits<float>::Max();
     float Brightest = 0.0f;
@@ -90,16 +92,21 @@ bool FLampFlickerAfterDaysTest::RunTest(const FString& Parameters)
         Previous = Now;
     }
 
-    // The steepest a frame can move: a starved light is StarvedGlow of its
+    // The steepest a step can move: a starved light is StarvedGlow of its
     // rating, wobbling by 22% of that at no more than the sum of the two
     // rates, 50.7 radians a second.
     const float Allowed = UShipLightingSubsystem::StarvedGlow * 0.22f * (37.0f + 13.7f) * Frame;
 
-    TestEqual(TEXT("after eleven days, the starved light still moves every frame"), Unchanged, 0);
+    // Not quite every step: a step that straddles the top of a swing can
+    // land on the same value either side of it. A frozen flicker repeats on
+    // every step.
+    TestTrue(FString::Printf(TEXT("after eleven days, the starved light still moves (%d of %d steps unchanged)"),
+                             Unchanged, Frames),
+             Unchanged <= Frames / 100);
     TestTrue(FString::Printf(TEXT("and swings as far as it did on the first day (%.4f to %.4f of its rating)"),
                              Dimmest, Brightest),
              Dimmest > 0.0f && Brightest / Dimmest > 1.3f);
-    TestTrue(FString::Printf(TEXT("smoothly: no frame jumps further than the wobble can move (%.5f, at most %.5f)"),
+    TestTrue(FString::Printf(TEXT("smoothly: no step jumps further than the wobble can move (%.5f, at most %.5f)"),
                              Steepest, Allowed),
              Steepest <= 1.05f * Allowed);
 
