@@ -1,3 +1,5 @@
+#include "Camera/PlayerCameraManager.h"
+#include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyProjection.h"
@@ -17,8 +19,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
  * the first time one of them is changed and the other is not.
  *
  * The formula is checked by its values, and both actors are checked to give
- * the one answer. Headless there is no viewport, so what they agree on here
- * is the fallback; the live field of view is a playtest question.
+ * the one answer. Headless there is no viewport to be wide, but there is a
+ * player's camera to zoom: it is zoomed away from the fallback's field of
+ * view, so an actor that sized by anything but the live view would disagree.
+ * The live width is a playtest question.
  */
 bool FOnePixelAngleTest::RunTest(const FString& Parameters)
 {
@@ -37,19 +41,37 @@ bool FOnePixelAngleTest::RunTest(const FString& Parameters)
              ShipSky::PixelAngle(90.0, 3840.0) < ShipSky::PixelAngle(90.0, 1920.0));
 
     const double Fallback = FSkyViewParams().PixelAngle;
-    TestEqual(TEXT("no width: the projection's own default"), ShipSky::PixelAngle(90.0, 0.0), Fallback);
-    TestEqual(TEXT("no field of view: the same"), ShipSky::PixelAngle(0.0, 1920.0), Fallback);
-    TestEqual(TEXT("no world: the same"), ShipSky::ViewPixelAngle(nullptr), Fallback);
+    constexpr double Tight = 1e-15;
+    TestEqual(TEXT("no view at all: the projection's own default"), ShipSky::PixelAngle(0.0, 0.0), Fallback, Tight);
+    TestEqual(TEXT("no world: the same"), ShipSky::ViewPixelAngle(nullptr), Fallback, Tight);
+    // Only the missing half is assumed.
+    TestEqual(TEXT("no width: the field of view over the fallback's width"), ShipSky::PixelAngle(60.0, 0.0),
+              ShipSky::PixelAngle(60.0, ShipSky::FallbackWidthPixels), Tight);
+    TestEqual(TEXT("no field of view: the fallback's over the width"), ShipSky::PixelAngle(0.0, 1000.0),
+              ShipSky::PixelAngle(ShipSky::FallbackFovDegrees, 1000.0), Tight);
 
     FSkyWorld Test(TEXT("OnePixelAngleWorld"));
-    if (!TestNotNull(TEXT("a counter-frame"), Test.Frame) || !TestNotNull(TEXT("and a sky"), Test.Sky))
+    APlayerController* Player = Test.World ? Test.World->SpawnActor<APlayerController>() : nullptr;
+    if (!TestNotNull(TEXT("a counter-frame"), Test.Frame) || !TestNotNull(TEXT("and a sky"), Test.Sky)
+        || !TestNotNull(TEXT("and a player"), Player))
     {
         return false;
     }
+    // The player's camera is spawned as its actors are initialised for play.
     Test.BeginPlay();
+    if (!TestNotNull(TEXT("the player has a camera"), Player->PlayerCameraManager.Get()))
+    {
+        return false;
+    }
+    // Zoomed in, as a pilot leaning toward the glass might be.
+    Player->PlayerCameraManager->SetFOV(60.0f);
+
     const double Answer = ShipSky::ViewPixelAngle(Test.World);
-    TestEqual(TEXT("the sky sizes by the one answer"), Test.Sky->GetPixelAngle(), Answer);
-    TestEqual(TEXT("and so does the counter-frame"), Test.Frame->GetPixelAngle(), Answer);
+    TestEqual(TEXT("the one answer is the zoomed camera's"), Answer, ShipSky::PixelAngle(60.0, 0.0), Tight);
+    TestTrue(TEXT("which is not the fallback, so agreeing on it means something"),
+             FMath::Abs(Answer / Fallback - 1.0) > 0.1);
+    TestEqual(TEXT("the sky sizes by the one answer"), Test.Sky->GetPixelAngle(), Answer, Tight);
+    TestEqual(TEXT("and so does the counter-frame"), Test.Frame->GetPixelAngle(), Answer, Tight);
     return true;
 }
 

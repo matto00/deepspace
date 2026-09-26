@@ -260,11 +260,17 @@ namespace ShipSky
     /** The diameter a point needs to be Pixels across at Distance, cm. */
     DEEPSPACE_API double PointDiameter(double Distance, double PixelAngle, double Pixels);
 
+    /** The view FSkyViewParams' default pixel angle is taken from, used for
+     *  whichever half of a view is missing. */
+    inline constexpr double FallbackFovDegrees = 90.0;
+    inline constexpr double FallbackWidthPixels = 1920.0;
+
     /**
      * Radians per pixel at the centre of a view FovDegrees across and
-     * WidthPixels wide: 2 tan(FOV / 2) / width. FSkyViewParams' default, 90
-     * degrees over 1920 pixels, for a view with no width or no field of
-     * view, which is what -nullrhi gives.
+     * WidthPixels wide: 2 tan(FOV / 2) / width. A view with no width --
+     * which is what -nullrhi gives -- is taken as FallbackWidthPixels wide,
+     * and one with no field of view as FallbackFovDegrees across; neither
+     * missing, it is FSkyViewParams' default.
      */
     DEEPSPACE_API double PixelAngle(double FovDegrees, double WidthPixels);
 

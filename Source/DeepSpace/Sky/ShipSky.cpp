@@ -619,11 +619,12 @@ double ShipSky::PointDiameter(double Distance, double PixelAngle, double Pixels)
 
 double ShipSky::PixelAngle(double FovDegrees, double WidthPixels)
 {
-    if (!(WidthPixels > 0.0) || !(FovDegrees > 0.0))
-    {
-        return FSkyViewParams().PixelAngle;
-    }
-    return 2.0 * FMath::Tan(0.5 * FMath::DegreesToRadians(FovDegrees)) / WidthPixels;
+    // Only what the view is missing is assumed. Headless there is a camera
+    // with a field of view and no viewport to be wide: the camera's zoom is
+    // still real, so it still counts.
+    const double Fov = FovDegrees > 0.0 ? FovDegrees : FallbackFovDegrees;
+    const double Width = WidthPixels > 0.0 ? WidthPixels : FallbackWidthPixels;
+    return 2.0 * FMath::Tan(0.5 * FMath::DegreesToRadians(Fov)) / Width;
 }
 
 double ShipSky::ViewPixelAngle(const UWorld* World)
