@@ -33,16 +33,17 @@ DEFINE_LOG_CATEGORY_STATIC(LogShipSky, Log, All);
 namespace
 {
     /**
-     * The galley's EV100, in Unreal's convention, which manual exposure
-     * fixes for the whole game (sky decision 6). The spec's default is
-     * "whatever auto exposure settles on in the galley"; nobody has read that
-     * off a rendered galley yet, so this is the estimate: a ceiling grid of
-     * ~2.5 cd lights 3 m apart puts about a lux on the floor, ~0.3 cd/m^2 on
-     * average, which is EV100 -2. Read the real one with ds.Sky.ExposureMode
-     * 0 and VisualizeHDR, and put it here.
+     * The galley's EV100, in the HDR visualisation's convention, which
+     * manual exposure fixes for the whole game (sky decision 6). The spec's
+     * default is "whatever auto exposure settles on in the galley"; nobody
+     * has read that off a rendered galley yet, so this is the estimate: a
+     * ceiling grid of ~2.5 cd lights 3 m apart puts about a lux on the
+     * floor, ~0.3 cd/m^2 on average, and log2((0.3 / 0.18) / 1) is +0.7.
+     * Read the real one with ds.Sky.ExposureMode 0 and VisualizeHDR, and put
+     * it here.
      */
     TAutoConsoleVariable<float> CVarExposure(
-        TEXT("ds.Sky.Exposure"), -2.0f,
+        TEXT("ds.Sky.Exposure"), 0.7f,
         TEXT("The fixed exposure: the scene EV100 shown at middle grey, as the HDR visualisation reports it. ")
         TEXT("Higher is a darker picture."));
 
@@ -50,7 +51,8 @@ namespace
         TEXT("ds.Sky.ExposureMode"), 1,
         TEXT("0: the engine's own auto exposure, untouched (for reading the galley's EV). ")
         TEXT("1: manual at ds.Sky.Exposure (the design). ")
-        TEXT("2: auto held within ds.Sky.ExposureRange of ds.Sky.Exposure (the fallback if manual feels dead)."));
+        TEXT("2: auto held within ds.Sky.ExposureRange of ds.Sky.Exposure (the fallback if manual feels dead); ")
+        TEXT("a scene at exactly ds.Sky.Exposure looks the same in 1 and 2."));
 
     TAutoConsoleVariable<float> CVarExposureRange(
         TEXT("ds.Sky.ExposureRange"), 1.5f,
@@ -61,9 +63,9 @@ namespace
      * surface 1 AU from a Sun. The projection's brightnesses are relative to
      * that and say nothing about how it compares with the ship's lamps, and
      * without this the only way to brighten the outside would be exposure,
-     * which brightens the galley too. At EV100 -2 a sunlit Earth-albedo world
-     * shows about a pixel value of 1: plainly brighter than the dim interior,
-     * not blown out.
+     * which brightens the galley too. At the galley's +0.7, a picture scale
+     * of 2^0.3, a sunlit Earth-albedo world shows about a pixel value of 1:
+     * plainly brighter than the dim interior, not blown out.
      */
     TAutoConsoleVariable<float> CVarRadiance(
         TEXT("ds.Sky.Radiance"), 3.0f,
@@ -82,7 +84,7 @@ namespace
 
     TAutoConsoleVariable<float> CVarFluxGamma(
         TEXT("ds.Sky.FluxGamma"), 0.5f,
-        TEXT("Irradiance and point-boost compression: 1 is honest, 0.5 turns 900x into 30x."));
+        TEXT("Irradiance, point-boost and point-star compression: 1 is honest, 0.5 turns 900x into 30x."));
 
     TAutoConsoleVariable<float> CVarPointPixels(
         TEXT("ds.Sky.PointPixels"), 2.0f,
@@ -93,8 +95,8 @@ namespace
      * pi over the Sun's solid angle at 1 AU, about 46,000 -- and at the
      * galley's exposure that is a pixel value past 65,504, the ceiling of the
      * half-float scene colour, where it becomes infinity and the bloom goes
-     * with it. 1,000 is blinding under bloom and two decades under the
-     * ceiling. The projection's own default of 1 would draw the Sun three
+     * with it. 1,000 is blinding under bloom and more than a decade under
+     * the ceiling. The projection's own default of 1 would draw the Sun three
      * times as bright as a planet, which is not the brightest thing in the
      * game.
      */
@@ -103,7 +105,8 @@ namespace
         TEXT("A resolved Sun's surface brightness, in units of a white surface at 1 AU. Honest is ~46,000."));
 
     /** The faintest background star, so that it is just there against black
-     *  at the galley's exposure and the brightest, 400 times it, glints. */
+     *  at the galley's exposure and the brightest -- 400 times its flux, 20
+     *  times its brightness at FluxGamma 0.5 -- glints. */
     TAutoConsoleVariable<float> CVarStarfieldFaint(
         TEXT("ds.Sky.StarfieldFaint"), 0.01f,
         TEXT("Emission of a flux-1 point at infinity, before ds.Sky.Radiance."));
@@ -180,6 +183,8 @@ AShipSky::AShipSky()
     NeighbourStars->bAffectDynamicIndirectLighting = false;
     NeighbourStars->bAffectDistanceFieldLighting = false;
     NeighbourStars->bVisibleInRayTracing = false;
+    NeighbourStars->bVisibleInReflectionCaptures = false;
+    NeighbourStars->bVisibleInRealTimeSkyCaptures = false;
 }
 
 void AShipSky::BeginPlay()
@@ -222,15 +227,18 @@ void AShipSky::Tick(float DeltaSeconds)
 
 void AShipSky::SyncToShip()
 {
-    const UWorld* World = GetWorld();
-    ApplyExposure();
-    WriteParameters();
-
     // Asked every frame: a copy held here would be a second answer to
     // "which system am I in", and the day the two disagreed nobody would
     // know which was wrong.
-    const FSkySystem System = LocalSystem::Current(World);
-    const int32 Serial = LocalSystem::Serial(World);
+    const UWorld* World = GetWorld();
+    SyncTo(LocalSystem::Current(World), LocalSystem::Serial(World), LocalSystem::InTransit(World));
+}
+
+void AShipSky::SyncTo(const FSkySystem& System, int32 Serial, bool bInTransit)
+{
+    ApplyExposure();
+    WriteParameters();
+
     if (Serial != BuiltForSerial)
     {
         RebuildFor(System);
@@ -239,12 +247,18 @@ void AShipSky::SyncToShip()
 
     // Between stars there is nowhere to be near: no sun, no planets, no
     // neighbours, only the streaks and the dome the counter-frame keeps.
-    if (LocalSystem::InTransit(World))
+    if (bInTransit)
     {
         SetSkyVisible(false);
         return;
     }
     DrawFrom(System);
+}
+
+bool AShipSky::IsBuiltFor(const FSkySystem& System) const
+{
+    const FUniversePosition Star = System.Bodies.IsEmpty() ? FUniversePosition() : System.Bodies[0].Position;
+    return Proxies.Num() == System.Bodies.Num() && BuiltForSystem == System.SystemId && BuiltForStar == Star;
 }
 
 void AShipSky::RebuildFor(const FSkySystem& System)
@@ -257,6 +271,8 @@ void AShipSky::RebuildFor(const FSkySystem& System)
         }
     }
     Proxies.Reset();
+    BuiltForSystem = System.SystemId;
+    BuiltForStar = System.Bodies.IsEmpty() ? FUniversePosition() : System.Bodies[0].Position;
 
     for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
     {
@@ -272,14 +288,19 @@ void AShipSky::RebuildFor(const FSkySystem& System)
 
         // A 125,000 km sphere must touch nothing inside the ship: no
         // collision, no shadow, no bounce light, no distance-field lighting,
-        // no ray tracing. The materials are unlit, so the sun does not light
-        // them either (sky decision 5).
+        // no ray tracing, and no reflection or sky capture -- a sky light
+        // captures everything past 1.5 km, which is every proxy, and would
+        // bake the opening planet into the deck's ambient light for good.
+        // The materials are unlit, so the sun does not light them either
+        // (sky decision 5).
         Proxy->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         Proxy->SetGenerateOverlapEvents(false);
         Proxy->SetCastShadow(false);
         Proxy->bAffectDynamicIndirectLighting = false;
         Proxy->bAffectDistanceFieldLighting = false;
         Proxy->bVisibleInRayTracing = false;
+        Proxy->bVisibleInReflectionCaptures = false;
+        Proxy->bVisibleInRealTimeSkyCaptures = false;
         Proxy->bReceivesDecals = false;
         Proxy->bNeverDistanceCull = true;
 
@@ -306,7 +327,7 @@ void AShipSky::DrawFrom(const FSkySystem& System)
     {
         return;
     }
-    if (Proxies.Num() != System.Bodies.Num())
+    if (!IsBuiltFor(System))
     {
         RebuildFor(System);
     }
@@ -319,7 +340,7 @@ void AShipSky::DrawFrom(const FSkySystem& System)
     SetSkyVisible(true);
     DrawBodies(System, LastFrame, Flight.GetCounterFrameTransform().GetRotation());
     DrawSun(System, LastFrame);
-    DrawNeighbours(System, PixelAngle, Params.MinPointPixels);
+    DrawNeighbours(System, Flight.GetUniversePosition(), PixelAngle, Params.MinPointPixels);
 }
 
 void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, const FQuat& CounterFrameRotation)
@@ -400,7 +421,8 @@ void AShipSky::DrawSun(const FSkySystem& System, const FSkyFrame& Frame)
     Sun->SetLightSourceAngle(static_cast<float>(FMath::RadiansToDegrees(2.0 * Frame.Bodies[StarIndex].AngularRadius)));
 }
 
-void AShipSky::DrawNeighbours(const FSkySystem& System, double PixelAngle, double PointPixels)
+void AShipSky::DrawNeighbours(const FSkySystem& System, const FUniversePosition& ShipPosition, double PixelAngle,
+                              double PointPixels)
 {
     const int32 Count = System.Neighbours.Num();
     if (NeighbourStars->GetInstanceCount() != Count)
@@ -421,16 +443,19 @@ void AShipSky::DrawNeighbours(const FSkySystem& System, double PixelAngle, doubl
         MeshDiameter = FMath::Max(2.0 * BodyMesh->GetBoundingBox().GetExtent().GetMax(), UE_DOUBLE_SMALL_NUMBER);
     }
     const double Scale = ShipSky::PointDiameter(DomeRadius, PixelAngle, PointPixels) / MeshDiameter;
-    const double FluxGamma = CVarFluxGamma.GetValueOnGameThread();
 
-    // Direction only, on the dome. The system is light years across from
-    // its neighbours and the ship is never outside it, so the direction from
-    // the star is the direction from the ship to microradians.
+    // Direction only, on the dome, and from the ship rather than the star:
+    // near the system's edge the two differ by degrees. A system with
+    // neighbours and no star has nothing to refer them from but the star's
+    // own frame, which is all LocalSystem gave.
+    const FSkyBody* Star = System.Bodies.FindByPredicate([](const FSkyBody& Body) { return Body.Kind == ESkyBodyKind::Star; });
+    const FVector StarFromShip = Star ? Star->Position - ShipPosition : FVector::ZeroVector;
+
     TArray<FTransform> Transforms;
     Transforms.Reserve(Count);
     for (int32 Index = 0; Index < Count; ++Index)
     {
-        const FSkyNeighbour& Neighbour = System.Neighbours[Index];
+        const FSkyNeighbour Neighbour = ShipSky::NeighbourFromShip(System.Neighbours[Index], StarFromShip);
         Transforms.Emplace(FQuat::Identity, Neighbour.Direction * DomeRadius, FVector(Scale));
 
         const FLinearColor Colour = SkyColour::Blackbody(Neighbour.TemperatureK);
@@ -438,7 +463,7 @@ void AShipSky::DrawNeighbours(const FSkySystem& System, double PixelAngle, doubl
         Data[SkyMaterial::CustomDataRed] = Colour.R;
         Data[SkyMaterial::CustomDataGreen] = Colour.G;
         Data[SkyMaterial::CustomDataBlue] = Colour.B;
-        Data[SkyMaterial::CustomDataBrightness] = PointStarBrightness(ShipSky::NeighbourFlux(Neighbour, FluxGamma));
+        Data[SkyMaterial::CustomDataBrightness] = PointStarBrightness(ShipSky::NeighbourFlux(Neighbour));
         NeighbourStars->SetCustomData(Index, TArrayView<const float>(Data, SkyMaterial::StarfieldCustomData), false);
     }
     NeighbourStars->BatchUpdateInstancesTransforms(0, Transforms, /*bWorldSpace*/ false, /*bMarkRenderStateDirty*/ true, /*bTeleport*/ true);
@@ -453,7 +478,7 @@ void AShipSky::ApplyExposure()
     // Mode 0 hands exposure back to the engine entirely, so what the HDR
     // visualisation reports is the galley's own EV and not this one.
     Settings.bOverride_AutoExposureMethod = Mode != 0;
-    Settings.bOverride_AutoExposureBias = Mode == 1;
+    Settings.bOverride_AutoExposureBias = Mode != 0;
     Settings.bOverride_AutoExposureApplyPhysicalCameraExposure = Mode == 1;
     Settings.bOverride_AutoExposureMinBrightness = Mode == 2;
     Settings.bOverride_AutoExposureMaxBrightness = Mode == 2;
@@ -468,7 +493,13 @@ void AShipSky::ApplyExposure()
     }
     else if (Mode == 2)
     {
+        // The engine's default bias, pinned rather than inherited: a level
+        // volume setting its own would shift the fallback off the design by
+        // exactly that many stops. The brightness limits are white-point
+        // EV100, ds.Sky.Exposure's convention, so a scene at ds.Sky.Exposure
+        // looks the same here as under manual.
         const float Range = FMath::Max(CVarExposureRange.GetValueOnGameThread(), 0.0f);
+        Settings.AutoExposureBias = static_cast<float>(ShipSky::AutoExposureDefaultBias);
         Settings.AutoExposureMethod = AEM_Histogram;
         Settings.AutoExposureMinBrightness = EV - Range;
         Settings.AutoExposureMaxBrightness = EV + Range;
@@ -562,13 +593,26 @@ UInstancedStaticMeshComponent* AShipSky::GetNeighbourStars() const { return Neig
 
 float AShipSky::PointStarBrightness(double Flux)
 {
-    return static_cast<float>(Flux * CVarStarfieldFaint.GetValueOnGameThread() * CVarRadiance.GetValueOnGameThread());
+    const double Compressed = SkyProjection::Compress(Flux, CVarFluxGamma.GetValueOnGameThread());
+    return static_cast<float>(Compressed * CVarStarfieldFaint.GetValueOnGameThread() * CVarRadiance.GetValueOnGameThread());
 }
 
 // ---------------------------------------------------------------------------
 // The pure half.
 
-double ShipSky::NeighbourFlux(const FSkyNeighbour& Neighbour, double FluxGamma)
+FSkyNeighbour ShipSky::NeighbourFromShip(const FSkyNeighbour& Neighbour, const FVector& StarFromShip)
+{
+    const FVector FromShip = StarFromShip + Neighbour.Direction * Neighbour.Distance;
+    FSkyNeighbour Seen = Neighbour;
+    Seen.Distance = FromShip.Size();
+    if (Seen.Distance > 0.0)
+    {
+        Seen.Direction = FromShip / Seen.Distance;
+    }
+    return Seen;
+}
+
+double ShipSky::NeighbourFlux(const FSkyNeighbour& Neighbour)
 {
     const double Ly = Neighbour.Distance / UniverseUnits::CmPerLightYear;
     if (Ly <= 0.0)
@@ -576,8 +620,7 @@ double ShipSky::NeighbourFlux(const FSkyNeighbour& Neighbour, double FluxGamma)
         return SkyStarfield::MaxFlux;
     }
     const double Reach = FaintestFluxSunDistanceLy / Ly;
-    const double Honest = Neighbour.Luminosity * Reach * Reach;
-    return FMath::Clamp(SkyProjection::Compress(Honest, FluxGamma), 1.0, SkyStarfield::MaxFlux);
+    return FMath::Clamp(Neighbour.Luminosity * Reach * Reach, 1.0, SkyStarfield::MaxFlux);
 }
 
 double ShipSky::PointDiameter(double Distance, double PixelAngle, double Pixels)
@@ -587,9 +630,7 @@ double ShipSky::PointDiameter(double Distance, double PixelAngle, double Pixels)
 
 double ShipSky::ManualExposureBias(double SceneEV100)
 {
-    constexpr double MiddleGrey = 0.18;
-    constexpr double AutoExposureDefaultBias = 1.0;
-    return FMath::Log2(MiddleGrey) + AutoExposureDefaultBias - SceneEV100;
+    return AutoExposureDefaultBias - SceneEV100;
 }
 
 int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
@@ -644,6 +685,40 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
 // ---------------------------------------------------------------------------
 // ds.Sky.Goto: the sky's one write path, a one-shot PlaceShip for tuning.
 
+void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
+                    FOutputDevice& Out)
+{
+    if (Args.Num() < 2)
+    {
+        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km>: onto the body's day side, facing it. Bodies:"));
+        for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+        {
+            Out.Logf(TEXT("  %d  %s"), Index, *System.Bodies[Index].Id.ToString());
+        }
+        return;
+    }
+    if (bInTransit)
+    {
+        Out.Log(TEXT("ds.Sky.Goto: between stars; there is nothing to go to."));
+        return;
+    }
+
+    // A body's Id can have spaces in it, so every argument but the last is
+    // the body.
+    const FString Which = FString::Join(Args.Slice(0, Args.Num() - 1), TEXT(" "));
+    const double AltitudeKm = FCString::Atod(*Args.Last());
+    const int32 Body = ShipSky::FindBody(System, Which);
+    const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
+        System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition());
+    if (!Placement)
+    {
+        Out.Logf(TEXT("ds.Sky.Goto: no body '%s' here (%d bodies)."), *Which, System.Bodies.Num());
+        return;
+    }
+    Ship.PlaceShip(Placement->Position, Placement->Orientation);
+    Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s."), AltitudeKm, *System.Bodies[Body].Id.ToString());
+}
+
 namespace
 {
     void Goto(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
@@ -654,36 +729,7 @@ namespace
             Out.Log(TEXT("ds.Sky.Goto: no ship."));
             return;
         }
-        const FSkySystem System = LocalSystem::Current(World);
-        if (Args.Num() < 2)
-        {
-            Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km>: onto the body's day side, facing it. Bodies:"));
-            for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
-            {
-                Out.Logf(TEXT("  %d  %s"), Index, *System.Bodies[Index].Id.ToString());
-            }
-            return;
-        }
-        if (LocalSystem::InTransit(World))
-        {
-            Out.Log(TEXT("ds.Sky.Goto: between stars; there is nothing to go to."));
-            return;
-        }
-
-        // A body's Id can have spaces in it, so every argument but the last
-        // is the body.
-        const FString Which = FString::Join(TArrayView<const FString>(Args.GetData(), Args.Num() - 1), TEXT(" "));
-        const double AltitudeKm = FCString::Atod(*Args.Last());
-        const int32 Body = ShipSky::FindBody(System, Which);
-        const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
-            System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship->GetFlightState().GetUniversePosition());
-        if (!Placement)
-        {
-            Out.Logf(TEXT("ds.Sky.Goto: no body '%s' here (%d bodies)."), *Which, System.Bodies.Num());
-            return;
-        }
-        Ship->PlaceShip(Placement->Position, Placement->Orientation);
-        Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s."), AltitudeKm, *System.Bodies[Body].Id.ToString());
+        AShipSky::Goto(*Ship, LocalSystem::Current(World), LocalSystem::InTransit(World), Args, Out);
     }
 
     FAutoConsoleCommandWithWorldArgsAndOutputDevice GotoCommand(

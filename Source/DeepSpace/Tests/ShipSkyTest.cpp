@@ -137,28 +137,45 @@ namespace ShipSkyTestLocal
         return 2.0 * FMath::Asin(Sphere.Radius / (Sphere.Centre - Eye).Size());
     }
 
-    /** A position between stars in this universe, checked rather than
-     *  assumed: at 0.004 systems per cubic light year, a 0.25 ly sphere
-     *  holds one about once in three thousand. */
-    FUniversePosition BetweenStars(const UUniverseSubsystem* Universe)
-    {
-        for (int32 Step = 0; Step < 64; ++Step)
-        {
-            const FUniversePosition Where = FUniversePosition()
-                + FVector(1.7 + 0.37 * Step, -2.3, 0.9) * UniverseUnits::CmPerLightYear;
-            if (!Universe || !Universe->GetSystemAt(Where))
-            {
-                return Where;
-            }
-        }
-        return FUniversePosition();
-    }
-
     int32 CountBodyProxies(const AShipSky* Sky)
     {
         TArray<UStaticMeshComponent*> Meshes;
         Sky->GetComponents(Meshes);
         return Meshes.Num() - 1;    // less NeighbourStars, itself a static mesh component
+    }
+
+    /** The colour a proxy's material was built with, or magenta if it has
+     *  none: RebuildFor is the only place it is written. */
+    FLinearColor BuiltColour(const AShipSky* Sky, int32 Index)
+    {
+        const UStaticMeshComponent* Proxy = Sky->GetProxy(Index);
+        UMaterialInstanceDynamic* Instance = Proxy ? Cast<UMaterialInstanceDynamic>(Proxy->GetMaterial(0)) : nullptr;
+        return Instance ? Instance->K2_GetVectorParameterValue(SkyMaterial::Colour) : FLinearColor(1.0f, 0.0f, 1.0f);
+    }
+
+    /** Whether every proxy's visibility is bVisible, and there is at least
+     *  one: an empty sky proves nothing either way. */
+    bool AllProxies(const AShipSky* Sky, bool bVisible)
+    {
+        if (Sky->GetProxyCount() == 0)
+        {
+            return false;
+        }
+        for (int32 Index = 0; Index < Sky->GetProxyCount(); ++Index)
+        {
+            if (!Sky->GetProxy(Index) || Sky->GetProxy(Index)->IsVisible() != bVisible)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Where a neighbour really is from Ship: through universe positions,
+     *  not through the sky's arithmetic. */
+    FVector TrueDirection(const FSkyNeighbour& Neighbour, const FUniversePosition& Star, const FUniversePosition& Ship)
+    {
+        return ((Star + Neighbour.Direction * Neighbour.Distance) - Ship).GetSafeNormal();
     }
 }
 
@@ -173,26 +190,74 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
 
     // -- The pure half --------------------------------------------------------
     {
-        TestTrue(TEXT("manual exposure at EV 0 is auto's middle grey at its +1 bias"),
-            FMath::IsNearlyEqual(ShipSky::ManualExposureBias(0.0), FMath::Log2(0.36), 1e-12));
-        TestTrue(TEXT("a scene one stop brighter gets one stop less exposure"),
-            FMath::IsNearlyEqual(ShipSky::ManualExposureBias(-1.0) - ShipSky::ManualExposureBias(0.0), 1.0, 1e-12));
+        // Exposure, against the engine's own arithmetic rather than this
+        // file's: the HDR visualisation reports log2((average / 0.18) /
+        // LuminanceMax), LuminanceMax is 1 at the default lens attenuation,
+        // auto exposure scales the picture by 2^bias / (average / 0.18), and
+        // manual with no physical camera by 2^bias.
+        {
+            const double Average = 0.3;                                 // cd/m^2, the galley's estimate
+            const double SceneEV = FMath::Log2(Average / 0.18);
+            const double AutoScale = FMath::Pow(2.0, ShipSky::AutoExposureDefaultBias) / (Average / 0.18);
+            const double ManualScale = FMath::Pow(2.0, ShipSky::ManualExposureBias(SceneEV));
+            TestTrue(FString::Printf(TEXT("manual shows a %.2f EV scene exactly as auto does (%.4f vs %.4f)"), SceneEV, ManualScale, AutoScale),
+                FMath::IsNearlyEqual(ManualScale, AutoScale, 1e-12));
+            TestTrue(TEXT("manual exposure at EV 0 is auto's default bias, +1"),
+                FMath::IsNearlyEqual(ShipSky::ManualExposureBias(0.0), 1.0, 1e-12));
+            TestTrue(TEXT("a scene one stop brighter gets one stop less exposure"),
+                FMath::IsNearlyEqual(ShipSky::ManualExposureBias(-1.0) - ShipSky::ManualExposureBias(0.0), 1.0, 1e-12));
+            TestEqual(TEXT("the default bias the formula assumes is the engine's"),
+                static_cast<double>(FPostProcessSettings().AutoExposureBias), ShipSky::AutoExposureDefaultBias);
+        }
 
         FSkyNeighbour Sun;
         Sun.Luminosity = 1.0;
         Sun.Distance = ShipSky::FaintestFluxSunDistanceLy * UniverseUnits::CmPerLightYear;
-        TestTrue(TEXT("a Sun at 70 ly is the faintest star drawn"), FMath::IsNearlyEqual(ShipSky::NeighbourFlux(Sun, 1.0), 1.0, 1e-9));
+        TestTrue(TEXT("a Sun at 70 ly is the faintest star drawn"), FMath::IsNearlyEqual(ShipSky::NeighbourFlux(Sun), 1.0, 1e-9));
         Sun.Distance = 4.0 * UniverseUnits::CmPerLightYear;
-        const double Honest = FMath::Square(ShipSky::FaintestFluxSunDistanceLy / 4.0);
-        TestTrue(TEXT("honest at gamma 1: the inverse square"), FMath::IsNearlyEqual(ShipSky::NeighbourFlux(Sun, 1.0), Honest, 1e-9));
-        TestTrue(TEXT("compressed at gamma 0.5: a Sun at 4 ly is about 18"),
-            FMath::IsNearlyEqual(ShipSky::NeighbourFlux(Sun, 0.5), FMath::Sqrt(Honest), 1e-9));
+        TestTrue(TEXT("a Sun at 4 ly is 310 on the starfield's honest scale, as Alpha Centauri is among the brightest"),
+            FMath::IsNearlyEqual(ShipSky::NeighbourFlux(Sun), 309.76, 1e-9));
         FSkyNeighbour Dwarf = Sun;
         Dwarf.Luminosity = 0.0017;
-        TestEqual(TEXT("a Proxima is never missing: held at the faintest drawn"), ShipSky::NeighbourFlux(Dwarf, 0.5), 1.0);
+        TestEqual(TEXT("a Proxima is never missing: held at the faintest drawn"), ShipSky::NeighbourFlux(Dwarf), 1.0);
         FSkyNeighbour Giant = Sun;
         Giant.Luminosity = 1.0e6;
-        TestEqual(TEXT("and nothing is brighter than the starfield's brightest"), ShipSky::NeighbourFlux(Giant, 0.5), SkyStarfield::MaxFlux);
+        TestEqual(TEXT("and nothing is brighter than the starfield's brightest"), ShipSky::NeighbourFlux(Giant), SkyStarfield::MaxFlux);
+
+        // A point's brightness, against literal CVar values: one function for
+        // every point at infinity, compressed flux times the faint end's
+        // emission times the scene's unit.
+        {
+            FScopedCVar Faint(TEXT("ds.Sky.StarfieldFaint"), 0.01f);
+            FScopedCVar Radiance(TEXT("ds.Sky.Radiance"), 3.0f);
+            {
+                FScopedCVar Gamma(TEXT("ds.Sky.FluxGamma"), 1.0f);
+                TestTrue(TEXT("honest: flux 4 at Faint 0.01 and Radiance 3 is 0.12"),
+                    FMath::IsNearlyEqual(AShipSky::PointStarBrightness(4.0), 0.12f, 1e-6f));
+            }
+            FScopedCVar Gamma(TEXT("ds.Sky.FluxGamma"), 0.5f);
+            TestTrue(TEXT("compressed at gamma 0.5: flux 4 is 0.06"), FMath::IsNearlyEqual(AShipSky::PointStarBrightness(4.0), 0.06f, 1e-6f));
+            TestTrue(TEXT("and the faintest star is 0.03"), FMath::IsNearlyEqual(AShipSky::PointStarBrightness(1.0), 0.03f, 1e-6f));
+        }
+
+        // A neighbour re-referred from the star to the ship. At the system's
+        // edge, 0.25 ly out square to a neighbour 4 ly off, it has moved by
+        // atan(0.25 / 4), 3.6 degrees.
+        {
+            FSkyNeighbour Ahead;
+            Ahead.Direction = FVector::ForwardVector;
+            Ahead.Distance = 4.0 * UniverseUnits::CmPerLightYear;
+            const FVector StarFromShip(0.0, 0.25 * UniverseUnits::CmPerLightYear, 0.0);
+            const FSkyNeighbour Seen = ShipSky::NeighbourFromShip(Ahead, StarFromShip);
+            TestTrue(TEXT("from the edge, a neighbour is where it is from the ship"),
+                Seen.Direction.Equals(FVector(4.0, 0.25, 0.0).GetSafeNormal(), 1e-12));
+            TestTrue(TEXT("3.6 degrees off where it is from the star"),
+                FMath::IsNearlyEqual(FMath::RadiansToDegrees(FMath::Acos(FVector::DotProduct(Seen.Direction, Ahead.Direction))), 3.576, 1e-3));
+            TestTrue(TEXT("and at its distance from the ship"),
+                FMath::IsNearlyEqual(Seen.Distance / UniverseUnits::CmPerLightYear, FMath::Sqrt(16.0625), 1e-12));
+            const FSkyNeighbour AtStar = ShipSky::NeighbourFromShip(Ahead, FVector::ZeroVector);
+            TestTrue(TEXT("at the star, nothing moves"), AtStar.Direction.Equals(Ahead.Direction, 1e-15) && AtStar.Distance == Ahead.Distance);
+        }
 
         const FSkySystem Fixture = SkyTestFixtures::System();
         TestEqual(TEXT("a body by index"), ShipSky::FindBody(Fixture, TEXT("2")), SkyTestFixtures::HomeIndex);
@@ -254,14 +319,6 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         FMath::IsNearlyEqual(Sky->GetPixelAngle(), 2.0 / 1920.0, 1e-15));
     TestTrue(TEXT("the dome is behind every proxy the band can make"), Sky->GetDomeRadius() > FSkyViewParams().FarProxy);
 
-    // Between stars there is nothing to draw, and it draws nothing. Placed
-    // explicitly, so the opening placement cannot decide this.
-    Ship->PlaceShip(BetweenStars(Test.Universe), FQuat::Identity);
-    Sky->SyncToShip();
-    TestEqual(TEXT("between stars: no bodies"), Sky->GetProxyCount(), 0);
-    TestFalse(TEXT("and no sun"), Sky->GetSun()->IsVisible());
-    TestEqual(TEXT("and no neighbours"), Sky->GetNeighbourStars()->GetInstanceCount(), 0);
-
     // Exposure is fixed, and exactly ds.Sky.Exposure.
     {
         const FPostProcessSettings& Settings = Sky->GetExposure()->Settings;
@@ -285,23 +342,26 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestFalse(TEXT("mode 0 hands exposure back to the engine"), Settings.bOverride_AutoExposureMethod != 0);
             }
             {
+                // Under manual the picture is scaled by 2^bias; under auto,
+                // for a scene at EV x inside its limits, by 2^(bias - x). A
+                // scene at ds.Sky.Exposure must look the same in both, or
+                // switching to the fallback jumps the picture by stops.
+                const float ManualBias = Settings.AutoExposureBias;
                 FScopedCVar Mode(TEXT("ds.Sky.ExposureMode"), 2.0f);
                 FScopedCVar Range(TEXT("ds.Sky.ExposureRange"), 1.0f);
                 Sky->SyncToShip();
                 TestTrue(TEXT("mode 2 is auto, held a range either side"), Settings.AutoExposureMethod == AEM_Histogram
                     && Settings.AutoExposureMinBrightness == 2.0f && Settings.AutoExposureMaxBrightness == 4.0f);
+                const float Centre = 0.5f * (Settings.AutoExposureMinBrightness + Settings.AutoExposureMaxBrightness);
+                TestTrue(FString::Printf(TEXT("modes 1 and 2 centre on the same EV (manual 2^%.3f, auto 2^%.3f)"),
+                    ManualBias, Settings.AutoExposureBias - Centre),
+                    Settings.bOverride_AutoExposureBias && FMath::IsNearlyEqual(Settings.AutoExposureBias - Centre, ManualBias, 1e-5f));
             }
         }
         Sky->SyncToShip();
     }
 
-    // ds.Sky.Goto with nothing here to go to leaves the ship where it is.
-    {
-        const FUniversePosition Before = Ship->GetFlightState().GetUniversePosition();
-        FOutputDeviceNull Quiet;
-        IConsoleManager::Get().ProcessUserConsoleInput(TEXT("ds.Sky.Goto 0 150"), Quiet, Test.World);
-        TestTrue(TEXT("goto between stars does nothing"), Ship->GetFlightState().GetUniversePosition().DistanceTo(Before) == 0.0);
-    }
+    TestNotNull(TEXT("ds.Sky.Goto is a console command"), IConsoleManager::Get().FindConsoleObject(TEXT("ds.Sky.Goto")));
 
     // -- A fixture drawn from the opening --------------------------------------
     FSkySystem Fixture = SkyTestFixtures::System();
@@ -337,6 +397,8 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("proxies touch nothing"), Home->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
             TestFalse(TEXT("and shadow nothing"), Home->CastShadow != 0);
             TestTrue(TEXT("and are never distance-culled"), Home->bNeverDistanceCull != 0);
+            TestFalse(TEXT("and no reflection capture sees them"), Home->bVisibleInReflectionCaptures != 0);
+            TestFalse(TEXT("and no sky light captures them"), Home->bVisibleInRealTimeSkyCaptures != 0);
 
             // The opening shot, measured where the pilot's eyes are rather
             // than at the ship's origin: an Earth 40,000 km off is 18.3
@@ -433,14 +495,24 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     // The neighbours, on the dome, nearest first, drawn like background stars.
     {
         UInstancedStaticMeshComponent* Neighbours = Sky->GetNeighbourStars();
+        TestFalse(TEXT("no reflection capture sees the neighbours"), Neighbours->bVisibleInReflectionCaptures != 0);
+        TestFalse(TEXT("and no sky light captures them"), Neighbours->bVisibleInRealTimeSkyCaptures != 0);
+
+        FScopedCVar Faint(TEXT("ds.Sky.StarfieldFaint"), 0.01f);
+        FScopedCVar Radiance(TEXT("ds.Sky.Radiance"), 3.0f);
+        FScopedCVar Gamma(TEXT("ds.Sky.FluxGamma"), 0.5f);
+        Sky->DrawFrom(Fixture);
+        const FUniversePosition ShipAt = Ship->GetFlightState().GetUniversePosition();
+
         if (TestEqual(TEXT("one point per neighbour"), Neighbours->GetInstanceCount(), 2))
         {
             for (int32 Index = 0; Index < 2; ++Index)
             {
+                const FSkyNeighbour& Neighbour = Fixture.Neighbours[Index];
                 FTransform Instance;
                 Neighbours->GetInstanceTransform(Index, Instance, false);
-                TestTrue(TEXT("a neighbour is in its true direction"),
-                    Instance.GetLocation().GetSafeNormal().Equals(Fixture.Neighbours[Index].Direction, 1e-9));
+                TestTrue(TEXT("a neighbour is in its true direction from the ship"),
+                    Instance.GetLocation().GetSafeNormal().Equals(TrueDirection(Neighbour, SkyTestFixtures::StarPosition(), ShipAt), 1e-9));
                 TestTrue(TEXT("on the dome"), FMath::IsNearlyEqual(Instance.GetLocation().Size(), AShipSky::DomeRadius, 1.0));
                 const double Across = Instance.GetScale3D().X * 2.0 * Test.Sphere->GetBoundingBox().GetExtent().GetMax();
                 TestTrue(TEXT("a point ds.Sky.PointPixels across"),
@@ -450,8 +522,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 const FLinearColor Colour = SkyColour::Blackbody(Fixture.Neighbours[Index].TemperatureK);
                 TestTrue(TEXT("coloured by its temperature"), FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataRed], Colour.R)
                     && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataGreen], Colour.G) && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataBlue], Colour.B));
-                TestTrue(TEXT("as bright as a background star of its flux"), FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataBrightness],
-                    AShipSky::PointStarBrightness(ShipSky::NeighbourFlux(Fixture.Neighbours[Index], CVarFloat(TEXT("ds.Sky.FluxGamma")))), 1e-6f));
+                // Written out rather than asked of the sky: the honest flux,
+                // L (70.4 ly / D)^2 in [1, 400], square-rooted, times 0.01
+                // and 3.
+                const double Ly = ((SkyTestFixtures::StarPosition() + Neighbour.Direction * Neighbour.Distance) - ShipAt).Size()
+                    / UniverseUnits::CmPerLightYear;
+                const double Flux = FMath::Clamp(Neighbour.Luminosity * FMath::Square(70.4 / Ly), 1.0, 400.0);
+                TestTrue(FString::Printf(TEXT("as bright as a background star of flux %.2f"), Flux),
+                    FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataBrightness], static_cast<float>(FMath::Sqrt(Flux) * 0.03), 1e-6f));
             }
             const float* Data = Neighbours->PerInstanceSMCustomData.GetData();
             TestTrue(TEXT("a Sun at 4 ly outshines a red dwarf at 9"),
@@ -474,6 +552,109 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         Sky->DrawFrom(Fixture);
         TestEqual(TEXT("drawing a system of another size rebuilds for it"), Sky->GetProxyCount(), Fixture.Bodies.Num());
         TestEqual(TEXT("still without leaking"), CountBodyProxies(Sky), Fixture.Bodies.Num());
+    }
+
+    // Out at the system's edge, where the drive carries a ship leaving the
+    // planets, a neighbour is degrees off where it is from the star.
+    {
+        const FSkyNeighbour& Near = Fixture.Neighbours[0];
+        const FVector Square = FVector::CrossProduct(Near.Direction, FVector::UpVector).GetSafeNormal();
+        const FUniversePosition Edge = SkyTestFixtures::StarPosition() + Square * (0.24 * UniverseUnits::CmPerLightYear);
+        Ship->PlaceShip(Edge, FQuat::Identity);
+        Test.Frame->SyncToShip();
+        Sky->DrawFrom(Fixture);
+
+        FTransform Instance;
+        Sky->GetNeighbourStars()->GetInstanceTransform(0, Instance, false);
+        const FVector Seen = Instance.GetLocation().GetSafeNormal();
+        TestTrue(TEXT("from the edge, the nearest neighbour is where it is from the ship"),
+            Seen.Equals(TrueDirection(Near, SkyTestFixtures::StarPosition(), Edge), 1e-9));
+        TestTrue(FString::Printf(TEXT("which is %.2f degrees from where it is from the star"),
+            FMath::RadiansToDegrees(FMath::Acos(FVector::DotProduct(Seen, Near.Direction)))),
+            FVector::DotProduct(Seen, Near.Direction) < FMath::Cos(FMath::DegreesToRadians(3.0)));
+    }
+
+    // The cache and transit, through SyncTo: the answers LocalSystem's
+    // null-world branch never gives -- a serial that moves, a ship between
+    // stars -- given by hand.
+    Ship->PlaceShip(SkyTestFixtures::Opening(), FQuat::Identity);
+    Test.Frame->SyncToShip();
+    {
+        using namespace SkyTestFixtures;
+        Sky->SyncTo(Fixture, 10, false);
+        TestEqual(TEXT("synced: one proxy per body"), Sky->GetProxyCount(), Fixture.Bodies.Num());
+
+        FSkySystem Recoloured = Fixture;
+        Recoloured.Bodies[HomeIndex].Colour = FLinearColor(0.8f, 0.2f, 0.1f);
+        Sky->SyncTo(Recoloured, 11, false);
+        TestTrue(TEXT("a serial that moves rebuilds, though the name, the star and the size are the same"),
+            BuiltColour(Sky, HomeIndex).Equals(Recoloured.Bodies[HomeIndex].Colour));
+
+        FSkySystem Renamed = Recoloured;
+        Renamed.SystemId = TEXT("Elsewhere");
+        Renamed.Bodies[HomeIndex].Colour = FLinearColor(0.1f, 0.7f, 0.2f);
+        Sky->SyncTo(Renamed, 11, false);
+        TestTrue(TEXT("another system of the same size is rebuilt for with no serial: by its name"),
+            BuiltColour(Sky, HomeIndex).Equals(Renamed.Bodies[HomeIndex].Colour));
+
+        FSkySystem Moved = Renamed;
+        for (FSkyBody& Body : Moved.Bodies)
+        {
+            Body.Position += FVector(3.0e13, 0.0, 0.0);
+        }
+        Moved.Bodies[HomeIndex].Colour = FLinearColor(0.3f, 0.3f, 0.9f);
+        Sky->SyncTo(Moved, 11, false);
+        TestTrue(TEXT("and by where its star is, a name being no identity"),
+            BuiltColour(Sky, HomeIndex).Equals(Moved.Bodies[HomeIndex].Colour));
+
+        // Between stars, nothing of the system is drawn -- and nothing is
+        // rebuilt, since the serial has not moved.
+        const TWeakObjectPtr<UStaticMeshComponent> Before = Sky->GetProxy(HomeIndex);
+        TestTrue(TEXT("before transit the proxies are shown"), AllProxies(Sky, true));
+        TestTrue(TEXT("and the sun is up"), Sky->GetSun()->IsVisible());
+        TestTrue(TEXT("and the neighbours are shown"), Sky->GetNeighbourStars()->IsVisible());
+        Sky->SyncTo(Moved, 11, true);
+        TestTrue(TEXT("in transit every proxy is hidden"), AllProxies(Sky, false));
+        TestFalse(TEXT("and the sun is down"), Sky->GetSun()->IsVisible());
+        TestFalse(TEXT("and the neighbours are hidden"), Sky->GetNeighbourStars()->IsVisible());
+        TestTrue(TEXT("and nothing was rebuilt"), Before.Get() == Sky->GetProxy(HomeIndex));
+
+        Sky->SyncTo(Moved, 11, false);
+        TestTrue(TEXT("out of transit, the same proxies are shown again"), AllProxies(Sky, true) && Before.Get() == Sky->GetProxy(HomeIndex));
+        TestTrue(TEXT("and the sun is up again"), Sky->GetSun()->IsVisible());
+        TestTrue(TEXT("and the neighbours are shown again"), Sky->GetNeighbourStars()->IsVisible());
+
+        // Arrival: transit ends in the same tick the serial moves, into
+        // another system.
+        Sky->SyncTo(Moved, 11, true);
+        Sky->SyncTo(Fixture, 12, false);
+        TestTrue(TEXT("arriving rebuilds for the new system"), BuiltColour(Sky, HomeIndex).Equals(Fixture.Bodies[HomeIndex].Colour));
+        TestTrue(TEXT("with its proxies shown"), AllProxies(Sky, true));
+        TestTrue(TEXT("its sun up"), Sky->GetSun()->IsVisible());
+        TestTrue(TEXT("and its neighbours shown"), Sky->GetNeighbourStars()->IsVisible() && Sky->GetNeighbourStars()->GetInstanceCount() == 2);
+
+        // An empty system -- what LocalSystem answers with no universe, or
+        // for a position no system reaches -- draws nothing at all.
+        Sky->SyncTo(FSkySystem(), 13, false);
+        TestEqual(TEXT("an empty system: no bodies"), Sky->GetProxyCount(), 0);
+        TestEqual(TEXT("none left behind"), CountBodyProxies(Sky), 0);
+        TestFalse(TEXT("no sun"), Sky->GetSun()->IsVisible());
+        TestEqual(TEXT("and no neighbours"), Sky->GetNeighbourStars()->GetInstanceCount(), 0);
+    }
+
+    // ds.Sky.Goto, given LocalSystem's answers.
+    {
+        FOutputDeviceNull Quiet;
+        const TArray<FString> ToMoon = { TEXT("Fixture"), TEXT("IIa"), TEXT("150") };
+        const FUniversePosition Before = Ship->GetFlightState().GetUniversePosition();
+        AShipSky::Goto(*Ship, Fixture, /*bInTransit*/ true, ToMoon, Quiet);
+        TestTrue(TEXT("goto refuses between stars"), Ship->GetFlightState().GetUniversePosition() == Before);
+        AShipSky::Goto(*Ship, FSkySystem(), false, TArray<FString>{ TEXT("0"), TEXT("150") }, Quiet);
+        TestTrue(TEXT("goto in an empty system does nothing"), Ship->GetFlightState().GetUniversePosition() == Before);
+        AShipSky::Goto(*Ship, Fixture, false, ToMoon, Quiet);
+        const FSkyBody& Moon = Fixture.Bodies[SkyTestFixtures::MoonIndex];
+        TestTrue(TEXT("goto joins a name the console split at its space, and goes 150 km over it"),
+            FMath::IsNearlyEqual(Moon.Position.DistanceTo(Ship->GetFlightState().GetUniversePosition()) - Moon.Radius, 150.0 * UniverseUnits::CmPerKm, 10.0));
     }
 
     return true;
@@ -551,8 +732,10 @@ bool FShipSkyLiveTest::RunTest(const FString& Parameters)
     {
         FTransform Instance;
         Sky->GetNeighbourStars()->GetInstanceTransform(0, Instance, false);
-        const FVector Toward = (Nearest->Position - Here->Stub.Position).GetSafeNormal();
-        TestTrue(TEXT("NeighbourStars instance 0 points at the nearest stub"), Instance.GetLocation().GetSafeNormal().Equals(Toward, 1e-6));
+        // From the ship, not the star: at the opening, a few AU out, the
+        // two differ by about 1e-5 rad.
+        const FVector Toward = (Nearest->Position - Flight.GetUniversePosition()).GetSafeNormal();
+        TestTrue(TEXT("NeighbourStars instance 0 points at the nearest stub, from the ship"), Instance.GetLocation().GetSafeNormal().Equals(Toward, 1e-9));
     }
 
     // ds.Sky.Goto, through the console, onto the system LocalSystem answers.
