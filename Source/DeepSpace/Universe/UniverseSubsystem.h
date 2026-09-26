@@ -38,9 +38,13 @@ public:
     static UUniverseSubsystem* Get(const UObject* WorldContext);
 
     /** Resolves the root seed with ResolveSeed(UniverseSeed, FCommandLine::Get())
-     *  and reads the priors from GetDefault<UProcGenPriorsConfig>(). Every
-     *  query below works from here on: none needs begin-play, so another
-     *  subsystem's OnWorldBeginPlay may ask in any order. */
+     *  and takes the priors. Every query below works from here on: none needs
+     *  begin-play, so another subsystem's OnWorldBeginPlay may ask in any
+     *  order.
+     *
+     *  Slice 1: the priors are FGenPriors{}, compile-time constants. Slice 2
+     *  reads them from GetDefault<UProcGenPriorsConfig>() here instead, and
+     *  adds ReloadPriors and ds.Universe.ReloadPriors; no caller changes. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
     /** World-level, per docs/vision.md: shareable, and a bug report is a
@@ -70,12 +74,6 @@ public:
      *  honestly makes, which is usually a red dwarf). */
     FSystemId GetStartSystem() const;
 
-    /** Re-reads the ini section and replaces the priors, so a prior can be
-     *  tuned inside one running session (ds.Universe.ReloadPriors). Safe
-     *  because nothing ever held a reference to anything built from the old
-     *  ones. */
-    void ReloadPriors();
-
     /** -UniverseSeed= from CommandLine if present, else ConfigSeed.
      *  UPROPERTY(Config) does not read the command line by itself, so
      *  Initialize does it here, and the test exercises the same function. */
@@ -87,9 +85,12 @@ private:
     /** Built per query from the two numbers below; see the class comment. */
     FGalaxyGenerator MakeGalaxy() const;
 
+    /** The universe is DefaultGame.ini's, never this default's. Zero is
+     *  nobody's universe: a default equal to the ini's seed would make a
+     *  section that never loads indistinguishable from one that does. */
     UPROPERTY(Config)
-    int64 UniverseSeed = 20260925;
+    int64 UniverseSeed = 0;
 
-    uint64 RootSeed = 20260925;
+    uint64 RootSeed = 0;
     FGenPriors Priors;
 };
