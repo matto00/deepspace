@@ -58,9 +58,9 @@ struct DEEPSPACE_API FSkyNeighbour
      *  the galaxy (procgen decision 8). */
     FName SystemId;
 
-    /** Unit, universe axes, from this system's star. The ship is always far
-     *  inside its own system, and from a few AU out the direction to a star
-     *  light years away differs from this by microradians. */
+    /** Unit, universe axes, from this system's star. Not from the ship: at
+     *  the system's edge the two differ by degrees, and AShipSky re-refers
+     *  it to the ship (ShipSky::NeighbourFromShip) before drawing it. */
     FVector Direction = FVector::ForwardVector;
 
     /** cm, from this system's star. */
