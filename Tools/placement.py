@@ -49,6 +49,12 @@ Practical = namedtuple("Practical", "place radius intensity")
 # actors that answer to it. test_placement.py reads the C++ to hold them equal.
 LIGHTS_TAG = "Power.Lights"
 
+# The actor tag every glowing lamp box carries: the ceiling panels and every
+# prop part whose role is a lamp. ShipLighting::LampsTag in C++ finds them by
+# it and dims their Colour with the lights, so a panel never glows full over
+# a browned-out room. test_placement.py reads the C++ to hold them equal.
+LAMPS_TAG = "Power.Lamps"
+
 # The sky's assets, as the level build assigns them and the verifier checks
 # them. Named from Tools/sky_material_contract.json, the list the materials
 # are authored from and SkyMaterialContract.h mirrors, so no path is typed
