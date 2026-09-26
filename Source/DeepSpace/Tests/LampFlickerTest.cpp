@@ -22,10 +22,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
  * sixtieth of a second at all, and the brown-out that should read as a
  * fixture running unwell freezes into a plain dim light.
  *
- * Measured the way the eye would: over two seconds at sixty frames a
- * second, the light must change every frame, swing as far as a starved
- * light does, and never jump further in one frame than the wobble's own
- * rates allow.
+ * Measured the way the eye would: over a minute at sixty frames a second,
+ * the light must change every frame, swing as far as a starved light does,
+ * and never jump further in one frame than the wobble's own rates allow --
+ * including the frame where the phase comes round, which a phase kept at
+ * the wrong period would show as a jump.
  */
 bool FLampFlickerAfterDaysTest::RunTest(const FString& Parameters)
 {
@@ -68,14 +69,17 @@ bool FLampFlickerAfterDaysTest::RunTest(const FString& Parameters)
         Lighting->Tick(1000.0f);
     }
 
+    // Sixty-four seconds: longer than the wobble's whole period, so however
+    // the phase is kept, the moment it comes round is among these frames.
     constexpr float Frame = 1.0f / 60.0f;
+    constexpr int32 Frames = 64 * 60;
     int32 Unchanged = 0;
     float Dimmest = TNumericLimits<float>::Max();
     float Brightest = 0.0f;
     float Steepest = 0.0f;
     Lighting->Tick(Frame);
     float Previous = Bulb->Intensity / Rated;
-    for (int32 Step = 0; Step < 120; ++Step)
+    for (int32 Step = 0; Step < Frames; ++Step)
     {
         Lighting->Tick(Frame);
         const float Now = Bulb->Intensity / Rated;
