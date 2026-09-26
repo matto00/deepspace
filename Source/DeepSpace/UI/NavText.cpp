@@ -1,5 +1,6 @@
 #include "UI/NavText.h"
 
+#include "Universe/SystemDescription.h"
 #include "Universe/UniverseUnits.h"
 
 namespace
@@ -73,6 +74,18 @@ FString NavText::StarClass(EStarClass Class)
     case EStarClass::B: return TEXT("blue-white star");
     }
     return TEXT("star");
+}
+
+FString NavText::WorldKind(EPlanetKind Kind)
+{
+    // One taxonomy: ds.Universe.Describe's words, so the console and the map
+    // never call one world two things.
+    return SystemDescription::KindName(Kind);
+}
+
+FString NavText::WorldName(const FPlanet& Planet)
+{
+    return Planet.GivenName.IsEmpty() ? Planet.Designation : Planet.GivenName + Separator + Planet.Designation;
 }
 
 FString NavText::Place(const FString& Name, EStarClass Class)

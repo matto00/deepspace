@@ -62,6 +62,13 @@ public:
      *  question, asked with the ship's position. */
     TOptional<FStarSystem> GetSystemAt(const FUniversePosition& Where) const;
 
+    /** Which system GetSystemAt(Where) would generate, without generating
+     *  it: the same stub search, stopped before the system. Empty between
+     *  stars. For a consumer that must know every frame whether the system
+     *  it drew is still the one the ship is in (the map's cache key), which
+     *  a generated system is far too dear to answer. */
+    TOptional<FSystemId> GetSystemIdAt(const FUniversePosition& Where) const;
+
     /** Empty if the id names a slot its sector does not have. */
     TOptional<FStarSystem> GetSystem(const FSystemId& Id) const;
 

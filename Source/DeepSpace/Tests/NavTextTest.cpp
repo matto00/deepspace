@@ -109,6 +109,23 @@ bool FNavTextTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("an M star is a red dwarf"), NavText::StarClass(EStarClass::M), FString(TEXT("red dwarf")));
     }
 
+    // The map's words for a world: procgen's taxonomy in lower case, and a
+    // name that is the designation unless somebody lives there.
+    {
+        TestEqual(TEXT("barren"), NavText::WorldKind(EPlanetKind::Barren), FString(TEXT("barren")));
+        TestEqual(TEXT("terrestrial"), NavText::WorldKind(EPlanetKind::Terrestrial), FString(TEXT("terrestrial")));
+        TestEqual(TEXT("ocean"), NavText::WorldKind(EPlanetKind::Ocean), FString(TEXT("ocean")));
+        TestEqual(TEXT("ice"), NavText::WorldKind(EPlanetKind::Ice), FString(TEXT("ice")));
+        TestEqual(TEXT("gas giant"), NavText::WorldKind(EPlanetKind::GasGiant), FString(TEXT("gas giant")));
+
+        FPlanet World;
+        World.Designation = TEXT("Kessa II");
+        TestEqual(TEXT("an empty world is its designation"), NavText::WorldName(World), FString(TEXT("Kessa II")));
+        World.GivenName = TEXT("Halden");
+        TestEqual(TEXT("an inhabited one is its given name, then its designation"),
+                  NavText::WorldName(World), FString(TEXT("Halden · Kessa II")));
+    }
+
     // The chart's words, pinned here so that the chart, the HUD and
     // ds.Nav.Near, which all ask NavText, say exactly these.
     {
