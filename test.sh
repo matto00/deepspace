@@ -18,6 +18,22 @@ LOG="$ROOT/Saved/Logs/DeepSpace.log"
 # shellcheck source=Tools/ue_lock.sh
 . "$ROOT/Tools/ue_lock.sh"
 
+# The whole suite includes the pure-Python tests. They are fast, and one of
+# them is load-bearing for the C++: the dressing's end-to-end tests read
+# Tools/dressing_markers.json, and test_dressing_markers.py is the only thing
+# that notices it has gone stale against the layout. Run only for the whole
+# suite -- a filtered run (Tools/mutate.sh uses them) wants just its test.
+if [[ $FILTER == DeepSpace ]]; then
+    for t in "$ROOT"/Tools/test_*.py; do
+        if ! out=$(python3 "$t" 2>&1); then
+            echo "FAILED: $(basename "$t")"
+            echo "$out" | tail -20
+            exit 1
+        fi
+    done
+    echo "python: $(ls "$ROOT"/Tools/test_*.py | wc -l) files passed"
+fi
+
 ue_locked "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" "$ROOT/DeepSpace.uproject" \
     -ExecCmds="Automation RunTests $FILTER" \
     -TestExit="Automation Test Queue Empty" \
