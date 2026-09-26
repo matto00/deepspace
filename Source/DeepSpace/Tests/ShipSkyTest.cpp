@@ -53,7 +53,9 @@ namespace ShipSkyTestLocal
 
             Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
             Frame = World->SpawnActor<AShipCounterFrame>();
-            Sky = World->SpawnActor<AShipSky>();
+            // Off the origin, as a hand in the editor might leave it: the
+            // sky must land in the counter-frame's space regardless.
+            Sky = World->SpawnActor<AShipSky>(FVector(500.0, -200.0, 50.0), FRotator(0.0, 30.0, 0.0));
             if (Frame)
             {
                 Frame->GetDistantStars()->SetStaticMesh(Sphere);
@@ -481,7 +483,7 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FShipSkyLiveTest,
-    "DeepSpace.Sky.ShipSkyLive",
+    "DeepSpace.Sky.LiveShipSky",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 /**
