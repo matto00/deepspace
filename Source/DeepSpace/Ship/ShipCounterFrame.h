@@ -81,11 +81,9 @@ public:
     int32 GetBuiltForSerial() const;
 
     /**
-     * Radians per pixel at the centre of the view, from the player camera's
-     * live field of view and the viewport's width: what anything drawn on
-     * the dome is sized by, so a star stays two pixels at the helm and at a
-     * screen alike. 90 degrees over 1920 pixels with no player or viewport,
-     * which is what -nullrhi gives.
+     * Radians per pixel at the centre of the view: ShipSky::ViewPixelAngle,
+     * the sky's own answer, so a star stays two pixels at the helm and at a
+     * screen alike and the dome's stars are the size of the sky's.
      */
     double GetPixelAngle() const;
 

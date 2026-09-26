@@ -92,11 +92,9 @@ public:
     static void Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit,
                      TConstArrayView<FString> Args, FOutputDevice& Out);
 
-    /** Radians per pixel at the centre of the player's view: the live FOV
-     *  over the viewport width, so a zoom or a small window resolves planets
-     *  at the right moment. 90 degrees over 1920 px with no player or no
-     *  viewport, which is what -nullrhi gets. For anything else that draws
-     *  on the dome -- navigation's course marker. */
+    /** Radians per pixel at the centre of the player's view,
+     *  ShipSky::ViewPixelAngle: the live FOV over the viewport width, so a
+     *  zoom or a small window resolves planets at the right moment. */
     double GetPixelAngle() const;
 
     /** Where points at infinity are drawn, cm: behind every body proxy. */
@@ -261,6 +259,23 @@ namespace ShipSky
 
     /** The diameter a point needs to be Pixels across at Distance, cm. */
     DEEPSPACE_API double PointDiameter(double Distance, double PixelAngle, double Pixels);
+
+    /**
+     * Radians per pixel at the centre of a view FovDegrees across and
+     * WidthPixels wide: 2 tan(FOV / 2) / width. FSkyViewParams' default, 90
+     * degrees over 1920 pixels, for a view with no width or no field of
+     * view, which is what -nullrhi gives.
+     */
+    DEEPSPACE_API double PixelAngle(double FovDegrees, double WidthPixels);
+
+    /**
+     * PixelAngle of the first player's live view: its camera's field of view
+     * over its viewport's width. The one answer everything drawn on the dome
+     * is sized by -- the sky's neighbours, the counter-frame's stars and its
+     * course marker -- so a point drawn by one is the size of a point drawn
+     * by the other at the helm and at a screen alike.
+     */
+    DEEPSPACE_API double ViewPixelAngle(const UWorld* World);
 
     /**
      * The engine's default AutoExposureBias, which auto exposure runs at in
