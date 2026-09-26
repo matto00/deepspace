@@ -1,11 +1,9 @@
 #include "Ship/ShipCounterFrame.h"
 
-#include "Camera/PlayerCameraManager.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
-#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -153,22 +151,7 @@ double AShipCounterFrame::GetDomeRadius() const { return DistantStarRadius; }
 
 double AShipCounterFrame::GetPixelAngle() const
 {
-    const double Fallback = FSkyViewParams().PixelAngle;
-    const UWorld* World = GetWorld();
-    const APlayerController* Player = World ? World->GetFirstPlayerController() : nullptr;
-    if (!Player || !Player->PlayerCameraManager)
-    {
-        return Fallback;
-    }
-    int32 Width = 0;
-    int32 Height = 0;
-    Player->GetViewportSize(Width, Height);
-    const double FieldOfView = Player->PlayerCameraManager->GetFOVAngle();
-    if (Width <= 0 || FieldOfView <= 0.0)
-    {
-        return Fallback;
-    }
-    return 2.0 * FMath::Tan(FMath::DegreesToRadians(FieldOfView) * 0.5) / Width;
+    return ShipSky::ViewPixelAngle(GetWorld());
 }
 
 TArray<FString> AShipCounterFrame::FindMaterialProblems() const

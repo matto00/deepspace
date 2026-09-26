@@ -6,7 +6,6 @@
 #include "Components/PostProcessComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Engine/GameViewportClient.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -123,9 +122,6 @@ namespace
     TAutoConsoleVariable<float> CVarBloom(
         TEXT("ds.Sky.Bloom"), 0.675f,
         TEXT("Bloom intensity. Bloom is what makes a two-pixel star read as bright rather than merely white."));
-
-    /** 90 degrees over a 1080p width: what the view is when there is none. */
-    constexpr double FallbackPixelAngle = 2.0 * 1.0 / 1920.0;
 
     /** Above any volume the level template carries, whose priority is 0. */
     constexpr float ExposurePriority = 10.0f;
@@ -563,22 +559,7 @@ void AShipSky::SetSkyVisible(bool bVisible)
 
 double AShipSky::GetPixelAngle() const
 {
-    const UWorld* World = GetWorld();
-    const APlayerController* Player = World ? World->GetFirstPlayerController() : nullptr;
-    const APlayerCameraManager* Camera = Player ? Player->PlayerCameraManager.Get() : nullptr;
-    UGameViewportClient* Viewport = World ? World->GetGameViewport() : nullptr;
-
-    FVector2D Size = FVector2D::ZeroVector;
-    if (Viewport)
-    {
-        Viewport->GetViewportSize(Size);
-    }
-    if (!Camera || Size.X <= 0.0)
-    {
-        return FallbackPixelAngle;
-    }
-    const double HalfFov = 0.5 * FMath::DegreesToRadians(static_cast<double>(Camera->GetFOVAngle()));
-    return 2.0 * FMath::Tan(HalfFov) / Size.X;
+    return ShipSky::ViewPixelAngle(GetWorld());
 }
 
 double AShipSky::GetDomeRadius() const
@@ -634,6 +615,29 @@ double ShipSky::NeighbourFlux(const FSkyNeighbour& Neighbour)
 double ShipSky::PointDiameter(double Distance, double PixelAngle, double Pixels)
 {
     return 2.0 * Distance * FMath::Tan(0.5 * Pixels * PixelAngle);
+}
+
+double ShipSky::PixelAngle(double FovDegrees, double WidthPixels)
+{
+    // Only what the view is missing is assumed. Headless there is a camera
+    // with a field of view and no viewport to be wide: the camera's zoom is
+    // still real, so it still counts.
+    const double Fov = FovDegrees > 0.0 ? FovDegrees : FallbackFovDegrees;
+    const double Width = WidthPixels > 0.0 ? WidthPixels : FallbackWidthPixels;
+    return 2.0 * FMath::Tan(0.5 * FMath::DegreesToRadians(Fov)) / Width;
+}
+
+double ShipSky::ViewPixelAngle(const UWorld* World)
+{
+    const APlayerController* Player = World ? World->GetFirstPlayerController() : nullptr;
+    const APlayerCameraManager* Camera = Player ? Player->PlayerCameraManager.Get() : nullptr;
+    int32 Width = 0;
+    int32 Height = 0;
+    if (Player)
+    {
+        Player->GetViewportSize(Width, Height);
+    }
+    return PixelAngle(Camera ? static_cast<double>(Camera->GetFOVAngle()) : 0.0, static_cast<double>(Width));
 }
 
 double ShipSky::ManualExposureBias(double SceneEV100)

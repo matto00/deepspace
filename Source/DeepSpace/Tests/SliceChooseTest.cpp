@@ -7,11 +7,14 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Materials/MaterialInterface.h"
+#include "Components/WidgetComponent.h"
 #include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/ShipHumComponent.h"
 #include "Ship/ShipHumSource.h"
+#include "Ship/ShipLaptop.h"
 #include "Ship/ShipLightingSubsystem.h"
+#include "Ship/ShipNavScreen.h"
 #include "Ship/ShipNavState.h"
 #include "Ship/ShipPowerState.h"
 #include "Sky/SkyProjection.h"
@@ -36,18 +39,6 @@
 namespace SliceChooseTestLocal
 {
     using namespace SkyTestWorld;
-
-    /** A screen as the tests make one: a widget component builds its widget
-     *  through the game instance, which a hand-made world has not got, so
-     *  it is made directly. What is under test is the screen and the ship. */
-    template <typename TWidget>
-    TWidget* MakeScreen(UWorld* World)
-    {
-        TWidget* Widget = NewObject<TWidget>(World);
-        Widget->Initialize();
-        Widget->TakeWidget();
-        return Widget;
-    }
 
     /**
      * The button in Screen whose click runs Handler: found by what its
@@ -136,6 +127,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
  * reaching the jump drive, and rises when the laptop leans the split on the
  * engine; charged, it settles back; pointed down the course the jump fires
  * with no confirm, and the ship arrives where the chart said.
+ *
+ * The chart and the laptop are the screen actors the level places, spawned
+ * before play, and their widgets are the ones their widget components made.
+ * Every frame runs in the game's order: the hum and the panels in
+ * TG_DuringPhysics, then the ship's subsystem, then the sky -- so the drone
+ * hears the watts the ship answered as the frame began, a frame behind, as
+ * it does in play.
  */
 bool FSliceChooseChartTest::RunTest(const FString& Parameters)
 {
@@ -143,24 +141,55 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
 
     FSkyWorld Test(TEXT("SliceChooseChartWorld"));
     AShipHumSource* Reactor = Test.World ? SpawnReactor(Test.World) : nullptr;
+    // Before play begins, as the level places them: a widget component makes
+    // its widget in BeginPlay, and one spawned into a running world never does.
+    AShipNavScreen* ChartScreen = Test.World
+        ? Test.World->SpawnActor<AShipNavScreen>(FVector(300.0, 0.0, 105.0), FRotator::ZeroRotator) : nullptr;
+    AShipLaptop* LaptopScreen = Test.World
+        ? Test.World->SpawnActor<AShipLaptop>(FVector(0.0, 300.0, 75.0), FRotator::ZeroRotator) : nullptr;
     if (!TestNotNull(TEXT("the world has a ship"), Test.Ship) || !TestNotNull(TEXT("a universe"), Test.Universe)
-        || !TestNotNull(TEXT("a sky"), Test.Sky) || !TestNotNull(TEXT("and a reactor to hear"), Reactor))
+        || !TestNotNull(TEXT("a sky"), Test.Sky) || !TestNotNull(TEXT("a reactor to hear"), Reactor)
+        || !TestNotNull(TEXT("the chart"), ChartScreen) || !TestNotNull(TEXT("and the laptop"), LaptopScreen))
     {
         return false;
     }
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     UShipHumComponent* Hum = Reactor->GetHum();
+    UWidgetComponent* ChartPanel = ChartScreen->GetScreen();
+    UWidgetComponent* LaptopPanel = LaptopScreen->GetScreen();
+    UNavigationWidget* Chart = Cast<UNavigationWidget>(ChartPanel->GetUserWidgetObject());
+    UPowerAllocationWidget* Laptop = Cast<UPowerAllocationWidget>(LaptopPanel->GetUserWidgetObject());
+    if (!TestNotNull(TEXT("the chart's panel made the chart"), Chart)
+        || !TestNotNull(TEXT("and the laptop's the power split"), Laptop))
+    {
+        return false;
+    }
+
+    // The screens' part of a frame: each panel's component ticks, which is
+    // where it takes its widget and the widget builds its tree, and each
+    // widget refreshes as its Slate tick would. Headless nothing paints, so
+    // the refresh is called directly.
+    const auto Look = [&](float Seconds)
+    {
+        ChartPanel->TickComponent(Seconds, LEVELTICK_All, nullptr);
+        LaptopPanel->TickComponent(Seconds, LEVELTICK_All, nullptr);
+        Chart->RefreshFromShip();
+        Laptop->RefreshFromShip();
+    };
+
+    // One frame in the game's order. The hum and the panels are components
+    // in TG_DuringPhysics; the ship's subsystem ticks with the tickable
+    // objects after the physics groups; the counter-frame and the sky draw
+    // in TG_PostUpdateWork (FSkyWorld::Step).
     const auto Step = [&](float Seconds)
     {
-        Test.Step(Seconds);
         Hum->TickComponent(Seconds, LEVELTICK_All, nullptr);
+        Look(Seconds);
+        Test.Step(Seconds);
     };
     Step(0.0f);
-
-    UNavigationWidget* Chart = MakeScreen<UNavigationWidget>(Test.World);
-    UPowerAllocationWidget* Laptop = MakeScreen<UPowerAllocationWidget>(Test.World);
-    Chart->RefreshFromShip();
+    Look(0.0f);
 
     TestEqual(TEXT("idle, the drone is fed nothing"), Hum->GetPostedInputs().EngineFeed, 0.0f);
 
@@ -183,7 +212,7 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
     RowButton->OnClicked.Broadcast();
     TestTrue(FString::Printf(TEXT("pressing row 1 plots %s in the ship"), *Destination.Name),
              Ship->GetPlottedSystem().IsSet() && *Ship->GetPlottedSystem() == Destination.Id);
-    Chart->RefreshFromShip();
+    Look(0.0f);
     TestTrue(TEXT("and the chart marks that row, asked of the ship"),
              Chart->GetRowText(1).ToString().StartsWith(UNavigationWidget::PlottedMark));
     const TOptional<FVector> Course = Ship->GetCourseDirection();
@@ -198,7 +227,7 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
     Step(0.0f);
     EngageButton->OnClicked.Broadcast();
     Step(0.1f);
-    Chart->RefreshFromShip();
+    Look(0.0f);
     TestTrue(TEXT("pressing Engage engages the jump"), Ship->IsJumpEngaged());
     TestEqual(TEXT("and it winds"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Winding));
     TestEqual(TEXT("which the chart says in words"), Chart->GetJumpText().ToString(), NavText::JumpWord(EJumpState::Winding) + TEXT("."));
@@ -221,13 +250,16 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
             WattsBefore = Ship->GetConsumerShare(ShipPower::Engine);
             Laptop->SetRowWeight(ShipPower::Engine, UPowerAllocationWidget::MaxWeight);
         }
+        // What the ship answers as the frame begins, which is what the hum
+        // is ticked with before the ship steps.
+        const float Heard = ExpectedFeed(*Ship);
         Step(0.5f);
         if (Ship->GetJumpState() != EJumpState::Winding)
         {
             break;
         }
         const float Posted = Hum->GetPostedInputs().EngineFeed;
-        Worst = FMath::Max(Worst, FMath::Abs(Posted - ExpectedFeed(*Ship)));
+        Worst = FMath::Max(Worst, FMath::Abs(Posted - Heard));
         Lowest = FMath::Min(Lowest, Posted);
         if (Ticks == 10)
         {
@@ -247,8 +279,13 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
     Laptop->SetRowWeight(ShipPower::Engine, 1.0f);
 
     TestEqual(TEXT("it charges to ready"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Ready));
-    // The engine's want follows the jump state at the start of the next
-    // tick, so the drone settles one frame after Ready.
+    // The engine's want follows the jump state at the start of the ship's
+    // next tick, and the hum hears the ship as each frame begins, before
+    // the ship steps: so the drone settles two frames after Ready, the
+    // first frame it could.
+    Step(0.1f);
+    TestTrue(TEXT("a frame after Ready the drone still hears the last winding watts"),
+             Hum->GetPostedInputs().EngineFeed > 0.0f);
     Step(0.1f);
     TestFalse(TEXT("pointed away, it holds"), Ship->IsInTransit());
     TestEqual(TEXT("charged, the drone settles back: a charged jump draws nothing"), Hum->GetPostedInputs().EngineFeed, 0.0f);
@@ -269,7 +306,7 @@ bool FSliceChooseChartTest::RunTest(const FString& Parameters)
     const TOptional<FStarSystem> There = Test.Universe->GetSystemAt(Ship->GetFlightState().GetUniversePosition());
     TestTrue(FString::Printf(TEXT("in %s, the system the chart's row named"), *Destination.Name),
              There.IsSet() && There->Stub.Id == Destination.Id);
-    Chart->RefreshFromShip();
+    Look(0.0f);
     TestTrue(FString::Printf(TEXT("the chart says so (\"%s\")"), *Chart->GetHereText().ToString()),
              Chart->GetHereText().ToString().Contains(Destination.Name));
     TestFalse(TEXT("the course is spent"), Ship->GetPlottedSystem().IsSet());
@@ -437,6 +474,9 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         Entry.RatedLight = Entry.Light->GetLightColor();
         Built.Add(Entry);
     }
+    // The laptop the split is set at, placed before play as the level places
+    // it, so its widget is the one its panel makes.
+    AShipLaptop* LaptopScreen = Test.World->SpawnActor<AShipLaptop>(FVector(0.0, 300.0, 75.0), FRotator::ZeroRotator);
 
     Test.BeginPlay();
     UShipLightingSubsystem* Lighting = Test.World->GetSubsystem<UShipLightingSubsystem>();
@@ -470,7 +510,15 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
                          FRotationMatrix::MakeFromX(-Test.Ship->GetCourseDirection().Get(FVector::XAxisVector)).ToQuat());
     Test.Ship->SetJumpEngaged(true);
 
-    UPowerAllocationWidget* Laptop = MakeScreen<UPowerAllocationWidget>(Test.World);
+    UPowerAllocationWidget* Laptop = LaptopScreen
+        ? Cast<UPowerAllocationWidget>(LaptopScreen->GetScreen()->GetUserWidgetObject()) : nullptr;
+    if (!TestNotNull(TEXT("the laptop's panel made the power split"), Laptop))
+    {
+        return false;
+    }
+    // Its component's first tick is where it takes the widget, and the
+    // widget builds its rows.
+    LaptopScreen->GetScreen()->TickComponent(0.016f, LEVELTICK_All, nullptr);
     Laptop->SetRowWeight(ShipPower::Engine, UPowerAllocationWidget::MaxWeight);
     Laptop->SetRowWeight(ShipPower::Boosters, UPowerAllocationWidget::MaxWeight);
     Laptop->SetRowWeight(ShipPower::Lights, 0.1f);
