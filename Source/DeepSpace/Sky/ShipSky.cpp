@@ -123,8 +123,11 @@ namespace
     /**
      * The fine bands, each of which fades in only once the screen can hold
      * it: this is what keeps a closing world showing new ground rather
-     * than a bigger blur, and so what says how near it is. Weaker than the
-     * coarse face, so the continents still read under it.
+     * than a bigger blur, and so what says how near it is. Every octave is
+     * scaled alike (sky_material_contract.json's detail_weights, flat), so
+     * this is the contrast of the ground arriving at the screen's scale at
+     * any distance, the last hundred kilometres included. Each octave
+     * weaker than the coarse face, so the continents still read under it.
      */
     TAutoConsoleVariable<float> CVarSurfaceDetail(
         TEXT("ds.Sky.SurfaceDetail"), 0.3f,

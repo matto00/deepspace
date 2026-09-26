@@ -284,6 +284,10 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     Test.Frame->SyncToShip();
     Sky->RebuildFor(Fixture);
     TestEqual(TEXT("one proxy per body"), Sky->GetProxyCount(), Fixture.Bodies.Num());
+    // The face's knobs at values no material default holds, so an instance
+    // that is never written cannot match them by agreeing with the asset.
+    const FScopedCVar FaceMottle(TEXT("ds.Sky.Mottle"), 0.123f);
+    const FScopedCVar FaceDetail(TEXT("ds.Sky.SurfaceDetail"), 0.456f);
     Sky->DrawFrom(Fixture);
 
     {
@@ -320,10 +324,10 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its brightness, as given, in the scene's unit"),
                     FMath::IsNearlyEqual(Instance->K2_GetScalarParameterValue(SkyMaterial::Brightness), static_cast<float>(View.Brightness) * Radiance, 1e-4f));
                 TestEqual(TEXT("resolved: a disc"), Instance->K2_GetScalarParameterValue(SkyMaterial::PointBlend), 0.0f);
-                TestEqual(TEXT("its mottle"), Instance->K2_GetScalarParameterValue(SkyMaterial::Mottle), CVarFloat(TEXT("ds.Sky.Mottle")));
+                TestEqual(TEXT("its mottle, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Mottle), 0.123f);
                 TestTrue(TEXT("its colour"), Instance->K2_GetVectorParameterValue(SkyMaterial::Colour).Equals(True.Colour));
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
-                TestEqual(TEXT("its fine detail"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), CVarFloat(TEXT("ds.Sky.SurfaceDetail")));
+                TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
                 TestTrue(TEXT("its own face, exactly"),
                     Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed));
                 TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);

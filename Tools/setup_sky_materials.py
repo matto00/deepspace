@@ -260,6 +260,11 @@ def surface_face(g, mottle, detail, banding, seed):
     streak along them as cloud does. Every term is centred on zero, so the
     disc keeps its flux on average through the resolve, and the clamp is
     the half-float guard: the face never more than doubles a pixel.
+
+    The detail is one octave per band at a flat weight, so a band arriving
+    on screen reads as strongly at the approach's floor as at its start:
+    the texture at the scale of the screen keeps its contrast however near
+    the world is, and it is its growing and renewing that says how near.
     """
     position = g.node(unreal.MaterialExpressionLocalPosition)
     direction = g.node(unreal.MaterialExpressionNormalize)
@@ -312,6 +317,12 @@ def surface_face(g, mottle, detail, banding, seed):
     g.link(banding, kind, "Alpha")
     face = g.mul(kind, mottle)
 
+    # One octave per detail band, every one at the contract's weight: a
+    # multi-octave band halves each finer octave (the engine's OutScale), so
+    # its newest detail would arrive fainter the nearer the world got, and
+    # the approach's last decade -- the one that says the ship is close --
+    # would be the one least seen. Same evaluations as bands of four; more
+    # nodes, which cost nothing at run time.
     fine = None
     for index, (frequency, weight) in enumerate(zip(CONSTANTS["detail_frequencies"], CONSTANTS["detail_weights"]), 1):
         band = noise_band(g, stretched, band_offset(index), frequency, CONSTANTS["detail_levels"], footprint, stretch)
