@@ -2,9 +2,19 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
+#include "Ship/NavStart.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
+#include "Sky/LocalSystem.h"
+#include "Sky/SkyColour.h"
+#include "Sky/SkyMaterialContract.h"
+#include "Sky/SkyProjection.h"
+#include "Sky/SkyStarfield.h"
+#include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -39,12 +49,16 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("the near layer is placed"),
                   Frame->GetNearStars()->GetInstanceCount(), 32);
 
+        // Instances are stored in single precision, so at 250,000 km "on the
+        // shell" means to a part in a million: a few tens of metres, far
+        // below a pixel.
         bool bAllOnShell = true;
         for (int32 Index = 0; Index < Frame->GetDistantStars()->GetInstanceCount(); ++Index)
         {
             FTransform Instance;
             Frame->GetDistantStars()->GetInstanceTransform(Index, Instance, false);
-            bAllOnShell &= FMath::IsNearlyEqual(Instance.GetLocation().Size(), Frame->DistantStarRadius, 1.0);
+            bAllOnShell &= FMath::IsNearlyEqual(Instance.GetLocation().Size(), Frame->DistantStarRadius,
+                                                Frame->DistantStarRadius * 1e-6);
         }
         TestTrue(TEXT("every distant star sits on the shell"), bAllOnShell);
 
@@ -113,6 +127,115 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             bAllInField &= Local.GetAbsMax() <= Frame->NearFieldRadius + 1.0;
         }
         TestTrue(TEXT("the near field wraps and stays around the ship"), bAllInField);
+    }
+
+    // The dome is the galaxy (sky decision 4): 3,000 stars at 250,000 km,
+    // behind everything the sky draws, from the universe's own seed, each
+    // two pixels across with its colour and brightness in custom data.
+    {
+        AShipCounterFrame* Dome = World->SpawnActor<AShipCounterFrame>();
+        const AShipCounterFrame* Defaults = GetDefault<AShipCounterFrame>();
+        TestEqual(TEXT("the dome holds 3,000 stars"), Defaults->DistantStarCount, 3000);
+        TestEqual(TEXT("at 250,000 km"), Defaults->DistantStarRadius, 2.5e10);
+
+        UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+        Dome->GetDistantStars()->SetStaticMesh(Sphere);
+        Dome->RebuildStarfield();
+
+        UInstancedStaticMeshComponent* Stars = Dome->GetDistantStars();
+        TestEqual(TEXT("every star is placed"), Stars->GetInstanceCount(), 3000);
+        TestEqual(TEXT("with four floats of custom data each"),
+                  Stars->PerInstanceSMCustomData.Num(), 3000 * SkyMaterial::StarfieldCustomData);
+
+        const TArray<FSkyStar> Expected = SkyStarfield::Generate(
+            LocalSystem::StarfieldSeed(World, static_cast<uint64>(Dome->StarSeed)), 3000);
+        const double Gamma = FSkyViewParams().FluxGamma;
+        const double MeshDiameter = 2.0 * Sphere->GetBounds().BoxExtent.GetMax();
+        const double Diameter = Dome->DistantStarPixels * Dome->GetPixelAngle() * Dome->DistantStarRadius;
+
+        bool bWhereTheGalaxyPutsThem = true;
+        bool bTwoPixels = true;
+        bool bColoured = true;
+        bool bCompressed = true;
+        for (int32 Index = 0; Index < Expected.Num(); ++Index)
+        {
+            FTransform Instance;
+            Stars->GetInstanceTransform(Index, Instance, false);
+            bWhereTheGalaxyPutsThem &= Instance.GetLocation().GetSafeNormal().Equals(Expected[Index].Direction, 1e-5);
+            bTwoPixels &= FMath::IsNearlyEqual(Instance.GetScale3D().X * MeshDiameter, Diameter, Diameter * 1e-4);
+
+            const float* Data = &Stars->PerInstanceSMCustomData[Index * SkyMaterial::StarfieldCustomData];
+            const FLinearColor Colour = SkyColour::Blackbody(Expected[Index].TemperatureK);
+            bColoured &= FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataRed], Colour.R, 1e-6f)
+                && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataGreen], Colour.G, 1e-6f)
+                && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataBlue], Colour.B, 1e-6f);
+            bCompressed &= FMath::IsNearlyEqual(static_cast<double>(Data[SkyMaterial::CustomDataBrightness]),
+                                                SkyProjection::Compress(Expected[Index].Flux, Gamma), 1e-5);
+        }
+        TestTrue(TEXT("each star is where the universe's starfield puts it"), bWhereTheGalaxyPutsThem);
+        TestTrue(TEXT("each is two pixels across at the dome"), bTwoPixels);
+        TestTrue(TEXT("coloured by its blackbody"), bColoured);
+        TestTrue(TEXT("and as bright as its compressed flux"), bCompressed);
+        Dome->Destroy();
+    }
+
+    // The motes fade with speed: full at cruise less a tenth, gone under the
+    // drive, where wrapping every frame would strobe.
+    UMaterialInterface* StarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarPath);
+    const UUniverseSubsystem* Universe = World->GetSubsystem<UUniverseSubsystem>();
+    if (Ship && TestNotNull(TEXT("M_SkyStar exists"), StarMaterial) && TestNotNull(TEXT("and a universe"), Universe))
+    {
+        AShipCounterFrame* Motes = World->SpawnActor<AShipCounterFrame>();
+        UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+        Motes->GetNearStars()->SetStaticMesh(Sphere);
+        Motes->GetNearStars()->SetMaterial(0, StarMaterial);
+        Motes->DistantStarCount = 16;
+
+        float Authored = 0.0f;
+        StarMaterial->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), Authored);
+
+        const TOptional<FStarSystem> Home = Universe->GetSystem(Universe->GetStartSystem());
+        if (TestTrue(TEXT("there is a start system to drive at"), Home.IsSet()))
+        {
+            const FNavPlacement Opening = NavStart::OpeningPlacement(*Home);
+            Ship->PlaceShip(Opening.Position, Opening.Orientation);
+            Motes->RebuildStarfield();
+            Motes->SyncToShip();
+
+            const auto Brightness = [Motes]()
+            {
+                float Value = -1.0f;
+                if (const UMaterialInterface* Material = Motes->GetNearStars()->GetMaterial(0))
+                {
+                    Material->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), Value);
+                }
+                return Value;
+            };
+            TestTrue(TEXT("the motes drive a runtime copy of their material"),
+                     Cast<UMaterialInstanceDynamic>(Motes->GetNearStars()->GetMaterial(0)) != nullptr);
+            TestEqual(TEXT("parked, the motes are as bright as authored"), Brightness(), Authored);
+            TestTrue(TEXT("and shown"), Motes->GetNearStars()->IsVisible());
+
+            APawn* Pilot = World->SpawnActor<APawn>();
+            Ship->SetPilot(Pilot);
+            Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
+            Ship->SetDriveEngaged(Pilot, true);
+            Ship->Tick(0.1f);
+            Motes->SyncToShip();
+            TestTrue(TEXT("under the drive the ship is past the fade"), Ship->GetShipSpeed() > 2.0e5f);
+            TestEqual(TEXT("and the motes are dark"), Brightness(), 0.0f);
+            TestFalse(TEXT("and hidden"), Motes->GetNearStars()->IsVisible());
+
+            // Off the drive the speed is clamped to cruise, 200 m/s, a tenth
+            // of the way to the fade.
+            Ship->SetDriveEngaged(Pilot, false);
+            Motes->SyncToShip();
+            TestTrue(TEXT("at cruise the motes are nine tenths as bright"),
+                     FMath::IsNearlyEqual(Brightness(), 0.9f * Authored, 1e-4f));
+            TestTrue(TEXT("and shown again"), Motes->GetNearStars()->IsVisible());
+            Ship->ClearPilot();
+        }
+        Motes->Destroy();
     }
 
     GEngine->DestroyWorldContext(World);
