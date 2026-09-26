@@ -1,27 +1,59 @@
 #include "Sky/LocalSystem.h"
 #include "Engine/World.h"
 #include "Universe/GenSeed.h"
+#include "Ship/ShipSubsystem.h"
 #include "Universe/UniverseSubsystem.h"
+#include "Universe/UniverseUnits.h"
 
-// The null-world branch: what every function answers when nothing is out
-// there to ask. The live branch -- the ship subsystem's jump serial and
-// transit flag, and GetSystemAt(ship position) through FromSystem -- lands
-// once procgen and navigation are merged, and changes nothing in this file's
-// answers for a world that has neither.
+namespace
+{
+    /**
+     * How far out the neighbours the sky draws reach: the chart's own 12 ly,
+     * procgen's nearby radius. Every star you could be sent to is drawn, and
+     * nothing is drawn that the universe has not already been asked about.
+     * About thirty systems at procgen's density.
+     */
+    constexpr double NeighbourRadiusCm = 12.0 * UniverseUnits::CmPerLightYear;
+
+    const UShipSubsystem* ShipOf(const UWorld* World)
+    {
+        return World ? World->GetSubsystem<UShipSubsystem>() : nullptr;
+    }
+}
+
+// Each function asks the subsystem that owns the answer, every call, and
+// keeps nothing. With no world, no ship or no universe it answers as if
+// nothing were out there -- the null-world branch the sky's world-free tests
+// run against.
 
 int32 LocalSystem::Serial(const UWorld* World)
 {
-    return 0;
+    const UShipSubsystem* Ship = ShipOf(World);
+    return Ship ? Ship->GetJumpSerial() : 0;
 }
 
 FSkySystem LocalSystem::Current(const UWorld* World)
 {
-    return FSkySystem();
+    const UShipSubsystem* Ship = ShipOf(World);
+    const UUniverseSubsystem* Universe = World ? World->GetSubsystem<UUniverseSubsystem>() : nullptr;
+    if (!Ship || !Universe)
+    {
+        return FSkySystem();
+    }
+
+    const FUniversePosition Where = Ship->GetFlightState().GetUniversePosition();
+    const TOptional<FStarSystem> Here = Universe->GetSystemAt(Where);
+    if (!Here)
+    {
+        return FSkySystem();
+    }
+    return FSkySystem::FromSystem(*Here, Universe->GetSystemsNear(Where, NeighbourRadiusCm));
 }
 
 bool LocalSystem::InTransit(const UWorld* World)
 {
-    return false;
+    const UShipSubsystem* Ship = ShipOf(World);
+    return Ship && Ship->IsInTransit();
 }
 
 uint64 LocalSystem::StarfieldSeed(const UWorld* World, uint64 Fallback)

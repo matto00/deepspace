@@ -2,21 +2,6 @@
 
 namespace
 {
-    /**
-     * A planet's centre. This is FStarSystem::PlanetPosition's documented
-     * rule -- the star's position plus a (cos phase, sin phase, 0) through
-     * UniverseUnits -- written out here only because procgen's StarSystem.cpp
-     * lands concurrently. Once it is in the tree this becomes a call to
-     * PlanetPosition, so there is one conversion and not two.
-     */
-    FUniversePosition PlanetCentre(const FStarSystem& System, int32 Index)
-    {
-        const FPlanet& Planet = System.Planets[Index];
-        const double RadiusCm = Planet.SemiMajorAxisAU * UniverseUnits::CmPerAU;
-        return System.Stub.Position
-            + FVector(FMath::Cos(Planet.PhaseRad), FMath::Sin(Planet.PhaseRad), 0.0) * RadiusCm;
-    }
-
     int32 LargestPlanet(const FStarSystem& System)
     {
         int32 Largest = INDEX_NONE;
@@ -50,7 +35,8 @@ FNavPlacement NavStart::OpeningPlacement(const FStarSystem& System)
         return Placement;
     }
 
-    const FUniversePosition Planet = PlanetCentre(System, Index);
+    // Procgen's one conversion from an orbit to a position, not a second copy of it.
+    const FUniversePosition Planet = System.PlanetPosition(Index);
 
     // Toward the star from the planet, in the orbital plane. The ship faces
     // the planet along a line square to that, so the star is abeam: +Y is
