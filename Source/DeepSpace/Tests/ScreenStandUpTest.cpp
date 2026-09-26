@@ -2,6 +2,8 @@
 #include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Camera/PlayerCameraManager.h"
+#include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
 #include "Player/DeepSpaceCharacter.h"
 #include "Ship/ShipLaptop.h"
@@ -193,12 +195,12 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         }
     }
 
-    // The ring search's own rule, that a spot is floor only at the height the
-    // player left: not a table top beside them, and not the deck below an
-    // edge. Both need the remembered spot taken and the nearest free spots,
-    // the side away from the seat first, to be the wrong kind of ground --
-    // cases 1 to 3 never reach a ring spot over anything but floor, so they
-    // say nothing about it.
+    // The ring search's own rule, that a spot is floor only at the height of
+    // the floor under the seat: not a table top beside them, and not the
+    // deck below an edge. Both need the remembered spot taken and the
+    // nearest free spots, the side away from the seat first, to be the wrong
+    // kind of ground -- cases 1 to 3 never reach a ring spot over anything
+    // but floor, so they say nothing about it.
     //
     // The rings are 30 cm apart (StandRingStepCm). Something 40 cm square
     // where the player stood keeps a body off the whole first ring and off
@@ -238,44 +240,160 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         }
     }
 
-    // 5. A chart on a raised deck, 60 cm up, whose edge falls away just short
-    //    of the second ring on the side away from the chart. A body stood in
-    //    the drop would fit and be reachable; it is still the wrong answer,
-    //    because it is not where the player was. The edge is set so a
+    // 5. A chart near an edge where the deck steps 60 cm down, just short of
+    //    the second ring on the side away from the chart. A body stood in the
+    //    drop would fit and be reachable; it is still the wrong answer,
+    //    because it is not the floor the seat is on. The edge is set so a
     //    capsule on that spot clears it by 6 cm, which is what makes the
-    //    wrong answer available at all.
+    //    wrong answer available at all. Off the main floor, which would
+    //    otherwise fill the drop.
     {
-        constexpr double DeckTop = 60.0;
-        AShipNavScreen* RaisedChart = World->SpawnActor<AShipNavScreen>(FVector(0.0, -1200.0, 105.0 + DeckTop),
-                                                                        FRotator::ZeroRotator);
-        if (TestNotNull(TEXT("the raised chart spawns"), RaisedChart))
+        constexpr double DropDepth = 60.0;
+        AShipNavScreen* EdgeChart = World->SpawnActor<AShipNavScreen>(FVector(0.0, -3000.0, 105.0),
+                                                                      FRotator::ZeroRotator);
+        if (TestNotNull(TEXT("the chart by the edge spawns"), EdgeChart))
         {
-            const FVector RaisedSeat = RaisedChart->GetUseTransform().GetLocation();
-            SpawnBlock(World, FVector(RaisedSeat.X, RaisedSeat.Y, (DeckTop + RaisedSeat.Z) * 0.5),
-                       FVector(30.0, 30.0, (RaisedSeat.Z - DeckTop) * 0.5));
-            const FVector2D Stood(RaisedSeat.X - 124.0, RaisedSeat.Y);
+            const FVector EdgeSeat = SpawnChairUnder(World, EdgeChart);
+            const FVector2D Stood(EdgeSeat.X - 124.0, EdgeSeat.Y);
             const double DeckEdge = Stood.X - (2.0 * RingStepCm - Radius - 6.0);
-            const double DeckFar = RaisedChart->GetActorLocation().X + 100.0;
-            SpawnBlock(World, FVector((DeckEdge + DeckFar) * 0.5, Stood.Y, DeckTop * 0.5),
-                       FVector((DeckFar - DeckEdge) * 0.5, 300.0, DeckTop * 0.5));
+            const double DeckFar = EdgeChart->GetActorLocation().X + 100.0;
+            SpawnBlock(World, FVector((DeckEdge + DeckFar) * 0.5, Stood.Y, -10.0),
+                       FVector((DeckFar - DeckEdge) * 0.5, 300.0, 10.0));
+            SpawnBlock(World, FVector(DeckEdge - 300.0, Stood.Y, -DropDepth - 10.0), FVector(300.0, 300.0, 10.0));
 
-            ADeepSpaceCharacter* Player = SpawnStanding(World, Stood, DeckTop);
-            if (TestNotNull(TEXT("the player spawns on the deck"), Player))
+            ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
+            if (TestNotNull(TEXT("the player spawns by the edge"), Player))
             {
-                Player->UseScreen(RaisedChart);
+                Player->UseScreen(EdgeChart);
                 Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
-                AActor* Taken = SpawnBlock(World, FVector(Stood, DeckTop + 115.0), FVector(20.0, 20.0, 85.0));
+                AActor* Taken = SpawnBlock(World, FVector(Stood, 115.0), FVector(20.0, 20.0, 85.0));
 
                 Player->StopUsingScreen();
-                CheckStanding(*this, TEXT("on a deck"), World, Player, RaisedSeat, DeckTop);
-                TestTrue(FString::Printf(TEXT("on a deck: on it, not below its edge (x %.0f, edge at %.0f)"),
+                CheckStanding(*this, TEXT("by an edge"), World, Player, EdgeSeat);
+                TestTrue(FString::Printf(TEXT("by an edge: on the deck, not below its edge (x %.0f, edge at %.0f)"),
                                          Player->GetActorLocation().X, DeckEdge),
                          Player->GetActorLocation().X > DeckEdge);
 
                 Taken->Destroy();
                 Player->Destroy();
             }
+        }
+    }
+
+    // 6. The developer's own report, again: "it puts me on top and i have to
+    //    crouch to get off." Jump is bound, so a player can climb onto the
+    //    chart's chair and sit down from up there. The spot they left is
+    //    then the cushion, which is clear and fits a body -- and is not
+    //    floor. They must stand up beside the chair, on the floor.
+    {
+        const FVector2D Stood(ChartSeat.X - 5.0, 0.0);
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood, ChartSeat.Z);
+        if (TestNotNull(TEXT("the player spawns on the chair"), Player))
+        {
+            Player->UseScreen(Chart);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+            Player->StopUsingScreen();
+            CheckStanding(*this, TEXT("climbed onto the chair"), World, Player, ChartSeat);
+            TestTrue(TEXT("climbed onto the chair: beside it"),
+                     FVector::Dist2D(Player->GetActorLocation(), FVector(Stood, 0.0)) < 150.0);
+            Player->Destroy();
+        }
+    }
+
+    // 7. Reaching a spot is walking to it, not seeing it. The spot is taken
+    //    and fenced in by furniture 75 cm high -- table height, below the
+    //    capsule's centre, so a line at that height sees over all of it --
+    //    with one gap 40 cm wide, narrower than a body. The first ring that
+    //    fits is outside the fence, and none of it can be walked to: the
+    //    body must not end up out there.
+    {
+        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        constexpr double Inner = 45.0;
+        constexpr double Thick = 10.0;
+        constexpr double Height = 75.0;
+        constexpr double Gap = 40.0;
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
+        if (TestNotNull(TEXT("the player spawns inside the fence"), Player))
+        {
+            Player->UseScreen(Chart);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+            TArray<AActor*> Placed;
+            Placed.Add(SpawnBlock(World, FVector(Stood, 115.0), FVector(20.0, 20.0, 85.0)));
+            const double Mid = Inner + Thick * 0.5;
+            const double Span = Inner + Thick;
+            for (const double Side : {-1.0, 1.0})
+            {
+                Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * Mid, Stood.Y, Height * 0.5),
+                                      FVector(Thick * 0.5, Span, Height * 0.5)));
+            }
+            Placed.Add(SpawnBlock(World, FVector(Stood.X, Stood.Y - Mid, Height * 0.5),
+                                  FVector(Span, Thick * 0.5, Height * 0.5)));
+            // The side with the gap: two lengths, Gap apart.
+            const double Piece = (2.0 * Span - Gap) * 0.5;
+            for (const double Side : {-1.0, 1.0})
+            {
+                Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * (Gap * 0.5 + Piece * 0.5), Stood.Y + Mid,
+                                                     Height * 0.5),
+                                      FVector(Piece * 0.5, Thick * 0.5, Height * 0.5)));
+            }
+            TestTrue(TEXT("fenced: the fence's gap is narrower than a body"), Gap < 2.0 * Radius);
+
+            Player->StopUsingScreen();
+            const FVector At = Player->GetActorLocation();
+            TestTrue(FString::Printf(TEXT("fenced: not across the furniture (%.0f, %.0f from where they stood)"),
+                                     At.X - Stood.X, At.Y - Stood.Y),
+                     FMath::Abs(At.X - Stood.X) < Inner && FMath::Abs(At.Y - Stood.Y) < Inner);
+
+            for (AActor* Actor : Placed)
+            {
+                Actor->Destroy();
+            }
+            Player->Destroy();
+        }
+    }
+
+    // 8. Sitting and standing move the view up to 60 cm in one frame. The
+    //    camera manager must be told each is a cut, or temporal AA and motion
+    //    blur build that frame from a history of somewhere else.
+    {
+        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
+        APlayerController* Controller = World->SpawnActor<APlayerController>();
+        if (TestNotNull(TEXT("the player spawns with a controller"), Player) &&
+            TestNotNull(TEXT("and the controller spawns"), Controller))
+        {
+            // The world is not initialised for play, so nothing has spawned
+            // the camera manager yet; the controller's own call does.
+            if (!Controller->PlayerCameraManager)
+            {
+                Controller->SpawnPlayerCameraManager();
+            }
+            Controller->Possess(Player);
+            APlayerCameraManager* Camera = Controller->PlayerCameraManager;
+            if (TestNotNull(TEXT("the controller has a camera manager"), Camera) &&
+                TestTrue(TEXT("and possesses the player"), Player->GetController() == Controller))
+            {
+                // The viewport clears it after drawing; headless, nothing
+                // draws, so each step starts it clear by hand.
+                Camera->bGameCameraCutThisFrame = false;
+                Player->UseScreen(Chart);
+                TestTrue(TEXT("sitting down is a camera cut"), Camera->bGameCameraCutThisFrame);
+                TestTrue(TEXT("and the camera is at the screen in that same frame"),
+                         FVector::Dist(Player->GetEyeLocation(), Chart->GetViewTransform().GetLocation()) < 1.0);
+
+                Camera->bGameCameraCutThisFrame = false;
+                Player->PlaceCamera(0.016f, Player->GetViewRotation());
+                TestFalse(TEXT("a frame sat still is not a cut"), Camera->bGameCameraCutThisFrame);
+
+                Player->StopUsingScreen();
+                TestTrue(TEXT("standing up is a camera cut"), Camera->bGameCameraCutThisFrame);
+            }
+            Controller->UnPossess();
+            Controller->Destroy();
+            Player->Destroy();
         }
     }
 

@@ -55,6 +55,13 @@ public:
     FTransform GetUseTransform() const;
 
     /**
+     * World Z of the floor under the seat, cm: SeatHeightCm below it. What
+     * getting up from this screen stands on -- not the height the feet were
+     * at when the player sat, which is the top of whatever they had climbed.
+     */
+    double GetUseFloorZ() const;
+
+    /**
      * Where the camera goes while the screen is in use -- close enough that
      * the panel fills the view and its text is legible, which at a laptop's
      * size it is not from across a table.
@@ -112,13 +119,18 @@ protected:
     FVector2D DrawSizePixels = FVector2D(600.0f, 400.0f);
 
     /**
-     * The frame round the glass on every side, cm: the casing the panel is
-     * set in. Framing includes it, because a screen whose edge is cut off by
-     * the view reads as a screen too big for the room rather than one you are
-     * sitting at.
+     * The frame round the glass, cm: X on each side, Y above and below. The
+     * casing the panel is set in. Framing includes it, because a screen
+     * whose edge is cut off by the view reads as a screen too big for the
+     * room rather than one you are sitting at.
+     *
+     * Per axis because casings are not even: the laptop's lid is 2 cm wider
+     * than its glass each side and 1.3 cm taller top and bottom. One figure
+     * for both overstated the lid's height -- and height is the axis every
+     * screen here fills first, being squarer than the window.
      */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
-    float BezelCm = 1.0f;
+    FVector2D BezelCm = FVector2D(1.0f, 1.0f);
 
     /** Whether E sits the player down at this screen. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")

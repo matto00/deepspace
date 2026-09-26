@@ -35,9 +35,13 @@ AShipLaptop::AShipLaptop()
     // glass rather than bigger on the screen.
     DrawSizePixels = FVector2D(720.0f, 480.0f);
 
-    // The lid is 30 cm across against 26 cm of glass: 2 cm of casing each
-    // side, which the seated view must show (AShipScreen::FitFieldOfView).
-    BezelCm = 2.0f;
+    // The casing is whatever of the lid the glass does not cover: 30 x 20 cm
+    // of lid round 26 x 17.3 cm of glass, so 2 cm each side and 1.3 cm top
+    // and bottom. The seated view must show all of it
+    // (AShipScreen::FitFieldOfView), and it is measured off the lid here
+    // rather than written beside it, so a resized lid is framed as it is.
+    BezelCm = FVector2D((LidSize.Y - PanelWidthCm) * 0.5f,
+                        (LidSize.Z - PanelWidthCm * DrawSizePixels.Y / DrawSizePixels.X) * 0.5f);
 
     // Left movable: a static child of a movable root never has its world
     // transform updated when the actor moves, which silently leaves the

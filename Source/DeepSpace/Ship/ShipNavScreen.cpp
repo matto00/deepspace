@@ -32,7 +32,7 @@ AShipNavScreen::AShipNavScreen()
     DrawSizePixels = FVector2D(816.0f, 576.0f);
     // That centimetre is the bezel the seated view frames: the desk screen's
     // 70 x 50 cm face, whole.
-    BezelCm = 1.0f;
+    BezelCm = FVector2D(1.0f, 1.0f);
 
     // The starting seat, to be moved by eye in the chart chair playtest.
     // They are per instance, set by build_hauler.py, so a nudge is a level

@@ -65,7 +65,7 @@ namespace
     float Margin()
     {
         const IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Screen.FrameMargin"));
-        return Var ? Var->GetFloat() : 0.04f;
+        return Var ? Var->GetFloat() : 0.02f;
     }
 }
 
@@ -112,8 +112,7 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
         const FVector2D Glass = Panel->GetDrawSize() * Panel->GetRelativeScale3D().X;
         const FVector2D Framed = Case.Screen->GetFramedSizeCm();
         TestTrue(FString::Printf(TEXT("the %s frames its glass and a bezel round it"), Case.Name),
-                 Framed.X > Glass.X && Framed.Y > Glass.Y &&
-                 FMath::IsNearlyEqual(Framed.X - Glass.X, Framed.Y - Glass.Y, 0.01));
+                 Framed.X > Glass.X && Framed.Y > Glass.Y);
 
         for (const EAspectRatioAxisConstraint Constraint : Constraints)
         {
@@ -138,13 +137,27 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
         }
     }
 
-    // The laptop read right at the old fixed 52 degrees; the fitted framing
-    // must leave it close to that, in the window it was played in.
+    // The casing framed is the one each screen has. The laptop's lid is 30 x
+    // 20 cm (ShipLaptop.cpp); one bezel for both axes framed it 21.3 cm high,
+    // and height is the axis a 3:2 lid fills first in a 16:9 window. The
+    // chart's face is the desk screen's 70 x 50.
     const AShipScreen* Laptop = GetDefault<AShipLaptop>();
+    const FVector2D LaptopFramed = Laptop->GetFramedSizeCm();
+    TestTrue(FString::Printf(TEXT("the laptop frames its lid, 30 x 20 cm (%.2f x %.2f)"),
+                             LaptopFramed.X, LaptopFramed.Y),
+             FMath::IsNearlyEqual(LaptopFramed.X, 30.0, 0.01) && FMath::IsNearlyEqual(LaptopFramed.Y, 20.0, 0.01));
+    const FVector2D ChartFramed = GetDefault<AShipNavScreen>()->GetFramedSizeCm();
+    TestTrue(FString::Printf(TEXT("the chart frames the desk screen's face, 70 x 50 cm (%.2f x %.2f)"),
+                             ChartFramed.X, ChartFramed.Y),
+             FMath::IsNearlyEqual(ChartFramed.X, 70.0, 0.01) && FMath::IsNearlyEqual(ChartFramed.Y, 50.0, 0.01));
+
+    // The laptop read right at the old fixed 52 degrees, and the developer
+    // said so; the fitted framing must give it back, in the window it was
+    // played in. A degree is about 2% of the frame: past that it is a
+    // different view of the same machine.
     const float LaptopFov = Laptop->GetUseFieldOfView(16.0f / 9.0f, Configured, CameraAspect);
-    AddInfo(FString::Printf(TEXT("laptop at 16:9: %.1f deg (was 52)"), LaptopFov));
-    TestTrue(TEXT("the laptop comes out close to the 52 degrees that looked right"),
-             FMath::Abs(LaptopFov - 52.0f) < 6.0f);
+    TestTrue(FString::Printf(TEXT("the laptop frames at the 52 degrees that looked right (%.2f)"), LaptopFov),
+             FMath::Abs(LaptopFov - 52.0f) < 1.0f);
 
     // And the complaint itself: at the old 52 degrees the chart overflowed.
     const AShipScreen* Chart = GetDefault<AShipNavScreen>();
