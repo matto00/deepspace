@@ -159,6 +159,66 @@ PROPS = {
 }
 
 
+# Where things can rest on a prop (lived-in decision 2): the only places the
+# dressing generator can put anything, so a mug in the middle of the corridor
+# is not something it rejects but something it has no way to express.
+#
+# at: centre of the resting plane, prop-local. size: (x, y) extent, in the
+# prop's own frame. back: "+x" or "-x", the edge things get pushed against.
+# use: "centre", "+y" or "-y", where the person using it sits or stands.
+# clear: the tallest thing that fits, stacks included (to the next shelf, the
+# upper cabinets). exclude: prop-local ((x0, y0), (x1, y1)) rectangles nothing
+# may cover -- the prop's own parts that stand on the surface.
+Surface = namedtuple("Surface", "name at size back use clear exclude",
+                     defaults=("centre", 40, ()))
+
+SURFACES = {
+    "galley_table": [Surface("top", (0, 0, 79), (90, 180), "-x", "centre")],
+    "counter":      [Surface("top", (0, 0, 90), (60, 300), "-x", "+y", clear=58)],
+    "desk":         [Surface("top", (0, 0, 77), (60, 120), "-x", "-y")],
+    # The screen stands on the bench's back edge; 2 cm either side of it.
+    "workbench":    [Surface("top", (0, 0, 90), (80, 160), "-x", "centre",
+                             exclude=(((-40, -27), (-34, 27)),))],
+    "cockpit_desk": [Surface("wing_port", (-50, -155, 80), (100, 50), "+x", "centre"),
+                     Surface("wing_stbd", (-50, 155, 80), (100, 50), "+x", "centre")],
+    "wall_rack":    [Surface("shelf_%d" % n, (0, 0, z), (50, 180), "-x", "centre", clear=70)
+                     for n, z in enumerate((77.5, 152.5, 227.5))],
+    "locker":       [Surface("top", (0, 0, 200), (60, 60), "-x", "centre", clear=45)],
+    "airlock_bench": [Surface("seat", (0, 0, 45), (40, 120), "-x", "-y", clear=30)],
+}
+
+# What a prop hangs from, where that is not simply the floor (ADR 0008's
+# missing metadata). resolve_props enforces it: a "ceiling" prop has a part
+# touching its room's ceiling, a "wall" prop a part touching a wall face, so
+# a counter cannot float in the middle of the galley or a ceiling panel lie
+# on the floor. Everything unlisted stands on the floor or on a surface.
+ANCHOR = {
+    "overhead_panel": "ceiling",
+    "counter": "wall",
+    "conduit": "wall",
+    "pipe_run": "wall",
+    "wall_rack": "wall",
+}
+
+
+def rotate_rect(lo, hi, facing):
+    """An axis-aligned rectangle ((x0, y0), (x1, y1)) turned by `facing`,
+    as rotate() turns a point: still axis-aligned, re-sorted."""
+    (ax, ay, _), _ = rotate((lo[0], lo[1], 0), (0, 0, 0), facing)
+    (bx, by, _), _ = rotate((hi[0], hi[1], 0), (0, 0, 0), facing)
+    return (min(ax, bx), min(ay, by)), (max(ax, bx), max(ay, by))
+
+
+def footprint(name):
+    """A prop's plan outline, prop-local: the rectangle every part of it
+    stands inside, seen from above."""
+    parts = PROPS[name]
+    return ((min(p.at[0] - p.size[0] / 2.0 for p in parts),
+             min(p.at[1] - p.size[1] / 2.0 for p in parts)),
+            (max(p.at[0] + p.size[0] / 2.0 for p in parts),
+             max(p.at[1] + p.size[1] / 2.0 for p in parts)))
+
+
 # Where a practical's bulb is: a prop-local point just under its glowing part,
 # where the point light goes. Only props that are lamps have one.
 HEADS = {

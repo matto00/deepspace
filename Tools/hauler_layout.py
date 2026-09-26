@@ -21,9 +21,9 @@ from collections import namedtuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from floorplan import Door, FloorPlan, PlanError, Room, Seal, Window, CELL
-from placement import (Mood, Mount, Place, Practical, Region, resolve_lights,
-                       resolve_mount, resolve_point, resolve_practicals,
-                       resolve_props)
+from placement import (DRESS_MARGIN, KeepOut, Mood, Mount, Place, Practical, Region,
+                       resolve_lights, resolve_mount, resolve_point,
+                       resolve_practicals, resolve_props, resolve_surfaces)
 
 # -- The contract with the character -------------------------------------
 # The ship is built for these, and the character is built to fit them. They
@@ -196,6 +196,11 @@ CONSOLE_WIDTH = 100
 # galley_table prop's surface is 8 cm thick and centred at 75.
 LAPTOP = ("galley", (300, 230), 79, 90)
 
+# The laptop's plan outline, in its own frame: the 22 x 30 cm base, and the
+# lid leaning back over +X to about 15 cm. Its user sits on its -X side.
+# test_placement.py reads ShipLaptop.cpp to hold the base's size to the C++.
+LAPTOP_FOOTPRINT = ((-11, -15), (15, 15))
+
 # The chart: the starboard desk screen, turned into the one you choose a star
 # at. The actor's origin is the centre of its glass, so this places the glass
 # and not a casing. (room, (x, y) from the room's corner, z, yaw), shaped like
@@ -216,8 +221,24 @@ NAV_SCREEN_WIDTH = 68
 # dressed over the chart's footprint plus this margin, nor on the strip
 # between the chart and the chair it is read from. The margin is the
 # laptop's. generate() resolves it into ship.nav_screen_exclude.
-NAV_SCREEN_MARGIN = 15
+NAV_SCREEN_MARGIN = DRESS_MARGIN
 NAV_SCREEN_CHAIR = ("cockpit", (175, 270))    # the starboard pilot_seat
+
+# What each room lets the dressing put things on (lived-in decision 2): the
+# surfaces, as "<prop>.<surface>" kinds. A kind not listed here is never
+# exported, so nothing can be dressed onto it. The corridor keeps its slide
+# run and the crawlway its crouch-only height by having nothing at all.
+# Floor bands and walls are after the POC.
+ROOM_DRESSING = {
+    "corridor":    (),
+    "crawlway":    (),
+    "cockpit":     ("cockpit_desk.wing_port", "cockpit_desk.wing_stbd"),
+    "cargo_bay":   ("wall_rack.shelf_0", "wall_rack.shelf_1", "wall_rack.shelf_2"),
+    "engineering": ("workbench.top",),
+    "galley":      ("galley_table.top", "counter.top"),
+    "bunk":        ("desk.top", "locker.top"),
+    "airlock":     ("airlock_bench.seat",),
+}
 
 # Where the ship is heard from (lived-in decision 9). One reactor, at the
 # reactor prop's own place, carrying the whole voice. One air handler per
@@ -247,7 +268,7 @@ Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
                           "pilot_seat_location pilot_seat_yaw "
                           "laptop_location laptop_yaw "
                           "nav_screen_location nav_screen_yaw nav_screen_exclude "
-                          "hum_sources")
+                          "hum_sources laptop_exclude surfaces keep_outs")
 
 
 def generate():
@@ -309,12 +330,52 @@ def generate():
                     resolve_point(plan, s.room, s.at, s.z), s.kind)
                    for s in HUM_SOURCES]
 
+    laptop_exclude = laptop_exclude_rect(plan, laptop_location, laptop_yaw)
+    surfaces = resolve_surfaces(plan, PLACEMENTS, ROOM_DRESSING,
+                                (laptop_exclude, nav_screen_exclude))
+
     return Ship(plan, boxes, lights, console_location, console_yaw,
                 player_start, regions, keep_clear,
                 pilot_seat_location, seat_yaw,
                 laptop_location, laptop_yaw,
                 nav_screen_location, nav_screen_yaw, nav_screen_exclude,
-                hum_sources)
+                hum_sources, laptop_exclude, surfaces, keep_outs(plan, keep_clear))
+
+
+def laptop_exclude_rect(plan, location, yaw):
+    """The laptop's clutter exclude as a world floor-plan rectangle: its
+    footprint plus DRESS_MARGIN, and the whole strip from it to the table's
+    edge on its user's side, so nothing is ever left between the reader and
+    the screen. The strip runs out to the room's wall; the surface it lies on
+    clips it to its own edge."""
+    import props as P
+    (x0, y0), (x1, y1) = LAPTOP_FOOTPRINT
+    r = plan.room(LAPTOP[0])
+    reach = r.w + r.d                     # past any edge of any table in the room
+    lo, hi = P.rotate_rect((x0 - reach, y0 - DRESS_MARGIN),
+                           (x1 + DRESS_MARGIN, y1 + DRESS_MARGIN), yaw)
+    x, y, _ = location
+    return (x + lo[0], y + lo[1]), (x + hi[0], y + hi[1])
+
+
+def keep_outs(plan, keep_clear):
+    """What the dressing may never touch, as world boxes the C++ generator
+    is handed (Dress.KeepOut markers): every door's and the console's
+    keep-clear zone, the corridor's slide run, and the crouch-only crawlway.
+    validate_hauler.py cannot see clutter -- it is spawned at runtime -- so
+    this guard is enforced by ShipDressing::Dress itself."""
+    out = []
+    doors = 0
+    for name, lo, hi in keep_clear:
+        if name == "console":
+            out.append(KeepOut("keepout_console", lo, hi))
+        else:
+            out.append(KeepOut("keepout_door_%d" % doors, lo, hi))
+            doors += 1
+    for label, room in (("keepout_slide_run", SLIDE_ROOM), ("keepout_crawlway", "crawlway")):
+        r = plan.room(room)
+        out.append(KeepOut(label, (r.x, r.y, 0), (r.x + r.w, r.y + r.d, r.height)))
+    return out
 
 
 def chart_exclude(plan, location, yaw):
