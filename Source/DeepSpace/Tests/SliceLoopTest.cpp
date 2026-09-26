@@ -97,17 +97,20 @@ namespace SliceLoopTestLocal
         return Attitude;
     }
 
-    /** Every DistantStars instance, in the counter-frame's own space: the
-     *  dome as the galaxy sees it, before the actor's rotation. */
-    TArray<FVector> DomeDirections(const AShipCounterFrame* Frame)
+    /** Every DistantStars instance as drawn, turned back into universe axes
+     *  through the ship's attitude: the galaxy as the universe sees it. The
+     *  ship turning moves every star on screen; this does not move unless
+     *  the galaxy itself did. */
+    TArray<FVector> GalaxyDirections(const AShipCounterFrame* Frame, const UShipSubsystem* Ship)
     {
         TArray<FVector> Out;
         const UInstancedStaticMeshComponent* Dome = Frame->GetDistantStars();
+        const FQuat Attitude = Ship->GetFlightState().GetUniverseOrientation();
         for (int32 Index = 0; Index < Dome->GetInstanceCount(); ++Index)
         {
             FTransform Instance;
-            Dome->GetInstanceTransform(Index, Instance, /*bWorldSpace*/ false);
-            Out.Add(Instance.GetLocation().GetSafeNormal());
+            Dome->GetInstanceTransform(Index, Instance, /*bWorldSpace*/ true);
+            Out.Add(Attitude.RotateVector((Instance.GetLocation() - Frame->GetActorLocation()).GetSafeNormal()));
         }
         return Out;
     }
@@ -166,7 +169,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("nothing outside the hull reaches the interior's captures: the dome"),
              KeptOutOfTheInterior(Frame->GetDistantStars()));
     TestTrue(TEXT("and the motes"), KeptOutOfTheInterior(Frame->GetNearStars()));
-    const TArray<FVector> Galaxy = DomeDirections(Frame);
+    const TArray<FVector> Galaxy = GalaxyDirections(Frame, Ship);
 
     // Chosen from the console, as slice 1 chooses.
     const TArray<FStarSystemStub> Chart = Ship->GetChart();
@@ -287,11 +290,11 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     }
 
     // The unmoved background is what makes the rest read as elsewhere.
-    const TArray<FVector> After = DomeDirections(Frame);
+    const TArray<FVector> After = GalaxyDirections(Frame, Ship);
     bool bGalaxyStill = After.Num() == Galaxy.Num() && Galaxy.Num() > 0;
     for (int32 Index = 0; bGalaxyStill && Index < Galaxy.Num(); ++Index)
     {
-        bGalaxyStill = After[Index].Equals(Galaxy[Index], 1e-9);
+        bGalaxyStill = After[Index].Equals(Galaxy[Index], 1e-6);
     }
     TestTrue(TEXT("the galaxy behind it all has not moved"), bGalaxyStill);
     return true;
