@@ -402,6 +402,7 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         FLinearColor Rated;
         UPointLightComponent* Light = nullptr;
         float RatedIntensity = 0.0f;
+        FLinearColor RatedLight;
         TArray<AStaticMeshActor*> Lamps;
     };
     TArray<FRoomLamps> Built;
@@ -433,6 +434,7 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         Entry.Light = Light->FindComponentByClass<UPointLightComponent>();
         Entry.Light->SetMobility(EComponentMobility::Movable);
         Entry.RatedIntensity = Entry.Light->Intensity;
+        Entry.RatedLight = Entry.Light->GetLightColor();
         Built.Add(Entry);
     }
 
@@ -478,7 +480,18 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("and the laptop's split starves the lights into their brown-out, not off (%.3f fed)"), Fed),
              Fed > 0.0f && Fed < UShipLightingSubsystem::BrownOutBelow);
 
+    // How far a colour has warmed from its rating in one channel: that
+    // channel's share against red, over the same share when rated. Red is
+    // the channel a brown-out keeps, so brightness alone never shows here,
+    // and a panel lit its room's kelvin compares with a light that is white.
+    const auto Warmth = [](const FLinearColor& Now, const FLinearColor& Rated, int32 Channel)
+    {
+        return (Now.Component(Channel) / Now.R) / (Rated.Component(Channel) / Rated.R);
+    };
+
     float Worst = 0.0f;
+    float WorstHue = 0.0f;
+    float LightWarmest = 1.0f;
     float WorstGlass = 0.0f;
     float Dimmest = TNumericLimits<float>::Max();
     float Brightest = 0.0f;
@@ -491,9 +504,17 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
             const float Fraction = Room.Light->Intensity / Room.RatedIntensity;
             Dimmest = FMath::Min(Dimmest, Fraction);
             Brightest = FMath::Max(Brightest, Fraction);
+            const FLinearColor LightNow = Room.Light->GetLightColor();
             for (const AStaticMeshActor* Lamp : Room.Lamps)
             {
-                Worst = FMath::Max(Worst, FMath::Abs((Glow(Lamp).R / Room.Rated.R) / Fraction - 1.0f));
+                const FLinearColor Panel = Glow(Lamp);
+                Worst = FMath::Max(Worst, FMath::Abs((Panel.R / Room.Rated.R) / Fraction - 1.0f));
+                for (int32 Channel = 1; Channel <= 2; ++Channel)
+                {
+                    const float LightWarmth = Warmth(LightNow, Room.RatedLight, Channel);
+                    LightWarmest = FMath::Min(LightWarmest, LightWarmth);
+                    WorstHue = FMath::Max(WorstHue, FMath::Abs(Warmth(Panel, Room.Rated, Channel) - LightWarmth));
+                }
             }
         }
     }
@@ -501,6 +522,13 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
              Brightest < 0.5f && Dimmest > 0.0f && Brightest / Dimmest > 1.05f);
     TestTrue(FString::Printf(TEXT("every room's lamps glow at their light's fraction, tick by tick (worst %.3f%% out)"), 100.0f * Worst),
              Worst < 1e-3f);
+    // The light's colour is held as 8-bit sRGB, so its warmth is only good
+    // to a percent or so; a panel that stopped browning out would be off by
+    // the whole brown-out, tens of percent.
+    TestTrue(FString::Printf(TEXT("starved, the lights run warm (green and blue down to %.2f of their share)"), LightWarmest),
+             LightWarmest < 0.9f);
+    TestTrue(FString::Printf(TEXT("and every lamp browns out with its light, on its own rated colour (worst %.3f out)"), WorstHue),
+             WorstHue < 0.02f);
     TestTrue(FString::Printf(TEXT("and the glass reflects the room as brightly as the lights are fed (worst %.5f out)"), WorstGlass),
              WorstGlass < 1e-6f);
 
@@ -519,7 +547,12 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         bAllBack &= FMath::IsNearlyEqual(Room.Light->Intensity, Room.RatedIntensity, 1e-3f * Room.RatedIntensity);
         for (const AStaticMeshActor* Lamp : Room.Lamps)
         {
-            bAllBack &= FMath::IsNearlyEqual(Glow(Lamp).R, Room.Rated.R, 1e-3f * Room.Rated.R);
+            const FLinearColor Panel = Glow(Lamp);
+            for (int32 Channel = 0; Channel <= 2; ++Channel)
+            {
+                bAllBack &= FMath::IsNearlyEqual(Panel.Component(Channel), Room.Rated.Component(Channel),
+                                                 1e-3f * Room.Rated.Component(Channel));
+            }
         }
     }
     TestTrue(TEXT("and every light and every lamp is back at its rating"), bAllBack);
