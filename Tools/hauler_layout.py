@@ -90,7 +90,10 @@ SEALS = [
     Seal("airlock", "port", 120, 220),
 ]
 
-PLACEMENTS = [
+# Every placement except the lamps, which are in PRACTICALS because each also
+# carries a light. PLACEMENTS, below them, is the one complete list: read that,
+# never this, or the galley counter goes missing.
+FURNITURE = [
     # Cockpit: pilots face fore, toward the window.
     Place("cockpit_desk",   "cockpit", (285, 200)),
     Place("pilot_seat",     "cockpit", (175, 130)),
@@ -163,6 +166,13 @@ PRACTICALS = [
               radius=200, intensity=0.8),
 ]
 
+# Every prop in the ship, lamps included: what resolve_props builds, and what
+# anything asking "what furniture is there" -- the surfaces, the dressing --
+# must read. A lamp stands on a surface like anything else, so a consumer that
+# took FURNITURE alone would lose the counter and dress straight through the
+# lamp bases.
+PLACEMENTS = FURNITURE + [p.place for p in PRACTICALS]
+
 REGIONS = [
     Region("corridor_aft",  "corridor",    (100, 75),  "stand"),
     Region("corridor_fore", "corridor",    (1300, 75), "stand"),
@@ -208,9 +218,9 @@ def generate():
     space. Raises floorplan.PlanError if the plan is not self-consistent."""
     plan = FloorPlan(ROOMS, DOORS, WINDOWS, SEALS)
     lights, lamps = resolve_lights(plan, ROOM_MOOD)
-    practical_places, practical_lights = resolve_practicals(plan, PRACTICALS, ROOM_MOOD)
+    _, practical_lights = resolve_practicals(plan, PRACTICALS, ROOM_MOOD)
     lights += practical_lights
-    boxes = plan.boxes() + lamps + resolve_props(plan, PLACEMENTS + practical_places)
+    boxes = plan.boxes() + lamps + resolve_props(plan, PLACEMENTS)
 
     console_location, console_yaw = resolve_mount(plan, CONSOLE)
     room, at, z = PLAYER_START

@@ -129,8 +129,9 @@ def test_lights_follow_the_grid_spacing():
 # -- colour and moods ----------------------------------------------------
 
 def test_warm_light_runs_red_over_green_over_blue():
+    # And blue is still there: a 2700 K lamp is amber, not a sodium lamp.
     r, g, b = kelvin_to_rgb(2700)
-    assert r > g > b, (r, g, b)
+    assert r > g > b > 0, (r, g, b)
 
 
 def test_daylight_is_white_within_three_percent():
@@ -142,10 +143,14 @@ def test_colour_cools_monotonically_with_temperature():
     # Blue rises and red never does as a lamp runs hotter, across every
     # temperature the ship uses: a mood cannot come out warmer than one
     # listed below it.
-    temps = sorted(m.kelvin for m in L.ROOM_MOOD.values())
+    # Strictly: every mood lies between 1900 K and 6600 K, where the fit's
+    # green and blue both climb, so two moods that differ in kelvin must
+    # differ in colour. Non-decreasing alone passes a curve that clamps every
+    # ship temperature to the same blue.
+    temps = sorted(set(m.kelvin for m in L.ROOM_MOOD.values()))
     cols = [kelvin_to_rgb(k) for k in temps]
-    for (r0, _, b0), (r1, _, b1) in zip(cols, cols[1:]):
-        assert b1 >= b0 and r1 <= r0, list(zip(temps, cols))
+    for (r0, g0, b0), (r1, g1, b1) in zip(cols, cols[1:]):
+        assert b1 > b0 and g1 > g0 and r1 <= r0, list(zip(temps, cols))
 
 
 def test_a_room_without_a_mood_is_rejected():
@@ -279,11 +284,27 @@ def test_every_head_sits_just_under_its_props_glowing_part():
         assert 0 < (bz - sz / 2) - hz <= 5, name
 
 
+def test_placements_is_every_prop_lamps_included():
+    # PLACEMENTS is the one list a consumer reads. The lamps live in
+    # PRACTICALS because each also carries a light, and a list that lost them
+    # would lose the galley counter, the ship's main dressing surface, and
+    # leave the lamp bases on the desk and bench for clutter to go through.
+    for p in L.PRACTICALS:
+        assert p.place in L.PLACEMENTS, p.place
+    assert [p.prop for p in L.PLACEMENTS].count("counter") == 1
+    assert len(L.PLACEMENTS) == len(L.FURNITURE) + len(L.PRACTICALS)
+    # And it is what the ship is built from, not a parallel copy of it.
+    ship = L.generate()
+    built = sorted(b.label for b in ship.boxes if b.label.startswith("prop_"))
+    want = sorted(b.label for b in resolve_props(ship.plan, L.PLACEMENTS))
+    assert built == want, set(built) ^ set(want)
+
+
 def test_every_practical_rests_on_a_surface():
     # Its lowest part's underside is the top of something beneath it, so a
     # lamp neither floats over the desk nor sinks into it.
     ship = L.generate()
-    places = L.PLACEMENTS + [x.place for x in L.PRACTICALS]
+    places = L.PLACEMENTS
     for i, place in enumerate(places):
         if place not in [x.place for x in L.PRACTICALS] or place.elevation == 0:
             continue

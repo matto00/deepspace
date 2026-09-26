@@ -823,7 +823,8 @@ browns out. With temperature enabled, the engine multiplies a second tint on
 top of that colour, so a warm room browning out would go doubly orange, and
 the colour on screen would stop matching the colour the verifier can check.
 Putting the colour in one place keeps the brown-out correct with no C++
-change.
+change. *That last claim was false; see Amendment 1 below. It keeps the
+colour in one place, but the brown-out needed a C++ change all the same.*
 
 The cockpit being the darkest room is the central principle made literal.
 *Scale is only felt in contrast*, and the contrast here is a dim, warm
@@ -1354,3 +1355,40 @@ and leaves the rest alone.
 | The ship clock's origin is drawn by the dressing subsystem, not set by the builder | Decision 11 |
 | The drone follows the watts reaching the jump drive (plan conflict 8, accepted by the developer) | Decision 9 |
 | **Unchanged**: the lighting moods (7), the practicals (8), surfaces and bands (2), the distributions (3), collision by band (5), the lamp panels (10), the readouts apart from the clock's seed (11), and what wear looks like (12) | — |
+
+## Amendments from building slice 1, 2026-09-25
+
+A review of the moods branch found two things this spec got wrong.
+
+**1. The brown-out is relative to the lamp's rating (decision 7).** The
+subsystem lerped every light's `RatedColour` to one fixed amber, linear
+(1, 0.62, 0.30). That was right when every lamp was a neutral-cool white. The
+moods made the bunk (2700 K), galley (2900 K), crawlway (3200 K),
+engineering (3600 K) and all three practicals *warmer* than that amber: the
+bunk is (1, 0.386, 0.095) linear. So a starved bunk went whiter and bluer,
+the opposite of a filament running cool. `UShipLightingSubsystem` now slides
+each lamp down its own temperature instead. Red holds, and green and blue are
+scaled by `Lerp(1, 0.62, Depth)` and `Lerp(1, 0.30, Depth)`, so a white lamp
+lands on the old amber and a warm one goes deeper amber than it was.
+`DeepSpace.Ship.BrownOutRunsWarmer` starves a 2700 K lamp and a 6200 K one
+and checks that B/R, G/R and B/G all fall. Decision 10's lamp panels take
+the same function applied to their own rated `Colour`, and not a fixed target.
+
+**2. Lamps stand on dressing surfaces (decisions 1b, 2).** The practicals
+put the desk lamp's base on `desk.top`, at world (948, -118), and the bench
+lamp's base on `workbench.top`, at (788, 240). The counter moved into
+`PRACTICALS` because its strip is a lamp. Two rules follow for step 5:
+
+- `hauler_layout.PLACEMENTS` is the one complete list: `FURNITURE` plus every
+  practical's `place`. `resolve_surfaces(plan, placements)` is given
+  `PLACEMENTS`, never `FURNITURE`, or the galley counter, the ship's main
+  dressing surface (affinity 4), and its `Ordinal` disappear.
+  `test_placements_is_every_prop_lamps_included` holds `generate()` to it.
+- `resolve_surfaces` computes an exclude for **every placement that rests on
+  another prop's surface**: its footprint plus 15 cm, the same margin as the
+  laptop's. That is the laptop's rule made general, not a list of special
+  cases, so a lamp moved in the layout moves its exclude with it. Today it
+  gives `desk.top` one exclude (the desk lamp's 14 cm base) and
+  `workbench.top` a second one beside the screen's (the bench lamp's 10 cm
+  base). `test_placement.py` gets a check that no surface marker's free area
+  overlaps a practical's lowest part.
