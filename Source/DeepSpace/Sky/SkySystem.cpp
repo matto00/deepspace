@@ -14,6 +14,7 @@ namespace
         FLinearColor Colour;
         FLinearColor Rim;
         ESkySurface Surface = ESkySurface::Rocky;
+        double Cratering = 0.0;
     };
 
     /** The face's purpose label: a child of the system's seed that no
@@ -26,16 +27,20 @@ namespace
         {
         // Bare rock, dark as the Moon and Mercury are: a tenth of the light back.
         case EPlanetKind::Barren:
-            return { 0.12, FLinearColor(0.55f, 0.50f, 0.46f), FLinearColor::Black };
+            // Airless and dead, so every impact it ever took is still there.
+            return { 0.12, FLinearColor(0.55f, 0.50f, 0.46f), FLinearColor::Black, ESkySurface::Rocky, 1.0 };
         // Land, cloud and a thin sky, Earth's 0.3, with a blue limb.
         case EPlanetKind::Terrestrial:
-            return { 0.30, FLinearColor(0.50f, 0.52f, 0.44f), FLinearColor(0.18f, 0.32f, 0.70f) };
+            // Weather and plates erase craters in a few hundred million
+            // years: Earth keeps a handful, softened.
+            return { 0.30, FLinearColor(0.50f, 0.52f, 0.44f), FLinearColor(0.18f, 0.32f, 0.70f), ESkySurface::Rocky, 0.15 };
         // Water under cloud: darker body, the same sky.
         case EPlanetKind::Ocean:
-            return { 0.28, FLinearColor(0.24f, 0.38f, 0.60f), FLinearColor(0.18f, 0.32f, 0.70f) };
+            return { 0.28, FLinearColor(0.24f, 0.38f, 0.60f), FLinearColor(0.18f, 0.32f, 0.70f), ESkySurface::Rocky, 0.0 };
         // Frost reflects most of what reaches it, as Europa does.
         case EPlanetKind::Ice:
-            return { 0.60, FLinearColor(0.86f, 0.89f, 0.93f), FLinearColor::Black };
+            // Between Europa, resurfaced smooth, and Callisto, saturated.
+            return { 0.60, FLinearColor(0.86f, 0.89f, 0.93f), FLinearColor::Black, ESkySurface::Rocky, 0.5 };
         // Banded cloud tops, Jupiter's half, with a faint haze at the limb.
         case EPlanetKind::GasGiant:
             return { 0.50, FLinearColor(0.80f, 0.70f, 0.56f), FLinearColor(0.20f, 0.18f, 0.14f), ESkySurface::Banded };
@@ -73,9 +78,11 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         Body.Albedo = Look.Albedo;
         Body.Rim = Look.Rim;
         Body.Surface = Look.Surface;
+        Body.Cratering = Look.Cratering;
         // By orbit index, which never renumbers (FStarSystem::Planets): a
         // world keeps its face however many planets are added outside it.
         Body.SurfaceSeed = GenSeed::Derive(System.Stub.Seed, SurfacePurpose, static_cast<uint64>(Index));
+        Body.BeltPairs = Look.Surface == ESkySurface::Banded ? SkyLook::BeltPairs(Planet.DayHours) : 0.0;
     }
 
     for (const FStarSystemStub& Stub : Neighbours)
@@ -95,4 +102,9 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         Neighbour.TemperatureK = Stub.TemperatureK;
     }
     return Sky;
+}
+
+double SkyLook::BeltPairs(double DayHours)
+{
+    return DayHours > 0.0 ? JupiterBeltPairs * FMath::Sqrt(JupiterDayHours / DayHours) : 0.0;
 }

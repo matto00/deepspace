@@ -159,6 +159,32 @@ bool FLocalSystemTest::RunTest(const FString& Parameters)
             FStarSystem Giant = System;
             Giant.Planets[1].Kind = EPlanetKind::GasGiant;
             TestTrue(TEXT("a giant wears belts"), FSkySystem::FromSystem(Giant, Stubs).Bodies[2].Surface == ESkySurface::Banded);
+
+            // As many as its day gives it: a Jupiter's day wears a Jupiter's
+            // belts, a day four times as long half as many, and rock none.
+            Giant.Planets[1].DayHours = SkyLook::JupiterDayHours;
+            TestEqual(TEXT("a giant with Jupiter's day wears Jupiter's belts"),
+                FSkySystem::FromSystem(Giant, Stubs).Bodies[2].BeltPairs, SkyLook::JupiterBeltPairs);
+            Giant.Planets[1].DayHours = 4.0 * SkyLook::JupiterDayHours;
+            TestTrue(TEXT("a day four times as long, half as many"),
+                FMath::IsNearlyEqual(FSkySystem::FromSystem(Giant, Stubs).Bodies[2].BeltPairs, 0.5 * SkyLook::JupiterBeltPairs, 1e-12));
+            TestEqual(TEXT("rock wears no belts"), Sky.Bodies[1].BeltPairs, 0.0);
+
+            // Craters where the ground keeps them: bare rock all of them,
+            // water and cloud none, and a giant none.
+            TestEqual(TEXT("bare rock keeps every crater"), Sky.Bodies[1].Cratering, 1.0);
+            TestEqual(TEXT("an ocean world keeps none"), Sky.Bodies[2].Cratering, 0.0);
+            TestEqual(TEXT("nor does a giant"), FSkySystem::FromSystem(Giant, Stubs).Bodies[2].Cratering, 0.0);
+
+            // And between them, what each kind of ground has erased: weather
+            // and plates leave an Earth a handful, ice resurfaces about half.
+            // Exact, so no kind can quietly keep bare rock's every crater.
+            FStarSystem Kinds = System;
+            Kinds.Planets[0].Kind = EPlanetKind::Terrestrial;
+            Kinds.Planets[1].Kind = EPlanetKind::Ice;
+            const FSkySystem KindsSky = FSkySystem::FromSystem(Kinds, Stubs);
+            TestEqual(TEXT("an Earth keeps a handful, softened"), KindsSky.Bodies[1].Cratering, 0.15);
+            TestEqual(TEXT("ice keeps about half"), KindsSky.Bodies[2].Cratering, 0.5);
         }
         if (TestEqual(TEXT("one neighbour: the system itself is left out"), Sky.Neighbours.Num(), 1))
         {

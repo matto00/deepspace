@@ -5,6 +5,7 @@
 #include "DeepSpaceEditorScripting.generated.h"
 
 class UBlendSpace;
+class UStaticMesh;
 
 /**
  * Engine operations the editor-side Python scripts under Tools/ need but that
@@ -27,4 +28,18 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "DeepSpace|Editor")
     static bool RebuildBlendSpace(UBlendSpace* BlendSpace);
+
+    /**
+     * Build SM_SkyBody, the sphere the sky draws every body with, into the
+     * package PackageName (/Game/Materials/Sky/SM_SkyBody), made if new and
+     * rebuilt in place if not, so every reference to it survives: one LOD
+     * per entry of CellsPerLod, finest first, each SkySphereMesh::Build of
+     * that many cells, switching at SkySphereMesh::LodScreenSizes. Returns
+     * the mesh, unsaved, or null outside the editor.
+     *
+     * In C++ because there is no modelling here, and Python has no way to
+     * make a quarter of a million triangles but one call per triangle.
+     */
+    UFUNCTION(BlueprintCallable, Category = "DeepSpace|Editor")
+    static UStaticMesh* BuildSkySphere(const FString& PackageName, const TArray<int32>& CellsPerLod);
 };

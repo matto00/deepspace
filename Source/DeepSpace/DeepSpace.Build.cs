@@ -39,6 +39,12 @@ public class DeepSpace : ModuleRules
 		// translate for; a commandlet compiles no shaders, so nothing else
 		// would notice a broken graph.
 		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "Slate", "SlateCore", "RHI" });
+
+		// MeshDescription/StaticMeshDescription/AssetRegistry: the sky's
+		// sphere, SM_SkyBody, is built from code (UDeepSpaceEditorScripting::
+		// BuildSkySphere) rather than modelled -- a quarter of a million
+		// triangles that no one should have to draw.
+		PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "AssetRegistry" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

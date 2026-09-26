@@ -50,6 +50,22 @@ FSkySystem LocalSystem::Current(const UWorld* World)
     return FSkySystem::FromSystem(*Here, Universe->GetSystemsNear(Where, NeighbourRadiusCm));
 }
 
+FSkySystem LocalSystem::Here(const UWorld* World)
+{
+    const UShipSubsystem* Ship = ShipOf(World);
+    const UUniverseSubsystem* Universe = World ? World->GetSubsystem<UUniverseSubsystem>() : nullptr;
+    if (!Ship || !Universe)
+    {
+        return FSkySystem();
+    }
+    return Here(Universe->GetSystemAt(Ship->GetFlightState().GetUniversePosition()));
+}
+
+FSkySystem LocalSystem::Here(const TOptional<FStarSystem>& System)
+{
+    return System ? FSkySystem::FromSystem(*System, {}) : FSkySystem();
+}
+
 bool LocalSystem::InTransit(const UWorld* World)
 {
     const UShipSubsystem* Ship = ShipOf(World);

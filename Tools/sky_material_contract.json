@@ -10,15 +10,21 @@
     "mottle":          { "name": "Mottle",         "type": "scalar" },
     "detail":          { "name": "Detail",         "type": "scalar" },
     "banding":         { "name": "Banding",        "type": "scalar" },
+    "relief":          { "name": "Relief",         "type": "scalar" },
+    "cratering":       { "name": "Cratering",      "type": "scalar" },
     "surface_seed":    { "name": "SurfaceSeed",    "type": "vector" },
     "interior_light":  { "name": "InteriorLight",  "type": "scalar" },
     "veil":            { "name": "Veil",           "type": "scalar" }
   },
   "materials": {
-    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "brightness", "point_blend", "mottle", "detail", "banding"] },
+    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "brightness", "point_blend", "mottle", "detail", "banding", "relief", "cratering"] },
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
     "M_SkyGlass":     { "parameters": [] }
+  },
+  "meshes": {
+    "comment": "SM_SkyBody: the sphere every body and neighbour is drawn with, built by UDeepSpaceEditorScripting::BuildSkySphere as an equal-angle cube sphere, one LOD per entry of cells_per_lod, finest first. SkySphereMesh.h decides the screen size each LOD switches at, from the view it is sized for: no facet more than half a 4K pixel inside the limb. 224 is what LOD 0 needs at the nearest the sky ever draws a world, 1.6e-3 of its radius; each coarser LOD halves the cells and takes over once it is far enough away not to show.",
+    "SM_SkyBody": { "cells_per_lod": [224, 112, 56, 28, 14, 7, 4] }
   },
   "collections": {
     "MPC_Sky": { "parameters": ["interior_light", "veil"], "defaults": { "interior_light": 1.0, "veil": 1.0 } }
@@ -36,8 +42,16 @@
     "level_scale": 2.0,
     "filter_pixels": 2.0,
     "surface_max_swing": 0.9,
-    "belt_pairs_min": 5.0,
-    "belt_pairs_range": 6.0,
+    "relief_comment": "M_SkyBody's relief: each detail band's height is its value over its frequency, so every band has the same slope and the ground at the screen's scale has the same relief at any distance; Relief (ds.Sky.Relief) scales them all, and a giant's cloud tops get relief_giant of it. Craters are one Voronoi band per crater_frequencies entry, a crater in crater_keep of the cells, crater_radius cells wide, walls sloping crater_depth per unit of distance and a rim crater_rim high; the bands step by four, so the count wider than D goes as D^-2, the highlands' law. The basins keep maria_cratering of the highlands' craters. Craters darken their floors and brighten their rims by the albedo terms, behind the same half-float guard as the face.",
+    "relief_giant": 0.33,
+    "crater_frequencies": [12.0, 48.0, 192.0, 768.0, 3072.0, 12288.0],
+    "crater_radius": 0.35,
+    "crater_depth": 0.4,
+    "crater_rim": 0.25,
+    "crater_keep": 0.6,
+    "crater_floor_dark": 0.12,
+    "crater_rim_bright": 0.12,
+    "maria_cratering": 0.35,
     "belt_warp": 0.06,
     "belt_stretch": 6.0,
     "rim_exponent": 5.0,

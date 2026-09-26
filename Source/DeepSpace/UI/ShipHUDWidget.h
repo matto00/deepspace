@@ -2,10 +2,12 @@
 
 #include "Blueprint/UserWidget.h"
 #include "CoreMinimal.h"
+#include "Sky/SkySystem.h"
 #include "ShipHUDWidget.generated.h"
 
 class ADeepSpaceCharacter;
 class APawn;
+struct FShipFlightState;
 class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
@@ -58,20 +60,38 @@ public:
     /**
      * The altitude line: how far the nearest surface is, and whose it is --
      * "212 KM ABOVE Kessa IV", or "3,400 AU TO THE EDGE" when the system's
-     * edge is nearer than any world. Within FloorBand of FloorCm either way
-     * it adds "DRIVE FLOOR": the drive settles there and closes no further,
-     * so the number has stopped falling because this is as close as the
-     * drive goes, not because something is wrong. Pure.
+     * edge is nearer than any world -- and "DRIVE FLOOR" after it while
+     * bAtDriveFloor, which DriveHoldsAtFloor decides. Pure.
      */
-    static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, double FloorCm, double FloorBand);
+    static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, bool bAtDriveFloor);
+
+    /**
+     * Whether the drive is what is holding the ship where it is: engaged,
+     * its lever pushing the ship toward the surface, and the room it has
+     * left to close -- SurfaceCm less the floor -- within FloorBand of the
+     * floor. Then the number has stopped falling because this is as close
+     * as the drive goes, and the words say so.
+     *
+     * Not merely a height. A ship coasting at 100 km with the drive off, or
+     * leaving at 100 km with the lever away from the world, is at that
+     * height and is not at the drive's floor: nothing is holding it there,
+     * and the words would promise a stop that is not coming. Pure; the
+     * surface's distance and the direction it grows in are the drive's own
+     * measure (LocalSystem::NearestSurfaceDistance, ShipDrive::AwayFromSurface).
+     */
+    static bool DriveHoldsAtFloor(const FShipFlightState& Flight, double SurfaceCm, const FVector& AwayFromSurface,
+                                  double FloorBand);
 
     /**
      * The altitude corner's line, asked of its owners: the nearest surface
-     * from LocalSystem::NearestSurface -- the measure the drive's room is --
-     * against the drive floor the ship is flying with, or a dash between
-     * stars and where there is nothing near. Stores nothing, so a headless
-     * test reads exactly what the corner draws.
+     * in Here -- the system the ship is in, from LocalSystem::Here, the
+     * measure the drive's room is -- and whether the drive holds the ship at
+     * its floor, or a dash between stars and where there is nothing near.
+     * Stores nothing, so a headless test reads exactly what the corner draws.
      */
+    static FText AltitudeLineText(const UShipSubsystem& Ship, const FSkySystem& Here);
+
+    /** The same, asking LocalSystem::Here itself. */
     static FText AltitudeLineText(const UShipSubsystem& Ship);
 
     /**
