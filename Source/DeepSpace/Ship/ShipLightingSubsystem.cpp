@@ -9,9 +9,23 @@
 
 namespace
 {
-    // A fixture browning out goes amber, because a filament starved of power
-    // runs cooler. The ship's lamps are a neutral-cool white when fed.
-    const FLinearColor BrownOutColour(1.0f, 0.62f, 0.30f, 1.0f);
+    // A filament starved of power runs cooler, so a lamp browning out slides
+    // down its *own* colour temperature: red holds, green falls, blue falls
+    // furthest. It has to be relative to the rating, because the ship's lamps
+    // are not one colour. A fixed amber target is whiter and bluer than a
+    // 2700 K bunk lamp already is, and lerping to it made the warm rooms go
+    // cold as they starved. A white lamp still lands on (1, 0.62, 0.30), the
+    // amber the ship always browned out to.
+    constexpr float StarvedGreen = 0.62f;
+    constexpr float StarvedBlue = 0.30f;
+
+    FLinearColor BrownOut(const FLinearColor& Rated, float Depth)
+    {
+        return FLinearColor(Rated.R,
+                            Rated.G * FMath::Lerp(1.0f, StarvedGreen, Depth),
+                            Rated.B * FMath::Lerp(1.0f, StarvedBlue, Depth),
+                            Rated.A);
+    }
 }
 
 void UShipLightingSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -103,7 +117,7 @@ void UShipLightingSubsystem::Tick(float DeltaTime)
         if (bOn)
         {
             const float Depth = 1.0f - FMath::Clamp(Feed / BrownOutBelow, 0.0f, 1.0f);
-            Light->SetLightColor(FMath::Lerp(Entry.RatedColour, BrownOutColour, Depth));
+            Light->SetLightColor(BrownOut(Entry.RatedColour, Depth));
         }
     }
 }
