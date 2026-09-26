@@ -302,60 +302,139 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         }
     }
 
-    // 7. Reaching a spot is walking to it, not seeing it. The spot is taken
-    //    and fenced in by furniture 75 cm high -- table height, below the
-    //    capsule's centre, so a line at that height sees over all of it --
-    //    with one gap 40 cm wide, narrower than a body. The first ring that
-    //    fits is outside the fence, and none of it can be walked to: the
-    //    body must not end up out there.
+    // 7. The same climb at the laptop. Its bench is 45 cm (ShipScreen.h's
+    //    SeatHeightCm), the galley's benches in the level, and lower than
+    //    the chart's chair: a floor band that let anything up to 50 cm count
+    //    as floor would stand this player on the bench, which is the
+    //    developer's symptom moved to the laptop.
     {
-        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
-        constexpr double Inner = 45.0;
-        constexpr double Thick = 10.0;
-        constexpr double Height = 75.0;
-        constexpr double Gap = 40.0;
-        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
-        if (TestNotNull(TEXT("the player spawns inside the fence"), Player))
+        const FVector2D Stood(LaptopSeat.X - 5.0, LaptopSeat.Y);
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood, LaptopSeat.Z);
+        if (TestNotNull(TEXT("the player spawns on the laptop's bench"), Player))
         {
-            Player->UseScreen(Chart);
+            Player->UseScreen(Laptop);
             Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
-            TArray<AActor*> Placed;
-            Placed.Add(SpawnBlock(World, FVector(Stood, 115.0), FVector(20.0, 20.0, 85.0)));
-            const double Mid = Inner + Thick * 0.5;
-            const double Span = Inner + Thick;
-            for (const double Side : {-1.0, 1.0})
-            {
-                Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * Mid, Stood.Y, Height * 0.5),
-                                      FVector(Thick * 0.5, Span, Height * 0.5)));
-            }
-            Placed.Add(SpawnBlock(World, FVector(Stood.X, Stood.Y - Mid, Height * 0.5),
-                                  FVector(Span, Thick * 0.5, Height * 0.5)));
-            // The side with the gap: two lengths, Gap apart.
-            const double Piece = (2.0 * Span - Gap) * 0.5;
-            for (const double Side : {-1.0, 1.0})
-            {
-                Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * (Gap * 0.5 + Piece * 0.5), Stood.Y + Mid,
-                                                     Height * 0.5),
-                                      FVector(Piece * 0.5, Thick * 0.5, Height * 0.5)));
-            }
-            TestTrue(TEXT("fenced: the fence's gap is narrower than a body"), Gap < 2.0 * Radius);
-
             Player->StopUsingScreen();
-            const FVector At = Player->GetActorLocation();
-            TestTrue(FString::Printf(TEXT("fenced: not across the furniture (%.0f, %.0f from where they stood)"),
-                                     At.X - Stood.X, At.Y - Stood.Y),
-                     FMath::Abs(At.X - Stood.X) < Inner && FMath::Abs(At.Y - Stood.Y) < Inner);
-
-            for (AActor* Actor : Placed)
-            {
-                Actor->Destroy();
-            }
+            CheckStanding(*this, TEXT("climbed onto the laptop's bench"), World, Player, LaptopSeat);
+            TestTrue(TEXT("climbed onto the laptop's bench: beside it"),
+                     FVector::Dist2D(Player->GetActorLocation(), FVector(Stood, 0.0)) < 150.0);
             Player->Destroy();
         }
     }
 
-    // 8. Sitting and standing move the view up to 60 cm in one frame. The
+    // 8. A low plinth where the player stood, 12 cm: a deck plate, a step up
+    //    to a console, a crate lid. Walking steps onto it without a thought,
+    //    and it is still not the floor the seat is on -- the band's upper
+    //    edge is 5 cm because a floor is flat to within a few centimetres
+    //    and anything taller is something stood on. This pins that edge
+    //    close to its value, where the chair and the bench pin it only
+    //    below 45 cm. 40 cm square, so the second ring clears it.
+    {
+        constexpr double PlinthHeight = 12.0;
+        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        AActor* Plinth = SpawnBlock(World, FVector(Stood, PlinthHeight * 0.5),
+                                    FVector(20.0, 20.0, PlinthHeight * 0.5));
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood, PlinthHeight);
+        if (TestNotNull(TEXT("the player spawns on the plinth"), Player))
+        {
+            Player->UseScreen(Chart);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+            Player->StopUsingScreen();
+            CheckStanding(*this, TEXT("stood on a low plinth"), World, Player, ChartSeat);
+            TestTrue(TEXT("stood on a low plinth: beside it"),
+                     FVector::Dist2D(Player->GetActorLocation(), FVector(Stood, 0.0)) < 150.0);
+            Player->Destroy();
+        }
+        Plinth->Destroy();
+    }
+
+    // 9 and 10. Reaching a spot is walking to it, not seeing it. The spot is
+    //    taken and fenced in by furniture 75 cm high -- table height, below
+    //    the capsule's centre, so a line at that height sees over all of it
+    //    -- with one gap, on +Y. The first ring that fits is outside the
+    //    fence, so whether the body gets out there says whether the reach
+    //    sweep fits through the gap. The gap is 4 cm either side of a body's
+    //    width: narrower, and no spot can be walked to; wider, and the spot
+    //    straight through the gap must be. Between them they pin the sweep
+    //    at the standing capsule's own size -- a thinner probe fits gaps no
+    //    body fits, a fatter one refuses doorways a body walks through.
+    //    The fence is 8 cm thick, so the spot through the gap clears it.
+    auto StandInsideFence = [&](const TCHAR* What, double Gap) -> TOptional<FVector>
+    {
+        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        constexpr double Inner = 45.0;
+        constexpr double Thick = 8.0;
+        constexpr double Height = 75.0;
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
+        if (!TestNotNull(FString::Printf(TEXT("%s: the player spawns inside the fence"), What), Player))
+        {
+            return {};
+        }
+        Player->UseScreen(Chart);
+        Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+        TArray<AActor*> Placed;
+        Placed.Add(SpawnBlock(World, FVector(Stood, 115.0), FVector(20.0, 20.0, 85.0)));
+        const double Mid = Inner + Thick * 0.5;
+        const double Span = Inner + Thick;
+        for (const double Side : {-1.0, 1.0})
+        {
+            Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * Mid, Stood.Y, Height * 0.5),
+                                  FVector(Thick * 0.5, Span, Height * 0.5)));
+        }
+        Placed.Add(SpawnBlock(World, FVector(Stood.X, Stood.Y - Mid, Height * 0.5),
+                              FVector(Span, Thick * 0.5, Height * 0.5)));
+        // The side with the gap: two lengths, Gap apart.
+        const double Piece = (2.0 * Span - Gap) * 0.5;
+        for (const double Side : {-1.0, 1.0})
+        {
+            Placed.Add(SpawnBlock(World, FVector(Stood.X + Side * (Gap * 0.5 + Piece * 0.5), Stood.Y + Mid,
+                                                 Height * 0.5),
+                                  FVector(Piece * 0.5, Thick * 0.5, Height * 0.5)));
+        }
+
+        Player->StopUsingScreen();
+        const FVector At = Player->GetActorLocation();
+        const FVector Offset(At.X - Stood.X, At.Y - Stood.Y, 0.0);
+        const bool bOutside = FMath::Abs(Offset.X) >= Inner || FMath::Abs(Offset.Y) >= Inner;
+        if (bOutside)
+        {
+            CheckStanding(*this, What, World, Player, ChartSeat);
+        }
+
+        for (AActor* Actor : Placed)
+        {
+            Actor->Destroy();
+        }
+        Player->Destroy();
+        return Offset;
+    };
+
+    {
+        const double Gap = 2.0 * Radius - 4.0;
+        TestTrue(TEXT("fenced: the fence's gap is narrower than a body"), Gap < 2.0 * Radius);
+        if (const TOptional<FVector> Offset = StandInsideFence(TEXT("fenced, gap narrower than a body"), Gap))
+        {
+            TestTrue(FString::Printf(TEXT("fenced, gap narrower than a body: not across the furniture "
+                                          "(%.0f, %.0f from where they stood)"),
+                                     Offset->X, Offset->Y),
+                     FMath::Abs(Offset->X) < 45.0 && FMath::Abs(Offset->Y) < 45.0);
+        }
+    }
+    {
+        const double Gap = 2.0 * Radius + 4.0;
+        if (const TOptional<FVector> Offset = StandInsideFence(TEXT("fenced, gap wider than a body"), Gap))
+        {
+            TestTrue(FString::Printf(TEXT("fenced, gap wider than a body: out through the gap "
+                                          "(%.0f, %.0f from where they stood)"),
+                                     Offset->X, Offset->Y),
+                     Offset->Y > 45.0 + 8.0 && FMath::Abs(Offset->X) < Gap * 0.5);
+        }
+    }
+
+    // 11. Sitting and standing move the view up to 60 cm in one frame. The
     //    camera manager must be told each is a cut, or temporal AA and motion
     //    blur build that frame from a history of somewhere else.
     {
