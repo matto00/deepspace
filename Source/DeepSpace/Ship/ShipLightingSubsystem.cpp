@@ -144,7 +144,11 @@ void UShipLightingSubsystem::Tick(float DeltaTime)
         return;
     }
 
-    Phase += DeltaTime;
+    // Wrapped at the wobble's own period, so the phase stays small however
+    // long the session: an unwrapped float loses a frame's worth of time
+    // after a day or two of play and the flicker first coarsens, then
+    // freezes. Wrapping there changes nothing the eye can see.
+    Phase = FMath::Fmod(Phase + DeltaTime, FlickerPeriod);
 
     // Asked for fresh, every frame. Nothing here keeps a copy of the
     // allocation: the subsystem is authoritative and this is a view of it.
@@ -164,10 +168,11 @@ void UShipLightingSubsystem::Tick(float DeltaTime)
 
         if (Feed < BrownOutBelow)
         {
-            // Two incommensurate rates, so the wobble never settles into a
-            // pulse the eye can predict. Deterministic, not random: the same
+            // Two rates far enough apart that the wobble never settles into
+            // a pulse the eye can predict: together they repeat only every
+            // FlickerPeriod, a minute. Deterministic, not random: the same
             // allocation always looks the same way.
-            const float Wobble = FMath::Sin(Phase * 37.0f) * FMath::Sin(Phase * 13.7f);
+            const float Wobble = FMath::Sin(Phase * FlickerFast) * FMath::Sin(Phase * FlickerSlow);
             Scale *= 1.0f + 0.22f * Depth * Wobble;
         }
     }
