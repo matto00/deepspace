@@ -283,7 +283,11 @@ private:
      *
      * The engine is not here: it wants ds.Nav.WindingWant while the jump
      * winds and nothing otherwise, so an idle drive costs the ship nothing
-     * and staying put is never taxed (nav decision 4).
+     * and staying put is never taxed (nav decision 4). Because an idle want
+     * of zero reads as full satisfaction, anything that wants to follow the
+     * winding -- the hum, in slice 2 -- reads watts delivered,
+     * GetConsumerShare(ShipPower::Engine) over ds.Nav.WindingWant, and never
+     * satisfaction (plan conflict 8).
      */
     static constexpr float LightsWant = 300.0f;
     static constexpr float BoostersWant = 450.0f;
