@@ -2,6 +2,27 @@
 
 #include "Components/SceneComponent.h"
 #include "Components/WidgetComponent.h"
+#include "HAL/IConsoleManager.h"
+
+namespace
+{
+    // Read where it is used and never cached, like every playtest knob: a
+    // nudge is a console command, not a rebuild.
+    //
+    // 4% at each edge: the panel fills 92% of the frame on its tighter axis.
+    // Enough that the bezel is plainly inside the view with some of the room
+    // round it -- you are sitting at a screen, not looking through one -- and
+    // little enough that the laptop, which read right at the old fixed 52
+    // degrees, comes out at about 57 rather than somewhere else entirely.
+    TAutoConsoleVariable<float> CVarFrameMargin(
+        TEXT("ds.Screen.FrameMargin"), 0.04f,
+        TEXT("Fraction of the view left clear at each edge of a screen you are sat at, on its tighter axis."),
+        ECVF_Default);
+
+    /** The widest a framing may go, degrees. Past this the view is a
+     *  fisheye, not a screen; only a degenerate panel or distance asks. */
+    constexpr float MaxFramedFov = 150.0f;
+}
 
 AShipScreen::AShipScreen()
 {
@@ -90,4 +111,43 @@ FTransform AShipScreen::GetViewTransform() const
     // Square on to the panel, including its tilt: a laptop lid leans back, so
     // reading it squarely means looking slightly down.
     return FTransform((-Normal).Rotation(), Panel.GetLocation() + Normal * ViewDistanceCm);
+}
+
+float AShipScreen::FitFieldOfView(const FVector2D& FramedSizeCm, float DistanceCm, float ViewportAspect,
+                                  EAspectRatioAxisConstraint Constraint, float CameraAspect, float MarginFraction)
+{
+    const double Distance = FMath::Max(static_cast<double>(DistanceCm), 1.0);
+    const double Aspect = ViewportAspect > 0.0f ? ViewportAspect : 16.0 / 9.0;
+    const double CamAspect = CameraAspect > 0.0f ? CameraAspect : 16.0 / 9.0;
+    const double Fill = FMath::Clamp(1.0 - 2.0 * static_cast<double>(MarginFraction), 0.1, 1.0);
+
+    // Tangents of the half-angles the frame needs, each way, for the panel
+    // to fill no more than Fill of it.
+    const double NeedX = 0.5 * FramedSizeCm.X / Distance / Fill;
+    const double NeedY = 0.5 * FramedSizeCm.Y / Distance / Fill;
+
+    // The engine's rule, FMinimalViewInfo::CalculateProjectionMatrixGivenViewRectangle:
+    // under MaintainXFOV the number is the viewport's horizontal angle and
+    // the vertical follows from its aspect; otherwise the vertical is kept,
+    // derived from the number read as horizontal at the *camera's* aspect.
+    const bool bMaintainX = Constraint == AspectRatio_MaintainXFOV ||
+                            (Constraint == AspectRatio_MajorAxisFOV && Aspect > 1.0);
+    const double HalfTan = bMaintainX
+        ? FMath::Max(NeedX, NeedY * Aspect)
+        : FMath::Max(NeedY, NeedX / Aspect) * CamAspect;
+
+    const double Fov = FMath::RadiansToDegrees(2.0 * FMath::Atan(HalfTan));
+    return static_cast<float>(FMath::Min(Fov, static_cast<double>(MaxFramedFov)));
+}
+
+FVector2D AShipScreen::GetFramedSizeCm() const
+{
+    const double Height = DrawSizePixels.X > 0.0 ? PanelWidthCm * DrawSizePixels.Y / DrawSizePixels.X : 0.0;
+    return FVector2D(PanelWidthCm + 2.0 * BezelCm, Height + 2.0 * BezelCm);
+}
+
+float AShipScreen::GetUseFieldOfView(float ViewportAspect, EAspectRatioAxisConstraint Constraint, float CameraAspect) const
+{
+    return FitFieldOfView(GetFramedSizeCm(), ViewDistanceCm, ViewportAspect, Constraint, CameraAspect,
+                          CVarFrameMargin.GetValueOnGameThread());
 }

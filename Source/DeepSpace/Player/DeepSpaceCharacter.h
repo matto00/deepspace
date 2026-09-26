@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "GameFramework/Character.h"
 #include "Player/Posture.h"
 #include "DeepSpaceCharacter.generated.h"
@@ -57,7 +58,10 @@ public:
      */
     void UseScreen(AShipScreen* Screen);
 
-    /** Get up from a screen. */
+    /**
+     * Get up from a screen: back to where the player was standing when they
+     * sat, or the nearest clear floor to it -- never on the chair.
+     */
     void StopUsingScreen();
 
     UFUNCTION(BlueprintPure, Category = "Interaction")
@@ -87,6 +91,25 @@ public:
 
     /** Where the eyes are in the world. */
     FVector GetEyeLocation() const;
+
+    /** The window shape a screen is framed for, and the axis it keeps. */
+    struct FFramingView
+    {
+        float Aspect;
+        EAspectRatioAxisConstraint Constraint;
+    };
+
+    /**
+     * What FrameUsedScreen fits the screen to, given the viewport's size in
+     * pixels (0x0 when there is none, as headless), the player's configured
+     * axis constraint, and the camera -- which may letterbox to its own shape
+     * or keep its own axis whatever the window is. Separate from reading the
+     * viewport so the one input fitting depends on in a real window can be
+     * tested without one.
+     */
+    static FFramingView ResolveFramingView(const FIntPoint& ViewportSize,
+                                           EAspectRatioAxisConstraint PlayerConstraint,
+                                           const UCameraComponent& Camera);
 
     /** The seam the input handlers go through, and what tests drive: held
      *  attitude -1..1 per body axis, and throttle as a rate, not a position. */
@@ -172,14 +195,6 @@ protected:
      */
     UPROPERTY(EditDefaultsOnly, Category = "Camera")
     float FieldOfView = 103.0f;
-
-    /**
-     * Field of view while sat at a screen, degrees. Narrow: the panel should
-     * fill the view the way a thing you are reading does. Framing by angle
-     * rather than by moving closer keeps the camera out of the body.
-     */
-    UPROPERTY(EditDefaultsOnly, Category = "Camera")
-    float UseFieldOfView = 52.0f;
 
     /** How far the player can reach, in centimetres. */
     UPROPERTY(EditDefaultsOnly, Category = "Interaction")
@@ -298,6 +313,21 @@ private:
     /** Restricts or restores how far the camera may turn. */
     void SetViewLimits(bool bSeated, float SeatYaw);
 
+    /**
+     * Sets the camera's field of view to frame the screen sat at, whole, in
+     * the viewport as it is now. Asked of the screen every frame rather than
+     * fixed at sitting down, so a window resized mid-read still fits.
+     */
+    void FrameUsedScreen();
+
+    /**
+     * Where to stand up from a screen: the capsule's centre, on the floor,
+     * with a standing capsule clear of everything. StandingFeet if it still
+     * fits; else the nearest of a few rings round it that fits and can be
+     * reached from it without passing through anything. Unset if none does.
+     */
+    TOptional<FVector> FindStandingSpot() const;
+
     /** Re-runs the reach trace and updates FocusedInteractable. */
     void UpdateFocusedInteractable();
 
@@ -328,6 +358,14 @@ private:
     /** The screen we are sat at, or null. */
     UPROPERTY()
     TObjectPtr<AShipScreen> UsedScreen;
+
+    /**
+     * Where the feet were when the player sat down at a screen, so standing
+     * up returns them there rather than onto the chair. The character's own
+     * memory of its own body -- nobody else's state -- set on sitting and
+     * cleared on standing.
+     */
+    TOptional<FVector> StandingFeet;
 
     /** The seat we are sitting in, or null. */
     UPROPERTY()

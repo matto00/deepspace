@@ -17,7 +17,32 @@
 #include "Ship/ShipSubsystem.h"
 #include "UI/ShipHUDWidget.h"
 #include "Engine/GameViewportClient.h"
-#include "Components/WidgetInteractionComponent.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/OverlapResult.h"
+#include "Engine/World.h"
+
+namespace
+{
+    // Standing up from a screen. The rings are the search for somewhere to
+    // stand when the spot the player left is taken: 30 cm apart, a little
+    // under a capsule's width, so no gap a body fits is stepped over, and out
+    // to 1.2 m -- still beside the screen, which is the point of getting up
+    // there rather than somewhere else in the room.
+    constexpr float StandRingStepCm = 30.0f;
+    constexpr int32 StandRings = 4;
+    constexpr int32 StandDirections = 12;
+
+    // A spot counts as floor only if something is under it within this of
+    // the height the player left: higher is standing on something, lower is
+    // a hole or the far side of a hull.
+    constexpr float StandFloorAboveCm = 5.0f;
+    constexpr float StandFloorBelowCm = 15.0f;
+
+    // How far above the floor the capsule is put, cm: inside the movement
+    // component's own 1.9--2.4 cm float, so the first walking frame finds the
+    // floor where it expects it rather than stepping or falling onto it.
+    constexpr float StandFloorClearanceCm = 2.0f;
+}
 
 ADeepSpaceCharacter::ADeepSpaceCharacter()
 {
@@ -151,6 +176,7 @@ void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRo
     if (UsedScreen)
     {
         FirstPersonCamera->SetWorldLocation(UsedScreen->GetViewTransform().GetLocation());
+        FrameUsedScreen();
         return;
     }
 
@@ -483,6 +509,11 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     {
         return;
     }
+
+    // Remembered before anything moves: the feet, not the capsule's centre,
+    // because the capsule may be crouched now and standing when it returns.
+    StandingFeet = GetActorLocation() - FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+
     if (bIsCrouched)
     {
         UnCrouch();
@@ -523,10 +554,7 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
         Pointer->InteractionSource = EWidgetInteractionSource::Mouse;
     }
 
-    if (FirstPersonCamera)
-    {
-        FirstPersonCamera->SetFieldOfView(UseFieldOfView);
-    }
+    FrameUsedScreen();
 
     // The framed camera sits in front of the face, which is behind the body's
     // own arms: left visible they fill both sides of the screen. Nobody looks
@@ -545,6 +573,31 @@ void ADeepSpaceCharacter::StopUsingScreen()
     }
 
     const FRotator Facing = GetActorRotation();
+
+    // Found before collision comes back, though it would not matter: every
+    // query here ignores this actor. What matters is that it is found at all
+    // -- the old answer was to stand up where the seat was, which is on the
+    // chair, and a player had to crouch to get off it.
+    const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+    if (const TOptional<FVector> Spot = FindStandingSpot())
+    {
+        // FindStandingSpot answers for a standing capsule; if this one is
+        // still crouched it is shorter, and goes on the same floor.
+        SetActorLocation(*Spot - FVector(0.0f, 0.0f, GetDefaultHalfHeight() - HalfHeight),
+                         false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    else if (StandingFeet.IsSet())
+    {
+        // Nowhere near fits a body. Where they came from is still the least
+        // wrong place: it was floor a moment ago, and the movement component
+        // pushes a capsule out of whatever has arrived since. The chair is
+        // not -- that is the one answer known to be wrong.
+        UE_LOG(LogTemp, Warning, TEXT("StopUsingScreen: no clear floor near %s; standing where the player sat down from"),
+               *StandingFeet->ToCompactString());
+        SetActorLocation(*StandingFeet + FVector(0.0f, 0.0f, HalfHeight + StandFloorClearanceCm),
+                         false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    StandingFeet.Reset();
     UsedScreen = nullptr;
 
     SetActorEnableCollision(true);
@@ -575,6 +628,150 @@ void ADeepSpaceCharacter::StopUsingScreen()
     {
         Body->SetVisibility(true, true);
     }
+
+    // The camera is attached to the capsule and was framing the screen, so
+    // the teleport carried it along at that offset -- somewhere in front of
+    // the new spot, perhaps in a wall. Put it back at the eyes now rather
+    // than on the next tick, and cut rather than ease: an eased camera would
+    // travel from the screen to the body through whatever lies between.
+    bEyeHeightSettled = false;
+    PlaceCamera(0.0f, FRotator(0.0f, Facing.Yaw, 0.0f));
+}
+
+ADeepSpaceCharacter::FFramingView ADeepSpaceCharacter::ResolveFramingView(
+    const FIntPoint& ViewportSize, EAspectRatioAxisConstraint PlayerConstraint, const UCameraComponent& Camera)
+{
+    // Headless there is no viewport; 16:9 is the window this is played in.
+    FFramingView View{16.0f / 9.0f, PlayerConstraint};
+    if (ViewportSize.X > 0 && ViewportSize.Y > 0)
+    {
+        View.Aspect = static_cast<float>(ViewportSize.X) / static_cast<float>(ViewportSize.Y);
+    }
+    if (Camera.bConstrainAspectRatio)
+    {
+        // Letterboxed to the camera's own aspect, whatever the window is.
+        View.Aspect = Camera.AspectRatio;
+    }
+    else if (Camera.bOverrideAspectRatioAxisConstraint)
+    {
+        View.Constraint = Camera.AspectRatioAxisConstraint;
+    }
+    return View;
+}
+
+void ADeepSpaceCharacter::FrameUsedScreen()
+{
+    if (!UsedScreen || !FirstPersonCamera)
+    {
+        return;
+    }
+
+    FIntPoint ViewportSize(0, 0);
+    EAspectRatioAxisConstraint Constraint = GetDefault<ULocalPlayer>()->AspectRatioAxisConstraint;
+    if (const APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        PC->GetViewportSize(ViewportSize.X, ViewportSize.Y);
+        if (const ULocalPlayer* Local = PC->GetLocalPlayer())
+        {
+            Constraint = Local->AspectRatioAxisConstraint;
+        }
+    }
+
+    const FFramingView View = ResolveFramingView(ViewportSize, Constraint, *FirstPersonCamera);
+    FirstPersonCamera->SetFieldOfView(
+        UsedScreen->GetUseFieldOfView(View.Aspect, View.Constraint, FirstPersonCamera->AspectRatio));
+}
+
+TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
+{
+    const UWorld* World = GetWorld();
+    if (!World || !StandingFeet.IsSet())
+    {
+        return {};
+    }
+
+    // A standing capsule, whatever this one is now: a spot a crouched body
+    // fits and a standing one does not is the crawlway, and nobody gets up
+    // from a screen into the crawlway.
+    const float Radius = GetCapsuleComponent()->GetScaledCapsuleRadius();
+    const float HalfHeight = GetDefaultHalfHeight();
+    const FCollisionShape Standing = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+    const FCollisionQueryParams Params(SCENE_QUERY_STAT(StandUpFromScreen), false, this);
+    const FVector Feet = *StandingFeet;
+
+    // Where a standing capsule's centre goes over At, if At is floor at the
+    // height the player left. Not "the nearest thing below": a box top is
+    // something below, and standing on the chair is the bug.
+    auto CentreOver = [&](const FVector2D& At) -> TOptional<FVector>
+    {
+        FHitResult Floor;
+        const FVector Top(At.X, At.Y, Feet.Z + StandFloorAboveCm);
+        const FVector Bottom(At.X, At.Y, Feet.Z - StandFloorBelowCm);
+        if (!World->LineTraceSingleByChannel(Floor, Top, Bottom, ECC_Pawn, Params) || Floor.bStartPenetrating)
+        {
+            return {};
+        }
+        return FVector(At.X, At.Y, Floor.ImpactPoint.Z + HalfHeight + StandFloorClearanceCm);
+    };
+    auto Fits = [&](const FVector& Centre)
+    {
+        return !World->OverlapBlockingTestByChannel(Centre, FQuat::Identity, ECC_Pawn, Standing, Params);
+    };
+
+    const FVector2D Home2D(Feet.X, Feet.Y);
+    const TOptional<FVector> Home = CentreOver(Home2D);
+    if (Home && Fits(*Home))
+    {
+        return Home;
+    }
+
+    // A ring spot must be reachable from the one the player left, or the
+    // search would happily stand them on the far side of a bulkhead. Whatever
+    // now occupies the remembered spot is left out of that test: a trace that
+    // starts inside a thing says nothing about walls.
+    const FVector From(Feet.X, Feet.Y, Feet.Z + HalfHeight + StandFloorClearanceCm);
+    FCollisionQueryParams PathParams = Params;
+    {
+        TArray<FOverlapResult> Occupants;
+        World->OverlapMultiByChannel(Occupants, From, FQuat::Identity, ECC_Pawn, Standing, Params);
+        for (const FOverlapResult& Occupant : Occupants)
+        {
+            if (const UPrimitiveComponent* Component = Occupant.GetComponent())
+            {
+                PathParams.AddIgnoredComponent(Component);
+            }
+        }
+    }
+
+    // Search outward, and round each ring starting from the side away from
+    // the seat: that is where the player walked up from, and it is open
+    // floor, where toward the seat is the chair and the screen.
+    FVector2D Away = Home2D - FVector2D(GetActorLocation().X, GetActorLocation().Y);
+    if (!Away.Normalize())
+    {
+        Away = -FVector2D(GetActorForwardVector().X, GetActorForwardVector().Y).GetSafeNormal();
+    }
+    const float AwayYaw = FMath::Atan2(Away.Y, Away.X);
+    const float Step = 2.0f * UE_PI / StandDirections;
+
+    for (int32 Ring = 1; Ring <= StandRings; ++Ring)
+    {
+        const float Distance = StandRingStepCm * Ring;
+        for (int32 I = 0; I < StandDirections; ++I)
+        {
+            // 0, +1, -1, +2, -2, ...: nearest to "away" first.
+            const int32 Turn = (I % 2 == 1) ? (I + 1) / 2 : -(I / 2);
+            const float Yaw = AwayYaw + Turn * Step;
+            const FVector2D At = Home2D + FVector2D(FMath::Cos(Yaw), FMath::Sin(Yaw)) * Distance;
+            const TOptional<FVector> Centre = CentreOver(At);
+            if (Centre && Fits(*Centre) &&
+                !World->LineTraceTestByChannel(From, *Centre, ECC_Pawn, PathParams))
+            {
+                return Centre;
+            }
+        }
+    }
+    return {};
 }
 
 void ADeepSpaceCharacter::StandUp()

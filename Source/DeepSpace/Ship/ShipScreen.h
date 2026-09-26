@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "GameFramework/Actor.h"
 #include "ShipScreen.generated.h"
 
@@ -60,6 +61,33 @@ public:
      */
     FTransform GetViewTransform() const;
 
+    /**
+     * The field of view that shows a whole panel from a seat in front of it:
+     * FramedSizeCm across and high, seen square on from DistanceCm, with
+     * MarginFraction of the frame left clear at each edge of whichever axis
+     * the panel fills first.
+     *
+     * Pure, so framing can be checked without a viewport. It takes the rest
+     * of what the engine uses to turn a camera's field of view into a view,
+     * because that is where the fit is won or lost: under MaintainYFOV (the
+     * engine's default) the number is horizontal *at the camera's aspect*,
+     * the vertical angle is what is kept, and a window narrower than the
+     * camera loses width -- so a fixed angle that frames a panel at 16:9
+     * cuts its sides off at 4:3. Returns degrees, for SetFieldOfView.
+     */
+    static float FitFieldOfView(const FVector2D& FramedSizeCm, float DistanceCm, float ViewportAspect,
+                                EAspectRatioAxisConstraint Constraint, float CameraAspect, float MarginFraction);
+
+    /** The panel's face with its bezel, cm: what a seated view must show whole. */
+    FVector2D GetFramedSizeCm() const;
+
+    /** How far the eyes sit from the panel while using it, cm. */
+    float GetViewDistanceCm() const { return ViewDistanceCm; }
+
+    /** The field of view to use this screen through, fitted to the view
+     *  described, with the margin ds.Screen.FrameMargin. */
+    float GetUseFieldOfView(float ViewportAspect, EAspectRatioAxisConstraint Constraint, float CameraAspect) const;
+
     /** True if a player can sit down at this screen at all. */
     UFUNCTION(BlueprintPure, Category = "Screen")
     bool IsUsable() const { return bUsable; }
@@ -82,6 +110,15 @@ protected:
      *  width together, never against the editor preview. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
     FVector2D DrawSizePixels = FVector2D(600.0f, 400.0f);
+
+    /**
+     * The frame round the glass on every side, cm: the casing the panel is
+     * set in. Framing includes it, because a screen whose edge is cut off by
+     * the view reads as a screen too big for the room rather than one you are
+     * sitting at.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
+    float BezelCm = 1.0f;
 
     /** Whether E sits the player down at this screen. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
