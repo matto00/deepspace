@@ -97,3 +97,51 @@ regardless of what is decided here.
   world Z, the world-yaw-only forward offset, and the world-vertical sweep axis
   all assume gravity points along −Z. Recorded here so that overturning this
   ADR does not quietly break the camera.
+
+## Amendment — a fourth write path: the jump (2026-09-25)
+
+The flight spec made the state trustworthy by counting its write paths:
+`SetFlightCommand` (gated on the pilot), `ClearPilot`, and the subsystem's own
+tick. Nothing else could move the ship. Navigation adds one, and it is
+recorded here because this ADR is where "the ship does not move, the universe
+does" was decided.
+
+**`FShipFlightState::JumpTo(Arrival)` is the fourth write path.** It is a
+translation and nothing else: the universe position changes, and orientation,
+velocity and angular velocity are left exactly as they were. It is called
+from exactly one place, `UShipSubsystem::StepNavigation`, when the pure
+`FShipNavState` reports `Arrived`, inside the tick. The subsystem still hands
+out no non-const flight state, so nothing outside it can call `JumpTo`.
+
+The arrival point lies on the line from the departure point to the destination
+star, at `max(ds.Nav.StandoffAU × √L, 1.5 × outermost orbit)` from it. So from
+where the ship arrives, the star is in exactly the direction it was when the
+fold opened, and that direction was inside the alignment cone. The new sun is
+where the nose was pointing. Because orientation is untouched, the
+counter-frame carries the same inverse rotation before and after, and **the
+distant dome does not move**, which is the one thing a jump must not do.
+
+This ADR's shape is what makes that cheap. The ship actor never moved and does
+not move now: a jump of several light years is a change to a chunked universe
+position (ADR 0007), and everything outside the hull follows through the
+counter-frame as it always has. Which system the ship is in then changes by
+itself, because `UUniverseSubsystem::GetSystemAt` is asked of the position. No
+"arrived at" is recorded anywhere; the sky and the counter-frame rebuild on
+`UShipSubsystem::GetJumpSerial()`, a polled cache key.
+
+Two things that look like write paths and are not new ones:
+
+- **The in-system drive** (`SetDriveEngaged`) is a field of the pilot's
+  command, `FShipFlightCommand::bDrive`, gated on the pilot exactly as
+  `SetFlightCommand` is. The drive's input, the room to the nearest surface,
+  is written by the tick.
+- **`PlaceShip`** is level setup and tests: the opening placement in
+  `UShipSubsystem::OnWorldBeginPlay`, and `ds.Sky.Goto` as a one-shot tuning
+  tool. It is not a gameplay path, and no gameplay code calls it.
+
+**Rejected: turning the ship to face the star on arrival**, first with
+`FRotationMatrix::MakeFromX` and then with the minimal rotation
+`FQuat::FindBetweenNormals(Forward, Dir)`. The first throws away roll, so the
+dome could reappear spun by up to 180°. The second keeps roll but still turns
+the dome by up to the cone's 8° in one frame, visibly. And neither buys
+anything: nothing needs the star centred, and the pilot can centre it.

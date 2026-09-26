@@ -54,3 +54,46 @@ consumer holding no copy of the state cannot drift out of sync with it.
   and ship systems can evolve independently.
 - Anything needing a reaction to state *changes* (rather than reading on demand)
   will need an event on the subsystem. Milestone 1 did not need one.
+
+## Amendment — the ship holds ids, never systems (2026-09-25)
+
+Navigation put the jump in `UShipSubsystem`, beside power and flight, as a
+third plain struct: **`FShipNavState`**, pure and headlessly tested
+(`DeepSpace.Ship.NavState`), which decides and holds nothing it could ask for.
+The subsystem acts on what it decides. This ADR's two layers held without
+change.
+
+What needed recording is the boundary with the universe, which did not exist
+when this was written. `UUniverseSubsystem` is the one authority on what
+exists and on which system a position is in (ADR 0006). **`UShipSubsystem`
+stores no universe data beyond ids**, all of them `FSystemId`:
+
+- **the course**, the system it is steering for, held because a course is
+  something the *ship* has, the way it has a throttle setting;
+- **the last arrival**, which the tick resolves into an arrival point;
+- **the visited set**, which the chart marks.
+
+Never a system, a star, a position, a name, and above all never a current
+system. Everything else is asked of the universe every time: the chart
+(`GetChart`) regenerates on every call, the course's direction is asked of
+`GetSystem(PlottedId)`, and which system the ship is in is
+`GetSystemAt(ship position)`. A stored current system would be a second
+answer that could disagree with where the ship is. `Initialize` calls
+`Collection.InitializeDependency<UUniverseSubsystem>()`, which is how Unreal
+orders one subsystem's start-up after another's, so the ship may ask from its
+own `OnWorldBeginPlay` onward.
+
+The consequence this ADR predicted -- that reacting to state *changes* would
+need an event -- did not arrive. The sky and the counter-frame must rebuild
+when the ship arrives somewhere, and they poll `GetJumpSerial()`, a number that
+bumps on every arrival, as a cache key. It is never an answer: they still ask
+what to draw. Nothing pushes, so nothing can be missed.
+
+**Rejected: a separate `UNavigationSubsystem`** reading both. The engine's
+power want and the jump's write into the flight state both live in
+`UShipSubsystem`, so a third subsystem would need both pushed back through a
+public API, and the flight state would have write paths in two places.
+**Rejected: the nav state on an actor** (a jump component in engineering):
+untestable without a world, and ship state scattered across actors is the
+thing this ADR exists to prevent. Machinery for the jump can come later, as a
+*view* of this state.

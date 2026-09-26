@@ -94,3 +94,44 @@ always yields the same plan.
   changes later.
 - Until this lands, `Tools/build_hauler.py` remains how the ship is built. This
   ADR sets the direction; it does not by itself delete anything.
+
+## Amendment — the Python dressing exception, refused (2026-09-25)
+
+The POC plan asked the developer to accept one deliberate exception to this
+ADR: generate the ship's clutter in Python (`Tools/dressing.py`, on a
+line-for-line mirror of `FGenStream` in `Tools/rng.py`) and bake it into
+`L_Hauler.umap` with the rest of the ship until a later port. **The exception
+was refused.** The refusal is recorded because the case for it was good, and
+it will be made again.
+
+The case: about a second per run, a 500-seed corpus with no editor at all, and
+no C++ rebuild per rule while the rules are being found. Against it:
+
+- **A generator that runs only in the editor builds only the ships the
+  developer thought to build.** That is this ADR's whole objection. The
+  question the clutter answers is whether a *generated* ship can read as lived
+  in, and it has to be answered with the generator the game will have.
+- **It was a second generator on a schedule.** The port was to reproduce the
+  same ships "because `rng.py` is a literal mirror": a promise that two
+  implementations will agree, kept only by test vectors. This ADR's rule is
+  one implementation, not two that agree.
+- **Its speed was smaller than it looked.** Every *look* at a baked dressing
+  needs a level build by commandlet with the editor closed, then the editor
+  reopened. A C++ generator redresses a running session in place.
+
+So the dressing is C++ at world start: the pure `ShipDressing` core plans from
+surfaces, a seed and rules, and `UShipDressingSubsystem` spawns the plan as
+instances on one transient actor in `OnWorldBeginPlay`. The layout exports its
+surfaces as markers tagged `Dress.Surface`. The rules are data in the ini, and
+`ds.Dress.*` reloads and redresses in place, which is what answers the
+tuning-loop argument. Its seed is `Derive(Derive(GetRootSeed(), Label("ship")),
+Label("dressing"))`, under the `ship` seed a ported layout will hang from, so the port
+will not reshuffle the clutter. `Tools/rng.py` and `rng_vectors.json` survive
+only as a cross-check on `FGenStream`; they are the basis of nothing.
+
+**What this settles.** "Until this lands, `Tools/build_hauler.py` remains how
+the ship is built" covers the hand-written layout: walls, furniture, lights,
+and anything else that is a plan resolved rather than a draw, such as the
+kick band on the walls. **It does not cover a new seeded generator.** Anything
+that draws from a seed is C++ running at startup from its first line, however
+convenient Python would be for the first version.

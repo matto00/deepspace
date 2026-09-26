@@ -8,7 +8,10 @@ A procedurally generated space exploration game built in Unreal Engine 5.8,
 emphasizing the scale of space: cruise, choose a destination, hyperjump, arrive.
 The player lives aboard a ship they walk around inside and progressively upgrade.
 
-Currently at **Milestone 1 — walk the ship**. See `docs/superpowers/plans/`.
+Milestone 1 (walk the ship) is done. The current work is **the playable POC**
+-- cruise, choose, jump, arrive -- in
+`docs/superpowers/plans/2026-09-25-poc-build-plan.md`, whose *Conflicts,
+resolved* table is binding on names and ownership.
 
 **Read `docs/vision.md` before proposing any design.** It records what the game
 is *for* — the register, the principle that scale is only felt in contrast, and
@@ -134,6 +137,15 @@ been abandoned. Say so.
   not a class hierarchy, bolted onto anything interactable.
 - `Source/DeepSpace/Player/DeepSpaceCharacter.*` — first-person pawn and the
   interaction trace.
+- `Source/DeepSpace/Universe/` — procgen: pure generators behind
+  `UUniverseSubsystem`, the one authority on what exists (*The universe*).
+- `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
+  which polls and stores nothing (*The sky*).
+- `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
+  with the drive, and the jump's decisions. `UShipSubsystem` owns and steps
+  both (*The drive and the jump*).
+- `Ship/ShipHum*`, `Ship/ShipLightingSubsystem.*`, `Ship/ShipNavScreen.*` —
+  the hum, the lights and lamps, the chart chair.
 
 Consumers **ask** the subsystem for state; they never store it. That discipline
 is what keeps ship state from scattering across actors.
@@ -259,13 +271,14 @@ write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.
 
 The helm is keyboard-only on purpose: the mouse keeps looking, so the pilot's
 head turns independently of the ship and a turn reads as *the ship* turning.
-W/S pitch, A/D yaw, Q/Z roll, Shift/Ctrl throttle. The throttle is a lever, not
-a button — input sweeps it and it stays where it is left, which is what makes a
-cruise something you set and walk away from.
+W/S pitch, A/D yaw, Q/Z roll, Shift/Ctrl throttle, F the in-system drive. The
+throttle is a lever, not a button — input sweeps it and it stays where it is
+left, which is what makes a cruise something you set and walk away from.
 
-`IA_Attitude`, `IA_Throttle` and their `IMC_Default` bindings are built by
-`Tools/setup_flight_input.py`, not by hand; re-running it replaces its own
-mappings and leaves the rest of the context alone. Two traps it works around:
+`IA_Attitude`, `IA_Throttle`, `IA_Drive` and their `IMC_Default` bindings are
+built by `Tools/setup_flight_input.py`, not by hand, and it assigns them on
+`BP_DeepSpaceCharacter`'s defaults; re-running it replaces its own mappings
+and leaves the rest of the context alone. Two traps it works around:
 Python has no `InputActionFactory` (a new action is a duplicate of `IA_Look`),
 and UE 5.8 keeps the real mapping list in `default_key_mappings.mappings` —
 the context's own `mappings` is the older, empty one, and `map_key` writes to
@@ -275,6 +288,329 @@ the context's own `mappings` is the older, empty one, and `map_key` writes to
 ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
     -run=pythonscript -script="$PWD/Tools/setup_flight_input.py" -unattended -nopause -nosplash -NoLiveCoding
 ```
+
+## The universe
+
+`UUniverseSubsystem` (`Source/DeepSpace/Universe/`) is the only authority on
+what exists. Behind it, `FGalaxyGenerator` and `FStarSystemGenerator` are pure
+functions of (root seed, priors, id), and the subsystem holds the root seed and
+nothing else: no cache, no generator (built per query), no start system, no
+current system. Every query works from `Initialize`, so another subsystem's
+`OnWorldBeginPlay` can ask in any order.
+
+**The seed lives in `Config/DefaultGame.ini`**, under
+`[/Script/DeepSpace.UniverseSubsystem]`, `UniverseSeed=20260925`. A
+`UPROPERTY(Config)` is a C++ field that Unreal fills from the ini when the
+object is created. The C++ default is **0 on purpose**: zero is nobody's
+universe, so a section that silently fails to load shows up as the wrong
+universe rather than passing for the right one. `-UniverseSeed=` on the command
+line overrides it (decimal or `0x` hex); a `UPROPERTY(Config)` does not read
+the command line by itself, so `ResolveSeed` does. Start-up logs `Universe
+seed N (0x...)`, and a bug report is that number.
+
+**"Which system am I in" has exactly one answer:
+`GetSystemAt(ship position)`**, the nearest system whose star is within
+`InSystemRadiusLy` (0.25 ly), empty between stars. There is no
+`GetCurrentSystem` and no `SetCurrentSystem`, and there must never be (plan
+conflict 1): a current system stored anywhere is a second answer that can
+disagree with where the ship is. Arrival is a translation, and the answer
+changes by itself because it is asked of the position. `GetStartSystem` is the
+nearest system to the origin with a planet; under honest weights that is
+usually a red dwarf. Where the ship *starts* is not the universe's to decide
+(conflict 3): `UShipSubsystem::OnWorldBeginPlay` places it once, through
+`NavStart::OpeningPlacement` -- the largest planet dead ahead and its star to
+starboard. The distance is 40,000 km *per Earth radius* of that planet
+(`NavStart::OpeningDistanceCm`), so an Earth opens at 40,000 km and a Jupiter
+at about 450,000 km: the shot is framed as an angle, the same ~18 degree world
+for any planet, because a gas giant held at a fixed 40,000 km would open with
+the ship inside it. `ds.Nav.PlaceAtStart 0` leaves the ship where it is.
+
+**The priors are data.** Every number the generator draws with is a line in
+`[/Script/DeepSpace.ProcGenPriorsConfig]` of `DefaultGame.ini`, read through
+`UProcGenPriorsConfig`; what each one means is in `Universe/GenPriors.h`. The
+weights are **honest** (developer's ruling): three suns in four are red dwarfs.
+To tune, edit the ini and type `ds.Universe.ReloadPriors` in the running game.
+No rebuild, no restart; it lists what changed, and the universe re-rolls
+around a ship that does not move. A value its sampler cannot take refuses the
+*whole* section, keeps the priors in use, and names the line. The guarantees
+(the Hill floor, the mass cap, the kind thresholds) are deliberately not in the
+ini, so no ini edit can break an invariant.
+
+The trap it works around: **Unreal reads every ini once, at start-up, into a
+config cache, and `ReloadConfig()` re-reads the cache, not the file.** It hands
+back the numbers the session began with, with no warning.
+`UProcGenPriorsConfig::ReloadFromIni` force-reloads the file into the cache
+first. Any other reload-from-ini command needs the same.
+
+Console, all in `UniverseSubsystem.cpp`:
+
+- `ds.Universe.Describe` -- the system the ship is in, or the start system if
+  it is between stars. `ds.Universe.Describe <seed>` describes another
+  universe's home, and `ds.Universe.Describe <seed> <x> <y> <z> <slot>` any
+  system of it, under this session's priors.
+- `ds.Universe.Near [ly]` -- systems within range of the ship, nearest first
+  (default 12).
+- `ds.Universe.ReloadPriors` -- as above.
+
+**The corpus** is for reading, not correctness. `./test.sh
+DeepSpace.Universe.Corpus` writes `Saved/procgen_corpus.tsv` (the 10,000
+systems nearest home, a row per planet) and `Saved/procgen_describe.txt` (home,
+its twelve neighbours, and the homes of seeds 1-12). Then `python3
+Tools/procgen_corpus.py` reads the TSV. The columns are
+`Tools/procgen_corpus_contract.json`'s, and the test fails if the file stops
+fitting it. The question is whether systems read as *places* or as *rolls*;
+the invariants are `DeepSpace.Universe.SystemGeneration`'s. The known-value
+tests (`DeepSpace.Universe.Seed`, `.Stream`) pin the hash and the stream that
+every universe rests on; never weaken them to make a change pass.
+`Tools/rng.py` survives only as a cross-check on `FGenStream`, and is the basis
+of nothing.
+
+## The sky
+
+`AShipSky` (`Source/DeepSpace/Sky/`, placed by `build_hauler.py` as
+`hauler_sky`) draws everything outside the glass that is *somewhere*: the local
+star, its planets and moons, the neighbouring stars, the one sun that lights
+the deck, and the exposure.
+
+**Distant bodies are projected, never placed.** Unreal's world, even with
+large world coordinates, ends 44 million km from the origin
+(`UE_LARGE_HALF_WORLD_MAX`), short of 1 AU, and the GPU still draws in 32-bit
+floats relative to the camera. The real distances cannot be geometry. So each
+body is drawn as a *homothety*, a uniform scaling centred on the ship: the
+true sphere, scaled toward the ship until it lands 50 km to 125,000 km out
+(`SkyProjection.h`). Direction, angular size and phase survive the scaling
+exactly; only the distance changes, and distance is the one thing the eye
+cannot see. The 50 km near edge is set by parallax: the eye can be 17.6 m from
+the ship's origin, which at 50 km is under a 4K pixel. Points at infinity sit
+on a dome at 250,000 km (`AShipSky::DomeRadius`), behind every body. A
+body is a point until it resolves, and the resolve is a blend in the material,
+so there is no moment of change.
+
+**The sky polls and stores nothing** (conflict 2). `AShipSky` has no
+`SetSystem` and no `SetInTransit`: nothing calls into it, and nothing needs to
+find it. Every frame it asks `LocalSystem` (`Current`, `Serial`,
+`InTransit`), which asks `UUniverseSubsystem` and `UShipSubsystem`. What it
+keeps is a cache of its own drawing -- the proxies, keyed by the jump serial
+and by the system's name and star position -- which it rebuilds whenever the
+key stops matching. Its one write to the flight state is `ds.Sky.Goto`, a
+one-shot placement for tuning. The counter-frame follows the same rule for
+the course marker and the streaks.
+
+**The material contract.** Every parameter name C++ drives lives in
+`Sky/SkyMaterialContract.h`, mirrored by `Tools/sky_material_contract.json`,
+which `Tools/setup_sky_materials.py` reads to author `M_SkyBody`, `M_SkyStar`,
+`M_SkyStarfield`, `M_SkyGlass` and `MPC_Sky`. **`SetScalarParameterValue` on
+a misspelt name fails silently**: the symptom is a planet that never resolves
+and no error anywhere. `DeepSpace.Sky.MaterialContract` holds the header, the
+JSON and the loaded assets to exactly the same names. Add a parameter on all
+three sides, then run the authoring commandlet (editor closed, through the
+lock):
+
+```bash
+. Tools/ue_lock.sh && ue_locked ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd \
+    "$PWD/DeepSpace.uproject" -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" \
+    -unattended -nopause -nosplash -NoLiveCoding      # report: Saved/setup_sky_materials.txt
+```
+
+The materials are unlit, and the sun lights only the ship. The glass casts no
+shadow, and its `M_SkyGlass` reflects the lit room through `MPC_Sky`'s
+`InteriorLight` and `Veil`: lights off at the console and the stars come out.
+`AShipSky`'s `Sun` is the only `DirectionalLight`, and `verify_level.py` fails
+on any other, and on any `SkyLight`, `SkyAtmosphere`, cloud or fog. When a
+planet crosses the sun, the deck darkens by the fraction covered
+(`SunVisibleFraction`; the eclipse).
+
+**Exposure is fixed, and the sky owns it.** Auto exposure is Unreal's
+simulated eye adaptation: it rescales the picture toward a middle grey, which
+would make a lit galley and a dark cockpit look alike and wash out the
+difference between a star and a world. `AShipSky`'s unbound
+`UPostProcessComponent` overrides it, at priority 10 so it beats any volume in
+the level. `ds.Sky.ExposureMode`:
+
+- `0` -- the engine's own auto exposure, untouched: for *reading* the scene.
+- `1` -- manual at `ds.Sky.Exposure` EV100 (the design, and the default).
+- `2` -- auto exposure held within `ds.Sky.ExposureRange` stops of
+  `ds.Sky.Exposure`: the fallback if manual feels dead.
+
+**`ds.Sky.Exposure`'s default, 0.7, is an estimate.** Nobody has read it off a
+rendered galley yet. To read it, stand in the galley in play, type
+`ds.Sky.ExposureMode 0`, then `ShowFlag.VisualizeHDR 1` (in an editor viewport:
+Show -> Visualize -> HDR (Eye Adaptation)). Take the average scene EV100 it
+reports, set `ds.Sky.Exposure` to it, and go back to `ds.Sky.ExposureMode 1`. A
+scene at exactly that EV looks the same in modes 1 and 2
+(`ShipSky::ManualExposureBias`, checked in `DeepSpace.Sky.ShipSky`). Read it
+after the room moods change, never before, or the exposure is calibrated
+against a galley that no longer exists.
+
+## The drive and the jump
+
+**Two levers, and two words that never swap** (conflict 7):
+
+- **The drive** is in-system: **F** at the helm (`IA_Drive`), which calls
+  `UShipSubsystem::SetDriveEngaged(Commander, bool)`, gated on the pilot like
+  `SetFlightCommand`. Engaged, the ship flies along the nose as the throttle
+  asks, but may *close* on the nearest surface no faster than the room left
+  over `ds.Drive.Tau` (15 s, stretched by thin boosters): at full throttle, a
+  tenth of the remaining room every 1.5 s. So an approach is exponential, a
+  planet grows from a point to a disc with no moment of change, and the ship
+  settles `ds.Drive.Floor` (100 km) up. Leaving is unlimited, and
+  disengaging clamps the speed back to cruise. It is a lever: it stays engaged
+  when the pilot stands up, and survives a jump.
+- **The jump** folds between stars: `SetJumpEngaged`, `IsJumpEngaged`,
+  `EJumpState {Idle, Winding, Ready, Transit}`, `NavText::Jump`, and the HUD's
+  `JUMP WINDING` / `JUMP READY` / `BETWEEN STARS`. The decisions are the pure
+  `FShipNavState`; `UShipSubsystem` acts on them. Its tunables are
+  `ds.Nav.*`.
+
+**The system's edge is a surface** (conflict 10).
+`LocalSystem::NearestSurfaceDistance` counts the distance to the edge
+(`InSystemRadiusLy`) as well as to every body. So the drive slows into the
+edge as it does into a planet, and never flies the ship out of its system, where
+`GetSystemAt` would go empty under a sky still drawing the old one. You leave a
+system by jumping. In transit the drive's room is 0, so it gives only cruise
+speed.
+
+**The jump has three levers, each left where it is set**: the course (the
+chart, or `ds.Nav.Plot`), the heading (the helm; the HUD's bearing words, and
+the nose caret on the teal course marker), and engage (the chart, or
+`ds.Nav.Engage`). Engaged, the engine asks for `ds.Nav.WindingWant` (800 W) and
+the charge winds at a rate the watts it actually gets scale. Starved, it still
+winds at `ds.Nav.StarvedRate` of full; it never stops. It asks for nothing
+otherwise, so staying put is never taxed. Once plotted, engaged, charged, and
+within `ds.Nav.ConeDeg` of the nose, **the fold opens by itself.** There is no
+confirm, and there must not be one. A final button would make the player come
+back on the jump's schedule to service it, and a game that makes you do that
+is telling you that you are behind: the anti-chore principle's definition of a
+chore (developer's ruling). If it feels like the game acting without you, the
+answer is a softer cue before the fold -- the hum already rises as the jump
+winds -- never a confirm. For the same reason no screen shows a percentage, a
+bar or a countdown: a number that fills is a clock to watch.
+
+The fold lasts `ds.Nav.TransitSeconds`, with streaks past the window, and the
+helm does nothing between stars. Arrival is `FShipFlightState::JumpTo`, the
+flight state's fourth write path (ADR 0005, amended): a translation and nothing
+else, onto the line from the departure point to the star, at
+`max(ds.Nav.StandoffAU x sqrt(L), 1.5 x the outermost orbit)` (conflict 9).
+Orientation is untouched, so the new sun is where the nose was and the distant
+stars do not move. The course is the only universe data the ship keeps, as an
+id (ADR 0003, amended).
+
+## The hum and the lamps
+
+**The hum** is synthesised, not sampled. `FShipHumVoice` is the pure
+synthesis. `UShipHumComponent` is a `USynthComponent`, Unreal's component for
+audio generated in code on the audio thread. Every tick it asks the ship for
+two numbers and posts them across an atomic mailbox, keeping no copy.
+`AShipHumSource` is one point the hum comes from: one reactor, and one air
+handler per room, from `HUM_SOURCES` in `hauler_layout.py`. The reactor's
+drone follows **`EngineFeed = clamp(GetConsumerShare(Engine) /
+ds.Nav.WindingWant, 0, 1)`**: watts delivered, never satisfaction (conflict
+8). An idle engine wants 0 W, and a zero want reads as fully satisfied, so a
+hum on satisfaction would sit at full whenever the ship is idle. On watts, it
+idles low, rises and brightens as the jump winds, and settles when charged,
+which makes it the jump's wind-up cue. The hiss follows the boosters
+(`ds.Hum.CruiseHiss`). `ds.Hum.Volume` is the first knob if it wears. Each air
+source seeds its noise from where it stands: two at one point would hiss the
+same noise and comb into a whistle, and `test_placement.py` forbids it.
+Headless, the mixer is real, so `DeepSpace.Ship.HumComponent` proves samples
+are pulled; whether it *sounds* right is a playtest question.
+
+**The lamps.** Room moods (`ROOM_MOOD`: a colour temperature and a scale per
+room) and practical lamps (`PRACTICALS`) are layout data in
+`hauler_layout.py`, built into the level. The glowing panels of every
+`lamp_<room>` role are tagged **`Power.Lamps`**, and `UShipLightingSubsystem`
+drives their `M_ShipEmissive` `Colour` alongside the `Power.Lights` lights, so
+a starved room's panels dim and brown out with its lights rather than shining
+on. A panel's rated glow is read from the material the level gave it, never
+from the dynamic instance, which holds whatever was last written.
+
+## The chart chair
+
+`AShipNavScreen`, an `AShipScreen` over the starboard desk screen in the
+cockpit, with `UNavigationWidget` built in C++. E sits you down at it; it shows
+where you are, the six nearest systems, the jump as a word and the course as a
+bearing. Clicking a row plots it (again clears it), and one toggle engages or
+stands down. That is all it does: aiming is the helm's. It asks the ship every
+frame and keeps nothing, so a course plotted from the console shows here
+untold. The chair beside the helm is not a second station (vision: shared
+presence, never division of labour).
+
+It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
+from `NAV_SCREEN` in `hauler_layout.py`. **Its three seat tunables,
+`UseDistanceCm`, `SeatHeightCm` and `ViewDistanceCm`, are per-instance
+`UPROPERTY`s that `place_nav_screen` sets**, so a nudge is an edit there and a
+level rebuild, not C++. Its `Reach` box sits *behind* the panel's face. A volume
+enclosing the panel blocks the channel the pointer traces on, and the screen
+draws perfectly and cannot be clicked. `DeepSpace.Ship.NavScreen` and
+`DeepSpace.UI.NavigationScreen` spawn it before `World->BeginPlay()`, as every
+screen test must.
+
+## The dressing
+
+The clutter is generated in **C++ at world start**, not baked by Python (ADR
+0006, amended: the exception was refused). `UShipDressingSubsystem` finds the
+surfaces the layout exports as markers tagged **`Dress.Surface`**, plans with
+the pure `ShipDressing` core under a seed derived from the universe's, and
+spawns the result as instances on one transient actor. It is tuned from the
+console with `ds.Dress.*`, and redresses a running session in place. It is
+being built as this is written; the lived-in spec's decisions 1-1d are its
+contract, and its own section belongs here once it lands.
+
+## Playtest console
+
+The backtick key opens Unreal's console in play (in the editor, the
+Output Log's `Cmd` box takes the same input). Console variables (CVars) set
+there last for the session only. The whole loop, with no chair and no
+walking:
+
+```text
+ds.Universe.Describe        where am I: the system the ship is in
+ds.Sky.Goto 1 40000         40,000 km over body 1, facing it (0 is the star; index or name)
+ds.Nav.Near                 the chart, numbered, nearest first
+ds.Nav.Plot 0               plot row 0
+ds.Nav.ChargeSeconds 5      wind from cold in 5 s, not 90, for every jump after
+ds.Nav.Engage               engage (ds.Nav.Engage 0 stands down); aim, and it fires by itself
+```
+
+`ds.Nav.Charge` fills the charge on the next tick, once. `ds.Nav.Clear` drops
+the course. `ds.HUD 0` hides the HUD for an unadorned look.
+
+## Where each tunable lives
+
+No value below has been settled by a playtest yet. Each is a
+`TAutoConsoleVariable` read at use and never cached, so a playtest moves it
+with no rebuild. **Write a settled value back as the default in the file
+named.** Where a default comes from a header constant, the constant is the
+default: change it there, and expect `./rebuild.sh --force` and the pure
+tests that assert it.
+
+| CVar | Default | Lives in |
+|---|---|---|
+| `ds.Nav.ChargeSeconds` | 90 s | `ShipSubsystem.cpp`, from `FShipFlightState::JumpChargeSeconds` (`ShipFlightState.h`) |
+| `ds.Nav.WindingWant` | 800 W | `ShipSubsystem.cpp` |
+| `ds.Nav.StarvedRate` | 0.2 | `ShipSubsystem.cpp` |
+| `ds.Nav.FoldDraw` | 0 W | `ShipSubsystem.cpp` |
+| `ds.Nav.TransitSeconds` | 6 s | `ShipSubsystem.cpp`, from `FNavTuning` (`ShipNavState.h`) |
+| `ds.Nav.ConeDeg` | 8 deg | `ShipSubsystem.cpp` |
+| `ds.Nav.StandoffAU` | 2.4 AU | `ShipSubsystem.cpp`, from `NavStart::DefaultStandoffAU` (`NavStart.h`) |
+| `ds.Nav.RangeLy` | 12 ly | `ShipSubsystem.cpp` |
+| `ds.Nav.PlaceAtStart` | 1 | `ShipSubsystem.cpp` |
+| `ds.Drive.Tau` | 15 s | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveTau` (`ShipFlightState.h`) |
+| `ds.Drive.Floor` | 100 km | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveFloor` (`ShipFlightState.h`) |
+| `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
+| `ds.Sky.MoteFadeSpeed` | 2000 m/s | `ShipCounterFrame.cpp` |
+| `ds.Sky.Exposure`, `.ExposureMode`, `.ExposureRange` | 0.7 (estimate), 1, 1.5 | `ShipSky.cpp` |
+| `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
+| `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
+| `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.15, 1.0, 0.675 | `ShipSky.cpp` |
+| `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
+| `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
+
+Tunables that are not CVars: the universe's seed and priors
+(`Config/DefaultGame.ini`, above); room moods and practicals
+(`hauler_layout.py`, a level rebuild); the chart's seat (`place_nav_screen`, a
+level rebuild); the reactor rating and each consumer's want
+(`UShipSubsystem`'s `static constexpr`s, a header change).
 
 ## The player's body
 
