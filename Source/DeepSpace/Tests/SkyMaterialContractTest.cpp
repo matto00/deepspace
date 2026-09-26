@@ -1,6 +1,8 @@
 #include "Misc/AutomationTest.h"
 #include "Dom/JsonObject.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionParameter.h"
+#include "MaterialShared.h"
 #include "Materials/MaterialExpressionPerInstanceCustomData.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Misc/FileHelper.h"
@@ -68,6 +70,26 @@ namespace
             const FName Name(*Parameter->GetStringField(TEXT("name")));
             (Parameter->GetStringField(TEXT("type")) == TEXT("scalar") ? OutScalars : OutVectors).Add(Name);
         }
+    }
+
+    /**
+     * Run the material translator on the graph, synchronously, and return its
+     * errors. A graph that does not translate still saves and still lists its
+     * parameters, and a commandlet compiles no shaders to complain with, so
+     * this is the only place a broken graph shows before somebody looks.
+     */
+    TArray<FString> TranslationErrors(UMaterial* Material)
+    {
+        FMaterialResource Resource;
+        Resource.SetMaterial(Material, nullptr, GMaxRHIShaderPlatform);
+        FString Source;
+        const bool bTranslated = Resource.GetMaterialExpressionSource(Source);
+        TArray<FString> Errors = Resource.GetCompileErrors();
+        if (!bTranslated && Errors.IsEmpty())
+        {
+            Errors.Add(TEXT("the translator failed without saying why"));
+        }
+        return Errors;
     }
 
     TSet<FName> AssetNames(const UMaterialInterface* Material, bool bScalars)
@@ -173,6 +195,19 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
             SameSet(Scalars, JsonScalars));
         TestTrue(FString::Printf(TEXT("%s exposes exactly the contract's vectors; has %s"), Expected.Asset, *Describe(Vectors)),
             SameSet(Vectors, JsonVectors));
+        // One node per parameter. Two nodes can share a name and the name
+        // lists above cannot tell; a stale one left by a rebuild is how that
+        // happens, and whichever the compiler picks is a guess.
+        int32 ParameterNodes = 0;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material->GetExpressions())
+        {
+            ParameterNodes += Cast<UMaterialExpressionParameter>(Expression) ? 1 : 0;
+        }
+        TestEqual(FString::Printf(TEXT("%s has one node per parameter"), Expected.Asset),
+            ParameterNodes, JsonScalars.Num() + JsonVectors.Num());
+
+        const TArray<FString> Errors = TranslationErrors(const_cast<UMaterial*>(Material));
+        TestTrue(FString::Printf(TEXT("%s translates: %s"), Expected.Asset, *FString::Join(Errors, TEXT("; "))), Errors.IsEmpty());
         TestTrue(FString::Printf(TEXT("%s is unlit: its emissive is the final pixel"), Expected.Asset),
             Material->GetShadingModels().HasOnlyShadingModel(MSM_Unlit));
 

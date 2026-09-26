@@ -20,7 +20,11 @@ public class DeepSpace : ModuleRules
 		// Slate/SlateCore: the ship's screens are real Slate built in C++ -- the
 		// widget trees live in Source/DeepSpace/UI, not in .uasset files, so that
 		// screen logic stays diffable and reviewable (ADR 0002).
-		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "Slate", "SlateCore" });
+		// RHI: DeepSpace.Sky.MaterialContract runs the material translator on
+		// the sky's generated graphs, which needs the shader platform to
+		// translate for; a commandlet compiles no shaders, so nothing else
+		// would notice a broken graph.
+		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "Slate", "SlateCore", "RHI" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
