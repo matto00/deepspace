@@ -199,11 +199,14 @@ bool FShipDressingCorpusTest::RunTest(const FString& Parameters)
     TArray<FDressSurface> Surfaces = DressingFixtures::Hauler();
     const int32 Doorway = Surfaces.Add(DressingFixtures::IntoTheDoorway());
     const int32 Floor = Surfaces.Add(DressingFixtures::OnTheFloor());
+    const int32 Low = Surfaces.Add(DressingFixtures::UnderALowShelf());
     TArray<FBox> KeepOut = DressingFixtures::HaulerKeepOut();
     KeepOut.Add(DressingFixtures::TheDoorway());
 
     TArray<int32> PerSurface;
     PerSurface.SetNumZeroed(Surfaces.Num());
+    int32 TooTallForTheLowShelf = 0;
+    double TallestOnTheLowShelf = 0.0;
     int32 Failures = 0;
     const auto Fail = [&](const FString& What)
     {
@@ -232,6 +235,11 @@ bool FShipDressingCorpusTest::RunTest(const FString& Parameters)
             }
             ++PerSurface[Item.Surface];
             Piles[Item.Surface] += Item.StackIndex == 0 ? 1 : 0;
+            if (Item.Surface == Low)
+            {
+                TallestOnTheLowShelf = FMath::Max(TallestOnTheLowShelf, Template->Height());
+                TooTallForTheLowShelf += Template->Height() > Surface.Clear ? 1 : 0;
+            }
 
             // Measured from the parts as they lie, in the surface's frame.
             const FBox World = ShipDressing::ItemBounds(Item, Surface, Rules);
@@ -299,6 +307,21 @@ bool FShipDressingCorpusTest::RunTest(const FString& Parameters)
                              PerSurface[Doorway]),
              PerSurface[Doorway] > 100);
     TestEqual(TEXT("the table on the floor gets nothing, ever"), PerSurface[Floor], 0);
+
+    // The low shelf's mix is mostly things taller than its 5 cm: the clear
+    // has to keep them off, one by one, not only trim a pile.
+    const FDressSurface& LowShelf = Surfaces[Low];
+    const FDressKind* Rack = Rules.FindKind(LowShelf.Kind);
+    const bool bMixHasTaller = Rack && Rack->Mix.ContainsByPredicate([&](const FDressWeight& Entry)
+    {
+        const FDressTemplate* Template = Rules.FindTemplate(Entry.Name);
+        return Entry.Weight > 0.0 && Template && Template->Height() > LowShelf.Clear;
+    });
+    TestTrue(TEXT("the low shelf's mix has things taller than its clear, or the probe proves nothing"), bMixHasTaller);
+    TestTrue(FString::Printf(TEXT("the low shelf is still dressed with what fits under it (%d things)"), PerSurface[Low]),
+             PerSurface[Low] > 100);
+    TestEqual(FString::Printf(TEXT("and never with anything taller than its %.0f cm (tallest %.1f)"), LowShelf.Clear, TallestOnTheLowShelf),
+              TooTallForTheLowShelf, 0);
     for (int32 S = 0; S < DressingFixtures::Hauler().Num(); ++S)
     {
         TestTrue(FString::Printf(TEXT("%s is dressed in some of the 500 (%d things)"), *KeyOf(Surfaces[S]), PerSurface[S]),
@@ -402,7 +425,7 @@ bool FShipDressingShapeTest::RunTest(const FString& Parameters)
     const TArray<FDressSurface> Hauler = DressingFixtures::Hauler();
     const int32 Counter = Hauler.IndexOfByPredicate([](const FDressSurface& S) { return S.Kind == FName(TEXT("counter.top")); });
     const int32 Desk = Hauler.IndexOfByPredicate([](const FDressSurface& S) { return S.Kind == FName(TEXT("desk.top")); });
-    FMoments Along, Depth, BookPile;
+    FMoments Along, Depth, WingDepth, BookPile;
     int32 Mugs = 0, OnCounter = 0, Coloured = 0, Olive = 0, TallestPile = 0;
     TMap<FVector2D, int32> Pile;
     for (int32 Corpus = 0; Corpus < 500; ++Corpus)
@@ -424,6 +447,13 @@ bool FShipDressingShapeTest::RunTest(const FString& Parameters)
                 ++OnCounter;
                 Mugs += Item.Template == FName(TEXT("mug"));
             }
+            // The cockpit's wings are backed the other way, against +x: the
+            // window side of the desk.
+            if (Hauler[Item.Surface].Back == EDressEdge::PosX && Item.StackIndex == 0)
+            {
+                const FDressSurface& S = Hauler[Item.Surface];
+                WingDepth.Add((Item.At.X + 0.5 * S.Size.X) / S.Size.X);
+            }
             if (Item.Surface == Desk && Item.Template == FName(TEXT("book")))
             {
                 Pile.FindOrAdd(Item.At) += 1;
@@ -439,6 +469,9 @@ bool FShipDressingShapeTest::RunTest(const FString& Parameters)
                             Along.Mean(), Depth.Mean(), double(Mugs) / OnCounter, double(Olive) / Coloured, BookPile.Mean()));
     TestTrue(FString::Printf(TEXT("the counter's things gather at its +y use end (%.3f of the way along)"), Along.Mean()), Along.Mean() > 0.58);
     TestTrue(FString::Printf(TEXT("and against its back wall (%.3f of the way back)"), Depth.Mean()), Depth.Mean() > 0.56);
+    TestTrue(FString::Printf(TEXT("a surface backed at +x leans to +x the same way (%.3f of the way back, %d things)"),
+                             WingDepth.Mean(), WingDepth.N),
+             WingDepth.N > 100 && WingDepth.Mean() > 0.56);
     TestTrue(FString::Printf(TEXT("mugs are the counter's commonest thing, 4 in 13 (%.3f)"), double(Mugs) / OnCounter),
              FMath::Abs(double(Mugs) / OnCounter - 4.0 / 13.0) <= 0.06);
     TestTrue(FString::Printf(TEXT("olive is the ship's issue colour, 5 in 11 (%.3f)"), double(Olive) / Coloured),

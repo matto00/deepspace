@@ -142,7 +142,14 @@ bool FShipDressingWorldTest::RunTest(const FString& Parameters)
 {
     UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
     UMaterialInterface* Furniture = LoadObject<UMaterialInterface>(nullptr, *UShipDressingSubsystem::MaterialPath(TEXT("furniture")));
-    if (!TestNotNull(TEXT("the cube"), Cube) || !TestNotNull(TEXT("MI_Ship_furniture, from build_hauler.py"), Furniture))
+    // Every asset the test needs, before there is a world to leave half made:
+    // a missing material returning early from inside the world's scope left
+    // a game world that never began play to be ended, and the run hung.
+    UMaterialInterface* Faded = LoadObject<UMaterialInterface>(nullptr, *UShipDressingSubsystem::MaterialPath(UShipDressingSubsystem::WearRole(EDressWear::Faded)));
+    UMaterialInterface* Replaced = LoadObject<UMaterialInterface>(nullptr, *UShipDressingSubsystem::MaterialPath(UShipDressingSubsystem::WearRole(EDressWear::Replaced)));
+    if (!TestNotNull(TEXT("the cube"), Cube) || !TestNotNull(TEXT("MI_Ship_furniture, from build_hauler.py"), Furniture)
+        || !TestNotNull(TEXT("MI_Ship_furniture_faded, from build_hauler.py"), Faded)
+        || !TestNotNull(TEXT("MI_Ship_furniture_replaced, from build_hauler.py"), Replaced))
     {
         return false;
     }
@@ -157,7 +164,10 @@ bool FShipDressingWorldTest::RunTest(const FString& Parameters)
     Context.SetCurrentWorld(World);
     ON_SCOPE_EXIT
     {
-        World->EndPlay(EEndPlayReason::RemovedFromWorld);
+        if (World->HasBegunPlay())
+        {
+            World->EndPlay(EEndPlayReason::RemovedFromWorld);
+        }
         GEngine->DestroyWorldContext(World);
         World->DestroyWorld(false);
     };
@@ -187,8 +197,8 @@ bool FShipDressingWorldTest::RunTest(const FString& Parameters)
             PlainPiece = Piece;
         }
     }
-    UMaterialInterface* WornMaterial = LoadObject<UMaterialInterface>(nullptr, *UShipDressingSubsystem::MaterialPath(UShipDressingSubsystem::WearRole(WornAs)));
-    if (!TestFalse(TEXT("some piece wears"), WornPiece.IsEmpty()) || !TestNotNull(TEXT("and its material exists"), WornMaterial))
+    UMaterialInterface* WornMaterial = WornAs == EDressWear::Faded ? Faded : Replaced;
+    if (!TestFalse(TEXT("some piece wears"), WornPiece.IsEmpty()) || !TestFalse(TEXT("and some piece does not"), PlainPiece.IsEmpty()))
     {
         return false;
     }

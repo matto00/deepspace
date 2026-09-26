@@ -83,9 +83,10 @@ namespace DressingFixtures
     }
 
     /**
-     * Two surfaces the hauler does not have, each built to prove one guard
-     * can bite: a long counter reaching into a doorway's keep-clear zone
-     * (the zone covers its +Y half), and a table standing on the floor.
+     * Surfaces the hauler does not have, each built to prove one guard can
+     * bite: a long counter reaching into a doorway's keep-clear zone (the
+     * zone covers its +Y half), a table standing on the floor, and a shelf
+     * too low for most of what a shelf holds.
      */
     inline FDressSurface IntoTheDoorway()
     {
@@ -102,5 +103,15 @@ namespace DressingFixtures
     {
         return Surface(TEXT("probe"), TEXT("counter.top"), 8, FVector(1000, -300, 0), 0, FVector2D(60, 300),
                        EDressEdge::NegX, EDressUse::PosY, 58);
+    }
+
+    /** A rack shelf with the next shelf 5 cm above it: room for a coil of
+     *  cable or one book, and nothing else in the rack's mix. The hauler has
+     *  no surface this low under its clearance, so without this nothing
+     *  would ever test that the clear keeps a canister off a shelf. */
+    inline FDressSurface UnderALowShelf()
+    {
+        return Surface(TEXT("probe"), TEXT("wall_rack.shelf_9"), 9, FVector(-400, -375, 120), 90, FVector2D(50, 180),
+                       EDressEdge::NegX, EDressUse::Centre, 5);
     }
 }
