@@ -588,7 +588,10 @@ are its contract.
   `ShipDressing::DressSeed(root)` -- the universe's root seed, so two players
   aboard one universe see one set of mugs -- and spawns it as
   `UInstancedStaticMeshComponent`s on one transient actor tagged
-  **`Dress.Clutter`**: Movable, `NoCollision`, each instance scaled and offset
+  **`Dress.Clutter`**: Movable, query-only and solid to `ECC_Camera` alone
+  (the crouch leans the eye ~30 cm past the capsule, into what stands on a
+  workbench or a rack, and the eye sweep is what keeps the view out of it;
+  `Visibility` and `Pawn` pass through), each instance scaled and offset
   from its mesh's measured bounds (the pivot trap, again). It swaps worn
   pieces to `MI_Ship_furniture_faded` / `_replaced`. The clutter's
   `MI_Ship_<role>` materials are authored by `build_hauler.py` (`PLAIN`), so a
@@ -732,8 +735,10 @@ Two guards, and they check different things:
 
 - `check_anim_heights.py` checks every clip's peak head height against its
   posture's capsule, so a taller clip fails there rather than in play.
-- `DeepSpace.Player.CameraStaysInsideWalls` and `.CameraDoesNotDiveWhenLookingDown`
-  check the placement itself.
+- `DeepSpace.Player.CameraStaysInsideWalls`, `.CameraStaysOutOfClutter` and
+  `.CameraDoesNotDiveWhenLookingDown` check the placement itself. The sweep is
+  on `ECC_Camera`, so anything the eye can lean into must block that channel:
+  the dressing's clutter does, and blocks nothing else.
 
 Sideways reach is deliberately *not* guarded per clip: heads do leave the
 capsule, and the sweep is what handles it.

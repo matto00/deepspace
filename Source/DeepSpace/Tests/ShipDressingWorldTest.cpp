@@ -257,8 +257,14 @@ bool FShipDressingWorldTest::RunTest(const FString& Parameters)
     const TArray<FBox> Drawn = InstanceBoxes(Clutter, &Layers);
     for (const UInstancedStaticMeshComponent* Layer : Layers)
     {
-        TestTrue(FString::Printf(TEXT("%s has no collision: scenery, out of every trace"), *Layer->GetName()),
-                 Layer->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+        TestTrue(FString::Printf(TEXT("%s is query-only: nothing simulates, nothing is pushed"), *Layer->GetName()),
+                 Layer->GetCollisionEnabled() == ECollisionEnabled::QueryOnly);
+        TestEqual(FString::Printf(TEXT("%s stops the camera's sweep"), *Layer->GetName()),
+                  static_cast<int32>(Layer->GetCollisionResponseToChannel(ECC_Camera)), static_cast<int32>(ECR_Block));
+        TestEqual(FString::Printf(TEXT("%s is out of the E trace and the laptop cursor"), *Layer->GetName()),
+                  static_cast<int32>(Layer->GetCollisionResponseToChannel(ECC_Visibility)), static_cast<int32>(ECR_Ignore));
+        TestEqual(FString::Printf(TEXT("%s is out of the capsule's way"), *Layer->GetName()),
+                  static_cast<int32>(Layer->GetCollisionResponseToChannel(ECC_Pawn)), static_cast<int32>(ECR_Ignore));
         TestTrue(FString::Printf(TEXT("%s is Movable, as is its root"), *Layer->GetName()),
                  Layer->Mobility == EComponentMobility::Movable && Clutter->GetRootComponent()->Mobility == EComponentMobility::Movable);
         TestTrue(FString::Printf(TEXT("%s wears a material the level build made"), *Layer->GetName()),

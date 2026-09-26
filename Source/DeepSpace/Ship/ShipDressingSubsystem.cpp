@@ -17,6 +17,10 @@
 #include "Ship/ShipDressingSurface.h"
 #include "Universe/UniverseSubsystem.h"
 
+#if WITH_EDITOR
+#include "StaticMeshCompiler.h"
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogShipDressing, Log, All);
 
 namespace
@@ -372,6 +376,14 @@ void UShipDressingSubsystem::Redress()
                 {
                     continue;
                 }
+#if WITH_EDITOR
+                // The editor builds a freshly loaded mesh asynchronously, and a
+                // component registered while it builds gets no physics state:
+                // no bodies, so the eye sweep sees nothing until some later
+                // tick finishes the build and recreates it. Dressed means
+                // dressed from the first frame, so wait for it here.
+                FStaticMeshCompilingManager::Get().FinishCompilation({ Mesh });
+#endif
                 Layer = NewObject<UInstancedStaticMeshComponent>(Actor);
                 Layer->SetMobility(EComponentMobility::Movable);
                 Layer->SetupAttachment(Root);
@@ -385,10 +397,19 @@ void UShipDressingSubsystem::Redress()
                     UE_LOG(LogShipDressing, Warning, TEXT("No %s: run Tools/build_hauler.py, which authors every dressing role."),
                            *MaterialPath(Role));
                 }
-                // Scenery the capsule cannot reach: out of the laptop cursor's
-                // trace, the E trace and the camera's sweep alike.
-                Layer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-                Layer->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+                // The capsule cannot reach a surface, but the eye can: the
+                // crouch carries it some 30 cm past the capsule, level with a
+                // workbench's toolbox or a rack's crate, and the eye sweep in
+                // ADeepSpaceCharacter::PlaceCamera is the only thing that keeps
+                // the view out of solid things. So clutter is solid to the
+                // camera and to nothing else: the laptop cursor and the E
+                // trace (Visibility) reach past a mug to what is behind it,
+                // and the capsule (Pawn) never meets it to be tripped.
+                Layer->SetCollisionProfileName(UCollisionProfile::CustomCollisionProfileName);
+                Layer->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+                Layer->SetCollisionObjectType(ECC_WorldStatic);
+                Layer->SetCollisionResponseToAllChannels(ECR_Ignore);
+                Layer->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
                 Layer->SetGenerateOverlapEvents(false);
                 Layer->SetCanEverAffectNavigation(false);
                 Layer->CanCharacterStepUpOn = ECB_No;

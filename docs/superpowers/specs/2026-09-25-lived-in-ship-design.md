@@ -505,7 +505,8 @@ surface's own size, whatever that size is.
   one piece. Everything is spawned before `World->BeginPlay()`. Then:
   - there is exactly one `Dress.Clutter` actor;
   - its instance count equals the core's plan for the tagged markers only;
-  - every component is `NoCollision`;
+  - every component is query-only and blocks `ECC_Camera` alone (amended,
+    decision 5);
   - **every instance's world bounds, measured from its mesh's bounding box
     and its instance transform, lie within its marker's surface and under
     its `Clear`**. This is the pivot bug's test in a new costume: ADR 0006
@@ -760,6 +761,21 @@ where clutter meets the capsule.
 `ECC_Visibility` and `ECC_Camera`.** It fixes the traces but leaves a
 collision body that nothing can ever touch. `NoCollision` says the same thing
 more plainly.
+
+**Amended, 2026-09-26 (slice 3 review): surface clutter blocks
+`ECC_Camera` and nothing else.** The bullet above was wrong about the
+camera. The capsule cannot reach a surface, but the eye can: the crouch
+carries it about 30 cm past the capsule at about a metre up, level with the
+workbench, the counter and the galley table, and standing at the cargo rack
+it is inside a shelf-1 crate's band. With `NoCollision` the eye sweep in
+`ADeepSpaceCharacter::PlaceCamera` passed straight through, and the view
+could sit inside a toolbox. The sweep stopping at a mug is not a cost; it is
+the sweep doing for clutter what it already does for walls. So clutter is
+`QueryOnly`, ignores every channel, and blocks `ECC_Camera`. The laptop
+cursor and the `E` trace (`ECC_Visibility`) still pass through it, and the
+capsule (`ECC_Pawn`) still never meets it. `DeepSpace.Ship.Dressing.World`
+checks the responses, and `DeepSpace.Player.CameraStaysOutOfClutter` leans a
+crouched eye into the hauler's own clutter.
 
 ### 6. A new intent check: floor-band dressing may not create pockets
 

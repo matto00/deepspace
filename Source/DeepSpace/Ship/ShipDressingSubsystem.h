@@ -34,8 +34,11 @@ struct FDressWornSlot
  * markers by tag, asks ShipDressing::Dress for a plan, and turns the plan
  * into instances on one transient actor tagged Dress.Clutter: one
  * UInstancedStaticMeshComponent per (mesh, material role), every one
- * Movable and NoCollision. Surface clutter is scenery the capsule cannot
- * reach, so nothing can be tripped over, picked up, knocked or tidied.
+ * Movable and solid to ECC_Camera alone. Surface clutter is scenery the
+ * capsule cannot reach, so nothing can be tripped over, picked up, knocked
+ * or tidied, and the traces that aim (Visibility) pass through it; but the
+ * eye leans past the capsule, so the camera's sweep stops at it rather than
+ * seeing out from inside a toolbox.
  *
  * It does not tick, on purpose. Nothing in the dressing changes at runtime,
  * and a subsystem with no tick has nowhere to put a mechanism that could
