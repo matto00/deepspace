@@ -14,6 +14,17 @@ public class DeepSpace : ModuleRules
 		// subdirectories cannot be included as "Ship/Foo.h".
 		PublicIncludePaths.Add(ModuleDirectory);
 
+		// No unity build. Unity concatenates many .cpp files into one
+		// translation unit, which merges their anonymous namespaces: two test
+		// files that each keep a private "Frame" or "Root" collide, and under
+		// -Wshadow that is an error. Worse, UBT's adaptive unity compiles
+		// git-modified files on their own, so a working tree builds green and
+		// the same code committed does not -- and this project is built by
+		// agents in parallel worktrees whose work only meets at the merge.
+		// Slice 1 hit exactly that. Each file as its own unit also catches the
+		// missing #include that a unity blob silently supplies from a neighbour.
+		bUseUnity = false;
+
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "UMG" });
 
 		// Json: the movement-contract test reads Tools/movement_contract.json.
