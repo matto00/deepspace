@@ -1,0 +1,12 @@
+{
+  "comment": "The columns of Saved/procgen_corpus.tsv, in order, and the words it uses for star classes and planet kinds. DeepSpace.Universe.Corpus holds the file it writes to this; Tools/procgen_corpus.py reads by these names and Tools/test_procgen_corpus.py holds its hand-made sample to them. One row per planet; a system with no planets is one row with planet -1 and the planet columns empty, so an empty system is counted rather than lost.",
+  "columns": [
+    "system", "sector_x", "sector_y", "sector_z", "slot", "distance_ly",
+    "star_class", "star_mass_solar", "star_luminosity_solar", "star_temperature_k",
+    "habitable_inner_au", "habitable_outer_au", "frost_line_au", "planet_count",
+    "planet", "designation", "given_name", "kind",
+    "semi_major_axis_au", "mass_earth", "radius_earth", "equilibrium_k", "population"
+  ],
+  "classes": ["M", "K", "G", "F", "A", "B"],
+  "kinds": ["barren", "terrestrial", "ocean", "ice", "gas giant"]
+}
