@@ -252,6 +252,11 @@ def spawn_box(actor_sub, box, mesh, material):
     # be if the glass in them casts no shadow (sky decision 5).
     if box.role == "glass":
         component.set_editor_property("cast_shadow", False)
+        # And it is found as glass by tag: the target bracket's trace treats a
+        # hit on an actor tagged GLASS_TAG as the glass and anything else as
+        # a wall, so the bracket is drawn only where the target can be seen
+        # (system map spec, decision 7). ShipTags::Glass in C++.
+        actor.set_editor_property("tags", [unreal.Name(PL.GLASS_TAG)])
     return actor
 
 
@@ -366,6 +371,29 @@ def place_nav_screen(actor_sub, ship):
     return chart
 
 
+def place_map_screen(actor_sub, ship):
+    """The system map, over the middle desk screen (system map spec, decision
+    1). It has no chair and no reach volume: it is read and clicked from the
+    helm, and zoomed from the chart chair beside it (decision 13), so the one
+    tunable it takes is view_distance_cm, how far the eyes lean in when the
+    chart chair zooms it -- the chart's 60, so the two frame alike. Its size,
+    its draw size and its widget are the class's, per ADR 0002.
+
+    AShipMapScreen is C++ (Ship/ShipMapScreen.h). An editor built without it
+    would save a level with no map and nothing in play would say why, so a
+    missing class stops the build before the level is saved, as a missing
+    sky asset does."""
+    if not hasattr(unreal, "ShipMapScreen"):
+        raise RuntimeError("AShipMapScreen is not compiled into this editor; build the map "
+                           "screen's C++ before rebuilding the level")
+    screen = actor_sub.spawn_actor_from_class(
+        unreal.ShipMapScreen, unreal.Vector(*ship.map_screen_location),
+        unreal.Rotator(0, 0, ship.map_screen_yaw))
+    screen.set_actor_label(TAG + "map_screen")
+    screen.set_editor_property("view_distance_cm", float(L.MAP_VIEW_DISTANCE))
+    return screen
+
+
 DRESS_EDGES = {"-x": unreal.DressEdge.NEG_X, "+x": unreal.DressEdge.POS_X}
 DRESS_USES = {"centre": unreal.DressUse.CENTRE, "+y": unreal.DressUse.POS_Y, "-y": unreal.DressUse.NEG_Y}
 
@@ -472,6 +500,7 @@ def build():
     laptop.fit_parts()
 
     place_nav_screen(actor_sub, ship)
+    place_map_screen(actor_sub, ship)
 
     start = actor_sub.spawn_actor_from_class(
         unreal.PlayerStart, unreal.Vector(*ship.player_start), unreal.Rotator(0, 0, 0))
@@ -492,12 +521,12 @@ def build():
 
     summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights (%d practical, "
                "shadowed), %d lamp boxes tagged %s, %d glass panes casting no shadow, "
-               "%d hum sources, %d dressing surfaces, %d keep-outs, %d furniture parts "
-               "tagged %s, one chart, one counter-frame, one sky."
+               "tagged %s, %d hum sources, %d dressing surfaces, %d keep-outs, %d furniture "
+               "parts tagged %s, one chart, one map, one counter-frame, one sky."
                % (removed, len(ship.boxes), len(ship.lights),
                   sum(1 for light in ship.lights if light.shadows),
                   sum(1 for box in ship.boxes if box.role.startswith("lamp_")), PL.LAMPS_TAG,
-                  sum(1 for box in ship.boxes if box.role == "glass"),
+                  sum(1 for box in ship.boxes if box.role == "glass"), PL.GLASS_TAG,
                   len(ship.hum_sources), len(ship.surfaces), len(ship.keep_outs),
                   sum(1 for box in ship.boxes if box.role == "furniture"), PL.WEAR_TAG))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:

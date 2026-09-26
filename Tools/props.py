@@ -32,12 +32,18 @@ PROPS = {
         Part("chamfer", (-22.5, 0, 90), (15, 60, 70), "furniture"),
     ],
     # A desk across the cockpit with a wing at each end, and three screens
-    # along its far edge facing the pilots.
+    # along its far edge facing the pilots. The port one, dead ahead of the
+    # helm, is low: 30 cm to the others' 50, so its top edge is 15 cm under
+    # the seated pilot's eye (125 cm) and about 7 degrees under the nose line.
+    # At the others' height it stood 5 cm above that eye, 127 cm off, and
+    # anything the ship was pointed at -- a target, the bracket on the
+    # caret -- was behind a grey panel. An instrument panel sits under the
+    # line of sight for the same reason (validate_hauler's check_helm_glass).
     "cockpit_desk": [
         Part("chamfer", (0, 0, 40), (60, 260, 80), "furniture"),
         Part("chamfer", (-50, -155, 40), (100, 50, 80), "furniture"),
         Part("chamfer", (-50, 155, 40), (100, 50, 80), "furniture"),
-        Part("cube", (20, -85, 105), (6, 70, 50), "screen"),
+        Part("cube", (20, -85, 95), (6, 70, 30), "screen"),
         Part("cube", (20, 0, 105), (6, 70, 50), "screen"),
         Part("cube", (20, 85, 105), (6, 70, 50), "screen"),
     ],

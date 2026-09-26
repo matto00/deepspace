@@ -29,15 +29,26 @@ LOG="$ROOT/Saved/Logs/DeepSpace.log"
 # Tools/dressing_markers.json, and test_dressing_markers.py is the only thing
 # that notices it has gone stale against the layout. Run only for the whole
 # suite -- a filtered run (Tools/mutate.sh uses them) wants just its test.
+#
+# A pending test (test_placement's PEND: its C++ counterpart is not in the
+# tree yet) is not a pass, so each one is named here rather than folded into
+# "passed", where it would look green for as long as it stayed pending.
 if [[ $FILTER == DeepSpace ]]; then
+    pending=""
     for t in "$ROOT"/Tools/test_*.py; do
         if ! out=$(python3 "$t" 2>&1); then
             echo "FAILED: $(basename "$t")"
             echo "$out" | tail -20
             exit 1
         fi
+        pending+=$(echo "$out" | grep -E '^\s*PEND ' | sed "s|^\s*PEND *|  $(basename "$t"): |")$'\n'
     done
     echo "python: $(ls "$ROOT"/Tools/test_*.py | wc -l) files passed"
+    pending=$(echo "$pending" | sed '/^$/d')
+    if [[ -n $pending ]]; then
+        echo "python: $(echo "$pending" | wc -l) PENDING, checking nothing until their C++ lands:"
+        echo "$pending"
+    fi
 fi
 
 ue_locked "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" "$ROOT/DeepSpace.uproject" \
