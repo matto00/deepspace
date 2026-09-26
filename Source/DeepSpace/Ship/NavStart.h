@@ -20,9 +20,30 @@ struct FNavPlacement
  */
 namespace NavStart
 {
-    /** The opening planet's distance, centre to ship: an 18 degree world
-     *  that fills the cockpit glass (sky decision 7). */
-    inline constexpr double OpeningDistanceCm = 40000.0 * UniverseUnits::CmPerKm;
+    /**
+     * The opening planet's distance, centre to ship, per Earth radius of the
+     * planet: an Earth at 40,000 km (sky decision 7). The framing is an
+     * angle, not a distance -- an 18 degree world that fills the cockpit
+     * glass -- and 40,000 km is that angle for an Earth. Held at a fixed
+     * distance, a gas giant of 11 Earth radii, 70,000 km in radius, would
+     * open with the ship inside it, and a Mars would be half the world the
+     * shot was framed for. The altitude is 84% of the distance for any
+     * world, so no planet opens anywhere near the drive's floor.
+     */
+    inline constexpr double OpeningDistancePerEarthRadiusCm = 40000.0 * UniverseUnits::CmPerKm;
+
+    /** The distance the opening shot puts Planet's centre from the ship, cm. */
+    DEEPSPACE_API double OpeningDistanceCm(const FPlanet& Planet);
+
+    /**
+     * The nearest a jump ever lets go of a star, in its own radii: ten
+     * radii shows it 11 degrees across, a wall of light. The rule below
+     * never comes close to this for any real star -- a dim M dwarf is met
+     * at hundreds of radii -- so this is the guard that a star with no
+     * light, or a rule mistuned in play, is met outside it and never at
+     * its centre.
+     */
+    inline constexpr double MinStandoffStellarRadii = 10.0;
 
     /** The default of ds.Nav.StandoffAU: a Sun-like star is met at 2.4 AU
      *  as a disc of about 7 px. */
@@ -58,7 +79,8 @@ namespace NavStart
                                            double StandoffAU = DefaultStandoffAU);
 
     /** The same, for a system: its star's luminosity and its outermost
-     *  planet's orbit (0 with no planets). */
+     *  planet's orbit (0 with no planets), and never nearer the star than
+     *  MinStandoffStellarRadii of its radius. */
     DEEPSPACE_API double ArrivalStandoffAU(const FStarSystem& System,
                                            double StandoffAU = DefaultStandoffAU);
 

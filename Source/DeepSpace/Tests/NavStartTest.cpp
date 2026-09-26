@@ -1,5 +1,6 @@
 #include "Misc/AutomationTest.h"
 #include "Ship/NavStart.h"
+#include "Ship/ShipFlightState.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -84,15 +85,17 @@ bool FNavStartTest::RunTest(const FString& Parameters)
     const double Km = UniverseUnits::CmPerKm;
     const double AU = UniverseUnits::CmPerAU;
 
-    // The opening shot: the largest planet 40,000 km dead ahead, its star
-    // abeam to starboard, so the first thing through the glass is half lit.
+    // The opening shot: the largest planet dead ahead, framed as an Earth
+    // at 40,000 km is, its star abeam to starboard, so the first thing
+    // through the glass is half lit.
     {
         const FStarSystem System = SunLike();
         const FNavPlacement Opening = NavStart::OpeningPlacement(System);
+        const double Framed = 40000.0 * Km * 11.2;
 
         const FVector ToPlanet = Opening.Orientation.UnrotateVector(ExpectedPlanet(System, 2) - Opening.Position);
-        TestTrue(TEXT("the largest planet is 40,000 km along +X, to 1 km"),
-                 FMath::Abs(ToPlanet.X - 40000.0 * Km) <= 1.0 * Km);
+        TestTrue(TEXT("the largest planet, of 11.2 Earth radii, is 11.2 x 40,000 km along +X, to 1 km"),
+                 FMath::Abs(ToPlanet.X - Framed) <= 1.0 * Km);
         TestTrue(TEXT("and on the axis, to 1 km"), FVector2D(ToPlanet.Y, ToPlanet.Z).Size() <= 1.0 * Km);
 
         const FVector ToStar = Opening.Orientation.UnrotateVector(System.Stub.Position - Opening.Position);
@@ -105,13 +108,40 @@ bool FNavStartTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("it is not the outermost planet it frames"), ToSmaller.Size() > 1.0 * AU);
     }
 
+    // Whatever the world, the ship opens outside it and above the drive's
+    // floor, and it fills the glass the same: a giant, an Earth and a Mars
+    // are all an 18 degree disc.
+    {
+        const double Floor = FShipFlightLimits::Cruise().DriveFloor;
+        for (const double Radius : {11.0, 1.0, 0.53})
+        {
+            FStarSystem System = SunLike();
+            System.Planets.Reset();
+            System.Planets.Add(MakePlanet(0, 1.0, 1.9, Radius));
+            const FNavPlacement Opening = NavStart::OpeningPlacement(System);
+
+            const double Centre = Opening.Position.DistanceTo(ExpectedPlanet(System, 0));
+            const double RadiusCm = Radius * UniverseUnits::CmPerEarthRadius;
+            TestTrue(FString::Printf(TEXT("a world of %.2f Earth radii opens outside it, above the floor"), Radius),
+                     Centre - RadiusCm > Floor);
+            TestTrue(FString::Printf(TEXT("and %.2f Earth radii is 18 degrees across, to a tenth"), Radius),
+                     FMath::IsNearlyEqual(FMath::RadiansToDegrees(2.0 * FMath::Asin(RadiusCm / Centre)), 18.3, 0.1));
+        }
+
+        FStarSystem Earthlike = SunLike();
+        Earthlike.Planets.SetNum(2);
+        TestTrue(TEXT("an Earth is framed at the sky's 40,000 km, to 1 km"),
+                 FMath::Abs(NavStart::OpeningPlacement(Earthlike).Position.DistanceTo(ExpectedPlanet(Earthlike, 1))
+                            - 40000.0 * Km) <= 1.0 * Km);
+    }
+
     // Ties go to the inner orbit, and a system of one planet frames it.
     {
         FStarSystem System = SunLike();
         System.Planets[1].RadiusEarth = System.Planets[2].RadiusEarth;
         const FNavPlacement Opening = NavStart::OpeningPlacement(System);
         TestTrue(TEXT("a tie frames the inner planet"),
-                 FMath::Abs(Opening.Position.DistanceTo(ExpectedPlanet(System, 1)) - 40000.0 * Km) <= 1.0 * Km);
+                 FMath::Abs(Opening.Position.DistanceTo(ExpectedPlanet(System, 1)) - 40000.0 * Km * 11.2) <= 1.0 * Km);
     }
 
     // A system with no planets is met the way a jump meets it: the star
@@ -138,8 +168,21 @@ bool FNavStartTest::RunTest(const FString& Parameters)
                  FMath::IsNearlyEqual(NavStart::ArrivalStandoffAU(SunLike()), 14.25, 1e-12));
         TestTrue(TEXT("ds.Nav.StandoffAU still scales it"),
                  FMath::IsNearlyEqual(NavStart::ArrivalStandoffAU(1.0, 0.0, 4.0), 4.0, 1e-12));
-        TestTrue(TEXT("a system of no planets and no light is met at the star, not inside it"),
-                 NavStart::ArrivalStandoffAU(0.0, 0.0) >= 0.0);
+
+        // Every real star is met hundreds of its radii out, so the floor is
+        // a guard: a star with no light and no planets is met outside it,
+        // not at its centre, where the rule alone would put the ship.
+        FStarSystem Dark = DimRedDwarf();
+        Dark.Planets.Reset();
+        Dark.Star.LuminositySolar = 0.0;
+        Dark.Star.RadiusSolar = 0.2;
+        const double DarkRadiusAU = 0.2 * UniverseUnits::CmPerSolarRadius / AU;
+        TestTrue(TEXT("a star with no light is met ten of its radii out"),
+                 FMath::IsNearlyEqual(NavStart::ArrivalStandoffAU(Dark), 10.0 * DarkRadiusAU, 1e-12));
+        FStarSystem Lit = DimRedDwarf();
+        Lit.Star.RadiusSolar = 0.2;
+        TestTrue(TEXT("and the floor never moves a real dwarf's standoff"),
+                 FMath::IsNearlyEqual(NavStart::ArrivalStandoffAU(Lit), 0.24, 1e-12));
     }
 
     // The arrival lies on the line to the star, the standoff short of it, so

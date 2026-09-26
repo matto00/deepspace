@@ -31,6 +31,11 @@ namespace
     }
 }
 
+double NavStart::OpeningDistanceCm(const FPlanet& Planet)
+{
+    return OpeningDistancePerEarthRadiusCm * FMath::Max(0.0, Planet.RadiusEarth);
+}
+
 FNavPlacement NavStart::OpeningPlacement(const FStarSystem& System)
 {
     const int32 Index = LargestPlanet(System);
@@ -60,11 +65,12 @@ FNavPlacement NavStart::OpeningPlacement(const FStarSystem& System)
     const FVector Nose = FVector::CrossProduct(ToStar, FVector::UpVector).GetSafeNormal();
 
     FNavPlacement Placement;
-    Placement.Position = Planet + (-Nose * OpeningDistanceCm);
+    Placement.Position = Planet + (-Nose * OpeningDistanceCm(System.Planets[Index]));
 
     // Nose exact; starboard is the star's direction from the ship, squared
-    // off against the nose. From 40,000 km out a planet at 1 AU leaves the
-    // star 0.015 degrees off the beam.
+    // off against the nose. An Earth at 1 AU, framed from 40,000 km, leaves
+    // the star 0.015 degrees off the beam; a Jupiter at 5 AU from 450,000 km,
+    // 0.03 degrees.
     const FVector StarFromShip = System.Stub.Position - Placement.Position;
     Placement.Orientation = FRotationMatrix::MakeFromXY(Nose, StarFromShip).ToQuat();
     return Placement;
@@ -83,7 +89,9 @@ double NavStart::ArrivalStandoffAU(const FStarSystem& System, double StandoffAU)
     {
         Outermost = FMath::Max(Outermost, Planet.SemiMajorAxisAU);
     }
-    return ArrivalStandoffAU(System.Star.LuminositySolar, Outermost, StandoffAU);
+    const double StarRadiusAU = System.Star.RadiusSolar * UniverseUnits::CmPerSolarRadius / UniverseUnits::CmPerAU;
+    return FMath::Max(ArrivalStandoffAU(System.Star.LuminositySolar, Outermost, StandoffAU),
+                      MinStandoffStellarRadii * FMath::Max(0.0, StarRadiusAU));
 }
 
 FUniversePosition NavStart::ArrivalPoint(const FUniversePosition& From, const FStarSystem& Destination,

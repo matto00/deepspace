@@ -66,9 +66,10 @@ void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
     Position = Arrival.Normalised();
 }
 
-void FShipFlightState::SetDriveRoom(double NearestSurfaceDistanceCm)
+void FShipFlightState::SetDriveRoom(double NearestSurfaceDistanceCm, const FVector& AwayFromSurface)
 {
     DriveSurfaceDistance = FMath::Max(0.0, NearestSurfaceDistanceCm);
+    DriveAwayFromSurface = AwayFromSurface.GetSafeNormal();
 }
 
 double FShipFlightState::GetDriveRoom() const
@@ -129,17 +130,34 @@ void FShipFlightState::SubStep(double FixedDelta)
     {
         // The drive. Speed is a fraction of the room per second, so distance
         // to the nearest surface falls exponentially with no easing curve, and
-        // a world swells from a point to a disc with no moment of change. It
-        // never goes slower than cruise would: out of room, below the floor or
-        // in transit, the drive is simply cruise along the nose.
+        // a world swells from a point to a disc with no moment of change.
+        //
+        // Closing on the surface is held to that rate and no more, even where
+        // cruise would be faster: the room then falls by e every tau all the
+        // way down, and the ship settles onto the floor rather than crossing
+        // it. A lever left on is somewhere to come back to, never a course
+        // that has gone wrong while you were in the galley. Any heading that
+        // does not close -- along the surface, away from it, or in transit
+        // with nothing to close on -- gets at least cruise, so the drive is
+        // never a trap at the floor.
+        //
+        // The cap scales the whole velocity rather than removing its closing
+        // part, so the ship still goes where the nose points, only slower.
         //
         // No inertia, deliberately: velocity is set, not chased. So it reports
         // no acceleration -- a ship going from 200 m/s to 34 c in one substep
         // would otherwise report an acceleration that would throw anything
         // that ever reads it through a bulkhead.
         const double Tau = FMath::Max(Limits.DriveTau, UE_DOUBLE_SMALL_NUMBER);
-        const double DriveSpeed = Command.Throttle * FMath::Max(Limits.MaxSpeed, GetDriveRoom() / Tau);
-        Velocity = Orientation.GetForwardVector() * DriveSpeed;
+        const double RoomRate = GetDriveRoom() / Tau;
+        Velocity = Orientation.GetForwardVector() * (Command.Throttle * FMath::Max(Limits.MaxSpeed, RoomRate));
+
+        const double Closing = -(Velocity | DriveAwayFromSurface);
+        const double MayClose = FMath::Abs(Command.Throttle) * RoomRate;
+        if (Closing > MayClose)
+        {
+            Velocity *= MayClose / Closing;
+        }
         LastLinearAcceleration = FVector::ZeroVector;
         Position += Velocity * FixedDelta;
         return;
@@ -202,4 +220,17 @@ void FShipFlightState::SetUniverseTransform(const FUniversePosition& NewPosition
 {
     Position = NewPosition.Normalised();
     Orientation = NewOrientation.GetNormalized();
+}
+
+FVector ShipDrive::AwayFromSurface(TFunctionRef<double(const FUniversePosition&)> SurfaceDistance,
+                                   const FUniversePosition& Where)
+{
+    FVector Gradient = FVector::ZeroVector;
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        FVector Probe = FVector::ZeroVector;
+        Probe[Axis] = SurfaceProbeCm;
+        Gradient[Axis] = SurfaceDistance(Where + Probe) - SurfaceDistance(Where + (-Probe));
+    }
+    return Gradient.GetSafeNormal();
 }

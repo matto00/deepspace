@@ -82,6 +82,21 @@ bool FShipNavStateTest::RunTest(const FString& Parameters)
                   StepFor(Nav, 60.0, 0.999, Aligned).Began, 0);
     }
 
+    // The word and the fire decision change at the same charge, full: a
+    // screen that said JUMP READY while the fold refused to open would be
+    // the word and the state machine disagreeing about the one thing the
+    // player is waiting for.
+    {
+        FShipNavState Nav;
+        Nav.Plot(Kessa);
+        Nav.SetEngaged(true);
+        const double NearlyFull = 1.0 - 1e-9;
+        TestEqual(TEXT("a hair below full is still Winding"), Nav.GetJumpState(NearlyFull), EJumpState::Winding);
+        TestEqual(TEXT("and does not fire, aligned"), Nav.Step(Frame, NearlyFull, Aligned, Tuning), ENavEvent::None);
+        TestEqual(TEXT("full is Ready"), Nav.GetJumpState(Charged), EJumpState::Ready);
+        TestEqual(TEXT("and fires on that step"), Nav.Step(Frame, Charged, Aligned, Tuning), ENavEvent::TransitBegan);
+    }
+
     // Charged and misaligned, it holds at ready for as long as it takes.
     // Nothing escalates: ten minutes on, it is exactly where it was.
     {

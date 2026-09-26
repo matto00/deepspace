@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/Function.h"
 #include "Universe/UniversePosition.h"
 
 /**
@@ -32,9 +33,16 @@ struct DEEPSPACE_API FShipFlightLimits
      */
     double DriveTau = 15.0;
 
-    /** Where the drive's room runs out, cm above the nearest surface: 100 km.
-     *  Below it the drive hands back to cruise, so it cannot be flown into a
-     *  planet, and 200 m/s is the edge of landing's regime. */
+    /**
+     * Where the drive's room runs out, cm above the nearest surface: 100 km.
+     * The drive settles onto it and stops there: as the room runs out, so
+     * does the speed at which it may close, so a lever left on toward a world
+     * -- or toward the star a jump arrived at -- parks the ship 100 km up and
+     * holds it there however long nobody is at the helm. Cruise speed is
+     * still there for any heading that does not close, so at the floor the
+     * ship can still turn along the surface or away from it at 200 m/s, the
+     * edge of landing's regime.
+     */
     double DriveFloor = 1.0e7;
 
     static FShipFlightLimits Cruise();
@@ -86,20 +94,28 @@ public:
     void ReleaseAttitude();
 
     /**
-     * The drive's input: the distance to the nearest surface, cm, which the
+     * The drive's input: the distance to the nearest surface, cm, and the
+     * universe-frame direction in which that distance grows, which the
      * subsystem reads once a frame from LocalSystem::NearestSurfaceDistance
-     * (0 in transit, so the drive gives only cruise). An input like the
-     * command, not something the flight state works out: it knows nothing of
-     * what is out there.
+     * and ShipDrive::AwayFromSurface. An input like the command, not
+     * something the flight state works out: it knows nothing of what is out
+     * there.
+     *
+     * The direction is what lets the drive tell closing from leaving: it
+     * may close on the surface no faster than the room over tau, and leave
+     * it as fast as it likes. A zero direction means nothing to close with
+     * -- transit, where the subsystem passes 0 and zero, or an empty sky --
+     * and the drive is then cruise along the nose.
      *
      * Read once a frame while the state substeps at 120 Hz. At full throttle
      * a 60 Hz frame closes 0.1% of the room, and even the two-second catch-up
      * cap closes 13%, so a stale room cannot carry the ship through a floor.
      */
-    void SetDriveRoom(double NearestSurfaceDistanceCm);
+    void SetDriveRoom(double NearestSurfaceDistanceCm, const FVector& AwayFromSurface);
 
     /** Room the drive has left to close, cm: the nearest surface less
-     *  DriveFloor, never negative. 0 means the drive is at cruise speed. */
+     *  DriveFloor, never negative. 0 means the ship is at the floor, where
+     *  the drive closes no further. */
     double GetDriveRoom() const;
 
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
@@ -181,8 +197,10 @@ private:
 
     double JumpCharge = 0.0;
 
-    /** Last nearest-surface distance the subsystem reported, cm. */
+    /** Last nearest-surface distance the subsystem reported, cm, and the
+     *  unit direction it grows in (zero: nothing to close with). */
     double DriveSurfaceDistance = 0.0;
+    FVector DriveAwayFromSurface = FVector::ZeroVector;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;
@@ -201,3 +219,26 @@ public:
      */
     static constexpr int32 MaxSubStepsPerCall = 256;
 };
+
+namespace ShipDrive
+{
+    /** How far either side of the ship AwayFromSurface probes, cm: 1 km.
+     *  Far below any distance the drive cares about -- the floor is a
+     *  hundred times it -- and far above the few centimetres of rounding in
+     *  a distance measured a quarter of a light year from the star. */
+    inline constexpr double SurfaceProbeCm = 1.0e5;
+
+    /**
+     * The direction in which a surface distance grows at Where, universe
+     * frame, unit length: its gradient, by central differences one probe
+     * either side on each axis. For a sphere it is the outward normal; for
+     * the system's edge it points at the star. Zero where the distance is
+     * flat -- an empty sky, or deep inside a body where it reads 0 -- which
+     * is what SetDriveRoom takes as nothing to close with.
+     *
+     * Pure: the subsystem passes LocalSystem::NearestSurfaceDistance on the
+     * system it read this frame, so the six probes regenerate nothing.
+     */
+    DEEPSPACE_API FVector AwayFromSurface(TFunctionRef<double(const FUniversePosition&)> SurfaceDistance,
+                                          const FUniversePosition& Where);
+}

@@ -202,9 +202,23 @@ namespace
         FUniversePosition Centre;
         double RadiusCm = 0.0;
 
+        double SurfaceDistance(const FUniversePosition& Where) const
+        {
+            return Where.DistanceTo(Centre) - RadiusCm;
+        }
+
         double SurfaceDistance(const FShipFlightState& State) const
         {
-            return State.GetUniversePosition().DistanceTo(Centre) - RadiusCm;
+            return SurfaceDistance(State.GetUniversePosition());
+        }
+
+        /** What the subsystem does before each step: the distance, and the
+         *  direction it grows in, found the way the subsystem finds it. */
+        void Feed(FShipFlightState& State) const
+        {
+            const FUniversePosition Where = State.GetUniversePosition();
+            State.SetDriveRoom(SurfaceDistance(Where), ShipDrive::AwayFromSurface(
+                [this](const FUniversePosition& At) { return SurfaceDistance(At); }, Where));
         }
     };
 
@@ -215,10 +229,10 @@ namespace
         const int32 Frames = FMath::RoundToInt32(Elapsed / FrameDelta);
         for (int32 Frame = 0; Frame < Frames; ++Frame)
         {
-            State.SetDriveRoom(Target.SurfaceDistance(State));
+            Target.Feed(State);
             State.Step(FrameDelta);
         }
-        State.SetDriveRoom(Target.SurfaceDistance(State));
+        Target.Feed(State);
     }
 
     FShipFlightCommand DriveCommand(double Throttle, const FVector& AttitudeRate = FVector::ZeroVector)
@@ -248,7 +262,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     {
         FShipFlightState State;
         State.SetCommand(DriveCommand(1.0));
-        State.SetDriveRoom(Earth.SurfaceDistance(State));
+        Earth.Feed(State);
         const double Start = State.GetDriveRoom();
         TestEqual(TEXT("room is the surface distance less the floor"), Start,
                   Earth.SurfaceDistance(State) - State.GetLimits().DriveFloor);
@@ -268,36 +282,122 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
                   State.GetLinearAcceleration().Size(), 0.0);
     }
 
-    // The room never goes below 0, and out of room the drive is cruise: it
-    // hands back at the floor and goes no nearer than cruise speed allows.
+    // The room never goes below 0, and the drive settles onto the floor and
+    // stops there. This is the lever left on while the player is in the
+    // galley: ten minutes later the ship is 100 km up and holding, not
+    // cruising into the world or through it.
     {
         FShipFlightState State;
         const double Floor = State.GetLimits().DriveFloor;
-        State.SetDriveRoom(Floor * 0.5);
+        State.SetDriveRoom(Floor * 0.5, -FVector::ForwardVector);
         TestEqual(TEXT("below the floor there is no room"), State.GetDriveRoom(), 0.0);
-        State.SetDriveRoom(-1.0e9);
+        State.SetDriveRoom(-1.0e9, -FVector::ForwardVector);
         TestEqual(TEXT("inside a body there is no room"), State.GetDriveRoom(), 0.0);
 
         FDriveTarget Low = Earth;
         Low.Centre = FUniversePosition(FVector(Earth.RadiusCm + Floor + 1000.0 * UniverseUnits::CmPerKm, 0.0, 0.0));
         State.SetCommand(DriveCommand(1.0));
 
-        double Fastest = 0.0;
-        const int32 Frames = 150 * 60;
-        for (int32 Frame = 0; Frame < Frames; ++Frame)
+        double Lowest = Low.SurfaceDistance(State);
+        for (int32 Frame = 0; Frame < 10 * 60 * 60; ++Frame)
         {
-            State.SetDriveRoom(Low.SurfaceDistance(State));
+            Low.Feed(State);
             State.Step(1.0 / 60.0);
-            if (State.GetDriveRoom() <= 0.0)
-            {
-                Fastest = FMath::Max(Fastest, State.GetSpeed());
-            }
+            Lowest = FMath::Min(Lowest, Low.SurfaceDistance(State));
         }
-        TestTrue(TEXT("the ship reached the floor"), State.GetDriveRoom() <= 0.0);
-        TestTrue(TEXT("at the floor the drive is cruise and no faster"),
-                 Fastest <= State.GetLimits().MaxSpeed * (1.0 + 1e-9));
-        TestTrue(TEXT("and still cruise, not stopped"),
+        TestTrue(TEXT("ten minutes pointed at a world never takes the ship below the floor"),
+                 Lowest >= Floor - 1.0);
+        TestTrue(TEXT("it has settled onto the floor, to a metre"), Low.SurfaceDistance(State) - Floor <= 100.0);
+        TestTrue(TEXT("and stopped there: under a millimetre a second"), State.GetSpeed() < 0.1);
+        TestTrue(TEXT("still engaged: the lever is where it was left"), State.GetCommand().bDrive);
+    }
+
+    // Near the floor the drive is slower than cruise if it closes, and at
+    // least cruise if it does not: at the floor the ship can still leave.
+    {
+        const double Floor = FShipFlightLimits::Cruise().DriveFloor;
+        FDriveTarget Below = Earth;
+        Below.Centre = FUniversePosition(FVector(0.0, 0.0, -(Earth.RadiusCm + Floor)));
+
+        FShipFlightState Leaving;
+        Leaving.SetUniverseTransform(FUniversePosition(), FQuat(FVector::RightVector, -UE_DOUBLE_HALF_PI));
+        Leaving.SetCommand(DriveCommand(1.0));
+        TestTrue(TEXT("nose up is away from a world below"),
+                 Leaving.GetUniverseOrientation().GetForwardVector().Equals(FVector::UpVector, 1e-9));
+        Below.Feed(Leaving);
+        Leaving.Step(1.0 / 60.0);
+        TestTrue(TEXT("at the floor, pointed away, the drive leaves at cruise"),
+                 FMath::IsNearlyEqual(Leaving.GetSpeed(), Leaving.GetLimits().MaxSpeed, 1e-6));
+        DriveFor(Leaving, Below, 60.0);
+        TestTrue(TEXT("and is faster than cruise once there is room behind it"),
+                 Leaving.GetSpeed() > 2.0 * Leaving.GetLimits().MaxSpeed);
+
+        FShipFlightState Skimming;
+        Skimming.SetCommand(DriveCommand(1.0));
+        Below.Feed(Skimming);
+        Skimming.Step(1.0 / 60.0);
+        TestTrue(TEXT("at the floor, along the surface, the drive is cruise"),
+                 FMath::IsNearlyEqual(Skimming.GetSpeed(), Skimming.GetLimits().MaxSpeed, 1e-6));
+        TestTrue(TEXT("along the nose"), Skimming.GetVelocity().GetSafeNormal().Equals(FVector::ForwardVector, 1e-12));
+
+        FShipFlightState Diving;
+        Diving.SetUniverseTransform(FUniversePosition(), FQuat(FVector::RightVector, UE_DOUBLE_HALF_PI));
+        Diving.SetCommand(DriveCommand(1.0));
+        Below.Feed(Diving);
+        Diving.Step(1.0 / 60.0);
+        TestEqual(TEXT("at the floor, pointed at the world, the drive closes not at all"), Diving.GetSpeed(), 0.0);
+
+        // Reversing on the drive closes no faster than going forward does.
+        FShipFlightState Backing;
+        Backing.SetUniverseTransform(FUniversePosition(), FQuat(FVector::RightVector, -UE_DOUBLE_HALF_PI));
+        Backing.SetCommand(DriveCommand(-1.0));
+        Below.Feed(Backing);
+        Backing.Step(1.0 / 60.0);
+        TestEqual(TEXT("nor does backing into it"), Backing.GetSpeed(), 0.0);
+    }
+
+    // The jump arrives with the drive still on (the plan keeps it a lever),
+    // so the new star is closed on: it too is a surface with a floor. An
+    // M dwarf met at 0.24 AU, left for half an hour.
+    {
+        FDriveTarget Dwarf;
+        Dwarf.RadiusCm = 0.2 * UniverseUnits::CmPerSolarRadius;
+        Dwarf.Centre = FUniversePosition(FVector(0.24 * UniverseUnits::CmPerAU, 0.0, 0.0));
+
+        FShipFlightState State;
+        State.SetCommand(DriveCommand(1.0));
+        DriveFor(State, Dwarf, 30.0 * 60.0);
+        TestTrue(TEXT("an arrival left on the drive parks above the star, never in it"),
+                 Dwarf.SurfaceDistance(State) >= State.GetLimits().DriveFloor - 1.0);
+        TestTrue(TEXT("and holds there"), State.GetSpeed() < 0.1);
+    }
+
+    // With nothing to close on -- transit, or an empty sky -- the drive is
+    // cruise along the nose.
+    {
+        FShipFlightState State;
+        State.SetCommand(DriveCommand(1.0));
+        State.SetDriveRoom(0.0, FVector::ZeroVector);
+        State.Step(1.0);
+        TestTrue(TEXT("in transit the drive is cruise"),
                  FMath::IsNearlyEqual(State.GetSpeed(), State.GetLimits().MaxSpeed, 1e-6));
+    }
+
+    // AwayFromSurface is the gradient: the outward normal of a sphere, even a
+    // light year out, and zero where the distance is flat.
+    {
+        const FUniversePosition Far(FInt64Vector(812345, -40211, 17), FVector(1.7e13, 3.1e12, 9.0e11));
+        FDriveTarget World;
+        World.Centre = Far;
+        World.RadiusCm = UniverseUnits::CmPerEarthRadius;
+        const FVector Out = FVector(0.3, -0.8, 0.52).GetSafeNormal();
+        const FUniversePosition Ship = Far + Out * (World.RadiusCm + 5.0e7);
+        const FVector Away = ShipDrive::AwayFromSurface(
+            [&World](const FUniversePosition& At) { return World.SurfaceDistance(At); }, Ship);
+        TestTrue(TEXT("away from a sphere is its outward normal"), Away.Equals(Out, 1e-6));
+
+        const FVector Flat = ShipDrive::AwayFromSurface([](const FUniversePosition&) { return 0.0; }, Ship);
+        TestTrue(TEXT("a flat distance has no direction"), Flat.IsZero());
     }
 
     // The drive never touches attitude: the pilot steers throughout, exactly
@@ -329,7 +429,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     {
         FShipFlightState State;
         State.SetCommand(DriveCommand(0.5));
-        State.SetDriveRoom(Earth.SurfaceDistance(State));
+        Earth.Feed(State);
         const double Start = State.GetDriveRoom();
         DriveFor(State, Earth, 2.0 * State.GetLimits().DriveTau);
         TestTrue(TEXT("half throttle takes twice DriveTau to close by e"),
@@ -347,7 +447,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         FShipFlightState State;
         State.SetLimits(Starved);
         State.SetCommand(DriveCommand(1.0));
-        State.SetDriveRoom(Earth.SurfaceDistance(State));
+        Earth.Feed(State);
         const double Start = State.GetDriveRoom();
 
         const double RatedTau = FShipFlightLimits::Cruise().DriveTau;
@@ -392,7 +492,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         FShipFlightState Without;
         WithRoom.SetCommand(Command);
         Without.SetCommand(Command);
-        WithRoom.SetDriveRoom(UniverseUnits::CmPerAU);
+        WithRoom.SetDriveRoom(UniverseUnits::CmPerAU, -FVector::ForwardVector);
         WithRoom.Step(2.03125);
         Without.Step(2.03125);
         TestTrue(TEXT("drive off, the room changes nothing"),
