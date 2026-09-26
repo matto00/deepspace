@@ -10,6 +10,7 @@
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
@@ -149,7 +150,6 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
 
         const TArray<FSkyStar> Expected = SkyStarfield::Generate(
             LocalSystem::StarfieldSeed(World, static_cast<uint64>(Dome->StarSeed)), 3000);
-        const double Gamma = FSkyViewParams().FluxGamma;
         const double MeshDiameter = 2.0 * Sphere->GetBounds().BoxExtent.GetMax();
         const double Diameter = Dome->DistantStarPixels * Dome->GetPixelAngle() * Dome->DistantStarRadius;
 
@@ -169,13 +169,12 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             bColoured &= FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataRed], Colour.R, 1e-6f)
                 && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataGreen], Colour.G, 1e-6f)
                 && FMath::IsNearlyEqual(Data[SkyMaterial::CustomDataBlue], Colour.B, 1e-6f);
-            bCompressed &= FMath::IsNearlyEqual(static_cast<double>(Data[SkyMaterial::CustomDataBrightness]),
-                                                SkyProjection::Compress(Expected[Index].Flux, Gamma), 1e-5);
+            bCompressed &= Data[SkyMaterial::CustomDataBrightness] == AShipSky::PointStarBrightness(Expected[Index].Flux);
         }
         TestTrue(TEXT("each star is where the universe's starfield puts it"), bWhereTheGalaxyPutsThem);
         TestTrue(TEXT("each is two pixels across at the dome"), bTwoPixels);
         TestTrue(TEXT("coloured by its blackbody"), bColoured);
-        TestTrue(TEXT("and as bright as its compressed flux"), bCompressed);
+        TestTrue(TEXT("and as bright as the sky draws a point of its flux"), bCompressed);
         Dome->Destroy();
     }
 

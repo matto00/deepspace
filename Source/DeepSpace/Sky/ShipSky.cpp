@@ -585,6 +585,7 @@ double AShipSky::GetDomeRadius() const
 }
 
 const FSkyFrame& AShipSky::GetLastFrame() const { return LastFrame; }
+int32 AShipSky::GetBuiltForSerial() const { return BuiltForSerial; }
 int32 AShipSky::GetProxyCount() const { return Proxies.Num(); }
 UStaticMeshComponent* AShipSky::GetProxy(int32 Index) const { return Proxies.IsValidIndex(Index) ? Proxies[Index].Get() : nullptr; }
 UDirectionalLightComponent* AShipSky::GetSun() const { return Sun; }

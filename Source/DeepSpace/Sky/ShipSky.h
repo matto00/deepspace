@@ -105,6 +105,11 @@ public:
     /** The last projection DrawFrom made. For tests. */
     const FSkyFrame& GetLastFrame() const;
 
+    /** The jump serial the proxies were last built for; INDEX_NONE before
+     *  the first SyncToShip. A cache key, never an answer: for tests, which
+     *  must see the sky rebuild on arrival rather than infer it. */
+    int32 GetBuiltForSerial() const;
+
     int32 GetProxyCount() const;
     UStaticMeshComponent* GetProxy(int32 Index) const;
     UDirectionalLightComponent* GetSun() const;

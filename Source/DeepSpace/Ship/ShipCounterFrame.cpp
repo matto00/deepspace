@@ -11,6 +11,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
@@ -99,16 +100,20 @@ namespace
         return Base && Base->GetPathName() == Path;
     }
 
-    /** The sky's flux exponent, read at use if the sky has registered it, so
-     *  the background and the bodies are compressed alike; the projection's
-     *  own default otherwise. */
-    double FluxGamma()
+    /**
+     * Nothing outside the hull may light the inside or be seen in it, except
+     * the one sun (sky decision 5). Reflection and sky-light captures would
+     * otherwise bake the dome, the motes and the marker into the cockpit's
+     * surfaces as a faint glow nobody placed there -- the sky's proxies and
+     * neighbours are already kept out the same way.
+     */
+    void KeepOutOfTheInterior(UPrimitiveComponent* Component)
     {
-        if (const IConsoleVariable* Gamma = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.FluxGamma")))
-        {
-            return Gamma->GetFloat();
-        }
-        return FSkyViewParams().FluxGamma;
+        Component->bAffectDynamicIndirectLighting = false;
+        Component->bAffectDistanceFieldLighting = false;
+        Component->bVisibleInRayTracing = false;
+        Component->bVisibleInReflectionCaptures = false;
+        Component->bVisibleInRealTimeSkyCaptures = false;
     }
 }
 
@@ -136,6 +141,7 @@ AShipCounterFrame::AShipCounterFrame()
         Layer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         Layer->SetCastShadow(false);
         Layer->bNeverDistanceCull = true;
+        KeepOutOfTheInterior(Layer);
     }
 }
 
@@ -235,10 +241,12 @@ void AShipCounterFrame::BuildDistantStars(double PixelAngle)
                                /*bUpdateNavigation*/ false);
 
     // Only ever points, with no surface to keep honest: their brightness is
-    // their flux compressed as the sky compresses everything's, and their
-    // colour the one blackbody. One material and one draw call for all of
-    // them, reading these four floats.
-    const double Gamma = FluxGamma();
+    // the sky's own point brightness of their flux, and their colour the one
+    // blackbody. Through AShipSky::PointStarBrightness and nothing else, so a
+    // neighbour and a background star of the same flux are the same point:
+    // a destination is found in the backdrop, never lost in it or shouting
+    // over it. One material and one draw call for all of them, reading these
+    // four floats.
     float Data[SkyMaterial::StarfieldCustomData];
     for (int32 Index = 0; Index < Stars.Num(); ++Index)
     {
@@ -246,11 +254,13 @@ void AShipCounterFrame::BuildDistantStars(double PixelAngle)
         Data[SkyMaterial::CustomDataRed] = Colour.R;
         Data[SkyMaterial::CustomDataGreen] = Colour.G;
         Data[SkyMaterial::CustomDataBlue] = Colour.B;
-        Data[SkyMaterial::CustomDataBrightness] = static_cast<float>(SkyProjection::Compress(Stars[Index].Flux, Gamma));
+        Data[SkyMaterial::CustomDataBrightness] = AShipSky::PointStarBrightness(Stars[Index].Flux);
         DistantStars->SetCustomData(Index, Data, /*bMarkRenderStateDirty*/ false);
     }
     DistantStars->MarkRenderStateDirty();
     SizedForPixelAngle = PixelAngle;
+    BrightenedFaintest = AShipSky::PointStarBrightness(1.0);
+    BrightenedBrightest = AShipSky::PointStarBrightness(SkyStarfield::MaxFlux);
 }
 
 void AShipCounterFrame::ScatterNearField()
@@ -317,6 +327,13 @@ void AShipCounterFrame::SyncToShip()
     if (SizedForPixelAngle <= 0.0 || FMath::Abs(PixelAngle / SizedForPixelAngle - 1.0) > 0.05)
     {
         BuildDistantStars(PixelAngle);
+    }
+    else if (AShipSky::PointStarBrightness(1.0) != BrightenedFaintest
+             || AShipSky::PointStarBrightness(SkyStarfield::MaxFlux) != BrightenedBrightest)
+    {
+        // A tuning CVar moved: the dome must follow it the frame the
+        // neighbours do, or a playtest compares one against the other stale.
+        BuildDistantStars(SizedForPixelAngle);
     }
 
     // The streaks: each mote stretched along the ship's forward, most at the
@@ -422,6 +439,7 @@ void AShipCounterFrame::SyncCourseMarker(const UShipSubsystem& Ship, double Pixe
         CourseMarker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         CourseMarker->SetCastShadow(false);
         CourseMarker->bNeverDistanceCull = true;
+        KeepOutOfTheInterior(CourseMarker);
         CourseMarker->SetupAttachment(Root);
         CourseMarker->RegisterComponent();
 

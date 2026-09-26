@@ -177,6 +177,13 @@ private:
     /** The pixel angle the distant stars were last sized for; 0 for never. */
     double SizedForPixelAngle = 0.0;
 
+    /** What AShipSky::PointStarBrightness answered for the faintest and the
+     *  brightest star when the dome was last written: a cache key, so that
+     *  moving ds.Sky.FluxGamma, StarfieldFaint or Radiance in play re-lights
+     *  the dome as it re-lights the neighbours, and nothing else does. */
+    float BrightenedFaintest = -1.0f;
+    float BrightenedBrightest = -1.0f;
+
     /** A runtime copy of the motes' material, whose Brightness the fade
      *  drives; null until the first sync finds a material to copy. */
     UPROPERTY(Transient)
