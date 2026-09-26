@@ -189,7 +189,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     AShipCounterFrame* Frame = Test.Frame;
     const FSystemId Home = Test.Universe->GetStartSystem();
 
-    const UShipDressingSubsystem* Dressing = Test.World->GetSubsystem<UShipDressingSubsystem>();
+    UShipDressingSubsystem* Dressing = Test.World->GetSubsystem<UShipDressingSubsystem>();
     const TMap<FString, TArray<FTransform>> Dressed = HaulerDressingMarkers::Drawing(Dressing ? Dressing->GetClutter() : nullptr);
     TestTrue(FString::Printf(TEXT("the ship is dressed when play begins (%d instances)"), Dressing ? Dressing->GetInstanceCount() : 0),
              Dressing && Dressing->GetInstanceCount() > 0);
@@ -337,10 +337,19 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("the galaxy behind it all has not moved"), bGalaxyStill);
 
-    // Nothing aboard changed for the jump: no mess accumulated, nothing
-    // moved, nothing to tidy (the anti-chore principle, kept by a dressing
-    // that never ticks).
-    TestTrue(TEXT("and the ship arrives dressed exactly as it left"),
+    // Nothing aboard belongs to where the ship is. The dressing is drawn
+    // from the ship's markers and the universe's root, never from the system
+    // it arrives in or how many jumps it took, so dressed again here -- as
+    // ds.Dress.* redresses, and as the runtime ship generator one day will --
+    // it is the ship that left: no new mess per port, nothing to tidy however
+    // far it goes (the anti-chore principle). Asked by redressing, because a
+    // dressing that never ticks cannot change by itself, and a check that it
+    // had not would be a check of nothing.
+    if (Dressing)
+    {
+        Dressing->Redress();
+    }
+    TestTrue(TEXT("and dressed again where it arrived, the ship is dressed exactly as it left"),
              !Dressed.IsEmpty() && Dressing && HaulerDressingMarkers::SameDrawing(Dressed, HaulerDressingMarkers::Drawing(Dressing->GetClutter())));
     return true;
 }
