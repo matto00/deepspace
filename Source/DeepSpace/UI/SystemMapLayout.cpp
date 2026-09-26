@@ -21,7 +21,7 @@ namespace
 
 double SystemMap::MinRingGap(const FMapPixels& Pixels)
 {
-    return FMath::FloorToDouble((Pixels.RimPx - Pixels.StarPx) / FMath::Max(Pixels.MaxPlanets, 1));
+    return FMath::FloorToDouble((Pixels.RimPx - Pixels.StarPx) / (FMath::Max(Pixels.MaxPlanets, 0) + 1));
 }
 
 double SystemMap::FMapScale::RadiusPx(double DistanceAU) const
@@ -86,10 +86,13 @@ SystemMap::FMapScale SystemMap::Fit(const FStarSystem& System, double StandoffAU
 
     // 4. The warp. Outward, each ring at least a gap past the one inside it
     // (the first, a gap past the star's edge); then inward, the outermost
-    // held to the rim and each ring at least a gap inside the one outside
-    // it. MinRingGap is derived so that the inward pass can never push the
-    // first ring into the star, which is why this is two passes and not a
-    // proportional squeeze: that would break the very gap it exists to keep.
+    // held a gap inside the rim and each ring at least a gap inside the one
+    // outside it. The rim is a neighbour like the star's edge: the segment
+    // between the outermost orbit and the rim is where the arrival is drawn,
+    // and a ship coming in must be seen to move across it. MinRingGap is
+    // derived so that the inward pass can never push the first ring into
+    // the star, which is why this is two passes and not a proportional
+    // squeeze: that would break the very gap it exists to keep.
     for (int32 Ring = 0; Ring < Worlds; ++Ring)
     {
         const double Floor = Ring == 0 ? Pixels.StarPx + Gap : Rings[Ring - 1] + Gap;
@@ -97,7 +100,7 @@ SystemMap::FMapScale SystemMap::Fit(const FStarSystem& System, double StandoffAU
     }
     for (int32 Ring = Worlds - 1; Ring >= 0; --Ring)
     {
-        const double Ceiling = Ring == Worlds - 1 ? Pixels.RimPx : Rings[Ring + 1] - Gap;
+        const double Ceiling = Ring == Worlds - 1 ? Pixels.RimPx - Gap : Rings[Ring + 1] - Gap;
         Rings[Ring] = FMath::Min(Rings[Ring], Ceiling);
     }
 
@@ -171,10 +174,14 @@ SystemMap::FMapLayout SystemMap::Layout(const FStarSystem& System, const FMapSca
         Dot.Outward = PanelDirection(Offset.X, Offset.Y);
         Dot.Centre = Scale.Pixels.Centre + Dot.Outward * Dot.RingPx;
 
-        // The room either side. The rim is not a neighbour: nothing is drawn
-        // there, and the 12 px outside it are for the outermost numeral.
+        // The room either side: the next ring, or the star's edge inward and
+        // the rim outward. The rim is a neighbour because the arrival is
+        // drawn between it and the outermost ring, and the ship's glyph
+        // there must not sit on the outermost dot. The warp keeps it at
+        // least a gap away, so this never shrinks a dot the ring inside it
+        // would not.
         const double Inward = Dot.RingPx - (Orbit == 0 ? Scale.Pixels.StarPx : Scale.RingPx[Orbit - 1]);
-        const double Outward = Orbit + 1 < Worlds ? Scale.RingPx[Orbit + 1] - Dot.RingPx : Inward;
+        const double Outward = (Orbit + 1 < Worlds ? Scale.RingPx[Orbit + 1] : Scale.Pixels.RimPx) - Dot.RingPx;
         Dot.GapPx = FMath::Min(Inward, Outward);
 
         const double Base = Planet.Kind == EPlanetKind::GasGiant ? GiantDotPx : RockDotPx;

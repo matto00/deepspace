@@ -72,7 +72,10 @@ namespace SystemMapLayoutTestLocal
         return Rings;
     }
 
-    /** Every drawing invariant decision 3 promises, for one system. */
+    /** Every drawing invariant decision 3 promises, for one system. The
+     *  room each dot is capped against is worked out here from the rings
+     *  alone, never read back from the dot: a gap the code got wrong must
+     *  not be the yardstick it is measured with. */
     bool Fits(FAutomationTestBase& Test, const FStarSystem& System, const TCHAR* What)
     {
         const FMapScale Scale = Fit(System, NavStart::DefaultStandoffAU);
@@ -81,25 +84,63 @@ namespace SystemMapLayoutTestLocal
         constexpr double Slack = 1.0e-9;
         bool bOk = Test.TestEqual(FString::Printf(TEXT("%s: one ring per world"), What), Scale.RingPx.Num(), System.Planets.Num());
         bOk &= Test.TestEqual(FString::Printf(TEXT("%s: one dot per world"), What), Drawn.Dots.Num(), System.Planets.Num());
-        for (int32 Ring = 0; bOk && Ring < Scale.RingPx.Num(); ++Ring)
+        const int32 Worlds = Scale.RingPx.Num();
+        for (int32 Ring = 0; bOk && Ring < Worlds; ++Ring)
         {
             const double Inner = Ring == 0 ? Scale.Pixels.StarPx : Scale.RingPx[Ring - 1];
+            const double Outer = Ring + 1 < Worlds ? Scale.RingPx[Ring + 1] : Scale.Pixels.RimPx;
             bOk &= Test.TestTrue(FString::Printf(TEXT("%s: ring %d is at least a gap outside what is inside it (%.3f px)"),
                 What, Ring, Scale.RingPx[Ring] - Inner), Scale.RingPx[Ring] - Inner >= Gap - Slack);
-            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: ring %d is inside the rim"), What, Ring),
-                Scale.RingPx[Ring] <= Scale.Pixels.RimPx + Slack);
+            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: ring %d is at least a gap inside what is outside it, the rim included (%.3f px)"),
+                What, Ring, Outer - Scale.RingPx[Ring]), Outer - Scale.RingPx[Ring] >= Gap - Slack);
 
+            // The spec's local gap: to the ring, star edge or rim either side.
+            const double Room = FMath::Min(Scale.RingPx[Ring] - Inner, Outer - Scale.RingPx[Ring]);
             const FMapDot& Dot = Drawn.Dots[Ring];
             bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dot %d is on its ring"), What, Ring),
                 FMath::IsNearlyEqual(FVector2D::Distance(Dot.Centre, Scale.Pixels.Centre), Scale.RingPx[Ring], 1.0e-6));
-            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dot %d is drawn, and within its local gap less 2 px"), What, Ring),
-                Dot.SizePx > 0.0 && Dot.SizePx <= Dot.GapPx - DotClearancePx + Slack);
-            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dot %d's target ring is round it, and within twice its gap less 2 px"), What, Ring),
-                Dot.TargetRingPx > Dot.SizePx && Dot.TargetRingPx <= 2.0 * Dot.GapPx - DotClearancePx + Slack);
+            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dot %d is drawn, and within its local gap less 2 px (%.2f in %.2f)"),
+                What, Ring, Dot.SizePx, Room), Dot.SizePx > 0.0 && Dot.SizePx <= Room - DotClearancePx + Slack);
+            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dot %d's target ring is round it, and within twice its gap less 2 px (%.2f in %.2f)"),
+                What, Ring, Dot.TargetRingPx, Room), Dot.TargetRingPx > Dot.SizePx && Dot.TargetRingPx <= 2.0 * Room - DotClearancePx + Slack);
+            if (Ring + 1 < Worlds)
+            {
+                // Two neighbours at the same azimuth, the closest they can be.
+                const double Between = Scale.RingPx[Ring + 1] - Scale.RingPx[Ring]
+                    - 0.5 * (Dot.SizePx + Drawn.Dots[Ring + 1].SizePx);
+                bOk &= Test.TestTrue(FString::Printf(TEXT("%s: dots %d and %d never touch, even in line (%.2f px apart)"),
+                    What, Ring, Ring + 1, Between), Between >= DotClearancePx - Slack);
+            }
         }
-        const double ArrivalPx = Scale.RadiusPx(NavStart::ArrivalStandoffAU(System, NavStart::DefaultStandoffAU));
-        bOk &= Test.TestTrue(FString::Printf(TEXT("%s: the arrival standoff is on the map"), What),
-            ArrivalPx <= Scale.Pixels.RimPx && (Scale.RingPx.IsEmpty() || ArrivalPx >= Scale.RingPx.Last()));
+
+        // The arrival is drawn clear of the outermost ring, by more than
+        // the ship's glyph is wide, and a ship coming in from it moves on
+        // the map every step of the way to the outermost orbit.
+        const double ArrivalAU = NavStart::ArrivalStandoffAU(System, NavStart::DefaultStandoffAU);
+        const double ArrivalPx = Scale.RadiusPx(ArrivalAU);
+        const double LastPx = Scale.RingPx.IsEmpty() ? Scale.Pixels.StarPx : Scale.RingPx.Last();
+        bOk &= Test.TestTrue(FString::Printf(TEXT("%s: the arrival standoff is inside the rim (%.2f px)"), What, ArrivalPx),
+            ArrivalPx < Scale.Pixels.RimPx);
+        if (!System.Planets.IsEmpty())
+        {
+            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: the arrival is drawn its glyph's radius clear of the outermost ring (%.2f px)"),
+                What, ArrivalPx - LastPx), ArrivalPx - LastPx >= 0.5 * ShipRingPx - Slack);
+
+            const double OutermostAU = System.Planets.Last().SemiMajorAxisAU;
+            const FVector Out = FVector(0.6, -0.8, 0.0);
+            double Previous = TNumericLimits<double>::Max();
+            bool bMoves = true;
+            constexpr int32 Steps = 16;
+            for (int32 Step = 0; Step <= Steps; ++Step)
+            {
+                const double AU = FMath::Lerp(ArrivalAU, OutermostAU, static_cast<double>(Step) / Steps);
+                const double Px = FVector2D::Distance(
+                    Ship(Scale, Scale.Star + Out * AU * UniverseUnits::CmPerAU, FQuat::Identity).Centre, Scale.Pixels.Centre);
+                bMoves &= Px < Previous;
+                Previous = Px;
+            }
+            bOk &= Test.TestTrue(FString::Printf(TEXT("%s: coming in from the arrival, the ship moves inward on the map at every step"), What), bMoves);
+        }
         return bOk;
     }
 
@@ -236,8 +277,8 @@ bool FSystemMapWarpTest::RunTest(const FString& Parameters)
         }
         TestTrue(TEXT("pushed outward only, the outermost would be past the rim (or this proves nothing)"),
                  Pushed > Scale.Pixels.RimPx);
-        TestTrue(TEXT("the second pass puts the outermost on the rim"),
-                 FMath::IsNearlyEqual(Scale.RingPx.Last(), Scale.Pixels.RimPx, 1.0e-9));
+        TestTrue(TEXT("the second pass puts the outermost a gap inside the rim, not on it"),
+                 FMath::IsNearlyEqual(Scale.RingPx.Last(), Scale.Pixels.RimPx - Gap, 1.0e-9));
         Fits(*this, System, TEXT("crowded against the rim"));
     }
     return true;
@@ -254,9 +295,9 @@ bool FSystemMapTwelveWorldsFitTest::RunTest(const FString& Parameters)
     using namespace SystemMapLayoutTestLocal;
 
     const FMapPixels Pixels;
-    TestEqual(TEXT("MinRingGap is 9 px at the panel's sizes"), MinRingGap(Pixels), 9.0);
-    TestTrue(TEXT("MaxPlanets gaps fit between the star's edge and the rim"),
-             MinRingGap(Pixels) * GenGuarantees::MaxPlanets <= Pixels.RimPx - Pixels.StarPx);
+    TestEqual(TEXT("MinRingGap is 8 px at the panel's sizes"), MinRingGap(Pixels), 8.0);
+    TestTrue(TEXT("a gap per world and one outside the last fit between the star's edge and the rim"),
+             MinRingGap(Pixels) * (GenGuarantees::MaxPlanets + 1) <= Pixels.RimPx - Pixels.StarPx);
 
     const int32 Twelve = GenGuarantees::MaxPlanets;
     TArray<double> Inner;

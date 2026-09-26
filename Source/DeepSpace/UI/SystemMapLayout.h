@@ -86,9 +86,15 @@ namespace SystemMap
 
     /**
      * The least distance two rings are ever drawn apart, px:
-     * floor((RimPx - StarPx) / MaxPlanets), 9 at the panel's sizes. Twelve
-     * rings and the gap inside the first then need 108 px of the 109, so a
-     * crowded system is pushed inward by the warp and never off the rim.
+     * floor((RimPx - StarPx) / (MaxPlanets + 1)), 8 at the panel's sizes.
+     * One gap per world and one more: twelve rings, the gap inside the
+     * first and the gap outside the last need 104 px of the 109, so a
+     * crowded system is pushed inward by the warp and never off the rim, and
+     * the outermost ring is always a gap inside it. That last gap is the
+     * segment the arrival standoff is drawn in: without it a crowded
+     * system's outermost ring sat on the rim, the whole way in from the
+     * arrival to the outermost orbit was drawn in no pixels at all, and the
+     * ship stood still on the map for the first leg of every approach.
      */
     DEEPSPACE_API double MinRingGap(const FMapPixels& Pixels);
 
@@ -130,7 +136,8 @@ namespace SystemMap
      * (NavStart::ArrivalStandoffAU with StandoffAU, the ds.Nav.StandoffAU
      * it would be met at) times RimMargin, so every world and every arrival
      * lands on the map, and its rings placed by the log map and then warped
-     * so every gap is at least MinRingGap and every ring is inside the rim.
+     * so every gap is at least MinRingGap and the outermost ring is at least
+     * MinRingGap inside the rim.
      */
     DEEPSPACE_API FMapScale Fit(const FStarSystem& System, double StandoffAU, const FMapPixels& Pixels = FMapPixels());
 
@@ -182,8 +189,8 @@ namespace SystemMap
         double RingPx = 0.0;
 
         /** The room either side of its ring, px: to the next ring or the
-         *  star's edge inward, the next ring outward. Every size below is
-         *  capped against it. */
+         *  star's edge inward, to the next ring or the rim outward. Every
+         *  size below is capped against it. */
         double GapPx = 0.0;
 
         /** Diameter, px. */
