@@ -261,12 +261,17 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     // aiming needs, from the pilot's seat alone (nav decision 3).
     if (DriveLine)
     {
-        const TOptional<FSystemId> Course = ShipState->GetPlottedSystem();
-        const TOptional<FStarSystem> Star = (Universe && Course) ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
-        const TOptional<FVector> Bearing = ShipState->GetCourseDirectionShipLocal();
-        DriveLine->SetText(Star && Bearing
-            ? FText::FromString(NavText::Jump(ShipState->GetJumpState(), Star->Stub.Name, *Bearing,
-                                              ShipState->GetJumpConeRadians()))
-            : Blank);
+        DriveLine->SetText(DriveLineText(*ShipState, Universe));
     }
+}
+
+FText UShipHUDWidget::DriveLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)
+{
+    const TOptional<FSystemId> Course = ShipState.GetPlottedSystem();
+    const TOptional<FStarSystem> Star = (Universe && Course) ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
+    const TOptional<FVector> Bearing = ShipState.GetCourseDirectionShipLocal();
+    return Star && Bearing
+        ? FText::FromString(NavText::Jump(ShipState.GetJumpState(), Star->Stub.Name, *Bearing,
+                                          ShipState.GetJumpConeRadians()))
+        : Blank;
 }
