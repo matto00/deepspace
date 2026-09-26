@@ -1,6 +1,7 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
@@ -116,6 +117,16 @@ namespace SliceLoopTestLocal
     }
 
     /** Custom-data float Slot of Instance. */
+    /** How wide an instance is drawn, cm: its scale times its mesh's own
+     *  width, read from the mesh's bounds and never assumed. */
+    double Across(const UInstancedStaticMeshComponent* Layer, int32 Instance)
+    {
+        FTransform Transform;
+        Layer->GetInstanceTransform(Instance, Transform, /*bWorldSpace*/ false);
+        const UStaticMesh* Mesh = Layer->GetStaticMesh();
+        return Mesh ? Transform.GetScale3D().X * 2.0 * Mesh->GetBoundingBox().GetExtent().GetMax() : 0.0;
+    }
+
     float CustomData(const UInstancedStaticMeshComponent* Layer, int32 Instance, int32 Slot)
     {
         return Layer->PerInstanceSMCustomData[Instance * Layer->NumCustomDataFloats + Slot];
@@ -452,6 +463,7 @@ bool FSliceLoopPointStarsTest::RunTest(const FString& Parameters)
     FScopedCVar Faint(TEXT("ds.Sky.StarfieldFaint"), 0.01f);
     FScopedCVar Radiance(TEXT("ds.Sky.Radiance"), 3.0f);
     FScopedCVar Gamma(TEXT("ds.Sky.FluxGamma"), 0.5f);
+    FScopedCVar Size(TEXT("ds.Sky.PointPixels"), 2.0f);
     Test.BeginPlay();
     Test.Step(0.0f);
 
@@ -490,12 +502,33 @@ bool FSliceLoopPointStarsTest::RunTest(const FString& Parameters)
                  FMath::IsNearlyEqual(Point, FMath::Sqrt(N) * 0.03, 1e-5));
     }
 
+    // And the same size: a destination found by its brightness, never by
+    // being a bigger dot than the galaxy behind it.
+    const double Point = Across(Neighbours, 0);
+    const double TwoPixels = ShipSky::PointDiameter(AShipSky::DomeRadius, Test.Sky->GetPixelAngle(), 2.0);
+    TestTrue(FString::Printf(TEXT("a neighbour is drawn two pixels across: %.1f cm against %.1f"), Point, TwoPixels),
+             FMath::IsNearlyEqual(Point, TwoPixels, 1e-6 * TwoPixels));
+    TestTrue(FString::Printf(TEXT("and so is a background star: %.1f cm against %.1f"), Across(Dome, Bright), Point),
+             FMath::IsNearlyEqual(Across(Dome, Bright), Point, 1e-6 * Point));
+
     // Tuned in play, the dome follows the frame the neighbours do.
     {
         FScopedCVar Brighter(TEXT("ds.Sky.Radiance"), 6.0f);
         Test.Step(0.0f);
         TestTrue(TEXT("doubling ds.Sky.Radiance doubles the dome on the next frame"),
                  FMath::IsNearlyEqual(CustomData(Dome, Bright, SkyMaterial::CustomDataBrightness), 2.0f * Drawn, 1e-5f));
+    }
+    {
+        // What the CVar's own help suggests when two-pixel points shimmer
+        // under TSR: it must reach the 3,000 stars, not only the destinations.
+        FScopedCVar Bigger(TEXT("ds.Sky.PointPixels"), 3.0f);
+        Test.Step(0.0f);
+        const double Larger = Across(Neighbours, 0);
+        TestTrue(FString::Printf(TEXT("ds.Sky.PointPixels 3 draws a neighbour half as wide again: %.1f cm against %.1f"),
+                                 Larger, 1.5 * Point),
+                 FMath::IsNearlyEqual(Larger, 1.5 * Point, 1e-3 * Point));
+        TestTrue(FString::Printf(TEXT("and the dome with it, on the same frame: %.1f cm against %.1f"), Across(Dome, Bright), Larger),
+                 FMath::IsNearlyEqual(Across(Dome, Bright), Larger, 1e-6 * Larger));
     }
     return true;
 }

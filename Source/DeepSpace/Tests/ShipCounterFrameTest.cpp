@@ -151,7 +151,7 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         const TArray<FSkyStar> Expected = SkyStarfield::Generate(
             LocalSystem::StarfieldSeed(World, static_cast<uint64>(Dome->StarSeed)), 3000);
         const double MeshDiameter = 2.0 * Sphere->GetBounds().BoxExtent.GetMax();
-        const double Diameter = Dome->DistantStarPixels * Dome->GetPixelAngle() * Dome->DistantStarRadius;
+        const double Diameter = ShipSky::PointDiameter(Dome->DistantStarRadius, Dome->GetPixelAngle(), AShipSky::PointPixels());
 
         bool bWhereTheGalaxyPutsThem = true;
         bool bTwoPixels = true;

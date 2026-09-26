@@ -116,12 +116,6 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Starfield")
     double DistantStarRadius = 2.5e10;
 
-    /** Each distant star's diameter, in pixels: the smallest size a point can
-     *  honestly have (FSkyViewParams::MinPointPixels). Sized in pixels, never
-     *  in centimetres, so the dome's radius can move without changing them. */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Starfield")
-    double DistantStarPixels = 2.0;
-
     /** The near field is a cube of this half-extent around the ship, wrapped:
      *  a mote that falls out of the back comes round the front. They are dust
      *  that is everywhere rather than landmarks, so wrapping is honest as well
@@ -158,8 +152,8 @@ private:
     /** Re-scatter the near field around wherever the ship now is. */
     void ScatterNearField();
 
-    /** Place the dome's stars, DistantStarPixels across at PixelAngle, with
-     *  their colour and brightness in per-instance custom data. */
+    /** Place the dome's stars, AShipSky::PointPixels across at PixelAngle,
+     *  with their colour and brightness in per-instance custom data. */
     void BuildDistantStars(double PixelAngle);
 
     /** The motes' brightness from the ship's speed: full at cruise, gone by
@@ -183,6 +177,11 @@ private:
      *  the dome as it re-lights the neighbours, and nothing else does. */
     float BrightenedFaintest = -1.0f;
     float BrightenedBrightest = -1.0f;
+
+    /** What AShipSky::PointPixels answered when the dome was last sized: the
+     *  same cache key for size, so ds.Sky.PointPixels resizes the galaxy the
+     *  frame it resizes the neighbours. */
+    double SizedForPointPixels = -1.0;
 
     /** A runtime copy of the motes' material, whose Brightness the fade
      *  drives; null until the first sync finds a material to copy. */

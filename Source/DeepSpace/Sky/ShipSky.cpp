@@ -139,7 +139,7 @@ namespace
         FSkyViewParams Params;
         Params.PixelAngle = PixelAngle;
         Params.FluxGamma = CVarFluxGamma.GetValueOnGameThread();
-        Params.MinPointPixels = CVarPointPixels.GetValueOnGameThread();
+        Params.MinPointPixels = AShipSky::PointPixels();
         Params.StarSurface = CVarStarSurface.GetValueOnGameThread();
         return Params;
     }
@@ -596,6 +596,11 @@ float AShipSky::PointStarBrightness(double Flux)
 {
     const double Compressed = SkyProjection::Compress(Flux, CVarFluxGamma.GetValueOnGameThread());
     return static_cast<float>(Compressed * CVarStarfieldFaint.GetValueOnGameThread() * CVarRadiance.GetValueOnGameThread());
+}
+
+double AShipSky::PointPixels()
+{
+    return CVarPointPixels.GetValueOnGameThread();
 }
 
 // ---------------------------------------------------------------------------

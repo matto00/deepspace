@@ -227,7 +227,11 @@ void AShipCounterFrame::BuildDistantStars(double PixelAngle)
         LocalSystem::StarfieldSeed(GetWorld(), static_cast<uint64>(StarSeed)), FMath::Max(0, DistantStarCount));
 
     const FMeshFit Fit = FitOf(DistantStars);
-    const double Diameter = DistantStarPixels * PixelAngle * DistantStarRadius;
+    // As big as the sky draws a neighbour, through the sky's own size and
+    // its own formula: the smallest a point can honestly be, sized in pixels
+    // so the dome's radius can move without changing it.
+    const double PointPixels = AShipSky::PointPixels();
+    const double Diameter = ShipSky::PointDiameter(DistantStarRadius, PixelAngle, PointPixels);
     TArray<FTransform> Transforms;
     Transforms.Reserve(Stars.Num());
     for (const FSkyStar& Star : Stars)
@@ -259,6 +263,7 @@ void AShipCounterFrame::BuildDistantStars(double PixelAngle)
     }
     DistantStars->MarkRenderStateDirty();
     SizedForPixelAngle = PixelAngle;
+    SizedForPointPixels = PointPixels;
     BrightenedFaintest = AShipSky::PointStarBrightness(1.0);
     BrightenedBrightest = AShipSky::PointStarBrightness(SkyStarfield::MaxFlux);
 }
@@ -320,7 +325,7 @@ void AShipCounterFrame::SyncToShip()
     const bool bInTransit = Ship->IsInTransit();
     DistantStars->SetVisibility(!bInTransit);
 
-    // A star stays two pixels across whatever the view does -- a screen's
+    // A star stays ds.Sky.PointPixels across whatever the view does -- a screen's
     // narrow framing, a smaller window -- so the dome is resized when the
     // pixel angle moves by more than a few percent, and not otherwise.
     const double PixelAngle = GetPixelAngle();
@@ -329,7 +334,8 @@ void AShipCounterFrame::SyncToShip()
         BuildDistantStars(PixelAngle);
     }
     else if (AShipSky::PointStarBrightness(1.0) != BrightenedFaintest
-             || AShipSky::PointStarBrightness(SkyStarfield::MaxFlux) != BrightenedBrightest)
+             || AShipSky::PointStarBrightness(SkyStarfield::MaxFlux) != BrightenedBrightest
+             || AShipSky::PointPixels() != SizedForPointPixels)
     {
         // A tuning CVar moved: the dome must follow it the frame the
         // neighbours do, or a playtest compares one against the other stale.

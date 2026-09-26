@@ -141,6 +141,18 @@ public:
      */
     static float PointStarBrightness(double Flux);
 
+    /**
+     * How many pixels across a point at infinity is drawn: ds.Sky.PointPixels,
+     * read at call time. A size, where PointStarBrightness is a brightness,
+     * and bound by the same rule: **the counter-frame sizes DistantStars
+     * through this too**, with ShipSky::PointDiameter. A neighbour is the
+     * same point as a background star of its flux only while both agree on
+     * how big a point is as well as how bright -- moved for the neighbours
+     * alone, the destinations stand out from the galaxy by size, and the
+     * shimmer the CVar exists to cure stays on every other star.
+     */
+    static double PointPixels();
+
     /** Assets, assigned by Tools/build_hauler.py. The sphere every body and
      *  every neighbour is drawn with. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sky")
