@@ -71,6 +71,31 @@ The build order both specs follow is
 `docs/superpowers/plans/2026-09-26-poc2-build-order.md`. This spec's Track 0
 is stage 1, Track A is stage 2, and Tracks B and C are stage 3.
 
+### Track 0's review, 2026-09-26
+
+Building Track 0 settled four things this spec had left loose; each is
+revised in place below.
+
+- **Thrust scales the whole ease** (decision 4). The law as first written,
+  `R = ds.Drive.Response x thrust`, slows only the rate-limited part: a
+  one-notch tap never reaches the limit, so at a quarter thrust it would take
+  1.4 times as long, not the four times decision 4 promises. Thrust now
+  multiplies the whole law, rate limit and time constant alike, which is the
+  same as the ease running on a clock slowed by thrust. `Ease` takes the
+  thrust as its own parameter and `R` stays `ds.Drive.Response`, unscaled:
+  scaling both would slow a starved drive by thrust squared, sixteen times
+  at a quarter.
+- **`SweepCruise` takes `PressesUp` as well as `PressesDown`**, because
+  leaving zero ahead after stopping from astern needs a fresh Shift just as
+  going astern needs a fresh Ctrl.
+- **A hold of zero is the braking curve alone** (decision 5):
+  `ds.Drive.HoldSeconds` at 0 or less drops the hold term from `MaySpeed`,
+  leaving a cap that lets the ship close at full lever until it must brake.
+  It never removes the cap.
+- **`ds.Drive.Top` is clamped to [1 km/s, 1 c]**, because the lever always
+  keeps its first notch, so a lower top could never make the CVar and the
+  lever agree.
+
 ### Revision 2
 
 A review of the first draft found the soft cap unstable, and it was. The
@@ -341,7 +366,7 @@ can come back to.
   the soft cap's (decision 5), and its last part takes about a minute from
   any notch that crosses the leg in less: from 0.2 AU at 1 c the floor is
   reached in 165 s, the last 64 of them under the cap. `ds.Drive.Top` (in c,
-  default 1, clamped to at most 1) removes the notches above a lower top for
+  default 1, clamped to 1 km/s at the least and 1 c at the most) removes the notches above a lower top for
   a playtest that wants the lever shorter; it can never lengthen it.
 
 **Rejected: a continuous logarithmic lever.** A tap would move it by however
@@ -370,9 +395,11 @@ player learns is the table. Ruled (ruling 1).
 ### 4. The ship answers the lever eased, at the lever's own pace, and never jumps up
 
 **The drive's speed follows the lever in notch space**: its eased position p
-moves toward the lever's notch at `clamp((notch - p) / 0.4 s, -R, +R)`,
-`R = ds.Drive.Response` (3 notches a second), times the boosters' thrust
-fraction. Speed is the notch table read at p: geometric between notches,
+moves toward the lever's notch at `f x clamp((notch - p) / 0.4 s, -R, +R)`,
+`R = ds.Drive.Response` (3 notches a second) and f the boosters' thrust
+fraction. f multiplies the whole law, rate limit and time constant alike,
+which is the same as the ease running on a clock slowed by f (Track 0's
+review). `R` itself is never scaled by thrust. Speed is the notch table read at p: geometric between notches,
 linear from STOP to the first. So:
 
 - one tap settles to 95% of its new speed in 1.2 s, with no overshoot;
@@ -383,7 +410,10 @@ linear from STOP to the first. So:
   about nine; from 0.1 c, 5.3 s and eight; cruise's all stop from 200 m/s is
   five. The two stops feel alike;
 - starved boosters slow the response, not the top: a quarter thrust takes
-  four times as long to reach any notch, and gets there. That replaces tau's
+  four times as long to reach any notch, and gets there. That includes a
+  one-notch tap. Scaling `R` alone would not slow a tap, because it never
+  reaches the limit. Scaling `R` *and* the clock would slow everything by
+  f^2, sixteen times at a quarter. That replaces tau's
   stretch (sky decision 8) with the same degradation, and it never becomes a
   readout of lost potential (the anti-chore principle's 73% case).
 
@@ -392,7 +422,7 @@ ship below `SpeedAt(p)`, p is set to `PositionOf(held speed)` every substep.
 So when the cap lets go -- the nose turned off the world, or the ship
 climbed -- the speed rises from where the ship actually was, at R notches a
 second like any other change: from 25 km/s to 1 c in about four seconds,
-never in one substep. **Speed never rises faster than R in notch space,
+never in one substep. **Speed never rises faster than f x R in notch space,
 anywhere.** It can fall faster in exactly one case, the substep in which the
 nose first meets a world the ship would reach within the cap's few seconds
 (decision 5, *capture*), and then only as far as the cap requires.
@@ -1030,11 +1060,14 @@ another editor process.
 0.1 **`Ship/ShipDriveLever.h/.cpp`**, pure, no UObject, no CVar:
     `NotchCount(TopCmPerSecond)`, `NotchSpeed(int32)`, `SpeedAt(double
     Position)`, `PositionOf(double Speed)`, `Ease(Position, Target, Dt,
-    MaxRate)` with `EaseSeconds = 0.4`; `TapDown(Notch, P)` and `TapUp(Notch,
+    MaxRate, Thrust)` with `EaseSeconds = 0.4`, `MaxRate` the unscaled
+    `ds.Drive.Response` and `Thrust` scaling the whole law (Track 0's review); `TapDown(Notch, P)` and `TapUp(Notch,
     P, Top)` (decision 3's rule); `FNotchRepeat` (a hold repeats after
     `RepeatDelaySeconds = 0.3` at a rate, fed a held flag, never a level
-    difference); `SweepCruise(Throttle, bHeldUp, bHeldDown, PressesDown, Dt,
-    Rate)` with the detent at zero.
+    difference); `SweepCruise(Throttle, bHeldUp, bHeldDown, PressesUp, PressesDown,
+    Dt, Rate)` with the detent at zero: a held key leaves zero only in a call
+    that carries a fresh press of it, so the caller must hand in the press
+    counts with the held flags in the same call, and only once a frame.
     `Tests/ShipDriveLeverTest.cpp`, **`DeepSpace.Ship.DriveLever`**:
     - the table is the 1-2-5 series above, strictly increasing, STOP is 0,
       and every step is x1.5 to x2.5
@@ -1049,7 +1082,8 @@ another editor process.
     - a 1 s hold repeats 1 + 3 x 0.7 = 3 times (rounded down), the same at
       30 and 144 Hz
     - `Ease` never overshoots, settles a one-notch step to 95% in 1.2 s, and
-      moves at most MaxRate per second
+      moves at most MaxRate per second; at a quarter thrust a one-notch tap
+      and STOP to 1 c each take four times as long
     - `SweepCruise` stops at zero from either side and needs a fresh press
       to cross it
 0.2 **`Ship/ShipFlightSurface.h/.cpp`**, pure: `FFlightSurface {FUniversePosition
@@ -1064,7 +1098,9 @@ another editor process.
     ray at the centre, at the limb (just in, just out), from on the sphere
     above and below its horizon, from under it, from inside the edge; the
     edge's far root; `MaySpeed` continuous and monotonic in D, equal to D / N
-    far out, to the braking curve near in, and never more than D / step.
+    far out, to the braking curve near in, and never more than D / step;
+    with no hold, the braking curve alone; the limb from 30 AU and 138 AU a
+    billionth of the floor radius either side, hit and miss.
     **`ShipFlight::SecondsToFloor(double D, double Speed, double
     BrakingAccel, double HoldSeconds)`** (ruling 3), the live ETA's law: the
     ship holds `Speed` until `MaySpeed(d)` falls to it (d1 = Speed x N, or
@@ -1080,7 +1116,8 @@ another editor process.
     against it before A makes it real, so it is declared and implemented
     there, in one pass. It is **`FShipFlightState`'s new public surface**: `FShipFlightLimits` loses
     `DriveTau` and `DriveFloor`, and gains `HoldSeconds`, `DriveTop`,
-    `DriveResponse`; `FShipFlightCommand` gains `int32 DriveNotch`;
+    `DriveResponse` (unscaled) and `DriveThrust` (the thrust fraction `Ease`
+    is handed); `FShipFlightCommand` gains `int32 DriveNotch`;
     `SetDriveRoom` becomes `SetSurfaces(TArray<FFlightSurface>)`,
     `GetDriveRoom` becomes `GetRoom()`; new `EFlightMode {Cruise, Drive,
     SpoolingDown}` and `GetMode()`; `EFlightHold {Free, HoldingOff, AtFloor}`,
@@ -1118,7 +1155,8 @@ A2. **`UShipSubsystem`**: `SetHelmInput(Commander, const FHelmInput&)` with
     `SetFlightCommand` kept as the absolute cruise setter; the tick applies
     presses (`TapUp`/`TapDown` against the live p, or `SweepCruise`) and the
     hold's repeat, then `ApplyAllocation` sets `DriveResponse =
-    ds.Drive.Response x thrust`, `HoldSeconds`, `DriveTop`, and
+    ds.Drive.Response` (never scaled by thrust), `DriveThrust` = the
+    boosters' thrust fraction, `HoldSeconds`, `DriveTop`, and
     `UpdateSurfaces` builds the list from `LocalSystem::Here` (not `Current`:
     the neighbours are never surfaces) with `FloorFor` each body --
     `max(ds.Flight.Floor, SkyProjection::RenderedFloor(R))` for planets and
@@ -1126,7 +1164,8 @@ A2. **`UShipSubsystem`**: `SetHelmInput(Commander, const FHelmInput&)` with
     the edge -- before `Step`; an empty list in transit. `TransitBegan` also
     sets both levers to STOP. `ClearPilot` zeroes held lever input as it
     releases attitude. CVars `ds.Drive.Top` (default 1 c, clamped to at most
-    1: ruling 1), `.Response`, `.Sweep`,
+    1 by ruling 1, and to at least 1 km/s so it never names less than the
+    lever's first notch), `.Response`, `.Sweep`,
     `.HoldSeconds`, `ds.Flight.Floor`, `ds.Flight.StarFloorRadii`,
     `ds.Cruise.Sweep`, as `TAutoConsoleVariable`s read at use (a per-frame
     `FindConsoleVariable` fails `test.sh`); `ds.Drive.Tau` and `ds.Drive.Floor`
@@ -1194,10 +1233,10 @@ C3. **[editor, eyes]** `Tests/Eyes/StarGlareEyesTest.cpp`, run once as in
 
 | Test | Pins today | Becomes |
 |---|---|---|
-| `DeepSpace.Ship.FlightDrive` (`ShipFlightStateTest.cpp`) | room falls by e per tau; settles onto the 100 km floor; half throttle doubles tau; starved quadruples it; disengage clamps to 200 m/s; backing closes no faster | Rewritten (A). **The lever:** a notch's speed is its table speed once settled; the ease never overshoots; STOP comes to rest; no reverse. **The cap binds only on the path:** a trajectory whose undisturbed miss altitude is above the floor is **bit-identical** to the same flight with no surfaces; with the nose fixed, velocity stays along the nose to 1e-9 through the whole approach. **Aim error:** from 0.2 AU at 1 c with 0, 0.01, 0.1 and 1 degree off, the ship either reaches the floor or passes at its undisturbed miss distance, and never ends farther than it started except by passing. **Arrival:** from STOP, 0.2 AU at 1 c reaches the floor within 170 s and 250,000 km at 1 c within 65 s; **never below any floor at any frame chop, including a 2 s hitch**; comes to rest on the floor with no substep's speed change larger than the braking curve's. **Every surface:** at 1 c past a giant toward its moon, and toward a planet while the star is nearer, at every frame chop from 30 to 144 Hz and a 2 s hitch, no substep ends inside any body or floor sphere. **Under and inside:** a ship placed under a floor, or inside a body, climbs out at the lever's speed and cannot descend. **p follows the hold:** in notch space p never rises faster than `DriveResponse`, including across a release by a turn off the limb at 1 c and by a climb; it falls faster only on the capture substep. **Spool-down:** each row of decision 4's table. `GetHold` says `HoldingOff` then `AtFloor`, and never flickers under a steady hold; the edge caps like a body; starved thrust slows the response four times and leaves the top alone; attitude untouched and zero acceleration reported (kept). **The top:** no notch and no speed above 1 c whatever `ds.Drive.Top` says. **At rest after a jump:** `JumpTo` leaves velocity and p at zero |
+| `DeepSpace.Ship.FlightDrive` (`ShipFlightStateTest.cpp`) | room falls by e per tau; settles onto the 100 km floor; half throttle doubles tau; starved quadruples it; disengage clamps to 200 m/s; backing closes no faster | Rewritten (A). **The lever:** a notch's speed is its table speed once settled; the ease never overshoots; STOP comes to rest; no reverse. **The cap binds only on the path:** a trajectory whose undisturbed miss altitude is above the floor is **bit-identical** to the same flight with no surfaces; with the nose fixed, velocity stays along the nose to 1e-9 through the whole approach. **Aim error:** from 0.2 AU at 1 c with 0, 0.01, 0.1 and 1 degree off, the ship either reaches the floor or passes at its undisturbed miss distance, and never ends farther than it started except by passing. **Arrival:** from STOP, 0.2 AU at 1 c reaches the floor within 170 s and 250,000 km at 1 c within 65 s; **never below any floor at any frame chop, including a 2 s hitch**; comes to rest on the floor with no substep's speed change larger than the braking curve's. **Every surface:** at 1 c past a giant toward its moon, and toward a planet while the star is nearer, at every frame chop from 30 to 144 Hz and a 2 s hitch, no substep ends inside any body or floor sphere. **Under and inside:** a ship placed under a floor, or inside a body, climbs out at the lever's speed and cannot descend. **p follows the hold:** in notch space p never rises faster than `DriveResponse x DriveThrust`, including across a release by a turn off the limb at 1 c and by a climb; it falls faster only on the capture substep. **Spool-down:** each row of decision 4's table. `GetHold` says `HoldingOff` then `AtFloor`, and never flickers under a steady hold; the edge caps like a body; starved thrust slows the response four times and leaves the top alone; attitude untouched and zero acceleration reported (kept). **The top:** no notch and no speed above 1 c whatever `ds.Drive.Top` says. **At rest after a jump:** `JumpTo` leaves velocity and p at zero |
 | same file, cruise | "drive off, the room changes nothing" | Cruise brakes to rest on the floor, never below, at full and quarter thrust; a turn made while drifting in hits the hard stop and slides, never enters; far from anything cruise is exactly today's |
-| `DeepSpace.Ship.Drive` (`ShipDriveTest.cpp`) | gating; tau stretched by thrust; `ds.Drive.Tau`/`.Floor` read at use; room = nearest surface less floor; room/e per tau through the subsystem | Gating kept, for `SetHelmInput`, `AllStop` and `SetDriveLever` too, and inert in transit; each lever survives F and standing up; X stops both; a tap under a hold slows the ship at once; `DriveResponse` is `ds.Drive.Response x thrust`; the new CVars read at use; `FloorFor` is `max(ds.Flight.Floor, RenderedFloor)` for an Earth and a giant, `StarFloorRadii x R` for the star, and `ds.Flight.Floor` at the edge; `GetRoom` is the minimum over surfaces of distance less that surface's floor |
-| `DeepSpace.Player.FlightInput` | the pawn's `Throttle` sweeps at 0.5/s and has stops; F toggles | The ship's cruise lever sweeps at `ds.Cruise.Sweep` and holds; the detent at zero; under the drive a tap is one notch and a hold repeats; **a press and release injected inside one frame moves one notch**; X stops both; a non-pilot moves nothing |
+| `DeepSpace.Ship.Drive` (`ShipDriveTest.cpp`) | gating; tau stretched by thrust; `ds.Drive.Tau`/`.Floor` read at use; room = nearest surface less floor; room/e per tau through the subsystem | Gating kept, for `SetHelmInput`, `AllStop` and `SetDriveLever` too, and inert in transit; each lever survives F and standing up; X stops both; a tap under a hold slows the ship at once; `DriveResponse` is `ds.Drive.Response`, unscaled, and `DriveThrust` the boosters' thrust fraction; **a one-notch tap at a quarter thrust takes four times the full-thrust time through the subsystem (not sixteen, not 1.4)**; `ds.Drive.Top` below 1 km/s reads as 1 km/s; the new CVars read at use; `FloorFor` is `max(ds.Flight.Floor, RenderedFloor)` for an Earth and a giant, `StarFloorRadii x R` for the star, and `ds.Flight.Floor` at the edge; `GetRoom` is the minimum over surfaces of distance less that surface's floor |
+| `DeepSpace.Player.FlightInput` | the pawn's `Throttle` sweeps at 0.5/s and has stops; F toggles | The ship's cruise lever sweeps at `ds.Cruise.Sweep` and holds; the detent at zero; under the drive a tap is one notch and a hold repeats; **a press and release injected inside one frame moves one notch**; **a fresh press arriving in the same frame as its held flag moves the cruise lever off zero, whatever the substep count, and the press is spent in the first substep only**; X stops both; a non-pilot moves nothing |
 | `DeepSpace.Loop.Drive` (`SliceLoopTest.cpp`) | twenty tau to the 100 km floor, e^-10 at ten tau; sixty tau outward stops short of the edge | From the opening shot, lever from STOP to 1 c: never farther, never shrinking, never below the floor, **at the floor within 70 s** (54 s for an Earth and 64 s for a Jupiter at the opening distance), drawn at its true size there to 1e-3; placed 0.05 AU inside the edge and flown out at 1 c for 60 s (uncapped it would cross 0.12 AU), it never leaves its system and settles 10 km inside. Plus the same approach with the opening shot's nose 0.01 degrees off the centre: the same floor, the same time to within a second |
 | `DeepSpace.Loop.Jump` | **nothing of the drive** (it steers at throttle 0 and never engages it) | The `JumpLine` rename; plus: with the drive lever at 1 c when the fold opens, the ship arrives at rest, velocity exactly zero, with both levers at STOP. The in-system jump's arrival is pinned the same way in the map spec's `DeepSpace.Loop.InSystemJump` |
 | `DeepSpace.Ship.Jump` (`ShipJumpTest.cpp`) | "between stars the drive has no room" | `GetRoom()` rename (still 0 between stars: no surfaces); plus: in transit the levers do not move |
@@ -1214,10 +1253,10 @@ Nothing in `Tools/test_*.py` reads the drive; they are run unchanged.
 
 | CVar | Default | Lives in | Replaces |
 |---|---|---|---|
-| `ds.Drive.Top` | 1 c, and never above it (ruling 1) | `ShipSubsystem.cpp` | -- |
-| `ds.Drive.Response` | 3 notches/s, x the boosters' thrust | `ShipSubsystem.cpp` | `ds.Drive.Tau` |
+| `ds.Drive.Top` | 1 c, and never above it (ruling 1) nor below 1 km/s | `ShipSubsystem.cpp` | -- |
+| `ds.Drive.Response` | 3 notches/s at full thrust; thrust scales the whole ease, never this | `ShipSubsystem.cpp` | `ds.Drive.Tau` |
 | `ds.Drive.Sweep` | 3 notches/s held (after 0.3 s) | `ShipSubsystem.cpp` | -- |
-| `ds.Drive.HoldSeconds` | 4 s | `ShipSubsystem.cpp` | -- |
+| `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp` | -- |
 | `ds.Flight.Floor` | 10 km (and never under the sky's own) | `ShipSubsystem.cpp` | `ds.Drive.Floor` (100 km) |
 | `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp` | -- |
 | `ds.Cruise.Sweep` | 0.5 /s | `ShipSubsystem.cpp` | the pawn's `ThrottleSweepRate` |
