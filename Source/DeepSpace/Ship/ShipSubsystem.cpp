@@ -320,7 +320,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // disengaged, or charged and waiting on alignment it wants nothing, so
     // it takes part in no split and an idle drive costs the ship nothing.
     const bool bWinding = GetJumpState() == EJumpState::Winding;
-    const float EngineWant = bWinding ? FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread()) : 0.0f;
+    const float EngineWant = bWinding ? GetWindingWant() : 0.0f;
     if (PowerState.GetWant(ShipPower::Engine) != EngineWant)
     {
         PowerState.SetWant(ShipPower::Engine, EngineWant);
@@ -679,6 +679,11 @@ TOptional<FVector> UShipSubsystem::GetCourseDirectionShipLocal() const
 double UShipSubsystem::GetJumpConeRadians() const
 {
     return FMath::DegreesToRadians(FMath::Max(0.0, static_cast<double>(CVarConeDeg.GetValueOnGameThread())));
+}
+
+float UShipSubsystem::GetWindingWant()
+{
+    return FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread());
 }
 
 bool UShipSubsystem::HasVisited(const FSystemId& Id) const

@@ -23,15 +23,6 @@ namespace
         TEXT("How much of the boosters' hiss holding a cruise keeps, at full throttle (0: the hiss only while the speed changes)."),
         ECVF_Default);
 
-    /** Nav's own tunable, asked by name: the hum's feed is the watts reaching
-     *  the engine over exactly what the jump asks for, whatever that has been
-     *  tuned to (plan conflict 8). */
-    float WindingWant()
-    {
-        const IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.WindingWant"));
-        return Variable ? Variable->GetFloat() : 0.0f;
-    }
-
     /** The voice on the audio thread. Owns its FShipHumVoice outright; the
      *  only thing it shares with the component is the mailbox. */
     class FShipHumGenerator final : public ISoundGenerator
@@ -96,7 +87,7 @@ EShipHumKind UShipHumComponent::GetKind() const
 FShipHumInputs UShipHumComponent::AskShip(const UShipSubsystem& Ship)
 {
     FShipHumInputs Inputs;
-    Inputs.EngineFeed = ShipHum::EngineFeed(Ship.GetConsumerShare(ShipPower::Engine), WindingWant());
+    Inputs.EngineFeed = ShipHum::EngineFeed(Ship.GetConsumerShare(ShipPower::Engine), UShipSubsystem::GetWindingWant());
 
     // Rated, not current: the subsystem's GetLinearAcceleration is already
     // the rating scaled by the boosters' allocation, which is the fraction
