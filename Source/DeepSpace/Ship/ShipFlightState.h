@@ -182,8 +182,15 @@ public:
      */
     void JumpTo(const FUniversePosition& Arrival);
 
-    /** Seconds from cold to ready with the engine fully fed. */
-    static constexpr double JumpChargeSeconds = 90.0;
+    /**
+     * Seconds from cold to ready with the engine fully fed. Short enough that
+     * setting the split and walking to the galley is the whole wait: the first
+     * playtest found 90 s, starved at the default split to four and a half
+     * minutes, read as the game making you wait, which is the chore the
+     * vision rules out. The split still matters -- starved it takes about
+     * twice as long -- but it never asks the player to sit it out.
+     */
+    static constexpr double JumpChargeSeconds = 45.0;
 
 private:
     void SubStep(double FixedDelta);

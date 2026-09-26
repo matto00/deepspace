@@ -1,3 +1,5 @@
+#include "Core/DeepSpaceGameMode.h"
+#include "Ship/ShipModuleDataAsset.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/DirectionalLightComponent.h"
@@ -432,6 +434,22 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // The stock ship's modules, as play installs them. On a bare reactor the
+    // engine, capped at its winding want, cannot starve the lights into
+    // their brown-out at all -- and a test of how the split looks would be
+    // describing a ship nobody flies.
+    {
+        const UClass* ModeClass = LoadClass<ADeepSpaceGameMode>(
+            nullptr, TEXT("/Game/Blueprints/BP_DeepSpaceGameMode.BP_DeepSpaceGameMode_C"));
+        const ADeepSpaceGameMode* Mode = ModeClass ? ModeClass->GetDefaultObject<ADeepSpaceGameMode>() : GetDefault<ADeepSpaceGameMode>();
+        for (const TSoftObjectPtr<UShipModuleDataAsset>& Soft : Mode->GetStartingModules())
+        {
+            if (UShipModuleDataAsset* Module = Soft.LoadSynchronous())
+            {
+                Test.Ship->InstallModule(Module);
+            }
+        }
+    }
 
     struct FRoomLamps
     {
@@ -580,10 +598,14 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("and the glass reflects the room as brightly as the lights are fed (worst %.5f out)"), WorstGlass),
              WorstGlass < 1e-6f);
 
-    // The lever back, and everything with it.
+    // The lever to the lights, and everything with it. Lights-first, not the
+    // default 1:1:1: on the stock ship the default split feeds the lights
+    // about 63% even idle, because the boosters' want and theirs together
+    // exceed the 380 W the modules leave -- so "fed again" is a split that
+    // feeds them, which is the promise the lamps have to keep.
     Laptop->SetRowWeight(ShipPower::Lights, 1.0f);
-    Laptop->SetRowWeight(ShipPower::Engine, 1.0f);
-    Laptop->SetRowWeight(ShipPower::Boosters, 1.0f);
+    Laptop->SetRowWeight(ShipPower::Engine, 0.0f);
+    Laptop->SetRowWeight(ShipPower::Boosters, 0.0f);
     Test.Ship->SetJumpEngaged(false);
     Step(0.016f);
     Step(0.016f);

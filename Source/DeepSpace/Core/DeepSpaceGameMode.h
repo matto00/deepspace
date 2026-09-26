@@ -14,6 +14,9 @@ class DEEPSPACE_API ADeepSpaceGameMode : public AGameModeBase
 public:
     ADeepSpaceGameMode();
 
+    /** The loadout the ship starts with, as play would install it. */
+    const TArray<TSoftObjectPtr<UShipModuleDataAsset>>& GetStartingModules() const { return StartingModules; }
+
 protected:
     virtual void BeginPlay() override;
 

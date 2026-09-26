@@ -226,17 +226,13 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("with a course the jump engages"), Ship->SetJumpEngaged(true));
     Ship->Tick(0.1f);
     TestEqual(TEXT("and winds"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Winding));
-    TestEqual(TEXT("wanting ds.Nav.WindingWant"), Ship->GetConsumerWant(ShipPower::Engine), 800.0f);
+    TestEqual(TEXT("wanting ds.Nav.WindingWant"), Ship->GetConsumerWant(ShipPower::Engine), UShipSubsystem::GetWindingWant());
 
-    // What the split does while it winds (nav decision 4, admitted): at the
-    // default 1:1:1 the lights never notice, since their third of the
-    // reactor is more than they want; leaning on the drive dims them.
-    TestEqual(TEXT("at 1:1:1 the lights stay fully fed while it winds"),
-              Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
-    Ship->SetConsumerWeight(ShipPower::Engine, 4.0f);
-    Ship->Tick(0.1f);
-    TestTrue(TEXT("at 1:1:4 they dim while it winds"), Ship->GetConsumerSatisfaction(ShipPower::Lights) < 0.9f);
-    Ship->SetConsumerWeight(ShipPower::Engine, 1.0f);
+    // What the split does to the lights while it winds is measured on the
+    // stock ship, in DeepSpace.Ship.JumpCanWindAtFullSpeed: this world has a
+    // bare reactor and no modules, where the engine -- capped at its winding
+    // want -- cannot take enough to dim anything, and a claim about the split
+    // made here would describe a ship nobody flies.
     // What is taken off the top, before any split: the total draw less every
     // consumer's share, so it moves with the fold and not with the split.
     const auto OffTheTop = [Ship]()

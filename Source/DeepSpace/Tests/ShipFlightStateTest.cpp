@@ -537,10 +537,10 @@ bool FShipFlightJumpTest::RunTest(const FString& Parameters)
     {
         FShipFlightState Default;
         FShipFlightState Explicit;
-        Default.ChargeJumpDrive(9.0, 1.0);
-        Explicit.ChargeJumpDrive(9.0, 1.0, FShipFlightState::JumpChargeSeconds);
+        Default.ChargeJumpDrive(4.5, 1.0);
+        Explicit.ChargeJumpDrive(4.5, 1.0, FShipFlightState::JumpChargeSeconds);
         TestEqual(TEXT("default parameter is JumpChargeSeconds"), Default.GetJumpCharge(), Explicit.GetJumpCharge());
-        TestTrue(TEXT("and today's rate: 9 s of 90 is a tenth"),
+        TestTrue(TEXT("and today's rate: 4.5 s of 45 is a tenth"),
                  FMath::IsNearlyEqual(Default.GetJumpCharge(), 0.1, 1e-12));
 
         FShipFlightState Quick;
