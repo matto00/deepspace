@@ -273,20 +273,30 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
                  Ahead.X >= FMath::Cos(Ship->GetJumpConeRadians()));
     }
 
-    // Home is a neighbour now, where it really is from here.
+    // Every neighbour where it really is from the ship -- not from the new
+    // star, which the arrival leaves a few AU away -- and home among them.
+    // Home alone would not show the difference: the arrival lands on the
+    // line from home to the new star, so from there the two agree.
     const TOptional<FStarSystem> Left = Test.Universe->GetSystem(Home);
-    if (TestTrue(TEXT("home still exists"), Left.IsSet()))
+    const FSkySystem Now = LocalSystem::Current(Test.World);
+    const UInstancedStaticMeshComponent* Neighbours = Sky->GetNeighbourStars();
+    if (TestTrue(TEXT("home still exists"), Left.IsSet()) && TestFalse(TEXT("and the new system is drawn"), Now.IsEmpty())
+        && TestEqual(TEXT("one point per neighbour"), Neighbours->GetInstanceCount(), Now.Neighbours.Num()))
     {
-        const FVector Back = Ship->UniverseToWorld(Left->Stub.Position).GetSafeNormal();
+        const FUniversePosition NewStar = Now.Bodies[0].Position;
         bool bHomeInSky = false;
-        const UInstancedStaticMeshComponent* Neighbours = Sky->GetNeighbourStars();
-        for (int32 Index = 0; Index < Neighbours->GetInstanceCount(); ++Index)
+        bool bEachFromTheShip = Now.Neighbours.Num() > 1;
+        for (int32 Index = 0; Index < Now.Neighbours.Num(); ++Index)
         {
+            const FSkyNeighbour& Neighbour = Now.Neighbours[Index];
+            const FUniversePosition Where = NewStar + Neighbour.Direction * Neighbour.Distance;
             FTransform Instance;
-            Neighbours->GetInstanceTransform(Index, Instance, /*bWorldSpace*/ true);
-            bHomeInSky |= (Instance.GetLocation() - Sky->GetActorLocation()).GetSafeNormal().Equals(Back, 1e-6);
+            Neighbours->GetInstanceTransform(Index, Instance, /*bWorldSpace*/ false);
+            bEachFromTheShip &= Instance.GetLocation().GetSafeNormal().Equals((Where - Arrived).GetSafeNormal(), 1e-9);
+            bHomeInSky |= Where.DistanceTo(Left->Stub.Position) < UniverseUnits::CmPerKm;
         }
-        TestTrue(TEXT("the system left behind is a neighbour, drawn where it is from the ship"), bHomeInSky);
+        TestTrue(TEXT("the system left behind is a neighbour now"), bHomeInSky);
+        TestTrue(TEXT("and every neighbour is drawn where it is from the ship, to 1e-9"), bEachFromTheShip);
     }
 
     // The unmoved background is what makes the rest read as elsewhere.
