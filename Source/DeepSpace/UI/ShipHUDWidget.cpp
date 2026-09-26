@@ -7,7 +7,10 @@
 #include "Components/TextBlock.h"
 #include "Player/DeepSpaceCharacter.h"
 #include "Ship/ShipSubsystem.h"
+#include "UI/NavText.h"
 #include "UI/ShipScreenWidget.h"
+#include "Universe/UniverseSubsystem.h"
+#include "Universe/UniverseUnits.h"
 
 namespace
 {
@@ -25,6 +28,28 @@ namespace
 
     /** A dash reads as "no reading", where a zero would read as a measurement. */
     const FText Blank = NSLOCTEXT("DeepSpace", "HUDBlank", "-----");
+
+    /**
+     * A speed in the unit a person would say it in: metres a second at
+     * cruise, kilometres a second as the drive opens, and fractions of light
+     * once it is past a hundredth of it -- "34 C" at 1 AU says what the drive
+     * is doing, where eleven digits of metres say nothing.
+     */
+    FString SpeedWords(double CmPerSecond)
+    {
+        const double MetresPerSecond = CmPerSecond * 0.01;
+        const double Light = UniverseUnits::CmPerLightYear / (365.25 * 86400.0) * 0.01;
+        if (MetresPerSecond < 1.0e4)
+        {
+            return FString::Printf(TEXT("%.0f M/S"), MetresPerSecond);
+        }
+        if (MetresPerSecond < 0.01 * Light)
+        {
+            return FString::Printf(TEXT("%.0f KM/S"), MetresPerSecond * 0.001);
+        }
+        const double Fraction = MetresPerSecond / Light;
+        return Fraction < 1.0 ? FString::Printf(TEXT("%.2f C"), Fraction) : FString::Printf(TEXT("%.0f C"), Fraction);
+    }
 }
 
 UShipHUDWidget::UShipHUDWidget(const FObjectInitializer& ObjectInitializer)
@@ -207,9 +232,46 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 
     if (MotionLine)
     {
-        const float Speed = ShipState->GetShipSpeed();
-        MotionLine->SetText(Speed > 1.0f
-            ? FText::FromString(FString::Printf(TEXT("%.0f M/S"), Speed * 0.01f))
-            : NSLOCTEXT("DeepSpace", "HUDStationary", "STATIONARY"));
+        // The drive is a lever the pilot can leave on and walk away from, so
+        // whether it is on is said here, beside the speed it makes.
+        const double Speed = ShipState->GetFlightState().GetSpeed();
+        FString Motion = Speed > 1.0 ? SpeedWords(Speed) : FString(TEXT("STATIONARY"));
+        if (ShipState->IsDriveEngaged())
+        {
+            Motion += NavText::Separator;
+            Motion += TEXT("DRIVE");
+        }
+        MotionLine->SetText(FText::FromString(Motion));
     }
+
+    // Where the ship is: the system asked of its position, never remembered.
+    const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(this);
+    if (PlaceLine)
+    {
+        const TOptional<FStarSystem> Here = (Universe && !ShipState->IsInTransit())
+            ? Universe->GetSystemAt(ShipState->GetFlightState().GetUniversePosition())
+            : TOptional<FStarSystem>();
+        PlaceLine->SetText(ShipState->IsInTransit() ? FText::FromString(NavText::Jump(EJumpState::Transit))
+                           : Here ? FText::FromString(Here->Stub.Name + NavText::Separator + NavText::StarClass(Here->Star.Class))
+                                  : Blank);
+    }
+
+    // The jump, in words and never a number, with the bearing to the course
+    // relative to the ship rather than to a free-looking head: everything
+    // aiming needs, from the pilot's seat alone (nav decision 3).
+    if (DriveLine)
+    {
+        DriveLine->SetText(DriveLineText(*ShipState, Universe));
+    }
+}
+
+FText UShipHUDWidget::DriveLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)
+{
+    const TOptional<FSystemId> Course = ShipState.GetPlottedSystem();
+    const TOptional<FStarSystem> Star = (Universe && Course) ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
+    const TOptional<FVector> Bearing = ShipState.GetCourseDirectionShipLocal();
+    return Star && Bearing
+        ? FText::FromString(NavText::Jump(ShipState.GetJumpState(), Star->Stub.Name, *Bearing,
+                                          ShipState.GetJumpConeRadians()))
+        : Blank;
 }

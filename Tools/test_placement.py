@@ -13,9 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (LIGHTS_TAG, Mood, Mount, Place, Practical, kelvin_to_rgb,
+from placement import (LIGHTS_TAG, SKY_DIRECTORY, Mood, Mount, Place, Practical, kelvin_to_rgb,
                        lamp_emissive, lamp_role, resolve_lights, resolve_mount,
-                       resolve_practicals, resolve_props, LIGHT_SPACING)
+                       resolve_practicals, resolve_props, sky_asset, LIGHT_SPACING)
 
 ROOM = Room("r", 1000, 2000, 400, 300, 250)
 PLAN = FloorPlan([ROOM])
@@ -241,6 +241,27 @@ def test_the_lights_tag_is_the_one_the_cpp_dims():
     with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipPowerState.cpp")) as f:
         cpp = f.read()
     assert 'Lights(TEXT("%s"))' % LIGHTS_TAG in cpp, LIGHTS_TAG
+
+
+def test_sky_asset_paths_are_the_ones_the_cpp_loads():
+    """The level assigns what C++ checks for: every *Path in
+    SkyMaterialContract.h is sky_asset of its own asset name, and every
+    material and collection the contract authors has one."""
+    import json
+    import re
+    with open(os.path.join(ROOT, "Source/DeepSpace/Sky/SkyMaterialContract.h")) as f:
+        header = f.read()
+    paths = re.findall(r'\w+Path = TEXT\("([^"]+)"\)', header)
+    assert paths, "no paths found in SkyMaterialContract.h"
+    for path in paths:
+        name = path.rsplit(".", 1)[1]
+        assert sky_asset(name) == path, (sky_asset(name), path)
+    with open(os.path.join(ROOT, "Tools/sky_material_contract.json")) as f:
+        contract = json.load(f)
+    authored = list(contract["materials"]) + list(contract["collections"])
+    for name in authored:
+        assert sky_asset(name) in paths, name
+    assert SKY_DIRECTORY == "/Game/Materials/Sky"
 
 
 def test_a_practical_burns_at_its_rooms_kelvin():

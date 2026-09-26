@@ -9,6 +9,7 @@ class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
 class UTextBlock;
+class UUniverseSubsystem;
 
 /**
  * The HUD: a dot at the centre and four quiet readouts at the corners.
@@ -34,6 +35,14 @@ public:
     UShipHUDWidget(const FObjectInitializer& ObjectInitializer);
 
     virtual void NativeTick(const FGeometry& Geometry, float DeltaSeconds) override;
+
+    /**
+     * The drive corner's line: the jump in words, the course, and its bearing
+     * from the ship's nose -- not from a free-looking head, and not in the
+     * universe's axes -- or a dash with no course. Static and asked of its
+     * owners, so a headless test reads exactly what the corner draws.
+     */
+    static FText DriveLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
 
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;

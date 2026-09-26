@@ -8,13 +8,23 @@ turning rather than the camera swinging.
     A / D   yaw
     Q / Z   roll
     Shift / Ctrl   throttle, which is a lever and stays where it is left
+    F       the in-system drive, a second lever: pressed, it flips, and it
+            stays where it is left like the throttle (sky decision 8)
+
+F is checked against every other mapping in IMC_Default before it is bound,
+and the script fails rather than bind a key something else already uses.
 
 Idempotent: re-running rebuilds the mappings rather than appending to them.
+The character Blueprint is compiled and saved once its actions are set, so
+its class default object carries them (CLAUDE.md: a Blueprint saved against
+an older C++ class keeps a stale template until it is recompiled).
 Run with the editor closed:
 
     UnrealEditor-Cmd DeepSpace.uproject -run=pythonscript \
         -script=".../Tools/setup_flight_input.py" -unattended -nopause -nosplash
 """
+
+import traceback
 
 import unreal
 
@@ -90,9 +100,22 @@ def make_mapping(imc, action, key_name, axis="X", negate=False):
     return mapping
 
 
+DRIVE_KEY = "F"
+
+
+def key_of(mapping):
+    return str(mapping.get_editor_property("key").get_editor_property("key_name"))
+
+
+def action_name(mapping):
+    action = mapping.get_editor_property("action")
+    return action.get_name() if action else "(no action)"
+
+
 def main():
     attitude = ensure_action("IA_Attitude", unreal.InputActionValueType.AXIS3D)
     throttle = ensure_action("IA_Throttle", unreal.InputActionValueType.AXIS1D)
+    drive = ensure_action("IA_Drive", unreal.InputActionValueType.BOOLEAN)
 
     imc = unreal.load_asset(IMC_PATH)
     if not imc:
@@ -101,7 +124,7 @@ def main():
     # UE 5.8 keeps the real list under default_key_mappings; the context's own
     # `mappings` is the older, now-empty one, and map_key writes to that.
     data = imc.get_editor_property("default_key_mappings")
-    ours = {attitude.get_path_name(), throttle.get_path_name()}
+    ours = {attitude.get_path_name(), throttle.get_path_name(), drive.get_path_name()}
 
     # Drop our own mappings first so a re-run replaces rather than stacks.
     # Everything else in the context is left untouched.
@@ -110,6 +133,15 @@ def main():
             if not (m.get_editor_property("action")
                     and m.get_editor_property("action").get_path_name() in ours)]
     note(f"cleared {len(existing) - len(kept)} existing flight mapping(s), kept {len(kept)}")
+
+    # The flight keys share W/A/S/D with IA_Move on purpose -- seated, the
+    # keys fly; standing, they walk -- but the drive's key must mean nothing
+    # else, or pressing it at the helm would also do whatever else it does.
+    clashes = [action_name(m) for m in kept if key_of(m) == DRIVE_KEY]
+    if clashes:
+        raise RuntimeError(f"{DRIVE_KEY} is already bound in IMC_Default to {', '.join(clashes)}; "
+                           "choose another key for IA_Drive")
+    note(f"{DRIVE_KEY} is free in IMC_Default")
 
     note("IA_Attitude:")
     kept.append(make_mapping(imc, attitude, "W", "X", negate=True))   # nose down
@@ -123,23 +155,43 @@ def main():
     kept.append(make_mapping(imc, throttle, "LeftShift", "X"))
     kept.append(make_mapping(imc, throttle, "LeftControl", "X", negate=True))
 
+    # A press, not a hold: the handler flips the lever on Started.
+    note("IA_Drive:")
+    kept.append(make_mapping(imc, drive, DRIVE_KEY, "X"))
+
     data.set_editor_property("mappings", kept)
     imc.set_editor_property("default_key_mappings", data)
 
     unreal.EditorAssetLibrary.save_loaded_asset(imc, False)
     unreal.EditorAssetLibrary.save_loaded_asset(attitude, False)
     unreal.EditorAssetLibrary.save_loaded_asset(throttle, False)
+    unreal.EditorAssetLibrary.save_loaded_asset(drive, False)
 
-    # The character needs to be told which actions these are.
+    # The character needs to be told which actions these are, and then
+    # compiled, so the saved class default object is built against the C++
+    # that declares drive_action rather than the one before it.
     bp = unreal.load_asset(CHARACTER_BP)
     cdo = unreal.get_default_object(bp.generated_class())
     cdo.set_editor_property("attitude_action", attitude)
     cdo.set_editor_property("throttle_action", throttle)
-    unreal.EditorAssetLibrary.save_loaded_asset(bp, False)
-    note("BP_DeepSpaceCharacter: attitude_action, throttle_action assigned")
+    cdo.set_editor_property("drive_action", drive)
+    unreal.BlueprintEditorLibrary.compile_blueprint(bp)
 
+    cdo = unreal.get_default_object(bp.generated_class())
+    for prop, want in (("attitude_action", attitude), ("throttle_action", throttle), ("drive_action", drive)):
+        got = cdo.get_editor_property(prop)
+        if not got or got.get_path_name() != want.get_path_name():
+            raise RuntimeError(f"BP_DeepSpaceCharacter.{prop} did not survive the compile: {got}")
+    unreal.EditorAssetLibrary.save_loaded_asset(bp, False)
+    note("BP_DeepSpaceCharacter: attitude_action, throttle_action, drive_action assigned, compiled, saved")
+    note("DONE")
+
+
+try:
+    main()
+except Exception:
+    note("FAILED\n" + traceback.format_exc())
+    raise
+finally:
     with open(unreal.Paths.project_saved_dir() + "setup_flight_input.txt", "w") as f:
         f.write("\n".join(log) + "\n")
-
-
-main()

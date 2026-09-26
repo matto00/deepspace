@@ -3,92 +3,13 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Ship/ShipFlightState.h"
+#include "Ship/ShipNavState.h"
 #include "Ship/ShipPowerState.h"
 #include "ShipSubsystem.generated.h"
 
-// ---------------------------------------------------------------------------
-// WAVE 2 CONTRACT -- not yet code. The additions Wave 2 makes to this class,
-// frozen in Wave 0 so that the sky, navigation and the hum can be written
-// against them concurrently (docs/superpowers/plans/2026-09-25-poc-build-plan.md,
-// conflicts 1, 3, 7, 9, 10). Two levers, and two words that never swap:
-// **the drive** is the in-system one (sky decision 8), **the jump** is the
-// fold between stars (nav decision 5). All of it is C++ only -- no UFUNCTION,
-// so nothing a Blueprint inherits changes.
-//
-// Startup
-//   Initialize               also Collection.InitializeDependency<UUniverseSubsystem>().
-//   virtual void OnWorldBeginPlay(UWorld& InWorld) override;
-//                            The one owner of where the ship starts (conflict 3):
-//                            PlaceShip(NavStart::OpeningPlacement(start system)),
-//                            the largest planet 40,000 km dead ahead, its star to
-//                            starboard. Game worlds only; ds.Nav.PlaceAtStart 0
-//                            turns it off.
-//
-// The jump -- course, heading, engage; it fires by itself (nav decision 2)
-//   TArray<FStarSystemStub> GetChart() const;
-//                            Asks UUniverseSubsystem every call: GetSystemsNear(ship,
-//                            ds.Nav.RangeLy) nearest first, without the system the
-//                            ship is in. Stored nowhere.
-//   bool PlotCourse(const FSystemId& Id);
-//                            False in transit, for the system the ship is in, or for
-//                            an id with no system. The course is the one piece of
-//                            universe data the ship holds.
-//   void ClearCourse();
-//   TOptional<FSystemId> GetPlottedSystem() const;
-//   void SetJumpEngaged(bool bOn);        Ignored in transit. Not pilot-gated: the
-//                                         chart chair engages.
-//   bool IsJumpEngaged() const;
-//   EJumpState GetJumpState() const;      EJumpState {Idle, Winding, Ready, Transit},
-//                            declared in Ship/ShipNavState.h. Idle: not engaged.
-//                            Winding: engaged, charge below 1. Ready: engaged and
-//                            charged, holding for alignment as long as it takes.
-//                            Transit: between stars. A word, never a number.
-//   int32 GetJumpSerial() const;          Bumps on every arrival, in the same tick
-//                                         as JumpTo. LocalSystem::Serial.
-//   bool IsInTransit() const;             LocalSystem::InTransit.
-//   double GetTransitProgress() const;    0..1 through the transit; 0 outside it.
-//   TOptional<FVector> GetCourseDirectionShipLocal() const;
-//                            Unit, ship axes (+X the nose), from the ship toward the
-//                            plotted star, through FUniversePosition::operator-.
-//                            Empty with no course. The HUD's bearing words and the
-//                            nose caret read this.
-//
-// The drive -- a lever at the helm; closes a tenth of the room every 1.5 s
-//   bool SetDriveEngaged(APawn* Commander, bool bOn);
-//                            Gated on the pilot exactly as SetFlightCommand is;
-//                            false if refused. Persists when the pilot stands up.
-//   bool IsDriveEngaged() const;
-//
-// Private
-//   FShipNavState NavState;               Decides; holds no current system.
-//   void StepNavigation(float DeltaSeconds);
-//                            NavState.Step, then act on its event. TransitBegan:
-//                            FlightState.SpendJumpCharge(). Arrived:
-//                            FlightState.JumpTo(star - Dir * Standoff) and nothing
-//                            else -- a translation, never a turn; the answer to
-//                            GetSystemAt changes by itself (conflict 1). Standoff =
-//                            max(ds.Nav.StandoffAU * sqrt(L), 1.5 * outermost orbit)
-//                            (conflict 9).
-//   EngineWant goes: the engine wants ds.Nav.WindingWant while engaged and not
-//   yet charged, and 0 otherwise; the charge winds only while engaged. The hum's
-//   EngineFeed is GetConsumerShare(ShipPower::Engine) / ds.Nav.WindingWant.
-//
-// Tick becomes
-//   ApplyAllocation(DeltaTime);   // engine want follows the jump; boosters stretch the drive's tau
-//   FlightState.SetDriveRoom(InTransit ? 0 : LocalSystem::NearestSurfaceDistance(
-//       LocalSystem::Current(World), ship position));
-//   FlightState.Step(DeltaTime);
-//   StepNavigation(DeltaTime);
-//
-// The flight-state side, for reference (Ship/ShipFlightState.h, same wave):
-//   FShipFlightLimits::DriveTau = 15 s, DriveFloor = 1e7 cm; FShipFlightCommand::bDrive;
-//   SetDriveRoom(double); ChargeJumpDrive(DeltaSeconds, Satisfaction,
-//   SecondsFromCold = JumpChargeSeconds); SpendJumpCharge(); JumpTo(const FUniversePosition&),
-//   the fourth write path, private to this subsystem and called from one place.
-// ---------------------------------------------------------------------------
-
 class APawn;
 class UShipModuleDataAsset;
+class UUniverseSubsystem;
 
 /**
  * Authoritative ship state. Knows nothing about meshes, rooms, or the player.
@@ -107,7 +28,18 @@ public:
     /** Convenience accessor. Returns nullptr if there is no world. */
     static UShipSubsystem* Get(const UObject* WorldContext);
 
+    /** Also starts UUniverseSubsystem first: the ship asks it what is out
+     *  there, and asks from begin-play onward. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+
+    /**
+     * The one owner of where the ship starts (plan conflict 3): the start
+     * system's largest planet dead ahead, its star to starboard
+     * (NavStart::OpeningPlacement), and the start system marked visited.
+     * Game worlds only, which includes the tests' worlds; ds.Nav.PlaceAtStart 0
+     * leaves the ship wherever it was.
+     */
+    virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 
     /**
      * The subsystem owns the flight state, so it owns the clock that advances
@@ -233,9 +165,76 @@ public:
     void PlaceShip(const FUniversePosition& NewPosition, const FQuat& NewOrientation);
 
     /** Read-only. There is no non-const accessor: the only write paths are
-     *  SetFlightCommand, ClearPilot and this subsystem's own tick, which is
-     *  what makes the state trustworthy. */
+     *  SetFlightCommand, SetDriveEngaged, ClearPilot and this subsystem's own
+     *  tick -- which is where the jump's JumpTo happens -- and that is what
+     *  makes the state trustworthy. */
     const FShipFlightState& GetFlightState() const;
+
+    // -- the drive: the in-system lever at the helm (sky decision 8) --------
+    //
+    // Two levers, and two words that never swap (plan conflict 7): "the
+    // drive" closes on what is near, "the jump" folds between stars. All C++
+    // only, so nothing a Blueprint inherits changes.
+
+    /**
+     * Gated on the pilot exactly as SetFlightCommand is; false if refused.
+     * A lever, like the throttle: it persists when the pilot stands up, so an
+     * approach can be set and watched from the galley.
+     */
+    bool SetDriveEngaged(APawn* Commander, bool bOn);
+    bool IsDriveEngaged() const;
+
+    // -- the jump: course, heading, engage; it fires by itself ---------------
+
+    /**
+     * What the chart shows: every system within ds.Nav.RangeLy of the ship,
+     * nearest first, without the one the ship is in. Asked of the universe
+     * every call and stored nowhere.
+     */
+    TArray<FStarSystemStub> GetChart() const;
+
+    /** False in transit, for the system the ship is in, and for an id that
+     *  names no system. The course is the one piece of universe data the
+     *  ship holds, the way it holds a throttle setting. */
+    bool PlotCourse(const FSystemId& Id);
+
+    /** Also stands the jump down. Ignored in transit. */
+    void ClearCourse();
+
+    TOptional<FSystemId> GetPlottedSystem() const;
+
+    /** False in transit, and engaging with no course. Not pilot-gated: the
+     *  chart chair engages, and nobody need be at the helm for it. */
+    bool SetJumpEngaged(bool bOn);
+    bool IsJumpEngaged() const;
+
+    /** A word, never a number (EJumpState). */
+    EJumpState GetJumpState() const;
+
+    /** Bumps on every arrival, in the same tick as the ship lands, before any
+     *  actor ticks. LocalSystem::Serial: a cache key for the sky and the
+     *  counter-frame, never an answer. */
+    int32 GetJumpSerial() const;
+
+    bool IsInTransit() const;
+
+    /** 0..1 through the transit, 0 outside it. For the streaks, never for a
+     *  screen. */
+    double GetTransitProgress() const;
+
+    /** Unit, universe axes, from the ship toward the plotted star, through
+     *  FUniversePosition::operator-. Empty with no course. */
+    TOptional<FVector> GetCourseDirection() const;
+
+    /** The same in ship axes, +X the nose: what the helm's bearing words and
+     *  the alignment cone are measured in. */
+    TOptional<FVector> GetCourseDirectionShipLocal() const;
+
+    /** The alignment cone's half-angle, radians, from ds.Nav.ConeDeg: the
+     *  jump and the HUD's "dead ahead" ask the same number. */
+    double GetJumpConeRadians() const;
+
+    bool HasVisited(const FSystemId& Id) const;
 
 private:
     FShipPowerState PowerState;
@@ -247,9 +246,29 @@ private:
     UPROPERTY()
     TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
 
+    /** Decides; holds no current system. */
+    FShipNavState NavState;
+
     /** Applies this frame's allocation to the things it drives. Lights are
      *  the lighting subsystem's job; these are the ones that live here. */
     void ApplyAllocation(float DeltaSeconds);
+
+    /** The drive's input: the nearest surface, from LocalSystem, read once. */
+    void UpdateDriveRoom();
+
+    /** NavState.Step, then act on what it asks for. */
+    void StepNavigation(float DeltaSeconds);
+
+    /** The fold's draw off the top, while the jump winds (ds.Nav.FoldDraw). */
+    void SetFoldDraw(float Watts);
+
+    /** The id of the system the ship is in, asked of its position. */
+    TOptional<FSystemId> SystemHere() const;
+
+    const UUniverseSubsystem* Universe() const;
+
+    /** What SetFoldDraw last put on the reactor; 0 is none. */
+    float FoldDrawWatts = 0.0f;
 
     bool bLightsOn = true;
 
@@ -261,10 +280,17 @@ private:
      * to more than the reactor makes, deliberately: if everything could be
      * fed at once the split would never be a choice, and a choice with no
      * cost is not one.
+     *
+     * The engine is not here: it wants ds.Nav.WindingWant while the jump
+     * winds and nothing otherwise, so an idle drive costs the ship nothing
+     * and staying put is never taxed (nav decision 4). Because an idle want
+     * of zero reads as full satisfaction, anything that wants to follow the
+     * winding -- the hum, in slice 2 -- reads watts delivered,
+     * GetConsumerShare(ShipPower::Engine) over ds.Nav.WindingWant, and never
+     * satisfaction (plan conflict 8).
      */
     static constexpr float LightsWant = 300.0f;
     static constexpr float BoostersWant = 450.0f;
-    static constexpr float EngineWant = 500.0f;
 
     /**
      * How hard a completely starved set of boosters still pushes, as a

@@ -6,6 +6,7 @@
 #include "Ship/ShipLightingSubsystem.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
+#include "Universe/StarSystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -52,6 +53,26 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         Lighting->Refresh();
         TestEqual(TEXT("only the tagged light is the ship's"), Lighting->GetLightCount(), 1);
 
+        // An idle jump drive wants nothing, and so takes part in no split:
+        // staying put costs the ship nothing (nav decision 4). Satisfied, not
+        // starved -- a thing switched off is not a thing working badly.
+        Ship->Tick(0.016f);
+        TestEqual(TEXT("an idle engine wants 0 W"), Ship->GetConsumerWant(ShipPower::Engine), 0.0f);
+        TestEqual(TEXT("and gets none"), Ship->GetConsumerShare(ShipPower::Engine), 0.0f);
+
+        // Engaged, it winds, and wants power to do it.
+        const TArray<FStarSystemStub> Chart = Ship->GetChart();
+        if (!TestTrue(TEXT("there is somewhere to go"), Chart.Num() > 0))
+        {
+            GEngine->DestroyWorldContext(World);
+            World->DestroyWorld(false);
+            return false;
+        }
+        TestTrue(TEXT("a course plots"), Ship->PlotCourse(Chart[0].Id));
+        TestTrue(TEXT("and engages"), Ship->SetJumpEngaged(true));
+        Ship->Tick(0.016f);
+        TestTrue(TEXT("a winding engine wants power"), Ship->GetConsumerWant(ShipPower::Engine) > 0.0f);
+
         // Fed, a light burns at its rating. The default even split leaves
         // the lights fully satisfied because they want the least.
         TestEqual(TEXT("an even split feeds the lights fully"),
@@ -72,11 +93,12 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         // The console's switch is a different thing from starvation: off is
         // off, and the power genuinely goes elsewhere.
         Ship->SetConsumerWeight(ShipPower::Lights, 1.0f);
+        const float EngineWithLights = Ship->GetConsumerShare(ShipPower::Engine);
         Ship->SetLightsOn(false);
         Lighting->Tick(0.016f);
         TestEqual(TEXT("lights off is actually off"), Bulb->Intensity, 0.0f);
-        TestEqual(TEXT("and the engine can then have everything it wants"),
-                  Ship->GetConsumerSatisfaction(ShipPower::Engine), 1.0f);
+        TestTrue(TEXT("and the winding engine has what they were using"),
+                 Ship->GetConsumerShare(ShipPower::Engine) > EngineWithLights);
         Ship->SetLightsOn(true);
 
         // Boosters push softer on a thin allocation, and never stop pushing.
@@ -91,7 +113,8 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("starved boosters push softer"), Starved < Fed);
         TestTrue(TEXT("but they still push"), Starved > 0.0f);
 
-        // The engine's answer to a thin allocation is time, and only time.
+        // The engine's answer to a thin allocation is time, and only time --
+        // and it winds only while engaged.
         Ship->SetConsumerWeight(ShipPower::Engine, 8.0f);
         Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
         const float Before = Ship->GetJumpCharge();
@@ -103,7 +126,20 @@ bool FShipPowerConsumersTest::RunTest(const FString& Parameters)
         const float Slow = Ship->GetJumpCharge() - Middle;
         TestTrue(TEXT("a fed engine charges"), Fast > 0.0f);
         TestTrue(TEXT("a starved one charges slower"), Slow < Fast);
-        TestTrue(TEXT("the charge never runs backwards"), Slow >= 0.0f);
+        TestTrue(TEXT("and still charges: a starved drive always finishes"), Slow > 0.0f);
+
+        // Stood down, it holds exactly where it was and wants nothing: the
+        // charge never leaks while the player is away.
+        Ship->SetConsumerWeight(ShipPower::Engine, 8.0f);
+        Ship->SetJumpEngaged(false);
+        const float Held = Ship->GetJumpCharge();
+        for (int32 Second = 0; Second < 60; ++Second)
+        {
+            Ship->Tick(1.0f);
+        }
+        TestEqual(TEXT("a disengaged drive does not wind"), Ship->GetJumpCharge(), Held);
+        TestTrue(TEXT("and does not decay"), Held > 0.0f);
+        TestEqual(TEXT("and wants nothing"), Ship->GetConsumerWant(ShipPower::Engine), 0.0f);
     }
 
     GEngine->DestroyWorldContext(World);

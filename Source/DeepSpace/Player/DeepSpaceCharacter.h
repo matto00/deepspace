@@ -95,6 +95,10 @@ public:
     /** The lever's position, -1..1. */
     float GetThrottle() const { return Throttle; }
 
+    /** What the drive key does, exposed so a test can press it without an
+     *  input stack. */
+    void PressDrive() { ToggleDrive(); }
+
     /**
      * True when the pointer is live and over something on a ship screen.
      *
@@ -238,6 +242,16 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> ThrottleAction;
 
+    /**
+     * Pressed to toggle the in-system drive (F): a second lever beside the
+     * throttle, which with the drive on closes a tenth of the distance to
+     * the nearest surface every 1.5 s at full travel. Like the throttle it
+     * stays where it is left, so an approach can be set and walked away
+     * from. See Tools/setup_flight_input.py.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> DriveAction;
+
     /** How fast held throttle input sweeps the throttle, fraction per second.
      *  Four seconds lever-stop to lever-stop: slow enough to settle on a
      *  cruise by feel rather than by tapping. */
@@ -270,6 +284,9 @@ private:
     void ClearAttitudeInput(const FInputActionValue& Value);
     void SetThrottleInput(const FInputActionValue& Value);
     void ClearThrottleInput(const FInputActionValue& Value);
+
+    /** Flips the drive. Refused by the subsystem unless we are the pilot. */
+    void ToggleDrive();
 
     /** Sweeps the throttle and hands the ship this frame's intent. Refused by
      *  the subsystem unless we are the pilot, which is the only gate. */

@@ -34,15 +34,13 @@ MATERIAL_DIR = "/Game/Materials"
 CONSOLE_BP = "/Game/Blueprints/BP_ShipConsole"
 GAMEMODE_BP = "/Game/Blueprints/BP_DeepSpaceGameMode"
 GRID_MATERIAL = "/Game/LevelPrototyping/Materials/M_PrototypeGrid"
-GLASS_MATERIAL = "/Game/Materials/M_Glass"
-STAR_MATERIAL = "/Game/Materials/M_Star"
 
 MESHES = {
     "cube": "/Game/LevelPrototyping/Meshes/SM_Cube",
     "chamfer": "/Game/LevelPrototyping/Meshes/SM_ChamferCube",
     "cylinder": "/Game/LevelPrototyping/Meshes/SM_Cylinder",
 }
-SPHERE = "/Engine/BasicShapes/Sphere"
+SPHERE = PL.SPHERE
 
 # Every actor the script owns carries this prefix and is rebuilt each run.
 TAG = "hauler_"
@@ -50,7 +48,13 @@ TAG = "hauler_"
 # The consumer group the ship's lights belong to; ShipPower::Lights in C++.
 LIGHTS_TAG = PL.LIGHTS_TAG
 TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
-SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
+# Everything the level template brought from a planet's surface. The sun is
+# among them: there is exactly one, AShipSky's, and it is where the local star
+# is (sky decision 5). The SkyLight goes too. It had no cubemap to light with,
+# so it added nothing, and a sky light is the one other way the outside could
+# reach the deck; nothing but the sun through the glass should.
+SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog,
+                unreal.DirectionalLight, unreal.SkyLight)
 
 TEAL = (0.05, 0.55, 0.55)
 
@@ -148,11 +152,14 @@ def emissive_instance(role, colour, base):
     return mi
 
 
-def star_material():
-    existing = _asset(STAR_MATERIAL)
-    if existing:
+def sky_asset(name, required=True):
+    """One of the sky's authored assets. They are made by
+    Tools/setup_sky_materials.py, not here, so a missing one means that has
+    not run: say so rather than build a level that draws every star alike."""
+    existing = _asset(PL.sky_package(name))
+    if existing or not required:
         return existing
-    raise RuntimeError(STAR_MATERIAL + " is missing; it is created by the milestone 1 build")
+    raise RuntimeError("%s is missing; run Tools/setup_sky_materials.py first" % PL.sky_package(name))
 
 
 def materials():
@@ -161,7 +168,9 @@ def materials():
     out = {role: panelled_instance(role, *spec) for role, spec in PANELLED.items()}
     base = emissive_base()
     out.update({role: emissive_instance(role, c, base) for role, c in EMISSIVE.items()})
-    out["glass"] = unreal.EditorAssetLibrary.load_asset(GLASS_MATERIAL)
+    # The sky's glass: unlit and translucent, so the lamps add nothing to it
+    # and the stars behind stay honest under fixed exposure (sky decision 6).
+    out["glass"] = sky_asset("M_SkyGlass")
     return out
 
 
@@ -195,6 +204,10 @@ def spawn_box(actor_sub, box, mesh, material):
     component.set_static_mesh(mesh)
     component.set_mobility(unreal.ComponentMobility.STATIC)
     component.set_material(0, material)
+    # The sunlight on the deck is the shape of the windows, which it can only
+    # be if the glass in them casts no shadow (sky decision 5).
+    if box.role == "glass":
+        component.set_editor_property("cast_shadow", False)
     return actor
 
 
@@ -208,17 +221,6 @@ def clear_previous(actor_sub):
             actor_sub.destroy_actor(actor)
             removed += 1
     return removed
-
-
-def tame_sky_light(actor_sub):
-    """No atmosphere to capture in space, so a real-time-capture SkyLight only
-    warns. Capture once, and keep it faint."""
-    for actor in actor_sub.get_all_level_actors():
-        if isinstance(actor, unreal.SkyLight):
-            c = actor.get_component_by_class(unreal.SkyLightComponent)
-            c.set_editor_property("real_time_capture", False)
-            c.set_editor_property("source_type", unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
-            c.set_editor_property("intensity", 0.05)
 
 
 def place_lights(actor_sub, lights):
@@ -249,24 +251,54 @@ def place_lights(actor_sub, lights):
         c.set_editor_property("cast_shadows", bool(light.shadows))
 
 
-def place_counter_frame(actor_sub, sphere, material):
+def place_counter_frame(actor_sub, sphere):
     """The parent of everything outside the hull (ADR 0005).
 
     The ship never moves: the universe is drawn through the inverse of where
     the ship is and which way it points, and this actor carries the rotation
     half of that. Its starfield is generated in C++ at BeginPlay, so the stars
-    are runtime state belonging to the ship's frame rather than 160 rows in a
-    binary .umap. All this script does is hand it the mesh and material --
+    are runtime state belonging to the ship's frame rather than rows in a
+    binary .umap. All this script does is hand it the mesh and materials --
     asset assignment only, per ADR 0002.
+
+    Each layer has its own material because each asks something different of
+    it. The dome is the galaxy: M_SkyStarfield reads every star's colour and
+    brightness from its instance data, and any other material draws all
+    3,000 alike. The motes are dust at cruise: M_SkyStar has the Brightness
+    they fade by under the drive, and the course marker is tinted from it.
     """
     frame = actor_sub.spawn_actor_from_class(
         unreal.ShipCounterFrame, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     frame.set_actor_label(TAG + "counterframe")
-    for layer in ("distant_stars", "near_stars"):
+    for layer, material in (("distant_stars", "M_SkyStarfield"), ("near_stars", "M_SkyStar")):
         component = frame.get_editor_property(layer)
         component.set_static_mesh(sphere)
-        component.set_material(0, material)
+        component.set_material(0, sky_asset(material))
     return frame
+
+
+def place_sky(actor_sub, sphere):
+    """Everything outside the glass that is somewhere: the local star, its
+    planets, the neighbours, the one sun on the deck and the fixed exposure
+    (sky spec). AShipSky builds all of it at runtime from what the ship
+    subsystem answers; the level holds one of it, at the origin, with its
+    assets. It attaches itself to the counter-frame at BeginPlay, so where
+    it is placed does not matter, and the origin says so.
+
+    MPC_Sky is the glass veil's, which lands in slice 2. Until the collection
+    exists the slot stays empty and the sky writes nothing to it.
+    """
+    sky = actor_sub.spawn_actor_from_class(
+        unreal.ShipSky, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    sky.set_actor_label(TAG + "sky")
+    sky.set_editor_property("body_mesh", sphere)
+    sky.set_editor_property("body_material", sky_asset("M_SkyBody"))
+    sky.set_editor_property("star_material", sky_asset("M_SkyStar"))
+    sky.set_editor_property("point_star_material", sky_asset("M_SkyStarfield"))
+    parameters = sky_asset("MPC_Sky", required=False)
+    if parameters:
+        sky.set_editor_property("sky_parameters", parameters)
+    return sky
 
 
 def build():
@@ -280,7 +312,6 @@ def build():
         level_sub.new_level(MAP_PATH)
 
     removed = clear_previous(actor_sub)
-    tame_sky_light(actor_sub)
 
     mats = materials()
     meshes = {k: unreal.EditorAssetLibrary.load_asset(p) for k, p in MESHES.items()}
@@ -288,7 +319,9 @@ def build():
         spawn_box(actor_sub, box, meshes[box.mesh], mats[box.role])
 
     place_lights(actor_sub, ship.lights)
-    place_counter_frame(actor_sub, unreal.EditorAssetLibrary.load_asset(SPHERE), star_material())
+    sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
+    place_counter_frame(actor_sub, sphere)
+    place_sky(actor_sub, sphere)
 
     console = actor_sub.spawn_actor_from_class(
         unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP),
@@ -329,9 +362,10 @@ def build():
     level_sub.save_current_level()
 
     summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights (%d practical, "
-               "shadowed), one counter-frame."
+               "shadowed), %d glass panes casting no shadow, one counter-frame, one sky."
                % (removed, len(ship.boxes), len(ship.lights),
-                  sum(1 for light in ship.lights if light.shadows)))
+                  sum(1 for light in ship.lights if light.shadows),
+                  sum(1 for box in ship.boxes if box.role == "glass")))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)

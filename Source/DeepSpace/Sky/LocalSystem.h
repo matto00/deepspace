@@ -29,8 +29,10 @@ namespace LocalSystem
     /**
      * The system the ship is in, by value: FSkySystem::FromSystem of
      * UUniverseSubsystem::GetSystemAt(ship position) and its neighbours from
-     * GetSystemsNear. By value because procgen caches nothing, so there is
-     * nothing a reference could point into (plan conflict 1).
+     * GetSystemsNear, out to the chart's 12 ly. By value because procgen
+     * caches nothing, so there is nothing a reference could point into (plan
+     * conflict 1). Generated afresh every call, which costs about 0.06 ms --
+     * cheap enough that nobody need keep a copy.
      *
      * Empty -- no bodies, no neighbours -- with no world, no universe, or the
      * ship between stars.
