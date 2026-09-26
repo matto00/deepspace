@@ -18,7 +18,7 @@
     "M_SkyGlass":     { "parameters": [] }
   },
   "collections": {
-    "MPC_Sky": { "parameters": ["interior_light", "veil"], "pending": "slice 2: the glass veil" }
+    "MPC_Sky": { "parameters": ["interior_light", "veil"], "defaults": { "interior_light": 1.0, "veil": 1.0 } }
   },
   "constants": {
     "lambert_disc_gain": 1.5,
@@ -26,6 +26,7 @@
     "mottle_scale": 0.04,
     "rim_exponent": 5.0,
     "glass_opacity": 0.12,
-    "glass_tint": [0.0, 0.004, 0.005]
+    "glass_tint": [0.0, 0.004, 0.005],
+    "veil_colour": [0.5, 0.47, 0.42]
   }
 }

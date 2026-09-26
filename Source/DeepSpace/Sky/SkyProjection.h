@@ -126,9 +126,9 @@ struct DEEPSPACE_API FSkyFrame
      *  0 with no star. */
     double SunIrradiance = 0.0;
 
-    /** How much of the star's disc is not behind a nearer body. Always 1
-     *  until the eclipse term lands (slice 2), so the actor can multiply by
-     *  it from the first day. */
+    /** How much of the star's disc is not behind a nearer body: 1 in open
+     *  sky, 0 parked in a planet's shadow (sky decision 5). 1 with no star:
+     *  there is nothing to hide, and SunIrradiance is already 0. */
     double SunVisibleFraction = 1.0;
 };
 
@@ -146,6 +146,21 @@ namespace SkyProjection
      * at the same total flux through the resolve.
      */
     DEEPSPACE_API double LambertPhase(double Alpha);
+
+    /**
+     * The fraction of disc A covered by disc B, from their angular radii and
+     * the angle between their centres, all in rad: 0 apart, 1 when B covers
+     * A, (RadiusB / RadiusA)^2 when B sits wholly inside A.
+     *
+     * Plane discs, not spherical caps. Containment and separation are exact
+     * either way, since both are angles; only the shape of the lens between
+     * is approximate, by the difference between a planet limb's curvature on
+     * the sphere and in the plane, which across a sun half a degree wide is
+     * far below anything the deck's light level can show. The plane form
+     * stays exact for micro-radian discs, where the spherical one's
+     * arc-cosines of numbers next to 1 have nothing left to say.
+     */
+    DEEPSPACE_API double DiscOverlapFraction(double Separation, double RadiusA, double RadiusB);
 
     /** Ratio ^ Gamma: how irradiance spans are squeezed into a screen. */
     DEEPSPACE_API double Compress(double Ratio, double Gamma);

@@ -1,10 +1,14 @@
 #include "UI/ShipHUDWidget.h"
 
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "Blueprint/WidgetTree.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "Player/DeepSpaceCharacter.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/NavText.h"
@@ -25,6 +29,17 @@ namespace
     constexpr float DotFull = 7.0f;
 
     constexpr float Margin = 42.0f;
+
+    /** The caret's ring, slate units: wide enough that the marker's six
+     *  pixels sit inside it with room to see they are centred, and thin, so
+     *  it frames the marker rather than covering it. */
+    constexpr float CaretSize = 16.0f;
+    constexpr float CaretLine = 1.5f;
+
+    /** Any distance projects to the same place from a point taken relative to
+     *  the camera; 100 km keeps it far inside float range after the view
+     *  transform. */
+    constexpr double CaretDistance = 1.0e7;
 
     /** A dash reads as "no reading", where a zero would read as a measurement. */
     const FText Blank = NSLOCTEXT("DeepSpace", "HUDBlank", "-----");
@@ -51,6 +66,8 @@ namespace
         return Fraction < 1.0 ? FString::Printf(TEXT("%.2f C"), Fraction) : FString::Printf(TEXT("%.0f C"), Fraction);
     }
 }
+
+const FName UShipHUDWidget::NoseCaretName(TEXT("NoseCaret"));
 
 UShipHUDWidget::UShipHUDWidget(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
@@ -113,6 +130,25 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
         DotSlot->SetAnchors(FAnchors(0.5f, 0.5f));
         DotSlot->SetAlignment(FVector2D(0.5f, 0.5f));
         DotSlot->SetSize(FVector2D(DotIdle, DotIdle));
+    }
+
+    // The nose caret, hidden until there is a course to put it on. A ring
+    // rather than a chevron: it has a centre, and aligned is "the teal point
+    // is in the ring". Ink, not the accent, so it never reads as a second
+    // marker. Found again by name in NativeTick; it is not a member.
+    UBorder* Caret = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), NoseCaretName);
+    FSlateBrush Ring;
+    Ring.DrawAs = ESlateBrushDrawType::RoundedBox;
+    Ring.TintColor = FSlateColor(FLinearColor::Transparent);
+    Ring.OutlineSettings = FSlateBrushOutlineSettings(FSlateColor(UShipScreenWidget::Ink), CaretLine);
+    Caret->SetBrush(Ring);
+    Caret->SetVisibility(ESlateVisibility::Collapsed);
+    Canvas->AddChild(Caret);
+    if (UCanvasPanelSlot* CaretSlot = Cast<UCanvasPanelSlot>(Caret->Slot))
+    {
+        CaretSlot->SetAnchors(FAnchors(0.0f, 0.0f));
+        CaretSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+        CaretSlot->SetSize(FVector2D(CaretSize, CaretSize));
     }
 
     // The prompt lives in a corner, not under the dot. The dot already says
@@ -216,6 +252,8 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
             : FText::Format(NSLOCTEXT("DeepSpace", "HUDPrompt", "(E)  {0}"), What));
     }
 
+    PlaceNoseCaret(ShipState);
+
     if (!ShipState)
     {
         return;
@@ -263,6 +301,52 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     {
         DriveLine->SetText(DriveLineText(*ShipState, Universe));
     }
+}
+
+void UShipHUDWidget::PlaceNoseCaret(const UShipSubsystem* ShipState)
+{
+    UWidget* Caret = WidgetTree ? WidgetTree->FindWidget(NoseCaretName) : nullptr;
+    if (!Caret)
+    {
+        return;
+    }
+    APlayerController* Controller = GetOwningPlayer();
+    const APlayerCameraManager* Camera = Controller ? Controller->PlayerCameraManager.Get() : nullptr;
+
+    // Projected rather than drawn at the screen's centre: at the helm the
+    // mouse keeps looking, so the view is not the nose, and the caret must
+    // say where the nose is wherever the head has turned.
+    FVector2D Position = FVector2D::ZeroVector;
+    bool bShow = ShipState && Camera && ShowsNoseCaret(*ShipState, GetOwningPlayerPawn())
+        && UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(
+               Controller, NoseCaretWorldPoint(Camera->GetCameraLocation()), Position, false);
+    if (bShow)
+    {
+        // Off the edge of the view it is hidden, not pinned to the border: a
+        // caret at the edge would claim the nose is there.
+        const float Scale = FMath::Max(UWidgetLayoutLibrary::GetViewportScale(this), UE_KINDA_SMALL_NUMBER);
+        const FVector2D Size = UWidgetLayoutLibrary::GetViewportSize(this) / Scale;
+        bShow = Position.X >= 0.0 && Position.Y >= 0.0 && Position.X <= Size.X && Position.Y <= Size.Y;
+    }
+
+    Caret->SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (bShow)
+    {
+        if (UCanvasPanelSlot* CaretSlot = Cast<UCanvasPanelSlot>(Caret->Slot))
+        {
+            CaretSlot->SetPosition(Position);
+        }
+    }
+}
+
+bool UShipHUDWidget::ShowsNoseCaret(const UShipSubsystem& ShipState, const APawn* Viewer)
+{
+    return Viewer && ShipState.GetPilot() == Viewer && ShipState.GetPlottedSystem().IsSet() && !ShipState.IsInTransit();
+}
+
+FVector UShipHUDWidget::NoseCaretWorldPoint(const FVector& CameraLocation)
+{
+    return CameraLocation + FVector::ForwardVector * CaretDistance;
 }
 
 FText UShipHUDWidget::DriveLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)

@@ -9,6 +9,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameterCollection.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/ShipSky.h"
@@ -74,6 +75,7 @@ namespace SkyTestWorld
                 Sky->BodyMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::BodyPath);
                 Sky->StarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarPath);
                 Sky->PointStarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarfieldPath);
+                Sky->SkyParameters = LoadObject<UMaterialParameterCollection>(nullptr, SkyMaterial::ParametersPath);
             }
         }
 
