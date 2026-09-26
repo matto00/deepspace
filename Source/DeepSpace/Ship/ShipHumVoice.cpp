@@ -15,17 +15,6 @@ namespace
         return 1.0 - FMath::Exp(-TwoPi * CutoffHz / SampleRate);
     }
 
-    /**
-     * The RMS of uniform [-1, 1) noise after that low-pass, from the filter's
-     * noise gain a / (2 - a). A hiss's level is its RMS, because the peak of
-     * noise means nothing; dividing by this keeps "level" meaning the same
-     * loudness whatever the cutoff, so opening the filter brightens the hiss
-     * rather than quietening it.
-     */
-    double LowPassedNoiseRms(double Coefficient)
-    {
-        return FMath::Sqrt(Coefficient / (2.0 - Coefficient)) / FMath::Sqrt(3.0);
-    }
 }
 
 float ShipHum::EngineFeed(float EngineShareWatts, float WindingWantWatts)
@@ -153,9 +142,12 @@ void FShipHumVoice::Render(float* Out, int32 NumSamples)
         {
             const double Cutoff = Settings.bFollowsShip ? NoiseCutoffHz + NoiseCutoffRise * Push : AirCutoffHz;
             const double Level = Settings.bFollowsShip ? NoiseLevel + NoiseRise * Push : AirLevel;
-            const double Coefficient = LowPassCoefficient(Cutoff, Rate);
-            NoiseLowPassed += Coefficient * (NextNoise() - NoiseLowPassed);
-            Sample += Level * NoiseLowPassed / LowPassedNoiseRms(Coefficient);
+            // The level multiplies the filtered noise as it is, not its RMS:
+            // the hiss is quiet at idle and louder as the filter opens, and
+            // because a one-pole of draws in [-1, 1) never leaves [-1, 1),
+            // each level is also a hard bound on that term's peak.
+            NoiseLowPassed += LowPassCoefficient(Cutoff, Rate) * (NextNoise() - NoiseLowPassed);
+            Sample += Level * NoiseLowPassed;
         }
 
         Out[Index] = static_cast<float>(MasterGain * Presence * Sample);

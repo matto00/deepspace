@@ -1,4 +1,5 @@
 #include "AudioDevice.h"
+#include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -72,8 +73,21 @@ namespace
         return World;
     }
 
+    /**
+     * Play ends before the world goes, as it does in the game: EndPlay stops
+     * every hum, and the flush waits on the audio thread until the mixer
+     * holds nothing of this world. Destroying a world whose synths are still
+     * live left the audio thread rendering into freed components, and the
+     * editor process sometimes died there with no test result at all.
+     */
     void DestroyWorld(UWorld* World)
     {
+        World->EndPlay(EEndPlayReason::RemovedFromWorld);
+        if (FAudioDevice* Device = World->GetAudioDeviceRaw())
+        {
+            Device->Flush(World);
+            Device->Update(true);
+        }
         GEngine->DestroyWorldContext(World);
         World->DestroyWorld(false);
     }
@@ -113,6 +127,8 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
 
     AShipHumSource* Reactor = SpawnSource(World, EShipHumKind::Reactor, FVector(600.0, 280.0, 120.0));
     AShipHumSource* Air = SpawnSource(World, EShipHumKind::Air, FVector(1055.0, 280.0, 230.0));
+    // A second room's air: the galley's and the bunk's, at their ceilings.
+    AShipHumSource* OtherAir = SpawnSource(World, EShipHumKind::Air, FVector(800.0, -240.0, 230.0));
 
     // A test world has no game mode, and UWorld::BeginPlay reaches actors
     // only through one; the last call is the one its game state would make.
@@ -122,7 +138,8 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
 
     UShipSubsystem* Ship = World->GetSubsystem<UShipSubsystem>();
     if (!TestNotNull(TEXT("the world has a ship"), Ship)
-        || !TestNotNull(TEXT("a reactor hum"), Reactor) || !TestNotNull(TEXT("an air hum"), Air))
+        || !TestNotNull(TEXT("a reactor hum"), Reactor) || !TestNotNull(TEXT("an air hum"), Air)
+        || !TestNotNull(TEXT("and another room's"), OtherAir))
     {
         DestroyWorld(World);
         return false;
@@ -139,12 +156,24 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("a room's air, 6 m"), AirHum->AttenuationOverrides.FalloffDistance, UShipHumComponent::AirFalloff);
     TestTrue(TEXT("both are spatialised"), ReactorHum->bAllowSpatialization && AirHum->AttenuationOverrides.bSpatialize);
 
+    // -- every source hisses its own noise --------------------------------------
+    //
+    // Two air sources on one seed play the same noise from two points, and
+    // walking between them combs it into a whistle. HumVoice proves a voice
+    // honours its seed; this proves placed sources are given different ones.
+    const uint32 AirSeed = AirHum->GetSeed();
+    const uint32 OtherAirSeed = OtherAir->GetHum()->GetSeed();
+    TestNotEqual(TEXT("two rooms' air never share a seed"), AirSeed, OtherAirSeed);
+    TestNotEqual(TEXT("nor the air and the reactor"), AirSeed, ReactorHum->GetSeed());
+    TestNotEqual(TEXT("nor the other room's and the reactor"), OtherAirSeed, ReactorHum->GetSeed());
+
     // -- the feed follows the winding, and nothing else -----------------------
     const auto Tick = [&](float Seconds)
     {
         Ship->Tick(Seconds);
         ReactorHum->TickComponent(Seconds, LEVELTICK_All, nullptr);
         AirHum->TickComponent(Seconds, LEVELTICK_All, nullptr);
+        OtherAir->GetHum()->TickComponent(Seconds, LEVELTICK_All, nullptr);
     };
 
     Tick(0.1f);
@@ -237,6 +266,34 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
              Starved > 0.0f && Starved < CruiseHiss);
     Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
 
+    // -- ds.Hum.Volume, the way out if the hum wears ---------------------------
+    //
+    // Lived-in *Risks* names it as the first thing to turn down, so it must
+    // reach the sound, and be read each tick rather than once.
+    {
+        const auto Volume = [](UShipHumComponent* Hum)
+        {
+            const UAudioComponent* Audio = Hum->GetAudioComponent();
+            return Audio ? Audio->VolumeMultiplier : -1.0f;
+        };
+        {
+            FScopedCVar Down(TEXT("ds.Hum.Volume"), 0.25f);
+            Tick(0.0f);
+            TestTrue(FString::Printf(TEXT("ds.Hum.Volume 0.25 turns the reactor down (%.3f)"), Volume(ReactorHum)),
+                     Near(Volume(ReactorHum), 0.25f));
+            TestTrue(FString::Printf(TEXT("and the air (%.3f)"), Volume(AirHum)), Near(Volume(AirHum), 0.25f));
+        }
+        {
+            FScopedCVar Further(TEXT("ds.Hum.Volume"), 0.1f);
+            Tick(0.0f);
+            TestTrue(FString::Printf(TEXT("moved again in play, the hum follows it (%.3f)"), Volume(ReactorHum)),
+                     Near(Volume(ReactorHum), 0.1f));
+        }
+        Tick(0.0f);
+        TestTrue(FString::Printf(TEXT("and put back, it is back at its designed level (%.3f)"), Volume(ReactorHum)),
+                 Near(Volume(ReactorHum), 1.0f));
+    }
+
     // -- the mixer pulls it ---------------------------------------------------
     //
     // Headless, the audio device is real (SDL over PulseAudio). Turned down
@@ -254,6 +311,8 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
         Tick(0.0f);
         TestTrue(TEXT("the reactor hum is playing from BeginPlay"), ReactorHum->IsPlaying());
         TestTrue(TEXT("and so is the air"), AirHum->IsPlaying());
+        TestTrue(TEXT("hushed for this run"), ReactorHum->GetAudioComponent()
+                 && Near(ReactorHum->GetAudioComponent()->VolumeMultiplier, 0.01f));
 
         const double Until = FPlatformTime::Seconds() + 2.0;
         while (FPlatformTime::Seconds() < Until
@@ -266,10 +325,6 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
                  ReactorHum->GetSamplesRendered() >= 4096);
         TestTrue(FString::Printf(TEXT("and the air's (%lld samples)"), AirHum->GetSamplesRendered()),
                  AirHum->GetSamplesRendered() >= 4096);
-
-        ReactorHum->Stop();
-        AirHum->Stop();
-        Device->Update(true);
     }
 
     DestroyWorld(World);

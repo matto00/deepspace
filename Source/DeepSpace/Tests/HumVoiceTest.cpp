@@ -103,7 +103,32 @@ bool FHumVoiceTest::RunTest(const FString& Parameters)
         }
         TestTrue(At + TEXT(": no NaN, no infinity"), bFinite);
         TestTrue(At + FString::Printf(TEXT(": |x| <= 1 (peak %.4f)"), Peak), Peak <= 1.0f);
-        TestTrue(At + FString::Printf(TEXT(": and quiet -- under -12 dBFS (peak %.4f)"), Peak), Peak < 0.25f);
+    }
+
+    // -- loudness: at or under -18 dBFS, the air quietest ---------------------
+    //
+    // Lived-in *Risks*: a drone heard for two hours must not wear. Every term
+    // at its top, settled, then two seconds of the loudest the reactor can
+    // be; and the air, which never moves.
+    {
+        const float Ceiling = FMath::Pow(10.0f, -18.0f / 20.0f);
+        for (const float Rate : { 44100.0f, 48000.0f })
+        {
+            for (const bool bAir : { false, true })
+            {
+                FShipHumVoice Voice(Rate, 777u, bAir ? FShipHumVoice::Air() : FShipHumVoice::Reactor());
+                Voice.SetTargets(Inputs(1.0f, 1.0f));
+                Render(Voice, 10.0 * FShipHumVoice::SmoothingSeconds);
+                float Peak = 0.0f;
+                for (const float Sample : Render(Voice, 2.0))
+                {
+                    Peak = FMath::Max(Peak, FMath::Abs(Sample));
+                }
+                TestTrue(FString::Printf(TEXT("at %.0f Hz the %s at full feed and push peaks at or under -18 dBFS (%.4f, %.1f dBFS)"),
+                                         Rate, bAir ? TEXT("air") : TEXT("reactor"), Peak, 20.0f * FMath::LogX(10.0f, Peak)),
+                         Peak > 0.0f && Peak <= Ceiling);
+            }
+        }
     }
 
     // -- smoothing, on the parameter trajectory ---------------------------------
@@ -214,6 +239,17 @@ bool FHumVoiceTest::RunTest(const FString& Parameters)
         const double Air = SettledRms(FShipHumVoice::Air(), 0.0f, 0.0f);
         TestTrue(FString::Printf(TEXT("and quieter than the reactor's drone at its lowest (%.4f against %.4f)"), Air, Starved),
                  Air > 0.0 && Air < Starved);
+        // And under the boosters holding a cruise, at ds.Hum.CruiseHiss's
+        // default of 0.35: the hiss the player lives with most. Only the
+        // reactor's idle floor is quieter, and it is under the drone.
+        const double Cruising = SettledRms(Hiss, 0.0f, 0.35f);
+        TestTrue(FString::Printf(TEXT("and quieter than the boosters' hiss at a cruise (%.5f against %.5f)"), Air, Cruising),
+                 Air < Cruising);
+        // The hiss answers the throttle; it does not take over the voice.
+        // Flat out it stays 6 dB or more under the drone at its lowest, and a
+        // hiss is heard over a drone more readily than its RMS says.
+        TestTrue(FString::Printf(TEXT("the boosters flat out hiss under the drone they sit in (%.4f against %.4f)"), Pushing, Starved),
+                 Pushing < 0.5 * Starved);
     }
 
     return true;

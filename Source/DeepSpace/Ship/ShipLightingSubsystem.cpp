@@ -45,6 +45,17 @@ void UShipLightingSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 
 void UShipLightingSubsystem::Refresh()
 {
+    // A light found before keeps the rating it was found with. What it holds
+    // now is whatever this subsystem last dimmed it to, and re-reading that
+    // while starved would make the brown-out the new rating.
+    TMap<const UPointLightComponent*, FShipLight> Known;
+    for (const FShipLight& Entry : Lights)
+    {
+        if (const UPointLightComponent* Light = Entry.Light.Get())
+        {
+            Known.Add(Light, Entry);
+        }
+    }
     Lights.Reset();
 
     UWorld* World = GetWorld();
@@ -65,6 +76,11 @@ void UShipLightingSubsystem::Refresh()
             continue;
         }
 
+        if (const FShipLight* Previous = Known.Find(Light))
+        {
+            Lights.Add(*Previous);
+            continue;
+        }
         FShipLight Entry;
         Entry.Light = Light;
         Entry.RatedIntensity = Light->Intensity;

@@ -69,6 +69,9 @@ public:
     /** What was last posted to the audio thread. */
     FShipHumInputs GetPostedInputs() const;
 
+    /** The seed its noise was started with, fixed at BeginPlay. */
+    uint32 GetSeed() const;
+
     /** Samples the mixer has pulled from this hum, all told. */
     int64 GetSamplesRendered() const;
 

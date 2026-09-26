@@ -128,19 +128,25 @@ public:
     static constexpr float SecondLevel = 0.15f;      // the pair together
     static constexpr float ThirdLevel = 0.04f;
     static constexpr float ThirdRise = 0.20f;        // at Feed 1
-    static constexpr float NoiseLevel = 0.02f;       // RMS
+    static constexpr float NoiseLevel = 0.02f;       // of the filtered noise, not its RMS
     static constexpr float NoiseRise = 0.20f;        // at Push 1
     static constexpr float NoiseCutoffHz = 400.0f;
     static constexpr float NoiseCutoffRise = 1200.0f; // at Push 1
-    static constexpr float AirLevel = 0.04f;         // RMS; the quietest thing aboard
+    /** Filtered-noise level of a room's air, as NoiseLevel is. At its
+     *  600 Hz cutoff that is an RMS of about 0.007 before MasterGain:
+     *  under the boosters' hiss holding a cruise and far under the drone,
+     *  the quietest thing aboard (lived-in *Risks*). */
+    static constexpr float AirLevel = 0.06f;
     static constexpr float AirCutoffHz = 600.0f;
 
     /** Every level, frequency and cutoff glides with this time constant, so
      *  moving a slider makes the ship settle into a new note. */
     static constexpr float SmoothingSeconds = 0.8f;
 
-    /** Worst-case tonal peak 0.69 x this, about 0.086 (-21 dBFS); the hiss
-     *  adds its RMS on top. */
+    /** Worst-case peak, every level at its top: (0.30 + 0.15 + 0.24 + 0.22)
+     *  x this = 0.114, -19 dBFS. A bound, not an estimate -- no term's
+     *  magnitude ever exceeds its level -- and inside lived-in *Risks*'
+     *  -18 dBFS. */
     static constexpr float MasterGain = 0.125f;
 
 private:

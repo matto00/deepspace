@@ -10,6 +10,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/ShipLightingSubsystem.h"
+#include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 
@@ -99,6 +100,7 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
     UPointLightComponent* Bulb = BunkLight->FindComponentByClass<UPointLightComponent>();
     Bulb->SetMobility(EComponentMobility::Movable);
     Bulb->SetLightColor(FLinearColor(FColor(255, 167, 87)));
+    const float RatedIntensity = Bulb->Intensity;
 
     // Play begins as the level's does: the subsystem finds everything then.
     World->InitializeActorsForPlay(FURL());
@@ -109,6 +111,7 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
     UShipLightingSubsystem* Lighting = World->GetSubsystem<UShipLightingSubsystem>();
     if (!TestNotNull(TEXT("the world has a ship"), Ship) || !TestNotNull(TEXT("and a lighting subsystem"), Lighting))
     {
+        World->EndPlay(EEndPlayReason::RemovedFromWorld);
         GEngine->DestroyWorldContext(World);
         World->DestroyWorld(false);
         return false;
@@ -160,9 +163,80 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
     // dimmed glow this subsystem wrote into the panel.
     Lighting->Refresh();
     TestEqual(TEXT("a second Refresh finds the same two panels"), Lighting->GetLampCount(), 2);
+    TestEqual(TEXT("and the one light"), Lighting->GetLightCount(), 1);
     Ship->SetConsumerWeight(ShipPower::Lights, 1.0f);
     Lighting->Tick(0.016f);
     TestTrue(TEXT("fed again, it is back at its rating"), SameColour(Glow(BunkPanel), BunkRated, 0.01f));
+    TestTrue(FString::Printf(TEXT("and so is the light, not at the dimmed level it was refreshed at (%.1f of %.1f)"),
+                             Bulb->Intensity, RatedIntensity),
+             FMath::IsNearlyEqual(Bulb->Intensity, RatedIntensity, 1e-3f * RatedIntensity));
+
+    // -- the flicker, and a brown-out part of the way down -----------------------
+    //
+    // A panel is the light it belongs to, seen: at every moment its glow is
+    // the fraction of its rating the light's intensity is of its own, flicker
+    // included. Checked across two seconds of phases, starved and then half
+    // way into the brown-out, and each run must see the light visibly
+    // flicker, or it proves nothing about the flicker.
+    const auto FollowsTheLight = [&](const TCHAR* Case, float MinSwing)
+    {
+        const FLinearColor LightRated = LightFed;
+        float Worst = 0.0f;
+        float WorstColour = 0.0f;
+        float Dimmest = TNumericLimits<float>::Max();
+        float Brightest = 0.0f;
+        for (int32 Step = 0; Step < 200; ++Step)
+        {
+            Lighting->Tick(0.01f);
+            const float LightFraction = Bulb->Intensity / RatedIntensity;
+            Dimmest = FMath::Min(Dimmest, LightFraction);
+            Brightest = FMath::Max(Brightest, LightFraction);
+            const FLinearColor LightNow = Bulb->GetLightColor();
+            for (const TPair<const AStaticMeshActor*, FLinearColor>& Panel :
+                 { TPair<const AStaticMeshActor*, FLinearColor>(BunkPanel, BunkRated),
+                   TPair<const AStaticMeshActor*, FLinearColor>(AirlockPanel, AirlockRated) })
+            {
+                const FLinearColor Now = Glow(Panel.Key);
+                const FLinearColor Rated = Panel.Value;
+                Worst = FMath::Max(Worst, FMath::Abs((Now.R / Rated.R) / LightFraction - 1.0f));
+                const float PanelBlue = (Now.B / Now.R) / (Rated.B / Rated.R);
+                const float LightBlue = (LightNow.B / LightNow.R) / (LightRated.B / LightRated.R);
+                WorstColour = FMath::Max(WorstColour, FMath::Abs(PanelBlue / LightBlue - 1.0f));
+            }
+        }
+        TestTrue(FString::Printf(TEXT("%s: the light flickers (%.4f to %.4f of its rating)"), Case, Dimmest, Brightest),
+                 Dimmest > 0.0f && Brightest / Dimmest > MinSwing);
+        TestTrue(FString::Printf(TEXT("%s: and every panel glows at the light's fraction, tick by tick (worst %.2f%% out)"),
+                                 Case, 100.0f * Worst),
+                 Worst <= 0.001f);
+        TestTrue(FString::Printf(TEXT("%s: browned out as far as the light is (worst %.1f%% out)"), Case, 100.0f * WorstColour),
+                 WorstColour <= 0.05f);
+    };
+
+    Ship->SetConsumerWeight(ShipPower::Lights, 0.0f);
+    FollowsTheLight(TEXT("starved"), 1.3f);
+
+    // Part way: a load off the top leaves 100 W for the lights and boosters
+    // to split evenly, and the lights, wanting 300, get a sixth -- half way
+    // into the brown-out rather than at either end of it.
+    UShipModuleDataAsset* Load = NewObject<UShipModuleDataAsset>();
+    Load->ModuleId = TEXT("Test.Load");
+    Load->PowerDraw = Ship->GetReactorOutput() - 100.0f;
+    Ship->SetConsumerWeight(ShipPower::Lights, 1.0f);
+    TestTrue(TEXT("the load installs"), Ship->InstallModule(Load));
+    const float Partial = Ship->GetConsumerSatisfaction(ShipPower::Lights);
+    TestTrue(FString::Printf(TEXT("and the lights are part way into the brown-out (%.3f fed)"), Partial),
+             Partial > 0.1f && Partial < 0.9f * UShipLightingSubsystem::BrownOutBelow);
+    FollowsTheLight(TEXT("part way"), 1.1f);
+    {
+        const FLinearColor Now = Glow(BunkPanel);
+        TestTrue(FString::Printf(TEXT("part way, the panel is dimmer than fed and brighter than starved (red %.3f of %.3f)"),
+                                 Now.R, BunkRated.R),
+                 Now.R < 0.5f * BunkRated.R && Now.R > 1.5f * UShipLightingSubsystem::StarvedGlow * BunkRated.R);
+    }
+    Ship->RemoveModule(Load);
+    Lighting->Tick(0.016f);
+    TestTrue(TEXT("the load gone, it is back at its rating"), SameColour(Glow(BunkPanel), BunkRated, 0.01f));
 
     // Switched off at the console, the panels go dark with the lights.
     Ship->SetLightsOn(false);
@@ -171,6 +245,7 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("lights off, the panel is dark"), Off.R == 0.0f && Off.G == 0.0f && Off.B == 0.0f);
     Ship->SetLightsOn(true);
 
+    World->EndPlay(EEndPlayReason::RemovedFromWorld);
     GEngine->DestroyWorldContext(World);
     World->DestroyWorld(false);
     return true;

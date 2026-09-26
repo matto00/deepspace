@@ -118,6 +118,11 @@ FShipHumInputs UShipHumComponent::GetPostedInputs() const
     return Inputs;
 }
 
+uint32 UShipHumComponent::GetSeed() const
+{
+    return Seed;
+}
+
 int64 UShipHumComponent::GetSamplesRendered() const
 {
     return Mailbox->SamplesRendered.load(std::memory_order_relaxed);
