@@ -27,8 +27,66 @@ four were reconciled. Every disagreement is in *Conflicts, resolved* with the
 reason. The specs get a one-paragraph pointer to it in Wave 0; they are not
 rewritten.
 
-**Status:** Draft, awaiting the developer's answers to *Decisions for the
-developer*. Nothing here is implemented.
+**Status:** Decisions answered; restructured into slices. See *Revision, 2026-09-25*.
+
+## Revision, 2026-09-25 (supersedes the wave structure and the hours below)
+
+Three things this plan assumed turned out false, and one decision changed.
+
+**Agents can compile.** The plan treated the constraint as "one editor", and
+so had three tracks write several thousand lines of Unreal C++ that nobody
+compiled until Queue 1. The real constraint is one *heavy Unreal process* at
+a time on this machine. UBT's mutex is keyed on the engine install, so it
+already spans checkouts (`-waitmutex` queues rather than failing), and
+`Tools/ue_lock.sh` now puts every build *and* headless test run behind one
+flock in the git common directory. Each track therefore works in its own git
+worktree under `.worktrees/`, builds with `./build.sh` and tests with
+`./test.sh` there, and hands over a branch that compiles and passes. The
+orchestrator's queue shrinks to integration: merge, `./rebuild.sh --force` on
+main, the level build, the Blueprint check, and the developer playing.
+
+**The queue timings were invented, and wrong by an order of magnitude.**
+Measured on this machine: a cold build of the whole module in a fresh
+worktree, 38 s; the full automation suite with editor start-up, 15 s. The
+hour-denominated queue below does not describe anything real, and neither
+does *Hours, honestly*. Nothing here is re-estimated; the next number written
+down will be a measured one.
+
+**It was ordered by layer, not by the question.** The POC exists to test
+cruise, choose, jump, arrive. Work is now cut into three **slices**, each
+ending playable, each a full vertical pass rather than a layer:
+
+1. **Slice 1: the loop.** Procgen's systems, galaxy and `GetSystemAt`; the
+   sky's pure layer, `AShipSky` and its materials; the drive, the jump, nav
+   state, the opening placement and the `ds.Nav.*` commands; HUD bearing
+   words; room moods and practical lamps. Destination chosen from the
+   console. Ends with the developer flying cruise, drive, jump, arrive.
+2. **Slice 2: choosing and hearing.** The chart chair (`AShipNavScreen`,
+   `UNavigationWidget`), the hum as the jump's wind-up cue, lamp panels
+   dimming, the nose caret, the glass veil, the eclipse, the procgen corpus and
+   the priors ini.
+3. **Slice 3: somebody's ship.** The clutter generator in **C++** (decision
+   below), wear, the CVar write-back, CLAUDE.md and the ADR amendments.
+
+All of cut-list items 1-7 stay in scope (developer, 2026-09-25); they sit in
+Slices 2 and 3 so that none of them delays the first playable loop.
+
+**Decision 5 was answered no.** ADR 0006 is not relaxed: the clutter generator
+is C++ running at world start, like every other generator. `dressing.py`, the
+Python-generated clutter baked into the level, and the ADR 0006 amendment in
+Wave 3 Track B are withdrawn. See the revised lived-in spec. `Tools/rng.py`
+and `rng_vectors.json` survive as a cross-check on `FGenStream`, no longer as
+the basis of anything.
+
+The other developer rulings: all of it is in scope with no mid-way
+checkpoint; honest universe weights; the crude exponential drive as designed;
+the hum follows the watts reaching the jump drive.
+
+What survives unchanged from the plan below: *Done when*, *Global
+constraints* (read "the editor queue" as "the integration queue"), *Conflicts,
+resolved*, *Decisions taken in this plan*, and file ownership *within* a
+slice. The wave-by-wave sections remain as the detailed specification of each
+piece of work; the slices above say when each piece is done.
 
 ## Done when
 
