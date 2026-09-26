@@ -638,6 +638,27 @@ void ADeepSpaceCharacter::StopUsingScreen()
     PlaceCamera(0.0f, FRotator(0.0f, Facing.Yaw, 0.0f));
 }
 
+ADeepSpaceCharacter::FFramingView ADeepSpaceCharacter::ResolveFramingView(
+    const FIntPoint& ViewportSize, EAspectRatioAxisConstraint PlayerConstraint, const UCameraComponent& Camera)
+{
+    // Headless there is no viewport; 16:9 is the window this is played in.
+    FFramingView View{16.0f / 9.0f, PlayerConstraint};
+    if (ViewportSize.X > 0 && ViewportSize.Y > 0)
+    {
+        View.Aspect = static_cast<float>(ViewportSize.X) / static_cast<float>(ViewportSize.Y);
+    }
+    if (Camera.bConstrainAspectRatio)
+    {
+        // Letterboxed to the camera's own aspect, whatever the window is.
+        View.Aspect = Camera.AspectRatio;
+    }
+    else if (Camera.bOverrideAspectRatioAxisConstraint)
+    {
+        View.Constraint = Camera.AspectRatioAxisConstraint;
+    }
+    return View;
+}
+
 void ADeepSpaceCharacter::FrameUsedScreen()
 {
     if (!UsedScreen || !FirstPersonCamera)
@@ -645,35 +666,20 @@ void ADeepSpaceCharacter::FrameUsedScreen()
         return;
     }
 
-    // Headless there is no viewport; 16:9 is the window this is played in.
-    float Aspect = 16.0f / 9.0f;
+    FIntPoint ViewportSize(0, 0);
     EAspectRatioAxisConstraint Constraint = GetDefault<ULocalPlayer>()->AspectRatioAxisConstraint;
     if (const APlayerController* PC = Cast<APlayerController>(Controller))
     {
-        int32 Width = 0;
-        int32 Height = 0;
-        PC->GetViewportSize(Width, Height);
-        if (Width > 0 && Height > 0)
-        {
-            Aspect = static_cast<float>(Width) / static_cast<float>(Height);
-        }
+        PC->GetViewportSize(ViewportSize.X, ViewportSize.Y);
         if (const ULocalPlayer* Local = PC->GetLocalPlayer())
         {
             Constraint = Local->AspectRatioAxisConstraint;
         }
     }
-    if (FirstPersonCamera->bConstrainAspectRatio)
-    {
-        // Letterboxed to the camera's own aspect, whatever the window is.
-        Aspect = FirstPersonCamera->AspectRatio;
-    }
-    else if (FirstPersonCamera->bOverrideAspectRatioAxisConstraint)
-    {
-        Constraint = FirstPersonCamera->AspectRatioAxisConstraint;
-    }
 
+    const FFramingView View = ResolveFramingView(ViewportSize, Constraint, *FirstPersonCamera);
     FirstPersonCamera->SetFieldOfView(
-        UsedScreen->GetUseFieldOfView(Aspect, Constraint, FirstPersonCamera->AspectRatio));
+        UsedScreen->GetUseFieldOfView(View.Aspect, View.Constraint, FirstPersonCamera->AspectRatio));
 }
 
 TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const

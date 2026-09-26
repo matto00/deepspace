@@ -39,13 +39,14 @@ namespace
         return Seat;
     }
 
-    ADeepSpaceCharacter* SpawnStanding(UWorld* World, const FVector2D& At)
+    ADeepSpaceCharacter* SpawnStanding(UWorld* World, const FVector2D& At, double FloorZ = 0.0)
     {
         FActorSpawnParameters Spawn;
         Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
         // Feet 2 cm off the floor at Z = 0, as the movement component floats them.
         const float HalfHeight = GetDefault<ADeepSpaceCharacter>()->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-        return World->SpawnActor<ADeepSpaceCharacter>(FVector(At.X, At.Y, HalfHeight + 2.0), FRotator::ZeroRotator, Spawn);
+        return World->SpawnActor<ADeepSpaceCharacter>(FVector(At.X, At.Y, FloorZ + HalfHeight + 2.0),
+                                                      FRotator::ZeroRotator, Spawn);
     }
 
     /**
@@ -53,14 +54,15 @@ namespace
      * with, off the chair, and with the eyes somewhere a camera may be.
      */
     void CheckStanding(FAutomationTestBase& Test, const FString& What, UWorld* World,
-                       ADeepSpaceCharacter* Player, const FVector& Seat)
+                       ADeepSpaceCharacter* Player, const FVector& Seat, double FloorZ = 0.0)
     {
         const UCapsuleComponent* Capsule = Player->GetCapsuleComponent();
         const FVector Centre = Player->GetActorLocation();
         const float Bottom = Centre.Z - Capsule->GetScaledCapsuleHalfHeight();
 
-        Test.TestTrue(FString::Printf(TEXT("%s: the feet are on the floor (%.1f cm)"), *What, Bottom),
-                      Bottom >= -0.1f && Bottom <= 5.0f);
+        Test.TestTrue(FString::Printf(TEXT("%s: the feet are on the floor (%.1f cm, floor at %.0f)"),
+                                      *What, Bottom, FloorZ),
+                      Bottom >= FloorZ - 0.1 && Bottom <= FloorZ + 5.0);
 
         const FCollisionQueryParams Params(SCENE_QUERY_STAT(StandUpTest), false, Player);
         Test.TestFalse(What + TEXT(": the capsule overlaps nothing"),
@@ -188,6 +190,92 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("laptop: back where they stood"),
                      FVector::Dist2D(Player->GetActorLocation(), FVector(Stood, 0.0)) < 1.0);
             Player->Destroy();
+        }
+    }
+
+    // The ring search's own rule, that a spot is floor only at the height the
+    // player left: not a table top beside them, and not the deck below an
+    // edge. Both need the remembered spot taken and the nearest free spots,
+    // the side away from the seat first, to be the wrong kind of ground --
+    // cases 1 to 3 never reach a ring spot over anything but floor, so they
+    // say nothing about it.
+    //
+    // The rings are 30 cm apart (StandRingStepCm). Something 40 cm square
+    // where the player stood keeps a body off the whole first ring and off
+    // the second only toward it, so the second ring's spots straight away
+    // from the seat and square to either side are the first that fit.
+    constexpr double RingStepCm = 30.0;
+    const double Radius = GetDefault<ADeepSpaceCharacter>()->GetCapsuleComponent()->GetScaledCapsuleRadius();
+
+    // 4. A table beside the spot, its edge 45 cm from it on the side away
+    //    from the chart: the second ring's first spot is over the table top,
+    //    and the first clear floor is square to either side.
+    {
+        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        const double TableEdge = Stood.X - 45.0;
+        constexpr double TableTop = 79.0;
+        ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
+        if (TestNotNull(TEXT("the player spawns by the table"), Player))
+        {
+            Player->UseScreen(Chart);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+            AActor* Taken = SpawnBlock(World, FVector(Stood, 115.0), FVector(20.0, 20.0, 85.0));
+            AActor* Table = SpawnBlock(World, FVector(TableEdge - 150.0, 0.0, TableTop * 0.5),
+                                       FVector(150.0, 300.0, TableTop * 0.5));
+
+            Player->StopUsingScreen();
+            CheckStanding(*this, TEXT("beside a table"), World, Player, ChartSeat);
+            TestTrue(FString::Printf(TEXT("beside a table: beside it, not on it (x %.0f, edge at %.0f)"),
+                                     Player->GetActorLocation().X, TableEdge),
+                     Player->GetActorLocation().X - Radius > TableEdge - 1.0);
+            TestTrue(TEXT("beside a table: near where they stood"),
+                     FVector::Dist2D(Player->GetActorLocation(), FVector(Stood, 0.0)) < 2.0 * RingStepCm + 1.0);
+
+            Taken->Destroy();
+            Table->Destroy();
+            Player->Destroy();
+        }
+    }
+
+    // 5. A chart on a raised deck, 60 cm up, whose edge falls away just short
+    //    of the second ring on the side away from the chart. A body stood in
+    //    the drop would fit and be reachable; it is still the wrong answer,
+    //    because it is not where the player was. The edge is set so a
+    //    capsule on that spot clears it by 6 cm, which is what makes the
+    //    wrong answer available at all.
+    {
+        constexpr double DeckTop = 60.0;
+        AShipNavScreen* RaisedChart = World->SpawnActor<AShipNavScreen>(FVector(0.0, -1200.0, 105.0 + DeckTop),
+                                                                        FRotator::ZeroRotator);
+        if (TestNotNull(TEXT("the raised chart spawns"), RaisedChart))
+        {
+            const FVector RaisedSeat = RaisedChart->GetUseTransform().GetLocation();
+            SpawnBlock(World, FVector(RaisedSeat.X, RaisedSeat.Y, (DeckTop + RaisedSeat.Z) * 0.5),
+                       FVector(30.0, 30.0, (RaisedSeat.Z - DeckTop) * 0.5));
+            const FVector2D Stood(RaisedSeat.X - 124.0, RaisedSeat.Y);
+            const double DeckEdge = Stood.X - (2.0 * RingStepCm - Radius - 6.0);
+            const double DeckFar = RaisedChart->GetActorLocation().X + 100.0;
+            SpawnBlock(World, FVector((DeckEdge + DeckFar) * 0.5, Stood.Y, DeckTop * 0.5),
+                       FVector((DeckFar - DeckEdge) * 0.5, 300.0, DeckTop * 0.5));
+
+            ADeepSpaceCharacter* Player = SpawnStanding(World, Stood, DeckTop);
+            if (TestNotNull(TEXT("the player spawns on the deck"), Player))
+            {
+                Player->UseScreen(RaisedChart);
+                Player->PlaceCamera(0.016f, Player->GetViewRotation());
+
+                AActor* Taken = SpawnBlock(World, FVector(Stood, DeckTop + 115.0), FVector(20.0, 20.0, 85.0));
+
+                Player->StopUsingScreen();
+                CheckStanding(*this, TEXT("on a deck"), World, Player, RaisedSeat, DeckTop);
+                TestTrue(FString::Printf(TEXT("on a deck: on it, not below its edge (x %.0f, edge at %.0f)"),
+                                         Player->GetActorLocation().X, DeckEdge),
+                         Player->GetActorLocation().X > DeckEdge);
+
+                Taken->Destroy();
+                Player->Destroy();
+            }
         }
     }
 

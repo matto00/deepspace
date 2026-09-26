@@ -165,6 +165,63 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
         if (TestNotNull(TEXT("the chart spawns"), Screen) && TestNotNull(TEXT("the player spawns"), Player) &&
             TestNotNull(TEXT("with a camera"), Camera))
         {
+            // The window's shape is what fitting turns on, and headless there is no
+            // window: the character below only ever sees the 16:9 fallback. So the
+            // step from a real viewport's size to the aspect framed for is checked
+            // here, on the player's own camera, at the 4:3 window where the chart
+            // fits least well.
+            TestFalse(TEXT("the player's camera does not letterbox, so the window's shape is what counts"),
+                      Camera->bConstrainAspectRatio);
+
+            const ADeepSpaceCharacter::FFramingView Narrow =
+                ADeepSpaceCharacter::ResolveFramingView(FIntPoint(1440, 1080), Configured, *Camera);
+            TestTrue(FString::Printf(TEXT("a 1440x1080 window is framed as 4:3 (%.3f)"), Narrow.Aspect),
+                     FMath::IsNearlyEqual(Narrow.Aspect, 4.0f / 3.0f, 1e-4f));
+            const ADeepSpaceCharacter::FFramingView Wide =
+                ADeepSpaceCharacter::ResolveFramingView(FIntPoint(1920, 1200), Configured, *Camera);
+            TestTrue(FString::Printf(TEXT("a 1920x1200 window is framed as 16:10 (%.3f)"), Wide.Aspect),
+                     FMath::IsNearlyEqual(Wide.Aspect, 16.0f / 10.0f, 1e-4f));
+            const ADeepSpaceCharacter::FFramingView None =
+                ADeepSpaceCharacter::ResolveFramingView(FIntPoint(0, 0), Configured, *Camera);
+            TestTrue(TEXT("no viewport falls back to 16:9"), FMath::IsNearlyEqual(None.Aspect, 16.0f / 9.0f, 1e-4f));
+
+            const EAspectRatioAxisConstraint Expected = Camera->bOverrideAspectRatioAxisConstraint
+                ? Camera->AspectRatioAxisConstraint.GetValue()
+                : Configured;
+            TestEqual(TEXT("the axis kept is the one the player's settings or the camera choose"),
+                      static_cast<int32>(Narrow.Constraint), static_cast<int32>(Expected));
+
+            // A camera that letterboxes draws its own shape in any window,
+            // and one that keeps its own axis overrides the player's.
+            UCameraComponent* Letterboxed = NewObject<UCameraComponent>(Player);
+            Letterboxed->bConstrainAspectRatio = true;
+            Letterboxed->AspectRatio = 2.0f;
+            TestTrue(TEXT("a letterboxing camera is framed at its own aspect"),
+                     FMath::IsNearlyEqual(ADeepSpaceCharacter::ResolveFramingView(FIntPoint(1440, 1080), Configured,
+                                                                                  *Letterboxed).Aspect,
+                                          2.0f, 1e-4f));
+            UCameraComponent* OwnAxis = NewObject<UCameraComponent>(Player);
+            OwnAxis->bOverrideAspectRatioAxisConstraint = true;
+            OwnAxis->AspectRatioAxisConstraint = AspectRatio_MaintainYFOV;
+            TestEqual(TEXT("a camera keeping its own axis is framed on it"),
+                      static_cast<int32>(ADeepSpaceCharacter::ResolveFramingView(
+                          FIntPoint(1440, 1080), AspectRatio_MaintainXFOV, *OwnAxis).Constraint),
+                      static_cast<int32>(AspectRatio_MaintainYFOV));
+
+            // And what that means for the chart in that window: whole, and
+            // filling it, as the engine draws it.
+            const AShipScreen* NarrowChart = GetDefault<AShipNavScreen>();
+            const float NarrowFov = NarrowChart->GetUseFieldOfView(Narrow.Aspect, Narrow.Constraint,
+                                                                   Camera->AspectRatio);
+            const FVector2D NarrowSeen = ProjectedExtent(NarrowChart->GetFramedSizeCm(),
+                                                         NarrowChart->GetViewDistanceCm(), NarrowFov,
+                                                         Camera->AspectRatio, Narrow.Constraint,
+                                                         FIntPoint(1440, 1080));
+            TestTrue(FString::Printf(TEXT("the chart is whole in a 1440x1080 window (%.3f x %.3f)"),
+                                     NarrowSeen.X, NarrowSeen.Y),
+                     NarrowSeen.X <= Fill + 1e-3 && NarrowSeen.Y <= Fill + 1e-3 &&
+                         FMath::Max(NarrowSeen.X, NarrowSeen.Y) >= Fill - 1e-3);
+
             // BeginPlay's setup, which is what gives the walking view its angle.
             Player->ConfigureFirstPersonBody();
             const float Walking = Camera->FieldOfView;

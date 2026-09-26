@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "GameFramework/Character.h"
 #include "Player/Posture.h"
 #include "DeepSpaceCharacter.generated.h"
@@ -90,6 +91,25 @@ public:
 
     /** Where the eyes are in the world. */
     FVector GetEyeLocation() const;
+
+    /** The window shape a screen is framed for, and the axis it keeps. */
+    struct FFramingView
+    {
+        float Aspect;
+        EAspectRatioAxisConstraint Constraint;
+    };
+
+    /**
+     * What FrameUsedScreen fits the screen to, given the viewport's size in
+     * pixels (0x0 when there is none, as headless), the player's configured
+     * axis constraint, and the camera -- which may letterbox to its own shape
+     * or keep its own axis whatever the window is. Separate from reading the
+     * viewport so the one input fitting depends on in a real window can be
+     * tested without one.
+     */
+    static FFramingView ResolveFramingView(const FIntPoint& ViewportSize,
+                                           EAspectRatioAxisConstraint PlayerConstraint,
+                                           const UCameraComponent& Camera);
 
     /** The seam the input handlers go through, and what tests drive: held
      *  attitude -1..1 per body axis, and throttle as a rate, not a position. */
