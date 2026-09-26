@@ -68,6 +68,30 @@ edits *inside function bodies* but not reflection changes: a new `UPROPERTY`,
 `UFUNCTION`, component or class changes a layout that Blueprints were already
 built against. Treat any header change as needing `./rebuild.sh --force --launch`.
 
+**Parallel work goes in git worktrees under `.worktrees/`**, one per track,
+each building with `./build.sh` and testing with `./test.sh` in its own tree.
+The limit is not "one editor" but one *heavy Unreal process* on this machine,
+and `Tools/ue_lock.sh` enforces it: every build and headless test run, in
+every worktree, waits on one flock in the git common directory. Never call
+`Build.sh`, `UnrealEditor-Cmd` or UBT directly from parallel work; go through
+`./build.sh`, `./test.sh`, or `ue_locked`. Measured here: a cold build of the
+module in a fresh worktree, ~25-40 s; the whole suite with start-up, ~15 s.
+
+**Unity builds are off** (`bUseUnity = false` in `DeepSpace.Build.cs`). A
+unity blob merges the anonymous namespaces of the files it concatenates, and
+UBT's *adaptive* unity compiles git-modified files on their own -- so a dirty
+tree built green and the same code committed failed, and four worktrees that
+were each green broke together at the merge. Off, green in a worktree means
+green merged.
+
+**Prove a test can fail with `Tools/mutate.sh`** before trusting it. It
+checks everything that has made a mutation silently prove nothing here -- the
+text not found, the mutant not compiling, the library not rebuilt -- before
+reading a verdict, and restores the file. Rebuild afterwards: its last build
+held the mutant. `./test.sh` itself exits non-zero if no tests ran, and a
+test path that has children becomes a group node and silently stops running,
+so compare the tests that ran against those defined when a count looks off.
+
 Run automation tests headlessly (preferred — no UI clicking, works over SSH):
 
 ```bash
