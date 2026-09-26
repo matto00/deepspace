@@ -345,7 +345,9 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
     Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
     TestTrue(TEXT("the pilot engages the drive"), Ship->SetDriveEngaged(Pilot, true));
 
-    // Closing: ten time constants, at a frame rate a player might have.
+    // Closing: twenty time constants, at a frame rate a player might have --
+    // long enough to reach the floor, where cruise speed would carry the
+    // ship through it if the closing were not held to the room.
     const double Tau = Ship->GetFlightState().GetLimits().DriveTau;
     const double Floor = Ship->GetFlightState().GetLimits().DriveFloor;
     const double Start = Altitude();
@@ -355,12 +357,17 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
     bool bNeverShrinks = true;
     bool bNeverBelowFloor = true;
     bool bAlwaysHome = true;
-    for (double Time = 0.0; Time < 10.0 * Tau; Time += 0.25)
+    double RoomAtTenTau = -1.0;
+    for (double Time = 0.0; Time < 20.0 * Tau; Time += 0.25)
     {
+        if (RoomAtTenTau < 0.0 && Time >= 10.0 * Tau)
+        {
+            RoomAtTenTau = (Altitude() - Floor) / (Start - Floor);
+        }
         Test.Step(0.25f);
         const double Now = Altitude();
         const double NowSeen = Seen();
-        bAlwaysCloser &= Now < Previous;
+        bAlwaysCloser &= Now <= Previous;
         bNeverShrinks &= NowSeen >= PreviousSeen;
         bNeverBelowFloor &= Now >= Floor - 1.0;
         const TOptional<FStarSystem> Here = Test.Universe->GetSystemAt(Ship->GetFlightState().GetUniversePosition());
@@ -368,13 +375,14 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
         Previous = Now;
         PreviousSeen = NowSeen;
     }
-    TestTrue(TEXT("closing, every frame is nearer the planet"), bAlwaysCloser);
+    TestTrue(TEXT("closing, no frame is farther from the planet"), bAlwaysCloser);
     TestTrue(TEXT("and the planet never looks smaller"), bNeverShrinks);
     TestTrue(TEXT("and the ship never passes the floor"), bNeverBelowFloor);
     TestTrue(TEXT("and it is home throughout"), bAlwaysHome);
-    const double Room = (Altitude() - Floor) / (Start - Floor);
-    TestTrue(FString::Printf(TEXT("ten tau on, the room is e^-10 of what it was, within a factor of 2: %.3g"), Room),
-             Room > 0.5 * FMath::Exp(-10.0) && Room < 2.0 * FMath::Exp(-10.0));
+    TestTrue(FString::Printf(TEXT("ten tau on, the room is e^-10 of what it was, within a factor of 2: %.3g"), RoomAtTenTau),
+             RoomAtTenTau > 0.5 * FMath::Exp(-10.0) && RoomAtTenTau < 2.0 * FMath::Exp(-10.0));
+    TestTrue(FString::Printf(TEXT("twenty on, it has settled onto the floor, to a metre: %.1f cm above it"), Altitude() - Floor),
+             FMath::Abs(Altitude() - Floor) < 100.0);
     {
         const FUniversePosition Eye = Ship->GetFlightState().WorldToUniverse(PilotEye);
         const double True = 2.0 * FMath::Asin(Radius / (Planet - Eye).Size());
