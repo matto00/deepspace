@@ -557,6 +557,18 @@ draws perfectly and cannot be clicked. `DeepSpace.Ship.NavScreen` and
 `DeepSpace.UI.NavigationScreen` spawn it before `World->BeginPlay()`, as every
 screen test must.
 
+**Sat at any screen, the view is fitted to it, never a fixed angle.**
+`AShipScreen::FitFieldOfView` picks the field of view that shows the whole
+panel, bezel (`BezelCm`) included, with `ds.Screen.FrameMargin` clear at the
+edges of its tighter axis. It has to model the engine's aspect rule: under the
+default `AspectRatio_MaintainYFOV` a camera's field of view is horizontal *at
+the camera's 16:9*, and a narrower window loses width, so an angle that frames
+a panel at 16:9 cuts its sides off at 4:3. `DeepSpace.Ship.ScreenFraming`
+checks both screens through the engine's own projection. **Standing up
+returns the body to where it stood**, or the nearest clear floor within
+1.2 m that it can reach without passing through anything -- never the chair
+(`DeepSpace.Ship.ScreenStandUp`).
+
 ## The dressing
 
 Somebody's things on the ship's surfaces -- mugs on the counter, books on the
@@ -680,6 +692,7 @@ tests that assert it.
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.15, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
+| `ds.Screen.FrameMargin` | 0.04 | `ShipScreen.cpp` |
 | `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |
 
 Tunables that are not CVars: the universe's seed and priors, and the

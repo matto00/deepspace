@@ -35,6 +35,10 @@ AShipLaptop::AShipLaptop()
     // glass rather than bigger on the screen.
     DrawSizePixels = FVector2D(720.0f, 480.0f);
 
+    // The lid is 30 cm across against 26 cm of glass: 2 cm of casing each
+    // side, which the seated view must show (AShipScreen::FitFieldOfView).
+    BezelCm = 2.0f;
+
     // Left movable: a static child of a movable root never has its world
     // transform updated when the actor moves, which silently leaves the
     // screen's collision body behind while the panel draws in the right place.
