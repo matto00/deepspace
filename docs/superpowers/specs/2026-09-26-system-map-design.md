@@ -411,14 +411,19 @@ rings 3 px apart. So, with the star's disc radius `StarPx` (7) and the rim
 2. **Log placement.** Ring `i` goes where a log map puts it:
    `rho_i = StarPx + (log a_i - log r_in) / (log r_rim - log r_in) x (RimPx - StarPx)`.
 3. **The gap is derived, so it always fits.**
-   `MinRingGap = floor((RimPx - StarPx) / MaxPlanets)` = floor(109 / 12) =
-   **9 px**. Twelve rings and the gap inside the first need 12 x 9 = 108 px
-   of the 109 available, so the worst system procgen can make fits by
-   construction, not by luck.
+   `MinRingGap = floor((RimPx - StarPx) / (MaxPlanets + 1))` = floor(109 /
+   13) = **8 px**. Twelve rings, the gap inside the first and the gap outside
+   the last need 13 x 8 = 104 px of the 109 available, so the worst system
+   procgen can make fits by construction, not by luck. (Amended in delivery:
+   the first cut divided by `MaxPlanets` for 9 px, left no gap outside the
+   last ring, and a crowded system's outermost ring sat on the rim. The
+   segment from the outermost orbit to the rim, which holds the arrival, was
+   then drawn in no pixels, and the ship stood still on the outermost ring
+   for the first leg of every approach.)
 4. **The warp, two passes.** *Outward:* each ring is placed at
    `max(rho_i, rho_(i-1) + MinRingGap)`, the first at no less than
-   `StarPx + MinRingGap`. *Inward:* the outermost ring is clamped to `RimPx`,
-   and each ring inside it to no more than the ring outside it less
+   `StarPx + MinRingGap`. *Inward:* the outermost ring is clamped to `RimPx -
+   MinRingGap`, and each ring inside it to no more than the ring outside it less
    `MinRingGap`. Point 3 guarantees the inward pass never pushes the first
    ring into the star. Afterwards every gap is at least `MinRingGap`, every
    ring is inside the rim, and the order is kept. (The first draft scaled all
@@ -498,9 +503,14 @@ then planets innermost first). A test holds that order.
 - **The orrery**, a 256 px square at x 6-262, y 36-292, centre (134, 164),
   the rim at 116 px, leaving 12 px outside it for the outermost numeral.
 - **The list**, x 272-594 (322 px), one 24 px row per world in orbit order,
-  12 rows at most (y 36-324). Columns: the numeral (or the world's given
-  name, if it has one) in 34 px, the kind in 100, the distance to its surface
-  right-aligned in 180. The widest distance `AltitudeWords` prints,
+  12 rows at most (y 36-324). Columns: the numeral, always, in 40 px (34
+  cut `VIII`); the kind in 94, or an inhabited world's given name in its
+  place; the distance to its surface right-aligned in 176. (Amended in
+  delivery: the first cut put a given name in the numeral's column, clipped
+  to `Hald`, and the orrery labels every dot by numeral, so exactly the
+  inhabited worlds could not be matched to their dots. An inhabited world is
+  temperate, so the kind it gives up is terrestrial or ocean all but always;
+  `Halden · Kessa II` in full is the target line's.) The widest distance `AltitudeWords` prints,
   `1,496 THOUSAND KM`, is 17 characters, mostly capitals and digits, which
   run wide: about 180 px at size 14. That width is why the orrery is 256 px
   and not larger.
@@ -568,12 +578,20 @@ FVector2D Point, float MaxRadius)` returns the orbit whose dot centre is
 nearest the click, if it is within `PickRadius` (14 px), and nothing
 otherwise. Every point of the orrery belongs to at most one world, the
 Voronoi cell of its dot clipped to a 14 px disc, so two worlds at similar
-azimuths on rings 9 px apart split the space between them at the midpoint
+azimuths on rings 8 px apart split the space between them at the midpoint
 instead of sharing it. Ties go to the inner world. The star is not a pick:
 a click within its disc picks nothing, even when a first ring is within
 14 px. (The first draft gave each dot a 40 px hit square. Squares that large
 overlap wherever rings are closer than 40 px, which is most systems, and
 which world a click chose was undefined.)
+
+A click on the orrery is **a press and a release on it**, as a row's button
+is: the press arms it, the release picks where it lands, and leaving the
+orrery between the two lets it go. A press made on a drawing that the same
+frame replaces (the system changed, or the priors) picks nothing, on the
+orrery or a row: the orbit it names is an index into what was on the glass.
+(Amended in delivery: the first cut picked the orrery on the press and the
+rows on the release, and resolved a press against whatever the refresh drew.)
 
 **The star cannot be targeted.** It is the brightest thing in any sky, so a
 marker would never find it for anyone. `FBodyId` has no form that names a
@@ -1404,7 +1422,7 @@ them, and nothing built here assumes jumps are unlimited.
 | `ds.Sky.Goto <body> <km> [night]` | command, extended | `ShipSky.cpp` |
 
 Everything else is a named constant with a test on it: `SystemMap::MinRingGap`
-(derived, 9 px), `PickRadius` (14 px), the rim margin (1.25), the draw size
+(derived, 8 px), `PickRadius` (14 px), the rim margin (1.25), the draw size
 (600 x 424), `TargetMarker::AheadFloor` (0.25 degrees), the 10-degree switch
 from tenths to whole degrees, the 80% hide, the 0.15 night-side fraction, the
 1 m/s prograde threshold, the 30 m glass trace, `NavStart::WorldReachFactor`
@@ -1423,11 +1441,15 @@ Pure, no world:
   with no tight pair is drawn as the pure log map, unwarped; twelve orbits
   crowded against the rim are pulled inward by the second pass and keep every
   gap.
-- **`.TwelveWorldsFit`**: `MinRingGap` x `MaxPlanets` fits between the star's
-  edge and the rim; `MaxPlanets` worlds at the corpus's tightest spacing, at
-  either end of the log range, keep every ring at least `MinRingGap` from its
-  neighbour and inside the rim; every dot and target ring is within its
-  capped size.
+- **`.TwelveWorldsFit`**: `MinRingGap` x (`MaxPlanets` + 1) fits between the
+  star's edge and the rim; `MaxPlanets` worlds at the corpus's tightest
+  spacing, at either end of the log range, keep every ring at least
+  `MinRingGap` from its neighbour and the outermost at least `MinRingGap`
+  inside the rim; every dot and target ring is within its capped size,
+  against a local gap the test works out from the rings itself; neighbours in
+  line never touch; the arrival is drawn clear of the outermost ring by the
+  ship glyph's radius, and a ship coming in from it moves inward on the map at
+  every step to the outermost orbit.
 - **`.ShipOnTheWarp`**: a ship at a world's position is drawn on its dot; a
   ship at an orbit's radius is drawn on its ring; **a ship between the star's
   surface and `r_in` is drawn just outside the star's disc and reports it is

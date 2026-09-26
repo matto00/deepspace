@@ -1,4 +1,9 @@
 #include "Components/WidgetComponent.h"
+#include "GenericPlatform/GenericApplication.h"
+#include "Input/Events.h"
+#include "InputCoreTypes.h"
+#include "Layout/Geometry.h"
+#include "Widgets/SWidget.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/NavStart.h"
@@ -38,16 +43,17 @@ namespace SystemMapScreenTestLocal
      *  spec, decision 1). Tools/test_placement.py holds the layout to it. */
     const FVector MapGlass(1711.0, 0.0, 105.0);
 
-    /** What row Orbit must read: the numeral (or a given name), the kind,
-     *  and the surface distance in the altitude line's words. Built from
-     *  procgen and NavText, not from the widget. */
+    /** What row Orbit must read: the numeral the orrery labels its dot
+     *  with, always; the kind, or the given name of an inhabited world in
+     *  its place; and the surface distance in the altitude line's words.
+     *  Built from procgen and NavText, not from the widget. */
     FString ExpectedRow(const FStarSystem& System, int32 Orbit, const FUniversePosition& Where)
     {
         const FPlanet& Planet = System.Planets[Orbit];
         const double Surface = FMath::Max(0.0, Where.DistanceTo(System.PlanetPosition(Orbit))
             - Planet.RadiusEarth * UniverseUnits::CmPerEarthRadius);
-        const FString Name = Planet.GivenName.IsEmpty() ? SystemNames::RomanNumeral(Orbit + 1) : Planet.GivenName;
-        return Name + NavText::Separator + NavText::WorldKind(Planet.Kind) + NavText::Separator
+        const FString Second = Planet.GivenName.IsEmpty() ? NavText::WorldKind(Planet.Kind) : Planet.GivenName;
+        return SystemNames::RomanNumeral(Orbit + 1) + NavText::Separator + Second + NavText::Separator
             + UShipHUDWidget::AltitudeWords(Surface);
     }
 
@@ -119,10 +125,22 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    const auto Look = [Panel, Map]()
+    // A frame as the map sees one: the component's tick, then Slate's tick
+    // of the widget, which is what calls NativeTick in play. Headless the
+    // component never paints, and painting is what ticks a widget in play,
+    // so the Slate tick is made by hand -- on the widget's own Slate side,
+    // never by calling RefreshFromShip, so a map that stopped refreshing
+    // itself would fail here. GetCanTick is the one hop this skips: whether
+    // the paint pass would tick it at all.
+    const TSharedRef<SWidget> Slate = Map->TakeWidget();
+    TestTrue(TEXT("the map's Slate widget asks to be ticked"), Slate->GetCanTick());
+    double Clock = 0.0;
+    const auto Look = [Panel, Slate, &Clock]()
     {
-        Panel->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
-        Map->RefreshFromShip();
+        constexpr float Frame = 1.0f / 60.0f;
+        Panel->TickComponent(Frame, LEVELTICK_All, nullptr);
+        Clock += Frame;
+        Slate->Tick(FGeometry::MakeRoot(FVector2D(600.0, 424.0), FSlateLayoutTransform()), Clock, Frame);
     };
     const auto Where = [Ship]() { return Ship->GetFlightState().GetUniversePosition(); };
     const auto Facing = [Ship]() { return Ship->GetFlightState().GetUniverseOrientation(); };
@@ -220,11 +238,10 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
     }
 
     // -- both pick paths end at SelectWorld, which asks the chart's rule ------
+    TArray<SystemMap::FMapSelection> Selections;
+    const FDelegateHandle Handle = Map->OnSelectedForTest.AddLambda(
+        [&Selections](const SystemMap::FMapSelection& Selection) { Selections.Add(Selection); });
     {
-        TArray<SystemMap::FMapSelection> Selections;
-        const FDelegateHandle Handle = Map->OnSelected.AddLambda(
-            [&Selections](const SystemMap::FMapSelection& Selection) { Selections.Add(Selection); });
-
         Map->PressRow(1);
         const SystemMap::FMapLayout* Drawn = Map->GetLayout();
         if (Drawn)
@@ -240,7 +257,32 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("the dot targets its world"), Selections[1].Action == SystemMap::EMapSelect::Target
                 && Selections[1].Body == FBodyId{Home->Stub.Id, 0, -1});
         }
-        Map->OnSelected.Remove(Handle);
+    }
+
+    // -- the orrery picks on a press released on it, as a row's button does ---
+    if (const SystemMap::FMapLayout* Drawn = Map->GetLayout())
+    {
+        // The view's own Slate widget, given the root geometry: absolute is
+        // local, so a pointer at a dot's centre is on the dot.
+        const TSharedRef<SWidget> Orrery = Map->GetView()->TakeWidget();
+        const FGeometry Square = FGeometry::MakeRoot(FVector2D(256.0, 256.0), FSlateLayoutTransform());
+        const auto Pointer = [](const FVector2D& At)
+        {
+            return FPointerEvent(0, At, At, TSet<FKey>(), EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+        };
+        const FVector2D OnDot = Drawn->Dots[0].Centre;
+        Selections.Reset();
+        Orrery->OnMouseButtonDown(Square, Pointer(OnDot));
+        TestEqual(TEXT("a press on a dot alone picks nothing yet"), Selections.Num(), 0);
+        Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
+        TestTrue(TEXT("released on it, it picks that world"),
+                 Selections.Num() == 1 && Selections[0].Body == FBodyId{Home->Stub.Id, 0, -1});
+        Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
+        TestEqual(TEXT("a release with no press picks nothing"), Selections.Num(), 1);
+        Orrery->OnMouseButtonDown(Square, Pointer(OnDot));
+        Orrery->OnMouseLeave(Pointer(FVector2D(300.0, 300.0)));
+        Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
+        TestEqual(TEXT("a press that left the orrery before it was released picks nothing"), Selections.Num(), 1);
     }
 
     // -- another system, placed into without a jump: drawn again at once ------
@@ -259,12 +301,84 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
     {
         Asked = Map->GetLayoutAsked();
         Ship->PlaceShip(Other->Stub.Position + FVector(2.0 * UniverseUnits::CmPerAU, 0.0, 0.0), Facing());
+
         Look();
         TestEqual(TEXT("a PlaceShip into another system is drawn on the next frame, once"), Map->GetLayoutAsked(), Asked + 1);
         RowsAre(*this, *Map, *Other, Where(), TEXT("in the other system"));
         TestEqual(TEXT("and titled for it"), Map->GetTitleText().ToString(), NavText::Place(Other->Stub.Name, Other->Star.Class));
         TestTrue(TEXT("its selections are its own worlds"), SystemMap::Select(*Other, 0, {})->Body.System == Other->Stub.Id);
+
+        // A press in the frame the system changes, on a row of the system
+        // the glass still shows: refused, not turned into the same orbit of
+        // a system the player never saw.
+        Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 3.0 * UniverseUnits::CmPerAU, 0.0), Facing());
+        Selections.Reset();
+        Asked = Map->GetLayoutAsked();
+        TestTrue(TEXT("the other system's first row is still on the glass (or this proves nothing)"), Map->IsRowEnabled(0));
+        Map->PressRow(0);
+        TestEqual(TEXT("the press is what brought the map home"), Map->GetLayoutAsked(), Asked + 1);
+        TestEqual(TEXT("and a press made on a drawing that did not survive it picks nothing"), Selections.Num(), 0);
+        Map->PressRow(0);
+        TestTrue(TEXT("pressed again, on the drawing now shown, it picks home's world"),
+                 Selections.Num() == 1 && Selections[0].Body == FBodyId{Home->Stub.Id, 0, -1});
     }
+    Map->OnSelectedForTest.Remove(Handle);
+
+    // -- an inhabited world, and a system with none: the corpus near home ----
+    {
+        TOptional<FStarSystem> Inhabited;
+        TOptional<FStarSystem> Empty;
+        TArray<FStarSystemStub> Near = Universe->GetSystemsNear(Home->Stub.Position, 60.0 * UniverseUnits::CmPerLightYear);
+        Near.SetNum(FMath::Min(Near.Num(), 2000));
+        for (const FStarSystemStub& Stub : Near)
+        {
+            if (Inhabited && Empty)
+            {
+                break;
+            }
+            TOptional<FStarSystem> System = Universe->GetSystem(Stub.Id);
+            if (!System)
+            {
+                continue;
+            }
+            if (!Empty && System->Planets.IsEmpty())
+            {
+                Empty = System;
+            }
+            if (!Inhabited && System->Planets.ContainsByPredicate([](const FPlanet& Planet) { return !Planet.GivenName.IsEmpty(); }))
+            {
+                Inhabited = System;
+            }
+        }
+        if (TestTrue(TEXT("an inhabited world near home (or this proves nothing)"), Inhabited.IsSet()))
+        {
+            Ship->PlaceShip(Inhabited->Stub.Position + FVector(0.0, 2.0 * UniverseUnits::CmPerAU, 0.0), Facing());
+            Look();
+            RowsAre(*this, *Map, *Inhabited, Where(), TEXT("with an inhabited world"));
+            for (int32 Orbit = 0; Orbit < Inhabited->Planets.Num(); ++Orbit)
+            {
+                if (!Inhabited->Planets[Orbit].GivenName.IsEmpty())
+                {
+                    const FString Row = Map->GetRowText(Orbit).ToString();
+                    TestTrue(FString::Printf(TEXT("the inhabited world's row starts with its dot's numeral: %s"), *Row),
+                             Row.StartsWith(SystemNames::RomanNumeral(Orbit + 1) + NavText::Separator));
+                    TestTrue(TEXT("and names it"), Row.Contains(Inhabited->Planets[Orbit].GivenName));
+                }
+            }
+        }
+        if (TestTrue(TEXT("a system with no worlds near home (or this proves nothing)"), Empty.IsSet()))
+        {
+            Ship->PlaceShip(Empty->Stub.Position + FVector(0.0, 0.5 * UniverseUnits::CmPerAU, 0.0), Facing());
+            Look();
+            TestTrue(TEXT("0.5 AU from an empty system's star is in it"), Universe->GetSystemIdAt(Where()) == TOptional<FSystemId>(Empty->Stub.Id));
+            TestEqual(TEXT("a system with no worlds says so"), Map->GetFooterText().ToString(),
+                      FString::Printf(TEXT("Nothing orbits %s."), *Empty->Stub.Name));
+            TestEqual(TEXT("with no rows"), Map->GetShownRowCount(), 0);
+            TestTrue(TEXT("but draws its star"), Map->GetView()->HasDrawing());
+            TestEqual(TEXT("and is titled for it"), Map->GetTitleText().ToString(), NavText::Place(Empty->Stub.Name, Empty->Star.Class));
+        }
+    }
+
     Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 3.0 * UniverseUnits::CmPerAU, 0.0), Facing());
     Look();
     RowsAre(*this, *Map, *Home, Where(), TEXT("back home"));

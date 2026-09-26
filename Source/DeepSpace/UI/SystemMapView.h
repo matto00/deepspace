@@ -47,8 +47,9 @@ public:
     /**
      * What a click at Point (the view's own pixels) does: picks the world
      * there, if any, and passes it to OnPicked. The whole of the orrery's
-     * input, public so a test can click without Slate -- headless, nothing
-     * is painted and the hit-test grid is empty.
+     * input once a press has been released, public so a test can click
+     * without Slate -- headless, nothing is painted and the hit-test grid
+     * is empty.
      */
     TOptional<int32> ClickAt(const FVector2D& Point);
 
@@ -65,7 +66,13 @@ protected:
                               const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements,
                               int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
+    /** A click is a press and a release on the orrery, as a row's button
+     *  is: the press arms it, the release picks where it lands, and leaving
+     *  the orrery between the two lets it go. Picking on the press alone
+     *  made the dots fire before the rows beside them did. */
     virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+    virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+    virtual void NativeOnMouseLeave(const FPointerEvent& InMouseEvent) override;
 
     /** A control, so the pointer counts it as one and the HUD's dot turns
      *  teal over it. */
@@ -79,4 +86,8 @@ private:
 
     TOptional<SystemMap::FMapShip> Ship;
     TOptional<int32> TargetOrbit;
+
+    /** Pressed on the orrery and not yet released or left: input state,
+     *  the pointer's and not the ship's. */
+    bool bPressed = false;
 };

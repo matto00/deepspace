@@ -48,20 +48,25 @@ public:
     /**
      * What pressing world Orbit does, on the orrery or on its row: target it,
      * or let it go if it is the target (SystemMap::Select). The one seam both
-     * pick paths end at. Nothing for an orbit this system lacks, or between
-     * stars.
+     * pick paths end at. Nothing for an orbit this system lacks, between
+     * stars, or when the drawing the press was made on has just been
+     * replaced: Orbit is an index into what was on the glass, and a click
+     * that lands in the frame the system changes must not pick the same
+     * index of a system the player never saw.
      *
      * The target it acts on does not exist yet (build order, stage 3): today
-     * the selection is worked out and announced on OnSelected, and nothing
-     * else happens. Stage 3 makes it act -- Ship->SetTarget or
-     * Ship->ClearTarget -- here and nowhere else.
+     * the selection is worked out and announced to OnSelectedForTest, and
+     * nothing else happens. See "Stage 3 (3c)" at the foot of this class.
      */
     void SelectWorld(int32 Orbit);
 
-    /** Every selection SelectWorld works out, as it works it out. A seam a
-     *  test can hold both pick paths to before the target exists; not ship
-     *  state, and nothing on the glass reads it. */
-    TMulticastDelegate<void(const SystemMap::FMapSelection&)> OnSelected;
+#if WITH_DEV_AUTOMATION_TESTS
+    /** Every selection SelectWorld works out, as it works it out: the seam a
+     *  test holds both pick paths to before the target exists. Test-only so
+     *  that no behaviour can collect on it; 3c deletes it once SelectWorld
+     *  sets the target and the tests read GetTarget() instead. */
+    TMulticastDelegate<void(const SystemMap::FMapSelection&)> OnSelectedForTest;
+#endif
 
     /** How many times the map has generated its drawing. A test's measure of
      *  what a frame costs; nothing on the glass. */
@@ -142,7 +147,11 @@ private:
          *  generating it (UUniverseSubsystem::GetSystemIdAt). */
         TOptional<FSystemId> System;
 
-        /** In a star jump's transit: the sky is hidden and the map with it. */
+        /** In any transit, today: IsInTransit(), which is true for every
+         *  fold. Stage 3 narrows it to a fold whose course is a star -- an
+         *  in-system jump keeps its system on the map and says "In the
+         *  fold." (map spec, decision 12). Until then there is no fold that
+         *  is not between stars. */
         bool bBetweenStars = false;
 
         uint32 Priors = 0;
@@ -170,7 +179,7 @@ private:
 
     void Redraw(const UShipSubsystem& Ship, const FAskedAt& Now);
     void RefreshRows(const UShipSubsystem& Ship);
-    void RefreshFooter(const UShipSubsystem& Ship);
+    void RefreshFooter(const TOptional<SystemMap::FMapShip>& Glyph);
 
     /**
      * The target, as an orbit of the system drawn, or none. Always none
@@ -209,4 +218,22 @@ private:
     TObjectPtr<UTextBlock> TargetLine;
     UPROPERTY()
     TObjectPtr<UTextBlock> Footer;
+
+    /*
+     * Stage 3 (3c), which owns this file then -- what 1b left for the
+     * target to fill, all of it stubbed or defaulted today:
+     *
+     *  - SelectWorld: act on the selection, Ship->SetTarget(Selection->Body)
+     *    or Ship->ClearTarget(), then RefreshFromShip so the mark moves this
+     *    frame; delete OnSelectedForTest.
+     *  - TargetOrbit / TargetHeld: resolve GetTarget() through
+     *    ShipNav::TargetPlanet against Drawing->System; both return {} now.
+     *  - FAskedAt::Now: StandoffAU from GetStandoffAU(), and bBetweenStars
+     *    as IsInTransit() && the course is a star.
+     *  - RefreshFooter: "In the fold." for an in-system fold, which keeps
+     *    the drawing; "Between stars." only for a star course's.
+     *  - The band: the target line with its live ETA (NavText::WorldName
+     *    names the world there) and the Jump here / Stand down / Near
+     *    enough to fly button.
+     */
 };

@@ -11,6 +11,7 @@
 #include "Ship/NavStart.h"
 #include "Ship/ShipMapScreen.h"
 #include "Tests/SkyTestWorld.h"
+#include "UI/NavText.h"
 #include "UI/SystemMapWidget.h"
 #include "Universe/UniverseUnits.h"
 
@@ -28,20 +29,35 @@
  *
  * It frames the map from the helm's eye as the helm sees it -- 30 degrees
  * across at 800 px, near the 26.7 px a degree a 103-degree view has at its
- * middle on 4K -- and
- * writes Saved/Eyes/MapFromHelm/<shot>.png and report.txt. Stage 1 judges the
- * rows, the rings and the title; stage 3 runs it again with a target, and
- * deletes this file with that verdict.
+ * middle on 4K -- and writes Saved/Eyes/MapFromHelm/<shot>.png and
+ * report.txt. For stage 1 the frames are judged on the rows, the rings and
+ * the title; stage 3 runs it again with a target, and deletes this file with
+ * that verdict.
  *
- * Stage 1 verdict, 2026-09-26, three frames (home at the opening; the most
- * crowded system of the 2,000 stubs nearest home, twelve worlds, at its
- * arrival and among its worlds): every row, the title and the footer read at
- * the helm's pixels; twelve rings 9 px apart stay distinct, foreshortened to
- * about 6 px on the far side; the orrery's 11 pt numerals are the smallest
- * text and still read. The first run found two faults, both fixed before the
- * verdict: a row button centred its columns, so no two rows lined up, and
- * the spec's 34 px numeral column cut "VIII" to "V" (now 40 px). A still
- * frame cannot show shimmer as the head moves: that stays a playtest note.
+ * NOT A VERDICT. This file writes the frames; the orchestrator, or the
+ * developer at first playtest, judges them (decision 11). What the
+ * implementer saw in the first runs is recorded as findings, not as the
+ * gate: the rows, the title and the footer read at the helm's pixels. Two
+ * faults were fixed -- a row button centred its columns, so no two rows
+ * lined up, and the spec's 34 px numeral column cut "VIII" to "V" (now
+ * 40 px). A reviewer reading the same frames found what is still open, and
+ * these are the knobs, in SystemMapView.cpp and SystemMapLayout.h:
+ *   - dot legibility: barren dots are small grey points, 3-4 px at the
+ *     helm's scale (RockDotPx, MinWorldLuminance), and in a crowded system
+ *     MinRingGap -- now 8 px, one gap kept outside the outermost ring --
+ *     caps them at 6;
+ *   - numeral crowding: in the twelve-world frame the 11 pt numerals sit on
+ *     the neighbouring rings (NumeralSize).
+ * A still frame cannot show shimmer as the head moves: that stays a
+ * playtest note.
+ *
+ * The map refreshes itself here: nothing below calls RefreshFromShip. What
+ * each frame shows is what the widget component's own paint, and Slate's
+ * tick of the widget inside it, produced -- so a map that had stopped
+ * refreshing itself would show the last system in the next shot, and the
+ * title check after the move fails. (BuildScreen draws home itself, so the
+ * opening shot proves nothing about the tick.)
+ *
  * A fresh editor draws the widget's material as a checkerboard until its
  * shaders compile, hence FinishAllCompilation below.
  */
@@ -127,7 +143,6 @@ bool FMapFromHelmEyesTest::RunTest(const FString& Parameters)
                 GShaderCompilingManager->FinishAllCompilation();
             }
             Test.Step(1.0f / 60.0f);
-            Map->RefreshFromShip();
             Panel->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
             Test.World->SendAllEndOfFrameUpdates();
             // Enqueued behind the widget's own draw, in order; reading the
@@ -185,6 +200,9 @@ bool FMapFromHelmEyesTest::RunTest(const FString& Parameters)
             const FVector Toward = (Crowded->Stub.Position - Arrival).GetSafeNormal();
             Test.Ship->PlaceShip(Arrival, FRotationMatrix::MakeFromX(Toward).ToQuat());
             Shoot(TEXT("crowded_arrival"));
+            TestEqual(TEXT("the map moved to the crowded system by its own tick"), Map->GetTitleText().ToString(),
+                      NavText::Place(Crowded->Stub.Name, Crowded->Star.Class));
+            TestEqual(TEXT("with a row per world"), Map->GetShownRowCount(), Crowded->Planets.Num());
 
             // Among its worlds, between the third and fourth orbits.
             if (Crowded->Planets.Num() >= 4)

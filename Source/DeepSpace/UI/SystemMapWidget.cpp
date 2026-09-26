@@ -199,6 +199,8 @@ void USystemMapWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
 USystemMapWidget::FAskedAt USystemMapWidget::FAskedAt::Now(const UShipSubsystem& Ship)
 {
     FAskedAt Asked;
+    // Any fold, today. Stage 3: IsInTransit() && the course is a star, so an
+    // in-system jump keeps its system drawn (see the header's stage 3 list).
     Asked.bBetweenStars = Ship.IsInTransit();
     // The stand-off the rim is fitted to. The default until stage 3 hands
     // the map UShipSubsystem::GetStandoffAU(), ds.Nav.StandoffAU as tuned.
@@ -239,14 +241,16 @@ void USystemMapWidget::RefreshFromShip()
         DrawnFor = Now;
     }
 
+    TOptional<SystemMap::FMapShip> Glyph;
     if (Drawing)
     {
         const FShipFlightState& Flight = Subsystem->GetFlightState();
-        View->SetShip(SystemMap::Ship(Drawing->Scale, Flight.GetUniversePosition(), Flight.GetUniverseOrientation()));
+        Glyph = SystemMap::Ship(Drawing->Scale, Flight.GetUniversePosition(), Flight.GetUniverseOrientation());
+        View->SetShip(Glyph);
         View->SetTarget(TargetOrbit(*Subsystem));
     }
     RefreshRows(*Subsystem);
-    RefreshFooter(*Subsystem);
+    RefreshFooter(Glyph);
 }
 
 void USystemMapWidget::Redraw(const UShipSubsystem& Subsystem, const FAskedAt& Now)
@@ -300,9 +304,17 @@ void USystemMapWidget::Redraw(const UShipSubsystem& Subsystem, const FAskedAt& N
             RowKinds[Index]->SetText(FText::GetEmpty());
             continue;
         }
+        // The numeral always, because it is what the orrery labels the dot
+        // with and the row is how a dot is read. An inhabited world's given
+        // name takes the kind's column instead: who lives there says more
+        // than the taxonomy, and an inhabited world is temperate, so its
+        // kind is terrestrial or ocean all but always. The whole of it,
+        // "Halden · Kessa II", is the target line's (NavText::WorldName).
         const FPlanet& Planet = System->Planets[Index];
-        RowNames[Index]->SetText(FText::FromString(Planet.GivenName.IsEmpty() ? Drawn.Layout.Dots[Index].Numeral : Planet.GivenName));
-        RowKinds[Index]->SetText(FText::FromString(NavText::WorldKind(Planet.Kind)));
+        const bool bNamed = !Planet.GivenName.IsEmpty();
+        RowNames[Index]->SetText(FText::FromString(Drawn.Layout.Dots[Index].Numeral));
+        RowKinds[Index]->SetText(FText::FromString(bNamed ? Planet.GivenName : NavText::WorldKind(Planet.Kind)));
+        RowKinds[Index]->SetColorAndOpacity(FSlateColor(bNamed ? Ink : Dim));
     }
     Drawing = MoveTemp(Drawn);
 }
@@ -330,11 +342,13 @@ void USystemMapWidget::RefreshRows(const UShipSubsystem& Subsystem)
     }
 }
 
-void USystemMapWidget::RefreshFooter(const UShipSubsystem& Subsystem)
+void USystemMapWidget::RefreshFooter(const TOptional<SystemMap::FMapShip>& Glyph)
 {
     TArray<FString> Lines;
-    if (!Drawing)
+    if (!Drawing || !Glyph)
     {
+        // Stage 3: an in-system fold keeps its drawing and says "In the
+        // fold." instead; this is a star course's words.
         Lines.Add(NavText::JumpWord(EJumpState::Transit) + TEXT("."));
     }
     else if (Drawing->System.Planets.IsEmpty())
@@ -343,20 +357,18 @@ void USystemMapWidget::RefreshFooter(const UShipSubsystem& Subsystem)
     }
     else
     {
-        const FShipFlightState& Flight = Subsystem.GetFlightState();
-        const SystemMap::FMapShip Glyph = SystemMap::Ship(Drawing->Scale, Flight.GetUniversePosition(), Flight.GetUniverseOrientation());
-        if (Glyph.Pin == SystemMap::EMapPin::Inside)
+        if (Glyph->Pin == SystemMap::EMapPin::Inside)
         {
             Lines.Add(FString::Printf(TEXT("Inside %s's orbit."), *Drawing->System.Planets[0].Designation));
         }
-        else if (Glyph.Pin == SystemMap::EMapPin::Beyond)
+        else if (Glyph->Pin == SystemMap::EMapPin::Beyond)
         {
             Lines.Add(TEXT("Beyond the map."));
         }
-        if (FMath::Abs(Glyph.ElevationDeg) > SystemMap::ElevationShownPastDeg)
+        if (FMath::Abs(Glyph->ElevationDeg) > SystemMap::ElevationShownPastDeg)
         {
-            Lines.Add(FString::Printf(TEXT("%d° %s the plane."), FMath::RoundToInt32(FMath::Abs(Glyph.ElevationDeg)),
-                                      Glyph.ElevationDeg > 0.0 ? TEXT("above") : TEXT("below")));
+            Lines.Add(FString::Printf(TEXT("%d° %s the plane."), FMath::RoundToInt32(FMath::Abs(Glyph->ElevationDeg)),
+                                      Glyph->ElevationDeg > 0.0 ? TEXT("above") : TEXT("below")));
         }
     }
     Footer->SetText(FText::FromString(FString::Join(Lines, TEXT(" "))));
@@ -374,11 +386,14 @@ TOptional<FBodyId> USystemMapWidget::TargetHeld(const UShipSubsystem& Subsystem)
 
 void USystemMapWidget::SelectWorld(int32 Orbit)
 {
-    // The drawing is brought up to date first: a row is a world of the
-    // system the ship is in now, never of the one it was last drawn for.
+    // The drawing is brought up to date first, and a press made on a
+    // drawing that did not survive it picks nothing: Orbit is an index into
+    // what was on the glass when it was pressed, and a row or a dot is a
+    // world of that system, never of the one drawn in its place.
+    const int32 PressedOn = LayoutAsked;
     RefreshFromShip();
     const UShipSubsystem* Subsystem = Ship();
-    if (!Subsystem || !Drawing)
+    if (!Subsystem || !Drawing || LayoutAsked != PressedOn)
     {
         return;
     }
@@ -387,7 +402,9 @@ void USystemMapWidget::SelectWorld(int32 Orbit)
     {
         return;
     }
-    OnSelected.Broadcast(*Selection);
+#if WITH_DEV_AUTOMATION_TESTS
+    OnSelectedForTest.Broadcast(*Selection);
+#endif
 
     // Stage 3: act on it --
     //   Target: Ship()->SetTarget(Selection->Body)

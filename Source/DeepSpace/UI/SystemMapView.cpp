@@ -127,8 +127,28 @@ FReply USystemMapView::NativeOnMouseButtonDown(const FGeometry& InGeometry, cons
     {
         return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
     }
-    ClickAt(FVector2D(InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition())));
+    bPressed = true;
     return FReply::Handled();
+}
+
+FReply USystemMapView::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+    if (InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+    {
+        return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
+    }
+    if (bPressed)
+    {
+        bPressed = false;
+        ClickAt(FVector2D(InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition())));
+    }
+    return FReply::Handled();
+}
+
+void USystemMapView::NativeOnMouseLeave(const FPointerEvent& InMouseEvent)
+{
+    bPressed = false;
+    Super::NativeOnMouseLeave(InMouseEvent);
 }
 
 int32 USystemMapView::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
