@@ -21,8 +21,9 @@ from collections import namedtuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from floorplan import Door, FloorPlan, Room, Seal, Window, CELL
-from placement import (Mount, Place, Region, resolve_lights, resolve_mount,
-                       resolve_point, resolve_props)
+from placement import (Mood, Mount, Place, Practical, Region, resolve_lights,
+                       resolve_mount, resolve_point, resolve_practicals,
+                       resolve_props)
 
 # -- The contract with the character -------------------------------------
 # The ship is built for these, and the character is built to fit them. They
@@ -112,8 +113,7 @@ PLACEMENTS = [
     Place("pipe_run",  "engineering", (0, 60)),
     Place("workbench", "engineering", (360, 100), facing=180),
 
-    # Galley.
-    Place("counter",      "galley", (30, 200)),
+    # Galley. The counter is in PRACTICALS: its under-cabinet strip is a lamp.
     Place("galley_table", "galley", (300, 230), facing=90),
     Place("bench",        "galley", (300, 160), facing=90),
     Place("bench",        "galley", (300, 300), facing=90),
@@ -130,6 +130,37 @@ PLACEMENTS = [
 
     # Corridor: only conduit, high on the starboard wall.
     Place("conduit", "corridor", (0, 146)),
+]
+
+# Each room's light: colour temperature and brightness. Warm where people
+# live, cooler where the ship works, and the cockpit the dimmest room aboard,
+# because scale is only felt in contrast (docs/vision.md): the window should
+# be the brightest thing in it. The scale multiplies the ceiling grid's
+# intensity and its panels' glow alike.
+ROOM_MOOD = {
+    "cockpit":     Mood(4200, 0.45),  # dim, so the window is the brightest thing
+    "corridor":    Mood(4600, 0.8),
+    "cargo_bay":   Mood(5200, 1.0),   # a working hold
+    "engineering": Mood(3600, 0.9),
+    "galley":      Mood(2900, 0.85),
+    "bunk":        Mood(2700, 0.6),
+    "airlock":     Mood(6200, 0.9),   # clinical: the one room that is equipment
+    "crawlway":    Mood(3200, 0.5),
+}
+
+# Lamps somebody put where they read, cook and work: the only lights that
+# cast shadows. Each burns at its room's kelvin. Elevations are the tops they
+# stand on: the bunk desk's at 77, the workbench's at 90.
+PRACTICALS = [
+    # At the desk's back corner, reaching over the desk towards the chair.
+    Practical(Place("desk_lamp", "bunk", (348, 272), facing=180, elevation=77),
+              radius=180, intensity=0.6),
+    # The counter carries its own strip, under the uppers.
+    Practical(Place("counter", "galley", (30, 200)), radius=250, intensity=1.0),
+    # Clamped to the bench's starboard end, clear of its screen, head over the
+    # work.
+    Practical(Place("bench_lamp", "engineering", (388, 160), facing=180, elevation=90),
+              radius=200, intensity=0.8),
 ]
 
 REGIONS = [
@@ -176,8 +207,10 @@ def generate():
     """The whole ship, resolved: every box, light and fixed point in world
     space. Raises floorplan.PlanError if the plan is not self-consistent."""
     plan = FloorPlan(ROOMS, DOORS, WINDOWS, SEALS)
-    lights, lamps = resolve_lights(plan)
-    boxes = plan.boxes() + lamps + resolve_props(plan, PLACEMENTS)
+    lights, lamps = resolve_lights(plan, ROOM_MOOD)
+    practical_places, practical_lights = resolve_practicals(plan, PRACTICALS, ROOM_MOOD)
+    lights += practical_lights
+    boxes = plan.boxes() + lamps + resolve_props(plan, PLACEMENTS + practical_places)
 
     console_location, console_yaw = resolve_mount(plan, CONSOLE)
     room, at, z = PLAYER_START

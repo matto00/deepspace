@@ -20,11 +20,13 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
+import placement as PL
 
 MAP_PATH = "/Game/Maps/L_Hauler"
 TAG = "hauler_"
 TOLERANCE = 1.0  # cm
-LIGHTS_TAG = "Power.Lights"
+COLOUR_TOLERANCE = 2  # of 255, per channel
+LIGHTS_TAG = PL.LIGHTS_TAG
 
 
 def main():
@@ -68,6 +70,54 @@ def main():
     if len(built_lights) != len(ship.lights):
         failures.append("%d lights built, layout has %d" % (len(built_lights), len(ship.lights)))
 
+    # Each light is where the layout puts it, in its room's colour, and casts
+    # shadows only if it is a practical. The colour is checked on the light,
+    # not on a temperature: the lighting subsystem browns out from this one
+    # number, and a temperature tint would hide on top of it.
+    for light in ship.lights:
+        actor = actors.get(TAG + light.label)
+        if actor is None:
+            failures.append("MISSING " + light.label)
+            continue
+        p = actor.get_actor_location()
+        for a, axis in enumerate("xyz"):
+            if abs((p.x, p.y, p.z)[a] - light.location[a]) > TOLERANCE:
+                failures.append("%s.%s is %.1f, layout says %.1f"
+                                % (light.label, axis, (p.x, p.y, p.z)[a], light.location[a]))
+        c = actor.get_component_by_class(unreal.PointLightComponent)
+        got = c.get_editor_property("light_color")
+        if any(abs(g - w) > COLOUR_TOLERANCE for g, w in zip((got.r, got.g, got.b), light.colour)):
+            failures.append("%s is colour (%d, %d, %d), layout says %s"
+                            % (light.label, got.r, got.g, got.b, light.colour))
+        if c.get_editor_property("use_temperature"):
+            failures.append("%s uses a temperature, which tints its colour twice" % light.label)
+        if bool(c.get_editor_property("cast_shadows")) != bool(light.shadows):
+            failures.append("%s %s shadows; the layout says it %s"
+                            % (light.label,
+                               "casts" if c.get_editor_property("cast_shadows") else "does not cast",
+                               "should" if light.shadows else "should not"))
+        if abs(c.get_editor_property("intensity") - light.intensity) > 1e-3:
+            failures.append("%s intensity is %.3f, layout says %.3f"
+                            % (light.label, c.get_editor_property("intensity"), light.intensity))
+        if abs(c.get_editor_property("attenuation_radius") - light.radius) > TOLERANCE:
+            failures.append("%s radius is %.1f, layout says %.1f"
+                            % (light.label, c.get_editor_property("attenuation_radius"),
+                               light.radius))
+
+    # A lamp box wears its own room's lamp material, or it glows another
+    # room's colour over this room's light.
+    for box in ship.boxes:
+        if not box.role.startswith("lamp_"):
+            continue
+        actor = actors.get(TAG + box.label)
+        if actor is None:
+            continue                        # already reported above
+        material = actor.static_mesh_component.get_material(0)
+        want = "MI_Ship_" + box.role
+        if material is None or material.get_name() != want:
+            failures.append("%s wears %s, not %s"
+                            % (box.label, material.get_name() if material else "nothing", want))
+
     # The tag is the contract C++ addresses generated actors by (never the
     # name, never the index), so an untagged light is a light the ship cannot
     # dim. Mobility too: a Static light is baked and cannot change at all.
@@ -99,8 +149,9 @@ def main():
             failures.append("counterframe is rotated (%.1f, %.1f, %.1f), not at identity"
                             % (r.pitch, r.yaw, r.roll))
 
-    lines = ["Checked %d boxes and %d lights against the layout."
-             % (len(ship.boxes), len(ship.lights)), ""]
+    lines = ["Checked %d boxes and %d lights (%d practical) against the layout."
+             % (len(ship.boxes), len(ship.lights),
+                sum(1 for light in ship.lights if light.shadows)), ""]
     if failures:
         lines.append("FAIL (%d):" % len(failures))
         lines += ["  - " + f for f in failures[:40]]

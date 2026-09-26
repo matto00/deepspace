@@ -9,9 +9,11 @@ about where their origin is (SM_Cube at a corner, SM_ChamferCube at its centre,
 SM_Cylinder at its base).
 
 No part may sit below its prop's origin: a prop's lowest point is the floor it
-stands on, or the height it is lifted to. A prop faces +X at facing 0. Placement rotates it in 90-degree steps only, so
-every part stays axis-aligned and the validator can voxelise it exactly
-(cylinders by their bounding box, a deliberate over-approximation).
+stands on, or the height it is lifted to. A part whose role is "lamp" glows as
+the lamp of whatever room the prop is placed in. A prop faces +X at facing 0.
+Placement rotates it in 90-degree steps only, so every part stays axis-aligned
+and the validator can voxelise it exactly (cylinders by their bounding box, a
+deliberate over-approximation).
 
 No `unreal` import.
 """
@@ -86,6 +88,16 @@ PROPS = {
         Part("cube", (-38, 0, 107.5), (4, 50, 35), "screen"),
     ],
 
+    # A bench lamp: taller than the reading lamp, its arm reaching out over
+    # +X to light the work rather than the wall behind it.
+    "bench_lamp": [
+        Part("cube", (0, 0, 1), (10, 10, 2), "furniture"),
+        Part("cube", (0, 0, 31), (3, 3, 58), "furniture"),
+        Part("cube", (15, 0, 61), (32, 3, 3), "furniture"),
+        Part("chamfer", (30, 0, 57), (16, 10, 8), "furniture"),
+        Part("cube", (30, 0, 52.5), (12, 6, 1), "lamp"),
+    ],
+
     # -- galley ----------------------------------------------------------
     "galley_table": [
         Part("cylinder", (0, 0, 35.5), (20, 20, 71), "furniture"),
@@ -96,9 +108,12 @@ PROPS = {
     ],
     # Base cabinets with wall-hung upper cabinets; the uppers touch the wall
     # the counter is placed against.
+    # The strip under the uppers' front edge is the galley's practical: the
+    # light you cook by, not the ceiling's.
     "counter": [
         Part("chamfer", (0, 0, 45), (60, 300, 90), "furniture"),
         Part("chamfer", (-12.5, 0, 185), (35, 300, 70), "furniture"),
+        Part("cube", (1, 0, 149), (6, 280, 2), "lamp"),
     ],
 
     # -- bunk ------------------------------------------------------------
@@ -116,6 +131,15 @@ PROPS = {
         Part("chamfer", (0, -40, 35.5), (55, 40, 71), "furniture"),
         Part("chamfer", (0, 0, 74), (60, 120, 6), "furniture"),
     ],
+    # A reading lamp: base, post, and a shade reaching out over +X. Stood on a
+    # desk top, lifted by the desk's height.
+    "desk_lamp": [
+        Part("cylinder", (0, 0, 1), (14, 14, 2), "furniture"),
+        Part("cube", (0, 0, 20), (2, 2, 36), "furniture"),
+        Part("cube", (9, 0, 39), (20, 2, 2), "furniture"),
+        Part("chamfer", (18, 0, 36), (12, 12, 8), "furniture"),
+        Part("cube", (18, 0, 31.5), (8, 8, 1), "lamp"),
+    ],
 
     # -- airlock ---------------------------------------------------------
     "suit_locker": [
@@ -132,6 +156,15 @@ PROPS = {
     "conduit": [
         Part("chamfer", (700, 0, 244), (1400, 8, 8), "furniture"),
     ],
+}
+
+
+# Where a practical's bulb is: a prop-local point just under its glowing part,
+# where the point light goes. Only props that are lamps have one.
+HEADS = {
+    "desk_lamp": (18, 0, 29),
+    "bench_lamp": (30, 0, 50),
+    "counter": (1, 0, 146),
 }
 
 

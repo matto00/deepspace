@@ -27,6 +27,7 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
+import placement as PL
 
 MAP_PATH = "/Game/Maps/L_Hauler"
 MATERIAL_DIR = "/Game/Materials"
@@ -46,10 +47,8 @@ SPHERE = "/Engine/BasicShapes/Sphere"
 # Every actor the script owns carries this prefix and is rebuilt each run.
 TAG = "hauler_"
 
-# The consumer group the ship's lights belong to. The same string is
-# ShipPower::Lights in C++: one identifier for the power consumer and for the
-# actors that answer to it.
-LIGHTS_TAG = "Power.Lights"
+# The consumer group the ship's lights belong to; ShipPower::Lights in C++.
+LIGHTS_TAG = PL.LIGHTS_TAG
 TEMPLATE_CRUFT = ("Floor", "SM_SkySphere")
 SPACE_STRIPS = (unreal.SkyAtmosphere, unreal.VolumetricCloud, unreal.ExponentialHeightFog)
 
@@ -68,12 +67,14 @@ PANELLED = {
     "seal":      ((0.40, 0.42, 0.45), (0.05, 0.45, 0.45), 40,  0.40),
 }
 # Emissive roles: an unlit colour, brighter than 1 to read as a light source.
+# Each room's lamp panels glow its mood, so the panel and the light under it
+# are one colour, taken from one number.
 EMISSIVE = {
     "accent": (TEAL[0] * 4, TEAL[1] * 4, TEAL[2] * 4),
     "screen": (0.02, 0.10, 0.12),
-    "lamp":   (6.0, 6.2, 6.5),
 }
-LIGHT_COLOUR = unreal.Color(r=255, g=247, b=235, a=255)   # neutral-cool white
+EMISSIVE.update({PL.lamp_role(room): PL.lamp_emissive(mood)
+                 for room, mood in L.ROOM_MOOD.items()})
 
 
 # -- materials ---------------------------------------------------------------
@@ -237,10 +238,15 @@ def place_lights(actor_sub, lights):
         c.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
         c.set_editor_property("intensity", float(light.intensity))
         c.set_editor_property("attenuation_radius", float(light.radius))
-        c.set_editor_property("light_color", LIGHT_COLOUR)
-        # Soft, even fill: many overlapping lights, none casting shadows. Also
-        # what keeps thirty-odd lights cheap.
-        c.set_editor_property("cast_shadows", False)
+        # The colour itself, never bUseTemperature: the lighting subsystem
+        # lerps this colour to amber as a light browns out, and a temperature
+        # would tint on top of it, doubly orange and unverifiable.
+        r, g, b = light.colour
+        c.set_editor_property("light_color", unreal.Color(r=r, g=g, b=b, a=255))
+        c.set_editor_property("use_temperature", False)
+        # Only the practicals cast shadows. The ceiling grid is soft, even
+        # fill, which is also what keeps thirty-odd lights cheap.
+        c.set_editor_property("cast_shadows", bool(light.shadows))
 
 
 def place_counter_frame(actor_sub, sphere, material):
@@ -322,8 +328,10 @@ def build():
 
     level_sub.save_current_level()
 
-    summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights, "
-               "one counter-frame." % (removed, len(ship.boxes), len(ship.lights)))
+    summary = ("L_Hauler built: removed %d, placed %d boxes, %d lights (%d practical, "
+               "shadowed), one counter-frame."
+               % (removed, len(ship.boxes), len(ship.lights),
+                  sum(1 for light in ship.lights if light.shadows)))
     with open(os.path.join(unreal.Paths.project_saved_dir(), "hauler_build.txt"), "w") as f:
         f.write(summary + "\n")
     unreal.log(summary)
