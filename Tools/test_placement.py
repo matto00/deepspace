@@ -484,12 +484,6 @@ def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
 
 # -- the system map ------------------------------------------------------------
 
-class Pending(Exception):
-    """A test whose C++ counterpart is not in this tree yet. Reported, never
-    counted as a pass or a failure; it becomes a real check the moment the
-    file it reads exists."""
-
-
 def _map_prop(ship):
     """The desk screen prop the map covers."""
     _, y, _ = ship.map_screen_location
@@ -535,9 +529,8 @@ def test_the_map_covers_the_middle_desk_screen_one_cm_proud_and_level():
 
 def _map_screen_source():
     """Every source file that mentions AShipMapScreen, header and body, and
-    their text joined, so the width is found wherever stage 1b sets it.
-    Pending while no file names the class; the moment one does, this is a
-    real check, and a class with no PanelWidthCm in it fails."""
+    their text joined, so the width is found wherever the class sets it. No
+    file naming the class fails, as does a class with no PanelWidthCm."""
     import glob
     found = []
     for path in sorted(glob.glob(os.path.join(ROOT, "Source/DeepSpace/**/*.[hc]*"), recursive=True)):
@@ -545,8 +538,7 @@ def _map_screen_source():
             text = f.read()
         if "AShipMapScreen" in text and "/Tests/" not in path:
             found.append((path, text))
-    if not found:
-        raise Pending("no source outside Tests/ names AShipMapScreen yet (stage 1b)")
+    assert found, "no source outside Tests/ names AShipMapScreen"
     return "\n".join(text for _, text in found)
 
 
@@ -898,19 +890,15 @@ def test_every_room_has_its_air_under_its_own_ceiling():
 
 def main():
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
-    failed = pending = 0
+    failed = 0
     for name, fn in tests:
         try:
             fn()
             print("  ok    " + name)
-        except Pending as e:
-            pending += 1
-            print("  PEND  %s: %s" % (name, e))
         except Exception as e:                     # noqa: BLE001
             failed += 1
             print("  FAIL  %s: %s: %s" % (name, type(e).__name__, e))
-    print("\n%d passed, %d failed%s" % (len(tests) - failed - pending, failed,
-                                        ", %d pending" % pending if pending else ""))
+    print("\n%d passed, %d failed" % (len(tests) - failed, failed))
     return 1 if failed else 0
 
 
