@@ -98,7 +98,7 @@ bool FWorldReliefKnownValuesTest::RunTest(const FString& Parameters)
 bool FShaderMappingTest::RunTest(const FString& Parameters)
 {
     const FString* Mapped = AllShaderSourceDirectoryMappings().Find(TEXT("/Project"));
-    if (!TestNotNull(TEXT("DeepSpaceShaders mapped /Project at PostConfigInit"), Mapped))
+    if (!TestNotNull(TEXT("/Project is mapped before any shader compiles (the engine at PreInit, or DeepSpaceShaders at PostConfigInit)"), Mapped))
     {
         return false;
     }
