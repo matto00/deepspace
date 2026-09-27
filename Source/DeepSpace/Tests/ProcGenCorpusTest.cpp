@@ -57,7 +57,7 @@ namespace ProcGenCorpusTestLocal
         TEXT("star_class"), TEXT("star_mass_solar"), TEXT("star_luminosity_solar"), TEXT("star_temperature_k"),
         TEXT("habitable_inner_au"), TEXT("habitable_outer_au"), TEXT("frost_line_au"), TEXT("planet_count"),
         TEXT("planet"), TEXT("designation"), TEXT("given_name"), TEXT("kind"),
-        TEXT("semi_major_axis_au"), TEXT("mass_earth"), TEXT("radius_earth"), TEXT("equilibrium_k"), TEXT("population")};
+        TEXT("semi_major_axis_au"), TEXT("mass_earth"), TEXT("radius_earth"), TEXT("equilibrium_k"), TEXT("population"), TEXT("surface_gravity_g"), TEXT("relief_km")};
 
     struct FTestWorld
     {
@@ -148,7 +148,9 @@ namespace ProcGenCorpusTestLocal
             Num(Planet.MassEarth, NonFinite),
             Num(Planet.RadiusEarth, NonFinite),
             Num(Planet.EquilibriumK, NonFinite),
-            Num(Planet.Population, NonFinite)}, TEXT("\t"));
+            Num(Planet.Population, NonFinite),
+            Num(Planet.SurfaceGravityEarth(), NonFinite),
+            Num(Planet.ReliefKm, NonFinite)}, TEXT("\t"));
     }
 
     /** What every column of one row must hold, by column name, worked out
@@ -185,7 +187,9 @@ namespace ProcGenCorpusTestLocal
             {TEXT("mass_earth"), bAny ? G(Planet.MassEarth) : FString()},
             {TEXT("radius_earth"), bAny ? G(Planet.RadiusEarth) : FString()},
             {TEXT("equilibrium_k"), bAny ? G(Planet.EquilibriumK) : FString()},
-            {TEXT("population"), bAny ? G(Planet.Population) : FString()}};
+            {TEXT("population"), bAny ? G(Planet.Population) : FString()},
+            {TEXT("surface_gravity_g"), bAny ? G(Planet.SurfaceGravityEarth()) : FString()},
+            {TEXT("relief_km"), bAny ? G(Planet.ReliefKm) : FString()}};
     }
 
     /** One row a TSV line must be, to be read. */
@@ -202,7 +206,7 @@ namespace ProcGenCorpusTestLocal
      *  still sees it. */
     FString NoPlanetColumns()
     {
-        return TEXT("-1\t\t\t\t\t\t\t\t");
+        return TEXT("-1\t\t\t\t\t\t\t\t\t\t");
     }
 }
 

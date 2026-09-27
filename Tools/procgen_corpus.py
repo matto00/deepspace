@@ -35,7 +35,8 @@ DEFAULT_TSV = os.path.join(os.path.dirname(TOOLS), "Saved", "procgen_corpus.tsv"
 INT_COLUMNS = {"sector_x", "sector_y", "sector_z", "slot", "planet_count", "planet"}
 TEXT_COLUMNS = {"system", "star_class", "designation", "given_name", "kind"}
 PLANET_COLUMNS = ("designation", "given_name", "kind", "semi_major_axis_au", "mass_earth",
-                  "radius_earth", "equilibrium_k", "population")
+                  "radius_earth", "equilibrium_k", "population", "surface_gravity_g", "relief_km")
+SOLID = ("barren", "ice", "terrestrial")
 
 # One letter per kind, for a system's shape written in orbit order.
 KIND_LETTER = {"barren": "B", "terrestrial": "T", "ocean": "O", "ice": "I", "gas giant": "G"}
@@ -251,6 +252,20 @@ def report(rows, contract=None):
     if people:
         out += _render_histogram("  Settlement size, people (log bins; share of settlements)",
                                  histogram(people, 8, log=True), len(people))
+    out.append("")
+
+    out.append("Relief, km, of solid worlds (median, highest, count by kind)")
+    for kind in SOLID:
+        heights = sorted(p["relief_km"] for p in planets if p["kind"] == kind)
+        if heights:
+            out.append("  %-12s median %6.2f  highest %6.2f  n=%d" % (
+                kind, heights[len(heights) // 2], heights[-1], len(heights)))
+        else:
+            out.append("  %-12s none" % kind)
+    gravity = [p["surface_gravity_g"] for p in planets if p["kind"] in SOLID]
+    if gravity:
+        out += _render_histogram("Surface gravity of solid worlds, g (share of solid worlds)",
+                                 histogram(gravity, 8), len(gravity))
     out.append("")
 
     out += places_or_rolls(found)
