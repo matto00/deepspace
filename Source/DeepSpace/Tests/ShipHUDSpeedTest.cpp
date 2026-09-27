@@ -7,6 +7,7 @@
 #include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipSubsystem.h"
+#include "Tests/SkyTestWorld.h"
 #include "UI/NavText.h"
 #include "UI/ShipHUDWidget.h"
 #include "UI/ShipScreenWidget.h"
@@ -115,6 +116,23 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("one, never 1.00 C"), Words(0.996 * Light), FString(TEXT("1 C")));
     TestEqual(TEXT("the top"), Words(Light), FString(TEXT("1 C")));
 
+    // -- The reading keeps its decimals while it moves -----------------------
+    // Dropped, "12.9", "13", "13.1" would change length every round number
+    // it passed, and slide the lever words drawn after it under the eye.
+    // Only a reading that says what its lever asks for drops them.
+    const auto Reading = [](double CmPerSecond, double Lever) { return UShipHUDWidget::SpeedReading(CmPerSecond, Lever); };
+    const double To50 = 50.0 * KmPerSecond;
+    TestEqual(TEXT("passing a whole number, the tenth is kept"), Reading(13.0 * KmPerSecond, To50), FString(TEXT("13.0 KM/S")));
+    TestEqual(TEXT("so the reading is as long as it was below it"), Reading(13.0 * KmPerSecond, To50).Len(), Reading(12.9 * KmPerSecond, To50).Len());
+    TestEqual(TEXT("and above it"), Reading(13.0 * KmPerSecond, To50).Len(), Reading(13.1 * KmPerSecond, To50).Len());
+    TestEqual(TEXT("in light, the hundredths are kept"), Reading(0.1 * Light, Light), FString(TEXT("0.10 C")));
+    TestEqual(TEXT("and between"), Reading(0.37 * Light, Light), FString(TEXT("0.37 C")));
+    TestEqual(TEXT("on its lever, a reading is the lever's label"), Reading(To50, To50), FString(TEXT("50 KM/S")));
+    TestEqual(TEXT("in light too"), Reading(0.1 * Light, 0.1 * Light), FString(TEXT("0.1 C")));
+    TestEqual(TEXT("and near enough to round to it"), Reading(49.97 * KmPerSecond, To50), FString(TEXT("50 KM/S")));
+    TestEqual(TEXT("a lever astern is the same label"), Reading(100.0 * MetresPerSecond, -100.0 * MetresPerSecond), FString(TEXT("100 M/S")));
+    TestEqual(TEXT("whole units have no decimals to keep"), Reading(437.4 * KmPerSecond, Light), FString(TEXT("437 KM/S")));
+
     // -- Every notch reads as its label --------------------------------------
     TestEqual(TEXT("a label for every notch"), static_cast<int32>(UE_ARRAY_COUNT(NotchLabels)), ShipDriveLever::TableNotches());
     for (int32 Notch = 1; Notch <= FMath::Min<int32>(UE_ARRAY_COUNT(NotchLabels), ShipDriveLever::TableNotches()); ++Notch)
@@ -159,7 +177,9 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         const UShipHUDWidget::FMotionWords Motion = Line(State);
         TestTrue(FString::Printf(TEXT("climbing, the ship is short of its lever ('%s')"), *Motion.Ink),
                  State.GetSpeed() < 50.0 * KmPerSecond && State.GetSpeed() > KmPerSecond);
-        TestEqual(TEXT("under the drive, its lever is live"), Motion.Ink, Words(State.GetSpeed()) + Sep + TEXT("DRIVE 50 KM/S"));
+        TestEqual(TEXT("under the drive, its lever is live"), Motion.Ink, Reading(State.GetSpeed(), To50) + Sep + TEXT("DRIVE 50 KM/S"));
+        TestTrue(FString::Printf(TEXT("and the reading short of it keeps its tenth ('%s')"), *Motion.Ink),
+                 Motion.Ink.Contains(TEXT(".")) && Motion.Ink.StartsWith(Reading(State.GetSpeed(), To50)));
         TestEqual(TEXT("and cruise's lever is what F would go to"), Motion.Dim, Sep + TEXT("CRUISE 200 M/S"));
     }
     // At the top, cruise at STOP.
@@ -179,7 +199,7 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("F above cruise's top spools down"), static_cast<int32>(Top.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
         const UShipHUDWidget::FMotionWords Motion = Line(Top);
         TestEqual(TEXT("spooling down, cruise's lever is live and the corner says why the speed is not yet it"),
-                  Motion.Ink, Words(Top.GetSpeed()) + Sep + TEXT("CRUISE 100 M/S") + Sep + TEXT("SPOOLING DOWN"));
+                  Motion.Ink, Reading(Top.GetSpeed(), 100.0 * MetresPerSecond) + Sep + TEXT("CRUISE 100 M/S") + Sep + TEXT("SPOOLING DOWN"));
         TestTrue(FString::Printf(TEXT("still far above cruise ('%s')"), *Motion.Ink), Motion.Ink.StartsWith(TEXT("0.")));
         TestEqual(TEXT("and the drive's 1 c is kept, dim"), Motion.Dim, Sep + TEXT("DRIVE 1 C"));
 
@@ -195,6 +215,19 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         const UShipHUDWidget::FMotionWords Motion = Line(State);
         TestEqual(TEXT("at rest is STATIONARY, not a measurement of nothing"), Motion.Ink, FString(TEXT("STATIONARY")) + Sep + TEXT("DRIVE STOP"));
         TestEqual(TEXT("and cruise at STOP, dim"), Motion.Dim, Sep + TEXT("CRUISE STOP"));
+    }
+
+    // A lever a hair off its detent is at STOP: a very short frame of Shift
+    // can leave cruise's lever a fraction of a metre a second up, and
+    // "CRUISE 0 M/S" would name as a setting what is none. Either way.
+    for (const double Hair : { 0.001, -0.001 })
+    {
+        const FShipFlightState State = Flying(Hair, false, 0, 1.0);
+        TestTrue(TEXT("the lever is off its detent"), State.GetLeverSpeed() != 0.0);
+        TestEqual(FString::Printf(TEXT("a lever at %g of its travel reads STOP"), Hair),
+                  Line(State).Ink, FString(TEXT("STATIONARY")) + Sep + TEXT("CRUISE STOP"));
+        FShipFlightState Other = Flying(Hair, true, 1, 1.0);
+        TestEqual(FString::Printf(TEXT("and at %g, dim, too"), Hair), Line(Other).Dim, Sep + TEXT("CRUISE STOP"));
     }
 
     // In every mode the dim part names the other lever, and nothing in the
@@ -269,6 +302,48 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
                 TestFalse(FString::Printf(TEXT("the HUD's '%s' holds no time"), *Text), HoldsTime(Text));
             }
         });
+
+        // Between stars the ship is folded, not flown. The flight state goes
+        // on stepping with both levers at STOP and would ease the corner to
+        // STATIONARY mid-jump; the corner says nothing, as the altitude does.
+        const TArray<FStarSystemStub> Chart = Ship->GetChart();
+        if (TestTrue(TEXT("the chart has somewhere to go"), Chart.Num() > 0 && Ship->PlotCourse(Chart[0].Id)))
+        {
+            SkyTestWorld::FScopedCVar Instant(TEXT("ds.Nav.ChargeSeconds"), 0.0f);
+            Ship->PlaceShip(Ship->GetFlightState().GetUniversePosition(),
+                            FRotationMatrix::MakeFromX(Ship->GetCourseDirection().Get(FVector::ForwardVector)).ToQuat());
+            Ship->SetJumpEngaged(true);
+            for (int32 Tick = 0; Tick < 4 && !Ship->IsInTransit(); ++Tick)
+            {
+                Ship->Tick(0.05f);
+            }
+            if (TestTrue(TEXT("aligned, engaged and charged, the jump fires"), Ship->IsInTransit()))
+            {
+                for (int32 Frame = 0; Frame < 15 && Ship->IsInTransit(); ++Frame)
+                {
+                    Ship->Tick(1.0f / 30.0f);
+                }
+                TestTrue(TEXT("still between stars"), Ship->IsInTransit());
+                HUD->NativeTick(FGeometry(), 0.016f);
+                const UShipHUDWidget::FMotionWords Folded = UShipHUDWidget::MotionLineOf(*Ship);
+                TestEqual(TEXT("between stars the corner's speed is a dash"), Folded.Ink, FString(TEXT("-----")));
+                TestTrue(TEXT("and no lever"), Folded.Dim.IsEmpty());
+                bool bLevers = false;
+                bool bDash = false;
+                HUD->WidgetTree->ForEachWidget([&](UWidget* Widget)
+                {
+                    if (const UTextBlock* Block = Cast<UTextBlock>(Widget))
+                    {
+                        const FString Text = Block->GetText().ToString();
+                        bLevers |= Text.Contains(TEXT("STOP")) || Text.Contains(TEXT("STATIONARY"));
+                        bDash |= Block->GetColorAndOpacity().GetSpecifiedColor().Equals(UShipScreenWidget::Ink)
+                                 && Text == Folded.Ink;
+                    }
+                });
+                TestFalse(TEXT("the drawn HUD names no lever and no STATIONARY mid-jump"), bLevers);
+                TestTrue(TEXT("and draws the dash in ink"), bDash);
+            }
+        }
     }
 
     GEngine->DestroyWorldContext(World);

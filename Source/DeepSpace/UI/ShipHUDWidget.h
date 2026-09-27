@@ -60,13 +60,22 @@ public:
      * exactly where the last would round up to its own threshold, as
      * AltitudeWords does, so "1000 M/S" and "100.0 KM/S" are never shown.
      *
-     * A reading whose decimals are all zero drops them: "50 KM/S", "0.1 C".
-     * That is what makes every notch of the drive lever read exactly as its
-     * label (decision 3), so the settled ship and the lever it was set to say
-     * the same words, and a speed the player sets is one they can come back
-     * to. Pure.
+     * This is a label's form: decimals that are all zero are dropped, "50
+     * KM/S", "0.1 C", which is what makes every notch of the drive lever
+     * read exactly as its label (decision 3). Levers are named in it. Pure.
      */
     static FString SpeedWords(double CmPerSecond);
+
+    /**
+     * The ship's own speed as the corner reads it: SpeedWords, but keeping
+     * its decimals -- "13.0 KM/S", "0.10 C" -- so the reading does not
+     * change length each time it passes a round number, and what is drawn
+     * after it does not slide while the pilot aims by it. Only when it reads
+     * what the lever asks for, LeverCmPerSecond, does it drop them: settled,
+     * the ship and the lever say the same words, and a speed the player
+     * sets is one they can come back to. Pure.
+     */
+    static FString SpeedReading(double CmPerSecond, double LeverCmPerSecond);
 
     /**
      * The motion line (decision 7), as the two parts the corner draws: in
@@ -88,6 +97,11 @@ public:
         FString Dim;
     };
     static FMotionWords MotionLine(const FShipFlightState& Flight);
+
+    /** The motion line asked of the ship, which is what the corner draws: a
+     *  dash in ink between stars, where the ship is folded, not flown, and
+     *  otherwise MotionLine. Stores nothing. */
+    static FMotionWords MotionLineOf(const UShipSubsystem& Ship);
 
     /**
      * A distance in the unit a person would say it in: metres under a
@@ -170,6 +184,9 @@ protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+    /** SpeedWords, with decimals that are all zero dropped or kept. */
+    static FString SpeedWordsKept(double CmPerSecond, bool bDropZeros);
+
     /** What the dot is currently over; it is the only thing that animates. */
     enum class ETarget : uint8
     {

@@ -756,7 +756,7 @@ floor or the cap is doing.
 2,310 KM ABOVE Kessa IV  ·  HOLDING OFF     the cap is taking speed away
 10.2 KM ABOVE Kessa IV  ·  AT THE FLOOR     the lever pushes down; this is as low as it goes
 3,400 AU TO THE EDGE  ·  HOLDING OFF
-10 KM TO THE EDGE  ·  AT THE EDGE
+10.0 KM TO THE EDGE  ·  AT THE EDGE
 ```
 
 `HOLDING OFF` shows while the cap holds the ship more than 5% below the
@@ -778,6 +778,18 @@ to a tenth under 100, whole and grouped to 0.01 c; then C to a hundredth
 under 1, and `1 C` at the top, which is as fast as the drive goes (ruling 1).
 Every notch reads as its label.
 Distance keeps `AltitudeWords` (M, KM, THOUSAND KM, AU).
+
+*Amended in review:* the two round differently, on purpose. A label drops
+decimals that are all zero (`50 KM/S`, `0.1 C`): that is `SpeedWords`, and
+every lever is named in it. The ship's own speed is a moving reading, and
+keeps them (`13.0 KM/S`, `0.10 C`, `SpeedReading`) so it does not change
+length each time it passes a round number and slide the lever words drawn
+after it under the pilot's eye; it drops them only when it reads what its
+live lever asks for, which is what keeps every settled notch reading as its
+label. The altitude is always a moving reading with no label to match, so it
+keeps its tenth throughout (`10.0 KM TO THE EDGE`). Between stars the motion
+line is a dash, as the altitude is: the ship is folded, not flown. A lever
+whose speed prints as nothing reads `STOP`, not `0 M/S`.
 
 **No time appears in this corner.** The corner describes the ship: its
 speed, its levers, and how far it is from the nearest thing. A time to

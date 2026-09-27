@@ -4,7 +4,9 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/Pawn.h"
+#include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightState.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
@@ -163,6 +165,39 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("while the flight state says it holds more than 5% under the lever"),
                 Ship->GetFlightState().GetHold() == EFlightHold::HoldingOff
                 && Ship->GetFlightState().GetHeldFraction() > UShipHUDWidget::HoldingOffShown);
+
+            // Held a few percent under the lever, the corner says nothing:
+            // the flight state does report HOLDING OFF, and it is the corner
+            // that keeps it back, on the 5% rule. The lever at its first
+            // notch, settled far out; then the ship put where the cap's
+            // speed is 3.5% under that notch, and one frame flown.
+            const double FirstNotch = ShipDriveLever::NotchSpeed(1);
+            Ship->SetDriveLever(Pilot, 1);
+            PlaceAt(250.0 * Km);
+            Settle(8 * 30);
+            TestEqual(TEXT("far out, settled on the first notch"), Ship->GetFlightState().GetSpeed(), FirstNotch, FirstNotch * 1.0e-3);
+            const FShipFlightLimits& Limits = Ship->GetFlightState().GetLimits();
+            const auto May = [&](double D)
+            {
+                return ShipFlight::MaySpeed(D, Limits.LinearAcceleration, Limits.HoldSeconds, FShipFlightState::FixedStep);
+            };
+            // The cap's own speed is the one that rises with room, so the
+            // room that allows 96.5% of the notch is found by halving.
+            double Low = 0.0;
+            double High = 250.0 * Km;
+            for (int32 Halving = 0; Halving < 80; ++Halving)
+            {
+                const double Mid = 0.5 * (Low + High);
+                (May(Mid) < 0.965 * FirstNotch ? Low : High) = Mid;
+            }
+            PlaceAt(ShipFloor + High);
+            const FString Barely = Settle(1);
+            const double BarelyHeld = Ship->GetFlightState().GetHeldFraction();
+            TestTrue(FString::Printf(TEXT("the flight state holds the ship off, a few percent under its lever (%.4f)"), BarelyHeld),
+                Ship->GetFlightState().GetHold() == EFlightHold::HoldingOff
+                && BarelyHeld > 0.0 && BarelyHeld <= UShipHUDWidget::HoldingOffShown);
+            TestTrue(FString::Printf(TEXT("and the corner does not say so ('%s')"), *Barely),
+                Barely.Contains(TEXT(" ABOVE ")) && !Barely.EndsWith(HoldingOff) && !Barely.EndsWith(AtFloor));
 
             // Turned away from it at the floor, the ship is leaving.
             const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
