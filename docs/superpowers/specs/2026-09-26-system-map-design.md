@@ -1505,7 +1505,7 @@ so either answer is a deliberate change to those two lines.
 | `ds.Nav.Target [n\|name\|next\|none]` | command | `ShipSubsystem.cpp` |
 | `ds.Nav.Plot target` | command, extended: the target as the course (decision 12) | `ShipSubsystem.cpp` |
 | `ds.Nav.WorldStandoffDeg` | 2 (the world's angular diameter at an in-system arrival) | `ShipSubsystem.cpp` |
-| `ds.Sky.Goto <body> <km> [night]` | command, extended | `ShipSky.cpp` |
+| `ds.Sky.Goto <body> <km> [night\|dusk]` | command, extended (`dusk` added 2026-09-27, surface-artifacts fix) | `ShipSky.cpp` |
 
 Everything else is a named constant with a test on it: `SystemMap::MinRingGap`
 (derived, 8 px), `PickRadius` (14 px), the rim margin (1.25), the draw size

@@ -1,6 +1,8 @@
 #include "Sky/SkyProjection.h"
 #include "Universe/UniverseUnits.h"
 
+#include <cmath>
+
 namespace
 {
     /** The first star, the one every planet is lit from. One per system in
@@ -81,6 +83,21 @@ double SkyProjection::StarWarmth(double TemperatureK, double Gamma)
 {
     const double Warmth = TemperatureK / UniverseUnits::SolarTemperatureK;
     return FMath::Min(Compress(Warmth * Warmth * Warmth * Warmth, Gamma), MaxStarWarmth);
+}
+
+double SkyProjection::RenderableScale(double Scale)
+{
+    if (!(Scale > 0.0) || !FMath::IsFinite(Scale))
+    {
+        return Scale;
+    }
+    // Scale = f 2^Exponent with f in [0.5, 1): 15 significant bits are steps
+    // of 2^(Exponent - 15). Rounding up to 2^15 of them is 2^Exponent, which
+    // holds exactly too.
+    int Exponent = 0;
+    std::frexp(Scale, &Exponent);
+    const double Quantum = std::ldexp(1.0, Exponent - RenderedScaleBits);
+    return FMath::CeilToDouble(Scale / Quantum) * Quantum;
 }
 
 double SkyProjection::Compress(double Ratio, double Gamma)
@@ -207,14 +224,23 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
 
     // Because the scale is invisible it is reassigned every frame; bodies
     // that swap order in flight move nothing on screen.
+    //
+    // The scale is then rounded up to one the GPU keeps exactly
+    // (RenderableScale), and the centre moved out to match, so the proxy the
+    // GPU draws is still an exact homothety of the true sphere -- only a
+    // 2^-14 larger one at most, whose near side is that much beyond the
+    // cursor. Without it the ground under the ship, R / h times nearer than
+    // the proxy's radius, took the scale's rounding amplified by R / h.
+    const double MeshRadius = FMath::Max(Params.ProxyMeshRadius, UE_DOUBLE_SMALL_NUMBER);
     double Cursor = Params.NearProxy;
     for (const int32 Index : Frame.DepthOrder)
     {
         const FBodyShape& Shape = Shapes[Index];
         FSkyBodyView& View = Frame.Bodies[Index];
-        const double Centre = Cursor / Shape.NearFactor;
+        View.ProxyScale = RenderableScale(Cursor / Shape.NearFactor * Shape.Sin / MeshRadius);
+        View.ProxyRadius = View.ProxyScale * MeshRadius;
+        const double Centre = View.ProxyRadius / Shape.Sin;
         View.ProxyLocation = View.Direction * Centre;
-        View.ProxyRadius = Centre * Shape.Sin;
         Cursor = Centre * Shape.FarFactor * Params.StackGap;
     }
 

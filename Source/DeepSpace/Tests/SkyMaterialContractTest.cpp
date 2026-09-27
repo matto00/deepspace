@@ -2,7 +2,14 @@
 #include "Algo/Compare.h"
 #include "Dom/JsonObject.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionAppendVector.h"
 #include "Materials/MaterialExpressionCameraPositionWS.h"
+#include "Materials/MaterialExpressionComponentMask.h"
+#include "Materials/MaterialExpressionCrossProduct.h"
+#include "Materials/MaterialExpressionDDX.h"
+#include "Materials/MaterialExpressionSubtract.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionClamp.h"
 #include "Materials/MaterialExpressionCollectionParameter.h"
 #include "Materials/MaterialExpressionConstant.h"
@@ -63,6 +70,8 @@ namespace
             { TEXT("relief"), SkyMaterial::Relief, TEXT("scalar") },
             { TEXT("cratering"), SkyMaterial::Cratering, TEXT("scalar") },
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
+            { TEXT("body_axis_x"), SkyMaterial::BodyAxisX, TEXT("vector") },
+            { TEXT("body_axis_y"), SkyMaterial::BodyAxisY, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
         };
@@ -192,6 +201,250 @@ namespace
             Found.Append(ScaledBy(*Next, Depth - 1));
         }
         return Found;
+    }
+
+    /**
+     * A little evaluator for the vector arithmetic of a material graph: the
+     * nodes body_axes, to_body and to_world are built from, and nothing
+     * else. A value is its components, 1 to 4. Given is what the caller
+     * sets -- a node's value outright, or a vector parameter's by name --
+     * and a node it cannot evaluate fails the evaluation, so a graph that
+     * reaches the result some other way is refused, never guessed at.
+     */
+    struct FGraphEval
+    {
+        TMap<const UMaterialExpression*, TArray<double>> Given;
+        TMap<FName, TArray<double>> Vectors;
+        FString Failure;
+
+        TArray<double> Input(const FExpressionInput& In, TArray<double> Unlinked = {})
+        {
+            if (!In.Expression)
+            {
+                return Unlinked;
+            }
+            TArray<double> Value = Node(In.Expression);
+            if (In.Mask && Value.Num() > 0)
+            {
+                TArray<double> Masked;
+                const int32 Flags[4] = { In.MaskR, In.MaskG, In.MaskB, In.MaskA };
+                for (int32 Channel = 0; Channel < 4; ++Channel)
+                {
+                    if (Flags[Channel] && Value.IsValidIndex(Channel))
+                    {
+                        Masked.Add(Value[Channel]);
+                    }
+                }
+                return Masked;
+            }
+            return Value;
+        }
+
+        /** A op B, a one-component operand broadcast across the other. */
+        template <typename FOp>
+        TArray<double> Each(const TArray<double>& A, const TArray<double>& B, FOp Op)
+        {
+            if (A.IsEmpty() || B.IsEmpty() || (A.Num() != B.Num() && A.Num() != 1 && B.Num() != 1))
+            {
+                Failure = TEXT("operands of mismatched width");
+                return {};
+            }
+            TArray<double> Out;
+            for (int32 Index = 0; Index < FMath::Max(A.Num(), B.Num()); ++Index)
+            {
+                Out.Add(Op(A[A.Num() == 1 ? 0 : Index], B[B.Num() == 1 ? 0 : Index]));
+            }
+            return Out;
+        }
+
+        static double Dot(const TArray<double>& A, const TArray<double>& B)
+        {
+            double Sum = 0.0;
+            for (int32 Index = 0; Index < FMath::Min(A.Num(), B.Num()); ++Index)
+            {
+                Sum += A[Index] * B[Index];
+            }
+            return Sum;
+        }
+
+        TArray<double> Node(const UMaterialExpression* E)
+        {
+            if (const TArray<double>* Set = Given.Find(E))
+            {
+                return *Set;
+            }
+            if (const UMaterialExpressionVectorParameter* P = Cast<UMaterialExpressionVectorParameter>(E))
+            {
+                if (const TArray<double>* Set = Vectors.Find(P->ParameterName))
+                {
+                    return *Set;
+                }
+            }
+            else if (const UMaterialExpressionNormalize* N = Cast<UMaterialExpressionNormalize>(E))
+            {
+                TArray<double> V = Input(N->VectorInput);
+                const double Length = FMath::Sqrt(Dot(V, V));
+                for (double& C : V)
+                {
+                    C /= Length;
+                }
+                return V;
+            }
+            else if (const UMaterialExpressionDotProduct* D = Cast<UMaterialExpressionDotProduct>(E))
+            {
+                const TArray<double> A = Input(D->A), B = Input(D->B);
+                if (A.Num() == B.Num() && !A.IsEmpty())
+                {
+                    return { Dot(A, B) };
+                }
+            }
+            else if (const UMaterialExpressionCrossProduct* X = Cast<UMaterialExpressionCrossProduct>(E))
+            {
+                const TArray<double> A = Input(X->A), B = Input(X->B);
+                if (A.Num() == 3 && B.Num() == 3)
+                {
+                    return { A[1] * B[2] - A[2] * B[1], A[2] * B[0] - A[0] * B[2], A[0] * B[1] - A[1] * B[0] };
+                }
+            }
+            else if (const UMaterialExpressionAppendVector* V = Cast<UMaterialExpressionAppendVector>(E))
+            {
+                TArray<double> Out = Input(V->A);
+                Out.Append(Input(V->B));
+                return Out;
+            }
+            else if (const UMaterialExpressionComponentMask* M = Cast<UMaterialExpressionComponentMask>(E))
+            {
+                const TArray<double> In = Input(M->Input);
+                TArray<double> Out;
+                const bool Flags[4] = { !!M->R, !!M->G, !!M->B, !!M->A };
+                for (int32 Channel = 0; Channel < 4; ++Channel)
+                {
+                    if (Flags[Channel] && In.IsValidIndex(Channel))
+                    {
+                        Out.Add(In[Channel]);
+                    }
+                }
+                return Out;
+            }
+            else if (const UMaterialExpressionMultiply* Mul = Cast<UMaterialExpressionMultiply>(E))
+            {
+                return Each(Input(Mul->A, { Mul->ConstA }), Input(Mul->B, { Mul->ConstB }), [](double A, double B) { return A * B; });
+            }
+            else if (const UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(E))
+            {
+                return Each(Input(Add->A, { Add->ConstA }), Input(Add->B, { Add->ConstB }), [](double A, double B) { return A + B; });
+            }
+            else if (const UMaterialExpressionSubtract* Sub = Cast<UMaterialExpressionSubtract>(E))
+            {
+                return Each(Input(Sub->A, { Sub->ConstA }), Input(Sub->B, { Sub->ConstB }), [](double A, double B) { return A - B; });
+            }
+            if (Failure.IsEmpty())
+            {
+                Failure = FString::Printf(TEXT("reached %s, which the check cannot evaluate"), *E->GetClass()->GetName());
+            }
+            return {};
+        }
+    };
+
+    FVector AsVector(const TArray<double>& V)
+    {
+        return V.Num() == 3 ? FVector(V[0], V[1], V[2]) : FVector(NAN);
+    }
+
+    /**
+     * M_SkyBody turns the face with the ship. The proxy is drawn unturned,
+     * so the mesh's object space has the world's axes, and the material
+     * alone carries the body's: the direction the noise reads must be the
+     * pixel's world direction in the axes C++ writes to BodyAxisX/BodyAxisY
+     * (Z their cross product), and the relief's normal must come back from
+     * those axes to the world, where the light is. The names above cannot
+     * see that, and a graph that skips the turn, or turns the wrong way,
+     * draws a face fixed to the world, which swims as the ship turns. So
+     * the arithmetic is evaluated, under a turn with no symmetry to hide
+     * a transposition or a swapped axis:
+     *
+     * - the direction feeding the footprint (DDX) and every band is
+     *   (X . p, Y . p, (X x Y) . p) for p = normalize(LocalPosition);
+     * - LocalPosition reaches the pixel only through that direction;
+     * - the normal the light is dotted with is normalize(v.x X + v.y Y +
+     *   v.z (X x Y)) for the relief's body-space normal v.
+     */
+    void CheckBodyTurn(FAutomationTestBase& Test, UMaterial& Material)
+    {
+        const UMaterialExpressionLocalPosition* Position = nullptr;
+        const UMaterialExpressionDDX* Footprint = nullptr;
+        const UMaterialExpressionVectorParameter* Light = nullptr;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            Position = Position ? Position : Cast<UMaterialExpressionLocalPosition>(Expression.Get());
+            Footprint = Footprint ? Footprint : Cast<UMaterialExpressionDDX>(Expression.Get());
+            const UMaterialExpressionVectorParameter* Vector = Cast<UMaterialExpressionVectorParameter>(Expression.Get());
+            Light = Vector && Vector->ParameterName == SkyMaterial::LightDirection ? Vector : Light;
+        }
+        const UMaterialExpression* Direction = Footprint ? Footprint->Value.Expression : nullptr;
+        if (!Test.TestNotNull(TEXT("M_SkyBody reads the mesh's position"), Position)
+            || !Test.TestNotNull(TEXT("M_SkyBody's footprint is taken of the body's direction"), Direction)
+            || !Test.TestNotNull(TEXT("M_SkyBody has its light direction"), Light))
+        {
+            return;
+        }
+
+        // A turn about an oblique axis, and a pixel off every axis.
+        const FQuat Turn(FVector(0.3, -0.7, 0.2).GetSafeNormal(), 0.83);
+        const FVector X = Turn.GetAxisX(), Y = Turn.GetAxisY(), Z = X.Cross(Y);
+        const FVector Pixel(0.31, -0.52, 0.8);
+        const FVector Seen = Pixel.GetSafeNormal();
+
+        FGraphEval Eval;
+        Eval.Vectors.Add(SkyMaterial::BodyAxisX, { X.X, X.Y, X.Z, 0.0 });
+        Eval.Vectors.Add(SkyMaterial::BodyAxisY, { Y.X, Y.Y, Y.Z, 0.0 });
+        Eval.Given.Add(Position, { Pixel.X, Pixel.Y, Pixel.Z, 1.0 });
+        const FVector Body = AsVector(Eval.Node(Direction));
+        const FVector Expected(X.Dot(Seen), Y.Dot(Seen), Z.Dot(Seen));
+        Test.TestTrue(FString::Printf(TEXT("M_SkyBody's face is read in the body's axes, turned by BodyAxisX/Y: %s, not %s%s"),
+            *Body.ToString(), *Expected.ToString(), Eval.Failure.IsEmpty() ? TEXT("") : *(TEXT(" -- ") + Eval.Failure)),
+            Body.Equals(Expected, 1e-6));
+
+        // No band reads the position except through that turn.
+        const FExpressionInput* Emissive = Material.GetExpressionInputForProperty(MP_EmissiveColor);
+        const TSet<const UMaterialExpression*> Around = Upstream(Emissive ? Emissive->Expression : nullptr, { Direction });
+        Test.TestFalse(TEXT("M_SkyBody's pixel reads the mesh's position only through the body's axes"), Around.Contains(Position));
+
+        // The relief's normal, from the body's axes back to the world: the
+        // node the light is dotted with, given the body-space normal.
+        const UMaterialExpression* Normal = nullptr;
+        for (const UMaterialExpression* User : Consumers(Material, Light))
+        {
+            if (const UMaterialExpressionDotProduct* Lit = Cast<UMaterialExpressionDotProduct>(User))
+            {
+                const UMaterialExpression* Other = Lit->A.Expression == Light ? Lit->B.Expression : Lit->A.Expression;
+                Normal = Cast<UMaterialExpressionNormalize>(Other) ? Other : Normal;
+            }
+        }
+        const UMaterialExpression* Relief = nullptr;
+        for (const UMaterialExpression* User : Consumers(Material, Direction))
+        {
+            const UMaterialExpressionSubtract* Tilt = Cast<UMaterialExpressionSubtract>(User);
+            if (Tilt && Tilt->A.Expression == Direction)
+            {
+                const TArray<const UMaterialExpression*> Users = Consumers(Material, Tilt);
+                Relief = Users.Num() == 1 && Cast<UMaterialExpressionNormalize>(Users[0]) ? Users[0] : Relief;
+            }
+        }
+        if (!Test.TestNotNull(TEXT("M_SkyBody lights a unit normal"), Normal)
+            || !Test.TestNotNull(TEXT("M_SkyBody's relief tilts the body's direction"), Relief))
+        {
+            return;
+        }
+        const FVector Tilted = FVector(0.2, 0.9, -0.38).GetSafeNormal();
+        FGraphEval Back;
+        Back.Vectors = Eval.Vectors;
+        Back.Given.Add(Relief, { Tilted.X, Tilted.Y, Tilted.Z });
+        const FVector World = AsVector(Back.Node(Normal));
+        const FVector WorldExpected = (X * Tilted.X + Y * Tilted.Y + Z * Tilted.Z).GetSafeNormal();
+        Test.TestTrue(FString::Printf(TEXT("M_SkyBody's relief normal comes back to the world through the same axes: %s, not %s%s"),
+            *World.ToString(), *WorldExpected.ToString(), Back.Failure.IsEmpty() ? TEXT("") : *(TEXT(" -- ") + Back.Failure)),
+            World.Equals(WorldExpected, 1e-6));
     }
 
     /**
@@ -619,6 +872,7 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         if (Material->GetFName() == TEXT("M_SkyBody"))
         {
             CheckSurfaceFace(*this, *const_cast<UMaterial*>(Material), Contract->GetObjectField(TEXT("constants")));
+            CheckBodyTurn(*this, *const_cast<UMaterial*>(Material));
         }
         if (Material->GetFName() == TEXT("M_SkyGlass"))
         {

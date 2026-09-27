@@ -332,14 +332,47 @@ def crater_band(g, direction, offset, frequency, footprint):
     return g.mul(g.add(floor_dark, rim_bright), weight), g.mul(g.mul(away, wall), weight)
 
 
-def surface(g, knobs, seed):
+def body_axes(g):
+    """The universe's axes in world space, from BodyAxisX and BodyAxisY, and
+    Z as their cross product: the rows that turn a world direction into the
+    body's own axes. The proxy is drawn unturned -- its rotation is the
+    world's identity, which a GPU instance transform keeps exactly, where
+    the counter-frame's rotation came back 16-bit and the ground under the
+    ship took its error times R / h -- so the face is turned with the ship
+    here, by full-float parameters. Returns (x, y, z) as vector nodes."""
+    x = g.vector("body_axis_x", (1.0, 0.0, 0.0, 0.0))
+    y = g.vector("body_axis_y", (0.0, 1.0, 0.0, 0.0))
+    x3 = mask(g, x, "rgb")
+    y3 = mask(g, y, "rgb")
+    z3 = g.binary(unreal.MaterialExpressionCrossProduct, x3, y3)
+    return x3, y3, z3
+
+
+def to_body(g, axes, world):
+    """A world-space vector in the body's axes: its dot with each row."""
+    x, y, z = axes
+    dx = g.binary(unreal.MaterialExpressionDotProduct, x, world)
+    dy = g.binary(unreal.MaterialExpressionDotProduct, y, world)
+    dz = g.binary(unreal.MaterialExpressionDotProduct, z, world)
+    return g.binary(unreal.MaterialExpressionAppendVector, g.binary(unreal.MaterialExpressionAppendVector, dx, dy), dz)
+
+
+def to_world(g, axes, body):
+    """A body-axes vector in world space: the rows weighted by its parts."""
+    x, y, z = axes
+    along = lambda row, channel: g.mul(row, mask(g, body, channel))
+    return g.add(g.add(along(x, "r"), along(y, "g")), along(z, "b"))
+
+
+def surface(g, knobs, seed, axes):
     """The world's face and relief, both from the object-space noise: the
     face is the factor the shaded disc is multiplied by, 1 + swing, and the
     relief is the gradient of a height field the normal is tilted by.
-    Everything is a function of D, the unit direction to the pixel in object
-    space -- normalize(LocalPosition) -- so both are fixed to the body however
-    the proxy is moved and rescaled each frame, and every frequency is in
-    cycles per body radius, whatever mesh draws it.
+    Everything is a function of D, the unit direction to the pixel in the
+    body's own axes -- normalize(LocalPosition), turned by BodyAxisX/Y
+    (body_axes) -- so both are fixed to the body however the proxy is moved
+    and rescaled each frame, and every frequency is in cycles per body
+    radius, whatever mesh draws it.
 
         footprint = max(|ddx D|, |ddy D|) * filter_pixels
         offset    = SurfaceSeed.xyz            (where on the noise this world is)
@@ -373,9 +406,12 @@ def surface(g, knobs, seed):
     pixel, and the relief only turns a unit normal.
     """
     mottle, detail, banding, relief, cratering = knobs
+    # The mesh is unturned, so its object space has the world's axes: the
+    # direction to the pixel is taken there and turned into the body's.
     position = g.node(unreal.MaterialExpressionLocalPosition)
-    direction = g.node(unreal.MaterialExpressionNormalize)
-    g.link(position, direction, "", output_name="XYZ")
+    seen = g.node(unreal.MaterialExpressionNormalize)
+    g.link(position, seen, "", output_name="XYZ")
+    direction = to_body(g, axes, seen)
 
     ddx = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDX, direction))
     ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
@@ -460,23 +496,20 @@ def surface(g, knobs, seed):
     return factor, slope, direction
 
 
-def relief_normal(g, direction, slope):
+def relief_normal(g, direction, slope, axes):
     """The world-space normal of the relief: the sphere's own normal, D --
     exact at every pixel, so no facet of the mesh can show in the shading --
     tilted against the slope's part along the surface, and unit length,
 
         n = normalize(D - (slope - (slope . D) D)),
 
-    carried to world space, where LightDirection is. Unit, so N.L can never
-    exceed 1 whatever the relief: it turns the light, it cannot add any."""
+    carried from the body's axes to world space, where LightDirection is.
+    Unit, so N.L can never exceed 1 whatever the relief: it turns the light,
+    it cannot add any."""
     along = g.mul(g.binary(unreal.MaterialExpressionDotProduct, slope, direction), direction)
     tangential = g.binary(unreal.MaterialExpressionSubtract, slope, along)
     local = g.unary(unreal.MaterialExpressionNormalize, g.binary(unreal.MaterialExpressionSubtract, direction, tangential))
-    world = g.node(unreal.MaterialExpressionTransform,
-                   transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
-                   transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
-    g.link(local, world, "")
-    return g.unary(unreal.MaterialExpressionNormalize, world)
+    return g.unary(unreal.MaterialExpressionNormalize, to_world(g, axes, local))
 
 
 def sky_body():
@@ -517,8 +550,9 @@ def sky_body():
     knobs = (g.scalar("mottle", 0.35), g.scalar("detail", 0.3), g.scalar("banding", 0.0),
              g.scalar("relief", 0.2), g.scalar("cratering", 0.0))
 
-    factor, slope, direction = surface(g, knobs, seed)
-    normal = relief_normal(g, direction, slope)
+    axes = body_axes(g)
+    factor, slope, direction = surface(g, knobs, seed, axes)
+    normal = relief_normal(g, direction, slope, axes)
     n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
     lambert = g.unary(unreal.MaterialExpressionSaturate, n_dot_l)
 

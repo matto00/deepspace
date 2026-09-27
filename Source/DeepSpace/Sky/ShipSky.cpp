@@ -184,10 +184,25 @@ namespace
         return FLinearColor(static_cast<float>(Vector.X), static_cast<float>(Vector.Y), static_cast<float>(Vector.Z), 0.0f);
     }
 
-    FSkyViewParams ViewParams(double PixelAngle)
+    /** The body mesh's radius and centre, read from its bounds, never
+     *  assumed: meshes in this project do not agree on where their pivot is. */
+    void MeshShape(const UStaticMesh* Mesh, double& OutRadius, FVector& OutCentre)
+    {
+        OutRadius = 1.0;
+        OutCentre = FVector::ZeroVector;
+        if (Mesh)
+        {
+            const FBox Box = Mesh->GetBoundingBox();
+            OutRadius = FMath::Max(Box.GetExtent().GetMax(), UE_DOUBLE_SMALL_NUMBER);
+            OutCentre = Box.GetCenter();
+        }
+    }
+
+    FSkyViewParams ViewParams(double PixelAngle, double MeshRadius)
     {
         FSkyViewParams Params;
         Params.PixelAngle = PixelAngle;
+        Params.ProxyMeshRadius = MeshRadius;
         Params.FluxGamma = CVarFluxGamma.GetValueOnGameThread();
         Params.MinPointPixels = AShipSky::PointPixels();
         Params.StarSurface = CVarStarSurface.GetValueOnGameThread();
@@ -336,6 +351,13 @@ void AShipSky::RebuildFor(const FSkySystem& System)
         Proxy->SetMobility(EComponentMobility::Movable);
         Proxy->SetupAttachment(Root);
         Proxy->SetStaticMesh(BodyMesh);
+        // Placed through the counter-frame, but never turned or scaled by it:
+        // its rotation is the world's identity and its scale exactly the
+        // projection's, the two a GPU instance transform keeps without
+        // rounding (SkyProjection::RenderedScaleBits). The face turns with
+        // the ship in the material instead, through BodyAxisX and BodyAxisY.
+        Proxy->SetUsingAbsoluteRotation(true);
+        Proxy->SetUsingAbsoluteScale(true);
 
         // A 125,000 km sphere must touch nothing inside the ship: no
         // collision, no shadow, no bounce light, no distance-field lighting,
@@ -389,7 +411,10 @@ void AShipSky::DrawFrom(const FSkySystem& System)
 
     const FShipFlightState& Flight = Ship->GetFlightState();
     const double PixelAngle = GetPixelAngle();
-    const FSkyViewParams Params = ViewParams(PixelAngle);
+    double MeshRadius = 1.0;
+    FVector MeshCentre = FVector::ZeroVector;
+    MeshShape(BodyMesh, MeshRadius, MeshCentre);
+    const FSkyViewParams Params = ViewParams(PixelAngle, MeshRadius);
     LastFrame = SkyProjection::Project(System, Flight.GetUniversePosition(), Params);
 
     SetSkyVisible(true);
@@ -400,16 +425,16 @@ void AShipSky::DrawFrom(const FSkySystem& System)
 
 void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, const FQuat& CounterFrameRotation)
 {
-    // The mesh's size and centre are read from its bounds, never assumed:
-    // meshes in this project do not agree on where their pivot is.
     double MeshRadius = 1.0;
     FVector MeshCentre = FVector::ZeroVector;
-    if (BodyMesh)
-    {
-        const FBox Box = BodyMesh->GetBoundingBox();
-        MeshRadius = FMath::Max(Box.GetExtent().GetMax(), UE_DOUBLE_SMALL_NUMBER);
-        MeshCentre = Box.GetCenter();
-    }
+    MeshShape(BodyMesh, MeshRadius, MeshCentre);
+
+    // Universe axes as the world will see them when this frame is drawn: the
+    // counter-frame's rotation this frame (whichever actor ticks first), then
+    // the sky's own placement under it. The proxies are laid out through the
+    // same two rotations, so the face the material turns by these axes is
+    // the face of the sphere where it is drawn.
+    const FQuat Universe = CounterFrameRotation * Root->GetRelativeRotation().Quaternion();
 
     const float Radiance = CVarRadiance.GetValueOnGameThread();
     const float Mottle = CVarMottle.GetValueOnGameThread();
@@ -421,8 +446,13 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
     {
         UStaticMeshComponent* Proxy = Proxies[Index];
         const FSkyBodyView& View = Frame.Bodies[Index];
-        const double Scale = View.ProxyRadius / MeshRadius;
-        Proxy->SetRelativeTransform(FTransform(FQuat::Identity, View.ProxyLocation - MeshCentre * Scale, FVector(Scale)));
+        // Absolute rotation and scale: the identity and the projection's
+        // renderable scale, exactly. The location is still the root's, in
+        // universe axes, so the mesh's own centre -- world axes now -- is
+        // taken back into them.
+        const double Scale = View.ProxyScale;
+        Proxy->SetRelativeTransform(FTransform(FQuat::Identity,
+            View.ProxyLocation - Universe.UnrotateVector(MeshCentre * Scale), FVector(Scale)));
 
         UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Proxy->GetMaterial(0));
         if (!Instance)
@@ -447,6 +477,12 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             // this frame's whichever actor ticks first.
             Instance->SetVectorParameterValue(SkyMaterial::LightDirection,
                 AsParameter(CounterFrameRotation.RotateVector(View.LightDirection)));
+            // The face is fixed to the body, in universe axes; the mesh is
+            // drawn unturned, so the material turns world directions into
+            // universe axes with these rows. Material parameters are full
+            // floats: 6e-8, where the instance transform's rotation kept 3e-5.
+            Instance->SetVectorParameterValue(SkyMaterial::BodyAxisX, AsParameter(Universe.GetAxisX()));
+            Instance->SetVectorParameterValue(SkyMaterial::BodyAxisY, AsParameter(Universe.GetAxisY()));
         }
     }
 }
@@ -770,6 +806,16 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
             }
             Out = (-Sunward + Aside * NightSideSlope).GetSafeNormal();
         }
+        else if (Side == EGotoSide::Dusk)
+        {
+            FVector Aside = FVector::CrossProduct(FVector::UpVector, Sunward).GetSafeNormal();
+            if (Aside.IsNearlyZero())
+            {
+                Aside = FVector::CrossProduct(FVector::ForwardVector, Sunward).GetSafeNormal();
+            }
+            // The zenith DuskSunElevation short of square to the star.
+            Out = (Aside * FMath::Cos(DuskSunElevation) + Sunward * FMath::Sin(DuskSunElevation)).GetSafeNormal();
+        }
     }
     if (Out.IsNearlyZero())
     {
@@ -791,31 +837,49 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
     return Placement;
 }
 
-// ---------------------------------------------------------------------------
-// ds.Sky.Goto: the sky's one write path, a one-shot PlaceShip for tuning.
-
-void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
-                    FOutputDevice& Out)
+TOptional<ShipSky::FGotoRequest> ShipSky::ParseGoto(TConstArrayView<FString> Args)
 {
-    // A trailing "night" asks for the far side from the star, and is always
+    // A trailing "night" asks for the far side from the star, "dusk" for
+    // ground under a low sun (EGotoSide::Dusk); either is always
     // taken off before the rest is read: "1 night", its altitude forgotten,
     // is then the usage, never night read as 0 km, onto the surface.
+    FGotoRequest Request;
     TConstArrayView<FString> Rest = Args;
-    ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
     if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
-        Side = ShipSky::EGotoSide::Night;
+        Request.Side = EGotoSide::Night;
+        Rest = Rest.Slice(0, Rest.Num() - 1);
+    }
+    else if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("dusk"), ESearchCase::IgnoreCase))
+    {
+        Request.Side = EGotoSide::Dusk;
         Rest = Rest.Slice(0, Rest.Num() - 1);
     }
     // The altitude must be a number: a body's name has spaces in it, so a
     // forgotten altitude would otherwise read the name's last word as 0 km.
     // Any number, exponent form included: the .03 AU case is 4500000 km,
     // and 4.5e6 is how a person writes it.
-    double AltitudeKm = 0.0;
-    if (Rest.Num() < 2 || !LexTryParseString(AltitudeKm, *Rest.Last()) || !FMath::IsFinite(AltitudeKm))
+    if (Rest.Num() < 2 || !LexTryParseString(Request.AltitudeKm, *Rest.Last()) || !FMath::IsFinite(Request.AltitudeKm))
     {
-        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night]: onto the body's day side, or its night side, ")
-                TEXT("facing it. Bodies:"));
+        return {};
+    }
+    // A body's Id can have spaces in it, so every argument but the last is
+    // the body.
+    Request.Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
+    return Request;
+}
+
+// ---------------------------------------------------------------------------
+// ds.Sky.Goto: the sky's one write path, a one-shot PlaceShip for tuning.
+
+void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
+                    FOutputDevice& Out)
+{
+    const TOptional<ShipSky::FGotoRequest> Request = ShipSky::ParseGoto(Args);
+    if (!Request)
+    {
+        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night|dusk]: onto the body's day side, its night side, ")
+                TEXT("or under a low sun, facing it. Bodies:"));
         for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
         {
             Out.Logf(TEXT("  %d  %s"), Index, *System.Bodies[Index].Id.ToString());
@@ -828,9 +892,9 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
         return;
     }
 
-    // A body's Id can have spaces in it, so every argument but the last is
-    // the body.
-    const FString Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
+    const FString& Which = Request->Which;
+    const double AltitudeKm = Request->AltitudeKm;
+    const ShipSky::EGotoSide Side = Request->Side;
     const int32 Body = ShipSky::FindBody(System, Which);
     const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
         System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition(), Side);
@@ -841,7 +905,9 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
     }
     Ship.PlaceShip(Placement->Position, Placement->Orientation);
     Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s%s."), AltitudeKm, *System.Bodies[Body].Id.ToString(),
-             Side == ShipSky::EGotoSide::Night && System.Bodies[Body].Kind != ESkyBodyKind::Star ? TEXT(", night side") : TEXT(""));
+             System.Bodies[Body].Kind == ESkyBodyKind::Star ? TEXT("")
+             : Side == ShipSky::EGotoSide::Night ? TEXT(", night side")
+             : Side == ShipSky::EGotoSide::Dusk ? TEXT(", under a low sun") : TEXT(""));
 }
 
 namespace
@@ -859,9 +925,10 @@ namespace
 
     FAutoConsoleCommandWithWorldArgsAndOutputDevice GotoCommand(
         TEXT("ds.Sky.Goto"),
-        TEXT("'ds.Sky.Goto <body> <altitude_km> [night]': place the ship above a body of this system, on its day ")
+        TEXT("'ds.Sky.Goto <body> <altitude_km> [night|dusk]': place the ship above a body of this system, on its day ")
         TEXT("side -- or with 'night' its far side from the star, 3.8 degrees off the star's line as the .03 AU ")
-        TEXT("case is, the world dark in the glare and not in transit -- facing it, once; ")
+        TEXT("case is, the world dark in the glare and not in transit; or with 'dusk' over ground where the star ")
+        TEXT("stands 10 degrees high -- facing it, once; ")
         TEXT("the orientation is never held. <body> is an index or a name. Then 'ds.Nav.Target <body>' brackets it."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Goto));
 }

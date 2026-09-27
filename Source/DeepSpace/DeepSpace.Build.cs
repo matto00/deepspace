@@ -40,6 +40,11 @@ public class DeepSpace : ModuleRules
 		// would notice a broken graph.
 		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "Slate", "SlateCore", "RHI" });
 
+		// RenderCore: DeepSpace.Sky.ProxyOnTheGpu runs the sky's proxy
+		// transforms through GPU Scene's own instance compression
+		// (FCompressedTransform), which is what rounded the ground's distance.
+		PrivateDependencyModuleNames.Add("RenderCore");
+
 		// MeshDescription/StaticMeshDescription/AssetRegistry: the sky's
 		// sphere, SM_SkyBody, is built from code (UDeepSpaceEditorScripting::
 		// BuildSkySphere) rather than modelled -- a quarter of a million

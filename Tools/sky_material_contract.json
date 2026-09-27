@@ -13,11 +13,13 @@
     "relief":          { "name": "Relief",         "type": "scalar" },
     "cratering":       { "name": "Cratering",      "type": "scalar" },
     "surface_seed":    { "name": "SurfaceSeed",    "type": "vector" },
+    "body_axis_x":     { "name": "BodyAxisX",      "type": "vector" },
+    "body_axis_y":     { "name": "BodyAxisY",      "type": "vector" },
     "interior_light":  { "name": "InteriorLight",  "type": "scalar" },
     "veil":            { "name": "Veil",           "type": "scalar" }
   },
   "materials": {
-    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "brightness", "point_blend", "mottle", "detail", "banding", "relief", "cratering"] },
+    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "body_axis_x", "body_axis_y", "brightness", "point_blend", "mottle", "detail", "banding", "relief", "cratering"] },
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
     "M_SkyGlass":     { "parameters": [] }
