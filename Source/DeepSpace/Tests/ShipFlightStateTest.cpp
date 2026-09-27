@@ -74,7 +74,7 @@ bool FShipFlightStateTest::RunTest(const FString& Parameters)
                   (State.GetUniversePosition() - Before).X, Velocity.X * 1.0);
     }
 
-    // A held yaw spins up to MaxAngularRate.Y and no further. Angular
+    // A held pitch spins up to MaxAngularRate.Y and no further. Angular
     // acceleration is what throwing bodies around will read, so it is an
     // output in its own right.
     {
@@ -82,21 +82,21 @@ bool FShipFlightStateTest::RunTest(const FString& Parameters)
         State.SetCommand(MakeCommand(0.0, FVector(0.0, 1.0, 0.0)));
 
         State.Step(0.1);
-        TestEqual(TEXT("yaw rate builds at AngularAcceleration"), State.GetAngularVelocity().Y,
+        TestEqual(TEXT("pitch rate builds at AngularAcceleration"), State.GetAngularVelocity().Y,
                   State.GetLimits().AngularAcceleration.Y * 0.1);
         TestEqual(TEXT("and reports that acceleration"), State.GetAngularAcceleration().Y,
                   State.GetLimits().AngularAcceleration.Y);
 
         RunFor(State, 5.0, 1.0 / 60.0);
-        TestEqual(TEXT("yaw tops out at MaxAngularRate"), State.GetAngularVelocity().Y,
+        TestEqual(TEXT("pitch tops out at MaxAngularRate"), State.GetAngularVelocity().Y,
                   State.GetLimits().MaxAngularRate.Y);
         TestEqual(TEXT("and stops accelerating there"), State.GetAngularAcceleration().Y, 0.0);
-        TestEqual(TEXT("a pure yaw does not leak into pitch or roll"),
+        TestEqual(TEXT("a pure pitch does not leak into yaw or roll"),
                   FVector(State.GetAngularVelocity().X, 0.0, State.GetAngularVelocity().Z),
                   FVector::ZeroVector);
     }
 
-    // A full turn is a full turn: 2*pi of yaw comes back to where it started.
+    // A full turn is a full turn: 2*pi of pitch comes back to where it started.
     // The limits here are chosen so the rate is reached in one substep and the
     // period is a whole number of substeps, which isolates the integration.
     {

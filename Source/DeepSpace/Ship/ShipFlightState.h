@@ -17,7 +17,10 @@ struct DEEPSPACE_API FShipFlightLimits
     /** How hard the ship changes velocity, cm/s^2. */
     double LinearAcceleration = 4000.0;
 
-    /** Peak turn rate, radians/s, per body axis: X pitch, Y yaw, Z roll. */
+    /** Peak turn rate, radians/s, about each body axis: X roll, Y pitch, Z
+     *  yaw. The 0.3 was meant for roll when the axes were misnamed (X pitch,
+     *  Y yaw, Z roll) and has always turned yaw; kept there, pending a
+     *  playtest, since yaw is the turn a pilot makes most. */
     FVector MaxAngularRate = FVector(0.20, 0.20, 0.30);
 
     /** How hard the ship changes turn rate, radians/s^2, per body axis. */
@@ -72,7 +75,10 @@ struct DEEPSPACE_API FShipFlightCommand
      *  and leave. */
     double Throttle = 0.0;
 
-    /** Fraction of MaxAngularRate per body axis, -1..1: X pitch, Y yaw, Z roll.
+    /** Fraction of MaxAngularRate about each body axis, -1..1: X roll, Y
+     *  pitch, Z yaw -- the axes a rotation vector turns about, so +Y puts the
+     *  nose down, +Z swings it to starboard and -X rolls right
+     *  (DeepSpace.Playtest.KeysTurnTheShip holds the keys to it).
      *  Held, not persistent. */
     FVector AttitudeRate = FVector::ZeroVector;
 

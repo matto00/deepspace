@@ -299,8 +299,8 @@ protected:
     TObjectPtr<UInputAction> CrouchAction;
 
     /**
-     * Held while piloting to turn the ship: X pitch, Y yaw, Z roll, each
-     * -1..1. Keyboard flies and the mouse keeps looking -- the pilot's head
+     * Held while piloting to turn the ship: X roll, Y pitch, Z yaw, each
+     * -1..1, as FShipFlightCommand::AttitudeRate turns about them. Keyboard flies and the mouse keeps looking -- the pilot's head
      * turns independently of the ship, which is what makes a turn read as the
      * ship turning rather than the camera swinging.
      */

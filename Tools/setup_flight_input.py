@@ -78,9 +78,13 @@ def ensure_action(name, value_type):
     return action
 
 
-# X pitch, Y yaw, Z roll -- the body axes FShipFlightCommand::AttitudeRate uses.
-# A key drives X, so anything else needs a swizzle, exactly as IA_Move's
-# forward keys do.
+# X roll, Y pitch, Z yaw -- the body axes FShipFlightCommand::AttitudeRate
+# turns about, as a rotation vector: +Y puts the nose down, +Z swings it to
+# starboard, and -X rolls right. The comments here once said "X pitch, Y yaw,
+# Z roll", and the keys followed them, so W rolled, D pitched and Z yawed
+# through two playtests; DeepSpace.Playtest.KeysTurnTheShip now reads this
+# context and flies each key. A key drives X, so anything else needs a
+# swizzle, exactly as IA_Move's forward keys do.
 SWIZZLE = {
     "X": None,
     "Y": unreal.InputAxisSwizzle.YXZ,
@@ -189,12 +193,12 @@ def main():
 
     note("IA_Attitude:")
     attitude = actions["IA_Attitude"]
-    kept.append(make_mapping(imc, attitude, "W", "X", negate=True))   # nose down
-    kept.append(make_mapping(imc, attitude, "S", "X"))                # nose up
-    kept.append(make_mapping(imc, attitude, "D", "Y"))                # yaw right
-    kept.append(make_mapping(imc, attitude, "A", "Y", negate=True))
-    kept.append(make_mapping(imc, attitude, "Z", "Z"))                # roll right
-    kept.append(make_mapping(imc, attitude, "Q", "Z", negate=True))
+    kept.append(make_mapping(imc, attitude, "W", "Y"))                # nose down
+    kept.append(make_mapping(imc, attitude, "S", "Y", negate=True))   # nose up
+    kept.append(make_mapping(imc, attitude, "D", "Z"))                # yaw right
+    kept.append(make_mapping(imc, attitude, "A", "Z", negate=True))
+    kept.append(make_mapping(imc, attitude, "Z", "X", negate=True))   # roll right
+    kept.append(make_mapping(imc, attitude, "Q", "X"))
 
     # Presses, not axes: the character counts Started and reads the hold from
     # Triggered and Completed. No modifiers -- a Boolean has nothing to negate.

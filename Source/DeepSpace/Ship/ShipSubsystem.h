@@ -22,7 +22,8 @@ struct FTargetView;
  */
 struct DEEPSPACE_API FHelmInput
 {
-    /** -1..1 per body axis: X pitch, Y yaw, Z roll. */
+    /** -1..1 about each body axis: X roll, Y pitch, Z yaw
+     *  (FShipFlightCommand::AttitudeRate). */
     FVector Attitude = FVector::ZeroVector;
 
     /** Shift and Ctrl held: the live lever's up and down. */
