@@ -178,12 +178,49 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
         }
         TestTrue(TEXT("at the drive's top when the jump is engaged"), Ship->GetShipSpeed() > 0.99 * 2.99792458e10);
 
+        // The last frame of flight: the drive's dust, eight times long.
+        const TArray<FTransform> InFlight = Motes(Frame);
+
         // Engaged, with an instant charge: the fold opens.
         Ship->SetJumpEngaged(true);
         Ship->Tick(0.05f);
         Ship->Tick(0.05f);
         if (TestTrue(TEXT("the jump has begun"), Ship->IsInTransit()))
         {
+            // The frame the fold opens. The spec keeps the streaks exactly
+            // today's formula from the first frame (flight-feel decision 8),
+            // so the drive's eight-times motes are redrawn at once as the
+            // streak of the fold's first instant -- nearly round -- and
+            // re-wrapped into the ship's own cube, on the frame the dome
+            // goes. That is a seam the spec did not look at, handed to the
+            // developer rather than smoothed here; this pins what the
+            // opening frame draws, so a change to it is deliberate.
+            {
+                Frame->SyncToShip();
+                const double FoldOpened = Ship->GetTransitProgress();
+                TestTrue(FString::Printf(TEXT("the fold has just opened (%.4f)"), FoldOpened), FoldOpened < 0.05);
+                TestFalse(TEXT("the dome goes on the fold's first frame"), Frame->GetDistantStars()->IsVisible());
+                const TArray<FTransform> Shown = Motes(Frame);
+                const TConstArrayView<FVector> Field = Frame->GetDustField();
+                bool bFormula = Shown.Num() == Field.Num() && Shown.Num() == InFlight.Num() && Shown.Num() > 0;
+                int32 Rewrapped = 0;
+                for (int32 Index = 0; bFormula && Index < Shown.Num(); ++Index)
+                {
+                    const FTransform Expected = StreakFormula(Ship->GetFlightState(), Field[Index], FoldOpened,
+                                                              Frame->NearFieldRadius, Frame->NearStarScale);
+                    bFormula &= Shown[Index].GetLocation().Equals(Expected.GetLocation(), 0.05)
+                        && Shown[Index].GetScale3D().Equals(Expected.GetScale3D(), 1e-4 * Expected.GetScale3D().X);
+                    Rewrapped += (Shown[Index].GetLocation() - InFlight[Index].GetLocation()).Size() > Frame->NearFieldRadius ? 1 : 0;
+                }
+                TestTrue(FString::Printf(TEXT("at %.4f, the fold's first frame, every mote is already the streak formula"), FoldOpened), bFormula);
+                if (InFlight.Num() > 0 && Shown.Num() > 0)
+                {
+                    AddInfo(FString::Printf(TEXT("the seam as the fold opens: stretch %.2f in flight, %.2f on the first transit frame; %d of %d motes jump across the field"),
+                                            InFlight[0].GetScale3D().X / InFlight[0].GetScale3D().Y,
+                                            Shown[0].GetScale3D().X / Shown[0].GetScale3D().Y, Rewrapped, Shown.Num()));
+                }
+            }
+
             // A quarter, half and three quarters of the way through: the
             // streaks are long, and exactly the shape they always were.
             TArray<FVector> FieldAtFirst;
