@@ -321,9 +321,8 @@ the live one in ink. **X stops both**, and after it the lever starts again
 from STOP: the next speed after a stop is a new choice. The lever is at
 STOP, but a tap still counts from the ship (below), so while the ship is
 still slowing after X one Shift catches it at the notch above where it is;
-only once at rest is one Shift 1 km/s. (Open with the developer: whether
-ruling 5's "restarts from STOP" means that, or the lever from STOP however
-fast the ship still is.) A key still held
+only once at rest is one Shift 1 km/s. That is the developer's ruling
+(2026-09-26): after X, a tap catches the ship where it is. A key still held
 through a stop, or from before sitting down (Shift is sprint too), moves
 nothing until it is let go. In transit the helm is inert.
 
@@ -686,7 +685,8 @@ which (`(E)  Chart`, `Map`, `Back`, `Stand up`, from
 per instance: `IsZoomableFromChartChair`, `ZoomsOnSit` (the laptop, which
 frames as it always did) and `IsDrivableSeated`. Unzoomed, the pointer drives
 only the map, as at the helm. **Tab on the zoomed map** cycles the target
-outward (`CycleTarget`); anywhere else it does nothing. The chair's first
+outward (`CycleTarget`); anywhere else it does nothing -- at the helm too,
+where the pilot clicks (developer's ruling, 2026-09-26). The chair's first
 view is aimed from the *seated* eye (`ADeepSpaceCharacter::SeatedEyeOffset`,
 held by `DeepSpace.Player.SeatedEyeIsPilotEye`), because E runs before the
 frame's animation. `IsUsingScreen()` means a screen is framed and
