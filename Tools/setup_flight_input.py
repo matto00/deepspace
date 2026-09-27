@@ -7,12 +7,26 @@ turning rather than the camera swinging.
     W / S   pitch (nose down / nose up)
     A / D   yaw
     Q / Z   roll
-    Shift / Ctrl   throttle, which is a lever and stays where it is left
-    F       the in-system drive, a second lever: pressed, it flips, and it
-            stays where it is left like the throttle (sky decision 8)
+    Shift / Ctrl   the live lever, up and down (IA_LeverUp, IA_LeverDown):
+            under the drive a press is one notch and a hold repeats; in
+            cruise a hold sweeps, and a fresh press leaves the detent at zero.
+            The levers are the ship's and stay where they are left.
+    F       which lever is live, the drive's or cruise's (IA_Drive); each
+            keeps its own setting across it
+    X       all stop: both levers to STOP (IA_Stop)
+    Tab     the next world as the target, on the zoomed system map
+            (IA_CycleTarget; the system map spec's decision 13)
 
-F is checked against every other mapping in IMC_Default before it is bound,
-and the script fails rather than bind a key something else already uses.
+All four are Boolean presses: the character counts Started and reads held
+from Triggered and Completed, so a tap released inside one frame is still a
+press (flight-feel decision 3). IA_Throttle, the old axis lever the pawn
+swept, is dropped from the context and deleted.
+
+F, X and Tab are checked against every other mapping in IMC_Default before
+they are bound, and Shift and Ctrl against everything but the walking
+actions, which they share as the old throttle did: seated they are the
+lever, standing Shift is sprint. The script fails rather than bind a key
+something else already uses.
 
 Idempotent: re-running rebuilds the mappings rather than appending to them.
 The character Blueprint is compiled and saved once its actions are set, so
@@ -100,7 +114,35 @@ def make_mapping(imc, action, key_name, axis="X", negate=False):
     return mapping
 
 
-DRIVE_KEY = "F"
+# The keys that must mean nothing else in the context: pressed at the helm,
+# they must not also do whatever else they do. The flight keys share
+# W/A/S/D with IA_Move on purpose -- seated, the keys fly; standing, they
+# walk -- and so are not here.
+PRESS_KEYS = {
+    "IA_LeverUp": "LeftShift",
+    "IA_LeverDown": "LeftControl",
+    "IA_Drive": "F",
+    "IA_Stop": "X",
+    "IA_CycleTarget": "Tab",
+}
+
+# The Blueprint property each action is assigned to.
+PROPERTIES = {
+    "IA_Attitude": "attitude_action",
+    "IA_LeverUp": "lever_up_action",
+    "IA_LeverDown": "lever_down_action",
+    "IA_Drive": "drive_action",
+    "IA_Stop": "stop_action",
+    "IA_CycleTarget": "cycle_target_action",
+}
+
+RETIRED = f"{ACTIONS_DIR}/IA_Throttle"
+
+# What a helm key may share, and only on the lever keys: the walking actions,
+# which do nothing while seated, as W/A/S/D share with IA_Move. Shift is
+# sprint standing and the lever seated, as it was when it was the throttle.
+SHARES_WITH_WALKING = {"LeftShift", "LeftControl"}
+WALKING = {"IA_Move", "IA_Sprint", "IA_Crouch", "IA_Jump"}
 
 
 def key_of(mapping):
@@ -113,9 +155,10 @@ def action_name(mapping):
 
 
 def main():
-    attitude = ensure_action("IA_Attitude", unreal.InputActionValueType.AXIS3D)
-    throttle = ensure_action("IA_Throttle", unreal.InputActionValueType.AXIS1D)
-    drive = ensure_action("IA_Drive", unreal.InputActionValueType.BOOLEAN)
+    actions = {"IA_Attitude": ensure_action("IA_Attitude", unreal.InputActionValueType.AXIS3D)}
+    for name in PRESS_KEYS:
+        actions[name] = ensure_action(name, unreal.InputActionValueType.BOOLEAN)
+    retired = unreal.load_asset(RETIRED)
 
     imc = unreal.load_asset(IMC_PATH)
     if not imc:
@@ -124,26 +167,28 @@ def main():
     # UE 5.8 keeps the real list under default_key_mappings; the context's own
     # `mappings` is the older, now-empty one, and map_key writes to that.
     data = imc.get_editor_property("default_key_mappings")
-    ours = {attitude.get_path_name(), throttle.get_path_name(), drive.get_path_name()}
+    ours = {action.get_path_name() for action in actions.values()}
+    if retired:
+        ours.add(retired.get_path_name())
 
-    # Drop our own mappings first so a re-run replaces rather than stacks.
-    # Everything else in the context is left untouched.
+    # Drop our own mappings first -- the retired throttle's with them -- so a
+    # re-run replaces rather than stacks. Everything else is left untouched.
     existing = list(data.get_editor_property("mappings"))
     kept = [m for m in existing
             if not (m.get_editor_property("action")
                     and m.get_editor_property("action").get_path_name() in ours)]
     note(f"cleared {len(existing) - len(kept)} existing flight mapping(s), kept {len(kept)}")
 
-    # The flight keys share W/A/S/D with IA_Move on purpose -- seated, the
-    # keys fly; standing, they walk -- but the drive's key must mean nothing
-    # else, or pressing it at the helm would also do whatever else it does.
-    clashes = [action_name(m) for m in kept if key_of(m) == DRIVE_KEY]
-    if clashes:
-        raise RuntimeError(f"{DRIVE_KEY} is already bound in IMC_Default to {', '.join(clashes)}; "
-                           "choose another key for IA_Drive")
-    note(f"{DRIVE_KEY} is free in IMC_Default")
+    for name, key in PRESS_KEYS.items():
+        clashes = [action_name(m) for m in kept if key_of(m) == key
+                   and not (key in SHARES_WITH_WALKING and action_name(m) in WALKING)]
+        if clashes:
+            raise RuntimeError(f"{key} is already bound in IMC_Default to {', '.join(clashes)}; "
+                               f"choose another key for {name}")
+        note(f"{key} is free in IMC_Default" + (" but for walking" if key in SHARES_WITH_WALKING else ""))
 
     note("IA_Attitude:")
+    attitude = actions["IA_Attitude"]
     kept.append(make_mapping(imc, attitude, "W", "X", negate=True))   # nose down
     kept.append(make_mapping(imc, attitude, "S", "X"))                # nose up
     kept.append(make_mapping(imc, attitude, "D", "Y"))                # yaw right
@@ -151,39 +196,47 @@ def main():
     kept.append(make_mapping(imc, attitude, "Z", "Z"))                # roll right
     kept.append(make_mapping(imc, attitude, "Q", "Z", negate=True))
 
-    note("IA_Throttle:")
-    kept.append(make_mapping(imc, throttle, "LeftShift", "X"))
-    kept.append(make_mapping(imc, throttle, "LeftControl", "X", negate=True))
-
-    # A press, not a hold: the handler flips the lever on Started.
-    note("IA_Drive:")
-    kept.append(make_mapping(imc, drive, DRIVE_KEY, "X"))
+    # Presses, not axes: the character counts Started and reads the hold from
+    # Triggered and Completed. No modifiers -- a Boolean has nothing to negate.
+    for name, key in PRESS_KEYS.items():
+        note(f"{name}:")
+        kept.append(make_mapping(imc, actions[name], key, "X"))
 
     data.set_editor_property("mappings", kept)
     imc.set_editor_property("default_key_mappings", data)
 
     unreal.EditorAssetLibrary.save_loaded_asset(imc, False)
-    unreal.EditorAssetLibrary.save_loaded_asset(attitude, False)
-    unreal.EditorAssetLibrary.save_loaded_asset(throttle, False)
-    unreal.EditorAssetLibrary.save_loaded_asset(drive, False)
+    for action in actions.values():
+        unreal.EditorAssetLibrary.save_loaded_asset(action, False)
 
     # The character needs to be told which actions these are, and then
     # compiled, so the saved class default object is built against the C++
-    # that declares drive_action rather than the one before it.
+    # that declares them -- and no longer carries the throttle's
+    # ThrottleAction and ThrottleSweepRate, which that C++ removed (ADR 0002's
+    # second amendment).
     bp = unreal.load_asset(CHARACTER_BP)
     cdo = unreal.get_default_object(bp.generated_class())
-    cdo.set_editor_property("attitude_action", attitude)
-    cdo.set_editor_property("throttle_action", throttle)
-    cdo.set_editor_property("drive_action", drive)
+    for name, prop in PROPERTIES.items():
+        cdo.set_editor_property(prop, actions[name])
     unreal.BlueprintEditorLibrary.compile_blueprint(bp)
 
     cdo = unreal.get_default_object(bp.generated_class())
-    for prop, want in (("attitude_action", attitude), ("throttle_action", throttle), ("drive_action", drive)):
+    for name, prop in PROPERTIES.items():
         got = cdo.get_editor_property(prop)
+        want = actions[name]
         if not got or got.get_path_name() != want.get_path_name():
             raise RuntimeError(f"BP_DeepSpaceCharacter.{prop} did not survive the compile: {got}")
     unreal.EditorAssetLibrary.save_loaded_asset(bp, False)
-    note("BP_DeepSpaceCharacter: attitude_action, throttle_action, drive_action assigned, compiled, saved")
+    note("BP_DeepSpaceCharacter: " + ", ".join(PROPERTIES.values()) + " assigned, compiled, saved")
+
+    # The old throttle action, once nothing points at it: the context has
+    # dropped its mappings and the Blueprint has been saved without it.
+    if retired:
+        del retired
+        if unreal.EditorAssetLibrary.delete_asset(RETIRED):
+            note("deleted IA_Throttle")
+        else:
+            raise RuntimeError("could not delete IA_Throttle; something still references it")
     note("DONE")
 
 
