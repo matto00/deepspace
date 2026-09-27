@@ -11,6 +11,7 @@ class APawn;
 class UShipModuleDataAsset;
 class UUniverseSubsystem;
 struct FSkyBody;
+struct FTargetView;
 
 /**
  * What the helm's hands are doing this frame (flight-feel decision 1): held
@@ -273,13 +274,33 @@ public:
 
     /** False in transit, for the system the ship is in, and for an id that
      *  names no system. The course is the one piece of universe data the
-     *  ship holds, the way it holds a throttle setting. */
+     *  ship holds, the way it holds a throttle setting. Replaces a course to
+     *  a world: one course, the latest choice. */
     bool PlotCourse(const FSystemId& Id);
 
-    /** Also stands the jump down. Ignored in transit. */
+    /**
+     * The in-system jump's course (system map decision 12): the target, as
+     * the map's "Jump here" and ds.Nav.Plot target plot it. False in
+     * transit, with no target, for a target that names no world of the
+     * system the ship is in, and while the ship is near enough to fly
+     * (IsNearEnoughToFly). Replaces a star course. Not pilot-gated, like
+     * every plot.
+     */
+    bool PlotTarget();
+
+    /** Clears either course, and also stands the jump down. Ignored in
+     *  transit. */
     void ClearCourse();
 
+    /** The star course; empty for a world course, so a reader of star
+     *  courses reads what it always did. */
     TOptional<FSystemId> GetPlottedSystem() const;
+
+    /** The world course, which while set is always the target. */
+    TOptional<FBodyId> GetPlottedWorld() const;
+
+    /** A course of either kind: what engaging needs. */
+    bool HasCourse() const;
 
     /** False in transit, and engaging with no course. Not pilot-gated: the
      *  chart chair engages, and nobody need be at the helm for it. */
@@ -300,8 +321,11 @@ public:
      *  screen. */
     double GetTransitProgress() const;
 
-    /** Unit, universe axes, from the ship toward the plotted star, through
-     *  FUniversePosition::operator-. Empty with no course. */
+    /** Unit, universe axes, from the ship toward the plotted star, or the
+     *  plotted world's centre, through FUniversePosition::operator-. Empty
+     *  with no course. The jump's cone, the HUD's jump line and caret and
+     *  the counter-frame's course point all follow it, so a world course
+     *  needs nothing of theirs. */
     TOptional<FVector> GetCourseDirection() const;
 
     /** The same in ship axes, +X the nose: what the helm's bearing words and
@@ -324,6 +348,62 @@ public:
     static float GetChartRangeLy();
 
     bool HasVisited(const FSystemId& Id) const;
+
+    // -- the target: the world in this system the pilot has marked ----------
+    //
+    // System map decisions 4 and 5. An id, never a copy: its position,
+    // radius, name and kind are procgen's, asked every time (ADR 0003). Not
+    // pilot-gated -- anyone at the map picks, and the ship has one target --
+    // and not the course: the course is where the jump folds to, a star or,
+    // since ruling 1, the target itself.
+
+    /** False in transit, for a body not in the system the ship is in (asked
+     *  of its position), for an orbit that system does not have, and for a
+     *  moon, which procgen does not make yet. Replaces the target, and lets
+     *  a world course to the old one go. */
+    bool SetTarget(const FBodyId& Id);
+
+    /** Lets the target go, and a world course with it. Ignored in transit. */
+    void ClearTarget();
+
+    /** As held. Resolve it against the system in hand (ShipNav::TargetPlanet)
+     *  before drawing it: a PlaceShip into another system leaves an id that
+     *  names nothing here, and that must draw nothing rather than the wrong
+     *  world. */
+    TOptional<FBodyId> GetTarget() const;
+
+    /** Tab on the zoomed map (decision 13): the next world outward
+     *  (ShipNav::NextTarget), through SetTarget, as a click would. Never
+     *  clears. False with no world to go to, and in transit. */
+    bool CycleTarget();
+
+    /**
+     * The target as seen from the ship now (TargetMarker::View), against
+     * Here, the system the caller has in hand -- the map's drawing, the
+     * HUD's frame -- so nothing is generated for it. Everything the view
+     * needs of the ship is filled in here, once: position, attitude,
+     * velocity, the world's floor (FloorFor), the boosters' braking and
+     * ds.Drive.HoldSeconds. The HUD's line and the map's are this, printed,
+     * and so can never disagree. Empty with no target, one that names
+     * nothing in Here, and in transit.
+     */
+    TOptional<FTargetView> GetTargetView(const FStarSystem& Here) const;
+
+    /** Whether the ship is within NavStart::WorldReachFactor standoffs of
+     *  World's centre, of the system Here: near enough to fly, so an
+     *  in-system jump to it is refused. False for an id that names nothing
+     *  in Here. */
+    bool IsNearEnoughToFly(const FStarSystem& Here, const FBodyId& World) const;
+
+    /** ds.Nav.StandoffAU as tuned now, never negative: the interstellar
+     *  arrival's standoff from a Sun-like star, and the map's rim is fitted
+     *  to it (NavStart::ArrivalStandoffAU), as GetChartRangeLy is the
+     *  chart's. */
+    static float GetStandoffAU();
+
+    /** ds.Nav.WorldStandoffDeg as tuned now: how wide an in-system jump
+     *  meets its world, degrees. */
+    static double GetWorldStandoffDeg();
 
 private:
     FShipPowerState PowerState;
@@ -374,6 +454,33 @@ private:
 
     /** NavState.Step, then act on what it asks for. */
     void StepNavigation(float DeltaSeconds);
+
+    /** A world as the in-system jump needs it: where, how big, its floor,
+     *  and every other body's floor sphere. */
+    struct FWorldFix
+    {
+        FUniversePosition Centre;
+        double Radius = 0.0;
+        double Floor = 0.0;
+        TArray<FFlightSurface> Others;
+    };
+
+    /** World, resolved in Here; empty for an id that names nothing there. */
+    static TOptional<FWorldFix> FixWorld(const FStarSystem& Here, const FBodyId& World);
+
+    /** The same, generating the system the id names. */
+    TOptional<FWorldFix> FixWorld(const FBodyId& World) const;
+
+    /** Lets a world course go once the ship is near enough to fly, or its
+     *  world names nothing where the ship now is, with the charge unspent:
+     *  it is as if the ship had arrived. Never in transit. */
+    void LetGoOfNearWorldCourse();
+
+    /** Where an in-system jump's fold opened: its arrival is on the line
+     *  from here to the world. Taken when the fold opens, because the ship
+     *  still coasts through the fold, and at 1 c that is a sizeable part of
+     *  the world's standoff. Empty outside an in-system fold. */
+    TOptional<FUniversePosition> FoldDeparture;
 
     /** The fold's draw off the top, while the jump winds (ds.Nav.FoldDraw). */
     void SetFoldDraw(float Watts);

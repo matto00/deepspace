@@ -5,9 +5,11 @@
 
 /**
  * What the jump is doing, as a word for screens (plan conflict 7: the fold
- * is "the jump"; "the drive" is the in-system one). Never a number: there is
- * no percentage, no bar and no countdown anywhere, because a number that
- * fills is a clock to watch.
+ * is "the jump"; "the drive" is the in-system one). Never a number: the
+ * jump's charge has no percentage, no bar and no countdown, because a number
+ * that fills while the player waits is a clock to watch. That rule is the
+ * charge's (the system map spec's ruling 3): an approach the player is
+ * flying has a live time to arrival, which is a different thing.
  */
 enum class EJumpState : uint8
 {
@@ -29,6 +31,9 @@ enum class ENavEvent : uint8
     TransitBegan,
     /** The transit ended this step: put the ship at the arrival point. */
     Arrived,
+    /** An in-system jump's transit ended this step: put the ship at the
+     *  standoff above the world it went to (system map decision 12). */
+    ArrivedAtWorld,
 };
 
 /** Filled from the ds.Nav.* console variables every tick; the defaults are
@@ -54,6 +59,24 @@ namespace ShipNav
      *  0..pi. The one test of "aligned": the jump and the HUD's "dead ahead"
      *  both ask this, so they can never disagree about it. */
     DEEPSPACE_API double OffBoresight(const FVector& ShipLocalDir);
+
+    /**
+     * The world a target id names in Here, or null: an id for another
+     * system -- a PlaceShip into a different one leaves the old id behind --
+     * an orbit Here lacks, or a moon, which procgen does not make yet. Every
+     * reader of the target resolves it through this before drawing it, so a
+     * stale id draws nothing rather than the wrong world.
+     */
+    DEEPSPACE_API const FPlanet* TargetPlanet(const FStarSystem& Here, const FBodyId& Id);
+
+    /**
+     * What Tab targets (system map decision 13): the next world outward from
+     * Target, wrapping from the outermost to the innermost; the innermost
+     * when there is no target, or one that names nothing here. Nothing only
+     * in a system with no worlds, so from a set target it never clears --
+     * a click on the target is how that is done.
+     */
+    DEEPSPACE_API TOptional<FBodyId> NextTarget(const FStarSystem& Here, const TOptional<FBodyId>& Target);
 }
 
 /**
@@ -66,6 +89,18 @@ namespace ShipNav
  * itself. There is no confirm, because a final button would make the player
  * come back and service the drive on its schedule.
  *
+ * The course is a star or, since the developer's ruling 1, a world in this
+ * system (map decision 12): at most one of Plotted and PlottedWorld is set,
+ * and the latest choice wins. A world course is always the target -- it is
+ * the target the map's "Jump here" plots -- so changing or clearing the
+ * target lets it go, and the bracket and the jump can never name different
+ * worlds.
+ *
+ * The target is the world in this system the pilot has marked at the map
+ * (map decision 5): an id, never a copy, beside the course. A star jump's
+ * fold lets it go, because the ship leaves the system it names; an in-system
+ * jump's keeps it, because it is where that jump is going.
+ *
  * It holds no current system -- which system the ship is in is asked of its
  * position (plan conflict 1) -- and no charge, which is the flight state's.
  * Nothing in here changes with time except the transit itself: an engaged,
@@ -75,14 +110,42 @@ struct DEEPSPACE_API FShipNavState
 {
 public:
     /** False in transit. Refusing the system the ship is already in is the
-     *  subsystem's job, since only it can ask which system that is. */
+     *  subsystem's job, since only it can ask which system that is. Replaces
+     *  a world course: one course, the latest choice. */
     bool Plot(const FSystemId& Id);
 
-    /** Also stands the jump down: an engaged jump with nowhere to go would
-     *  draw power for nothing. Ignored in transit. */
+    /** A course to a world in this system, which must be the target: false
+     *  in transit and for any other id. Replaces a star course. Refusing a
+     *  world the ship is already near is the subsystem's, which has the
+     *  geometry. */
+    bool PlotWorld(const FBodyId& Id);
+
+    /** Clears either course, and also stands the jump down: an engaged jump
+     *  with nowhere to go would draw power for nothing. Ignored in transit. */
     void ClearPlot();
 
+    /** The star course. Empty for a world course, so every reader of a star
+     *  course reads exactly what it did before worlds could be plotted. */
     const TOptional<FSystemId>& GetPlotted() const;
+
+    /** The world course, which is always the target while it is set. */
+    const TOptional<FBodyId>& GetPlottedWorld() const;
+
+    /** A course of either kind. */
+    bool HasCourse() const;
+
+    /** Marks a world: false, and nothing changes, in transit. Which system
+     *  the ship is in, and whether it has that orbit, is the subsystem's to
+     *  check. A world course to another world is let go, and the jump with
+     *  it: the course is the target or nothing. */
+    bool SetTarget(const FBodyId& Id);
+
+    /** Lets the target go, and a world course with it. Ignored in transit,
+     *  where an in-system jump is on its way to it. */
+    void ClearTarget();
+
+    /** As held: resolve it (ShipNav::TargetPlanet) before drawing it. */
+    const TOptional<FBodyId>& GetTarget() const;
 
     /** False, and nothing changes, in transit, or engaging with no course
      *  plotted. Standing down is always allowed outside transit. */
@@ -94,9 +157,13 @@ public:
      * owns the charge and the subsystem owns the geometry.
      *
      * Holding, returns TransitBegan exactly when engaged, plotted, charged
-     * (>= 1) and within the cone. In transit, counts to TransitSeconds and
-     * then returns Arrived, having moved the course into LastArrival, marked
-     * it visited, cleared the course and engage, and bumped the serial.
+     * (>= 1) and within the cone; a star course's fold lets the target go,
+     * a world course's keeps it. In transit, counts to TransitSeconds and
+     * then, for a star, returns Arrived, having moved the course into
+     * LastArrival, marked it visited, cleared the course and engage, and
+     * bumped the serial; for a world, returns ArrivedAtWorld, having cleared
+     * the course and engage and bumped the serial, and touched neither
+     * LastArrival nor the visited set -- the ship has not been anywhere new.
      */
     ENavEvent Step(double DeltaSeconds, double JumpCharge, double OffBoresightRadians,
                    const FNavTuning& Tuning);
@@ -122,6 +189,8 @@ public:
 
 private:
     TOptional<FSystemId> Plotted;
+    TOptional<FBodyId> PlottedWorld;
+    TOptional<FBodyId> Target;
     TOptional<FSystemId> LastArrival;
     TSet<FSystemId> Visited;
     bool bEngaged = false;

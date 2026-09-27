@@ -600,6 +600,124 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("no brakes: no time"), NoBrakes && !NoBrakes->EtaSeconds && !NoBrakes->PassingCm);
     }
 
+    // Stepped through the flight state itself (build order 3c): the only
+    // check that the ETA and the soft cap agree. At 1 c from 0.2 AU, once
+    // the lever has settled, the time to the floor falls one second a second
+    // -- the moment it predicts is the moment the flown approach arrives, to
+    // within 0.5 s, all the way down. From the -Y side, clear of the star and
+    // the other worlds, with the world's floor the one surface.
+    {
+        const FUniversePosition Centre = System.PlanetPosition(1);
+        const FVector Side(0.0, -1.0, 0.0);
+        const FShipFlightLimits Limits = FShipFlightLimits::Cruise();
+        FShipFlightState Flight;
+        Flight.SetLimits(Limits);
+        Flight.SetSurfaces({ FFlightSurface{ Centre, R, Floor, false } });
+        // From 0.25 AU, so the spool-up to 1 c is over well before 0.2 AU.
+        Flight.SetUniverseTransform(Centre + Side * (0.25 * AU), FRotationMatrix::MakeFromX(-Side).ToQuat());
+        FShipFlightCommand Command;
+        Command.bDrive = true;
+        Command.DriveNotch = Flight.GetDriveNotchCount() - 1;
+        Flight.SetCommand(Command);
+
+        constexpr double Step = 0.25;
+        double Clock = 0.0;
+        while (Clock < 60.0 && Flight.GetUniversePosition().DistanceTo(Centre) > 0.2 * AU)
+        {
+            Flight.Step(Step);
+            Clock += Step;
+        }
+        TestTrue(FString::Printf(TEXT("stepped: at 1 c by 0.2 AU (%.4f c)"), Flight.GetSpeed() / C), Flight.GetSpeed() > 0.999 * C);
+
+        TArray<TPair<double, double>> Predicted;   // (when, when it says it will arrive)
+        TOptional<double> Arrived;
+        while (Clock < 400.0 && !Arrived)
+        {
+            const TOptional<FTargetView> Now = TargetMarker::View(System, Orbit(System, 1), Flight.GetUniversePosition(),
+                                                                  Flight.GetUniverseOrientation(), Flight.GetVelocity(), Floor,
+                                                                  Limits.LinearAcceleration, Limits.HoldSeconds, false);
+            if (Now && Now->EtaSeconds && Flight.GetSpeed() >= TargetMarker::MinSpeed)
+            {
+                Predicted.Emplace(Clock, Clock + *Now->EtaSeconds);
+            }
+            if (Flight.GetUniversePosition().DistanceTo(Centre) - R - Floor <= FShipFlightState::AtFloorCm)
+            {
+                Arrived = Clock;
+            }
+            Flight.Step(Step);
+            Clock += Step;
+        }
+        if (TestTrue(TEXT("stepped: the approach arrives at the floor"), Arrived.IsSet())
+            && TestTrue(TEXT("stepped: with a time all the way"), Predicted.Num() > 300))
+        {
+            double Worst = 0.0;
+            for (const TPair<double, double>& Sample : Predicted)
+            {
+                Worst = FMath::Max(Worst, FMath::Abs(Sample.Value - *Arrived));
+            }
+            AddInfo(FString::Printf(TEXT("stepped from 0.2 AU at 1 c: arrived after %.2f s, the ETA at most %.3f s off"),
+                                    *Arrived - Predicted[0].Key, Worst));
+            TestTrue(FString::Printf(TEXT("stepped: the ETA falls a second a second, to within 0.5 s of the flown arrival (%.3f s)"), Worst),
+                     Worst <= 0.5);
+        }
+    }
+
+    // A stepped cruise slide: the nose swung off the world while the
+    // velocity lags behind it. The time follows the velocity's ray as it
+    // swings, not the nose's -- a time while the nose is already off the
+    // world and the ship still falls onto it, then a pass once the velocity
+    // has swung off too.
+    {
+        const FUniversePosition Centre = System.PlanetPosition(1);
+        const FVector Side(0.0, -1.0, 0.0);
+        const FShipFlightLimits Limits = FShipFlightLimits::Cruise();
+        FShipFlightState Flight;
+        Flight.SetLimits(Limits);
+        const FFlightSurface World{ Centre, R, Floor, false };
+        Flight.SetSurfaces({ World });
+        Flight.SetUniverseTransform(Centre + Side * (20000.0 * UniverseUnits::CmPerKm), FRotationMatrix::MakeFromX(-Side).ToQuat());
+        FShipFlightCommand Command;
+        Command.Throttle = 1.0;
+        Flight.SetCommand(Command);
+        Flight.Step(10.0);
+        Command.AttitudeRate = FVector(0.0, 1.0, 0.0);
+        Flight.SetCommand(Command);
+
+        bool bFollowsVelocity = true;
+        bool bNoseOffStillFalling = false;
+        bool bSwungOff = false;
+        double MostApartDeg = 0.0;
+        for (int32 Tick = 0; Tick < 400 && !bSwungOff; ++Tick)
+        {
+            Flight.Step(0.05);
+            const FUniversePosition At = Flight.GetUniversePosition();
+            const FVector Velocity = Flight.GetVelocity();
+            const TOptional<FTargetView> Now = TargetMarker::View(System, Orbit(System, 1), At, Flight.GetUniverseOrientation(),
+                                                                  Velocity, Floor, Limits.LinearAcceleration, Limits.HoldSeconds, false);
+            if (!Now)
+            {
+                bFollowsVelocity = false;
+                break;
+            }
+            const TOptional<double> ByVelocity = ShipFlight::RayToFloor(World, At, Velocity);
+            const bool bNoseOn = ShipFlight::RayToFloor(World, At, Flight.GetUniverseOrientation().GetForwardVector()).IsSet();
+            bFollowsVelocity &= Now->EtaSeconds.IsSet() == ByVelocity.IsSet();
+            if (Now->EtaSeconds && ByVelocity)
+            {
+                bFollowsVelocity &= FMath::IsNearlyEqual(*Now->EtaSeconds,
+                    ShipFlight::SecondsToFloor(*ByVelocity, Velocity.Size(), Limits.LinearAcceleration, Limits.HoldSeconds), 1e-6);
+            }
+            bNoseOffStillFalling |= !bNoseOn && Now->EtaSeconds.IsSet();
+            bSwungOff |= !Now->EtaSeconds && Now->PassingCm.IsSet();
+            MostApartDeg = FMath::Max(MostApartDeg, FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+                FVector::DotProduct(Velocity.GetSafeNormal(), Flight.GetUniverseOrientation().GetForwardVector()), -1.0, 1.0))));
+        }
+        AddInfo(FString::Printf(TEXT("the slide: nose and velocity at most %.1f degrees apart"), MostApartDeg));
+        TestTrue(TEXT("slide: the time is the velocity's ray, every step"), bFollowsVelocity);
+        TestTrue(TEXT("slide: with the nose already off the world and the ship still falling onto it, a time"), bNoseOffStillFalling);
+        TestTrue(TEXT("slide: once the velocity has swung off too, a pass"), bSwungOff);
+    }
+
     // The words (ruling 3): each unit chosen on the rounded value it prints.
     TestEqual(TEXT("52 S"), NavText::Duration(52.0), FString(TEXT("52 S")));
     TestEqual(TEXT("99 S"), NavText::Duration(99.4), FString(TEXT("99 S")));

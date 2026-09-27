@@ -2,6 +2,7 @@
 #include "Components/WidgetComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/FileManager.h"
 #include "ImageUtils.h"
 #include "Misc/AutomationTest.h"
@@ -10,8 +11,10 @@
 #include "ShaderCompiler.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipMapScreen.h"
+#include "Ship/ShipSubsystem.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/NavText.h"
+#include "UI/SystemMapLayout.h"
 #include "UI/SystemMapWidget.h"
 #include "Universe/UniverseUnits.h"
 
@@ -31,8 +34,11 @@
  * across at 800 px, near the 26.7 px a degree a 103-degree view has at its
  * middle on 4K -- and writes Saved/Eyes/MapFromHelm/<shot>.png and
  * report.txt. For stage 1 the frames are judged on the rows, the rings and
- * the title; stage 3 runs it again with a target, and deletes this file with
- * that verdict.
+ * the title; stage 3 runs it again with a target (home_target_ahead, with a
+ * live ETA and "Near enough to fly"; home_target_far, with "Jump here";
+ * home_footer_longest, the longest footer beside the button), to
+ * judge the target ring, the band's lines and the button, and this file is
+ * deleted with that verdict.
  *
  * NOT A VERDICT. This file writes the frames; the orchestrator, or the
  * developer at first playtest, judges them (decision 11). What the
@@ -161,7 +167,10 @@ bool FMapFromHelmEyesTest::RunTest(const FString& Parameters)
         {
             Report.Add(FString::Printf(TEXT("  row %2d: %s"), Row, *Map->GetRowText(Row).ToString()));
         }
+        Report.Add(FString::Printf(TEXT("  target: %s"), *Map->GetTargetText().ToString()));
         Report.Add(FString::Printf(TEXT("  footer: %s"), *Map->GetFooterText().ToString()));
+        Report.Add(FString::Printf(TEXT("  button: %s%s"), Map->IsJumpButtonShown() ? *Map->GetJumpButtonText().ToString() : TEXT("(none)"),
+                                   Map->IsJumpButtonShown() && !Map->IsJumpButtonEnabled() ? TEXT(" (disabled)") : TEXT("")));
         if (const SystemMap::FMapLayout* Drawn = Map->GetLayout())
         {
             FString Rings;
@@ -175,6 +184,62 @@ bool FMapFromHelmEyesTest::RunTest(const FString& Parameters)
 
     // The opening: home, as the player first sees it.
     Shoot(TEXT("home_opening"));
+
+    // Stage 3: with a target. The world the opening shot faces, the drive
+    // taking the ship toward it, so the band carries a live ETA -- and it is
+    // near enough to fly, so the button says so; then the outermost other
+    // world, which can be jumped to.
+    if (const TOptional<FStarSystem> Opening = Test.Universe->GetSystemAt(Test.Ship->GetFlightState().GetUniversePosition()))
+    {
+        const FVector Nose = Test.Ship->GetFlightState().GetUniverseOrientation().GetForwardVector();
+        int32 Ahead = INDEX_NONE;
+        double Best = -1.0;
+        for (int32 Orbit = 0; Orbit < Opening->Planets.Num(); ++Orbit)
+        {
+            const double Along = FVector::DotProduct((Opening->PlanetPosition(Orbit) - Test.Ship->GetFlightState().GetUniversePosition()).GetSafeNormal(), Nose);
+            if (Along > Best)
+            {
+                Best = Along;
+                Ahead = Orbit;
+            }
+        }
+        APawn* Pilot = Test.World->SpawnActor<APawn>();
+        if (Ahead != INDEX_NONE && Pilot)
+        {
+            Test.Ship->SetTarget(FBodyId{ Opening->Stub.Id, Ahead, -1 });
+            Test.Ship->SetPilot(Pilot);
+            Test.Ship->SetDriveEngaged(Pilot, true);
+            Test.Ship->SetDriveLever(Pilot, 6);
+            for (int32 Tick = 0; Tick < 300; ++Tick)
+            {
+                Test.Ship->Tick(1.0f / 30.0f);
+            }
+            Shoot(TEXT("home_target_ahead"));
+            Test.Ship->AllStop(Pilot);
+            Test.Ship->ClearPilot();
+
+            for (int32 Orbit = Opening->Planets.Num() - 1; Orbit >= 0; --Orbit)
+            {
+                if (Orbit != Ahead && !Test.Ship->IsNearEnoughToFly(*Opening, FBodyId{ Opening->Stub.Id, Orbit, -1 }))
+                {
+                    Test.Ship->SetTarget(FBodyId{ Opening->Stub.Id, Orbit, -1 });
+                    Shoot(TEXT("home_target_far"));
+
+                    // The longest footer the map writes, held inside the
+                    // innermost orbit and off the plane, on the row the
+                    // button shares: it must wrap short of the button.
+                    const SystemMap::FMapScale Scale = SystemMap::Fit(*Opening, UShipSubsystem::GetStandoffAU());
+                    const double Inner = 0.5 * Scale.InnerAU * UniverseUnits::CmPerAU;
+                    const FQuat Facing = Test.Ship->GetFlightState().GetUniverseOrientation();
+                    Test.Ship->PlaceShip(Opening->Stub.Position + Inner * FVector(FMath::Cos(FMath::DegreesToRadians(34.0)), 0.0,
+                                                                                  FMath::Sin(FMath::DegreesToRadians(34.0))), Facing);
+                    Shoot(TEXT("home_footer_longest"));
+                    break;
+                }
+            }
+            Test.Ship->ClearTarget();
+        }
+    }
 
     // The most crowded system among the first 2,000 stubs nearest home, met
     // at its arrival point from home: the tightest rings procgen makes.

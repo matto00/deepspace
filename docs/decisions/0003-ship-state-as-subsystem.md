@@ -97,3 +97,27 @@ public API, and the flight state would have write paths in two places.
 untestable without a world, and ship state scattered across actors is the
 thing this ADR exists to prevent. Machinery for the jump can come later, as a
 *view* of this state.
+
+## Amendment — and the id of the body it has marked (2026-09-26)
+
+The system map (`docs/superpowers/specs/2026-09-26-system-map-design.md`,
+decisions 5 and 12) gave the ship a **target**: the world in this system the
+pilot has marked. The clause above grows by one id: **the ship stores no
+universe data beyond the id of the system it is steering for and the id of
+the body it has marked**, an `FBodyId`, held in `FShipNavState` beside the
+course. Its position, radius, name and kind are asked of procgen every time
+(`ShipNav::TargetPlanet`, `UShipSubsystem::GetTargetView`), and a
+`PlaceShip` into another system leaves an id that resolves to nothing there,
+which draws nothing rather than the wrong world.
+
+Since the developer's ruling of the same day, the course may name that same
+body instead of a system -- the in-system jump. It is still an id, and still
+the only one of its kind: at most one of the star course and the world course
+is set, and a world course is always the target.
+
+One transient that is the ship's own, not the universe's: where an in-system
+jump's fold opened (`UShipSubsystem::FoldDeparture`), held for the length of
+the fold because the arrival is on the line from there to the world, and the
+ship coasts on through the fold far enough, at 1 c, to matter. It is the
+ship's past position, not a fact about anything out there, and it is cleared
+on arrival.

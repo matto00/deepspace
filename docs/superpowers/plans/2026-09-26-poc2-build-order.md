@@ -239,6 +239,81 @@ it must not be lost here: at 1 c from 0.2 AU, stepped through
 stepped cruise slide, nose and velocity apart, pins that the ETA follows the
 velocity's ray as it swings (2b pins the unstepped half).
 
+*As built (3c):* the API the map coded against in stage 1 is
+`UShipSubsystem::SetTarget`, `ClearTarget`, `GetTarget`, `ShipNav::TargetPlanet`
+and `GetStandoffAU`; 3c added `CycleTarget`, `PlotTarget` (the in-system
+course, which is only ever the target), `GetPlottedWorld`, `HasCourse`,
+`IsNearEnoughToFly(Here, World)`, `GetWorldStandoffDeg`, and
+`GetTargetView(Here)`, which fills `TargetMarker::View` with the ship's own
+position, attitude, velocity, the world's `FloorFor`, the boosters' braking
+and `ds.Drive.HoldSeconds` -- so **4b's HUD line should print
+`TargetMarker::Line(*Ship->GetTargetView(Here))`**, as the map does, and
+`ScreensAgree` then holds by construction. Four things differ from the map
+spec as written:
+
+- **The chart's test is `DeepSpace.UI.ChartInSystemCourse`**, not
+  `DeepSpace.UI.NavigationScreen.InSystemCourse`: a child path would turn the
+  chart's own `DeepSpace.UI.NavigationScreen` into a group that silently runs
+  nothing. It lives in `InSystemJumpTest.cpp` with the other two.
+- **The in-system arrival is on the line from where the fold *opened***,
+  held for the fold as `UShipSubsystem::FoldDeparture` (ADR 0003's new
+  amendment), not from where the ship is when it ends: the ship coasts on
+  through the fold, about 130,000 km in half of it from 1 c, which moves an
+  arrival worked out at the end off the line by hundreds of kilometres when
+  the nose was a few degrees off the world's centre.
+- **The spec's "a body of 100 km radius (where 10 x Floor governs)" is an
+  arithmetic slip.** `R / sin(1 degree)` is 57.3 R, so the ten floors govern
+  only under about 1.8 km of radius over a 10 km floor; a 100 km body is met
+  5,700 km out, by the angle. `DeepSpace.Ship.InSystemJump` tests both a
+  100 km body and a 1 km one.
+- **Through an in-system fold the map draws the ship where it is**, not
+  where it left from: it coasts about 0.001 AU, well under a pixel of the
+  warped-log map, so nothing is held for the glyph. The footer says `In the
+  fold.` and the drawing stands.
+
+**The ETA the map prints is tested where the ship builds it.** A stepped
+case in `DeepSpace.Ship.Target` flies the stock ship with `Tick` at 1 c from
+0.25 AU onto a world, on fed boosters and again browned out (a quarter of the
+braking), and holds `GetTargetView(Here)->EtaSeconds` to the flown arrival at
+the floor within 0.5 s all the way down (0.07 s and 0.18 s off as run). So
+the map's line and 4b's HUD line printing the same view agree by
+construction, and the view itself is what is tested.
+
+**Stage 3 alone is not a playtest build for the in-system jump.** The HUD is
+4b's, and until 4b lands a pilot who presses `Jump here` at the helm sees
+almost nothing of it there: `DriveLineText` reads only `GetPlottedSystem()`
+and is blank on a world course, `ShowsNoseCaret` needs a star course so the
+caret never shows, and **`PlaceLine` prints `NavText::Jump(Transit)`,
+`BETWEEN STARS`, in an in-system fold** -- the words decision 12 says it must
+not use. The chart and the map say the right things; the helm's glass does
+not. 4b's list below names all three.
+
+**A world course adds per-frame procgen, not yet measured.**
+`LetGoOfNearWorldCourse` runs every tick and generates the system to fix the
+world; `GetCourseDirection` generates it again for each caller (the nav step,
+the chart, the counter-frame, 4b's HUD); and the map's band fixes the world
+twice a frame (`GetTargetView`, `IsNearEnoughToFly`). Star courses already
+did the same. Check the frame time with a world course plotted at the first
+playtest; if it shows, let the band's two share one `FixWorld` a frame and
+hold the fixed world for the tick.
+
+`Eyes.MapFromHelm` was run again with a target, two new frames:
+`home_target_ahead` (the target ring, `› Baemsekai III · dead ahead · 46
+THOUSAND KM · ETA 16 MIN` while the drive spools up, and `Near enough to fly`,
+disabled) and `home_target_far` (`Jump here`). In the implementer's reading
+the ring, the line and the button all read at the helm's pixels; the
+button's raised backdrop is barely distinguishable from the panel, and the
+disabled words are dim by design. **The verdict is the developer's**, so the
+file is kept until it is given, and deleted with it.
+
+**The footer shares its row with that button, and now wraps short of it**
+(`USystemMapWidget::JumpReserve`, 180 px: the widest button, `Near enough to
+fly`, measured by Slate at 168 px, and a gap). `DeepSpace.UI.SystemMapScreen`
+measures both under `-nullrhi` -- fonts are measured without a renderer --
+and a third frame, `home_footer_longest`, shows the longest footer the map
+writes (`Inside Baemsekai I's orbit. 34° above the plane.`, 368 px of the
+408 it has) beside `Jump here`, on one line and clear of the button.
+
 ### Stage 3 ownership check
 
 | File | Owner |
@@ -275,7 +350,11 @@ no level rebuild.
 
 **Owns:** `UI/ShipTargetOverlay.h/.cpp` (new), `UI/ShipHUDWidget.h/.cpp` (the
 overlay child, the target readout with its ETA, `ShowsNoseCaret` with a
-target, the jump line naming a world and saying `IN THE FOLD`),
+target *or a world course* (it needs `GetPlottedSystem()` today), the jump
+line naming a world and saying `IN THE FOLD` (`DriveLineText`, blank on a
+world course today), and **`PlaceLine`, which in an in-system fold says `IN
+THE FOLD` or nothing, never `BETWEEN STARS`** -- it prints
+`NavText::Jump(EJumpState::Transit)` for any fold today),
 `Sky/ShipSky.h/.cpp` (`ds.Sky.Goto ... night`), `Tools/sky_probe.py`
 (`--night`: moved here from stage 2, where 2a owns the file); tests
 `Tests/TargetOverlayTest.cpp` (new), `Tests/ShipHUDNoseCaretTest.cpp`,

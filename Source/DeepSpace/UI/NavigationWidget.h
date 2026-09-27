@@ -23,9 +23,14 @@ class UTextBlock;
  * again only when something it depends on has changed (FAskedAt), since the
  * chart is in view from the helm and would otherwise pay for it every frame.
  *
+ * The course may be a world in this system (the map's in-system jump, map
+ * decision 12): the rows stay stars, none of them marked, and the course
+ * line names the world "in this system"; the toggle engages or stands down
+ * that jump as it would a star's, and plotting a star row replaces it.
+ *
  * What is deliberately absent: the jump has no percentage, no bar, no
- * countdown and no ETA -- a number that fills is a clock to watch -- and no
- * row is ranked or recommended. Distances are facts about the sky, and so
+ * countdown and no ETA -- the charge is a wait, and a number that fills is a
+ * clock to watch -- and no row is ranked or recommended. Distances are facts about the sky, and so
  * are bearings; nothing here is late and nothing gets worse.
  */
 UCLASS()
@@ -83,6 +88,10 @@ public:
     /** The marker the plotted row carries. */
     static const TCHAR* const PlottedMark;
 
+    /** What the course line says of a course to a world: "› Kessa II · in
+     *  this system · 12° to port" (map decision 12). */
+    static const TCHAR* const InSystemWords;
+
 protected:
     virtual UWidget* BuildScreen() override;
     virtual void NativeTick(const FGeometry& Geometry, float DeltaTime) override;
@@ -111,7 +120,7 @@ private:
      * Everything the chart's costly answers depend on, asked of their owners
      * each frame, which is cheap. The here line and the rows are a function
      * of the jump's serial (every arrival, and the visited record with it),
-     * whether the ship is between stars, the plotted system, where the ship
+     * whether the ship is between stars, the course (a star or a world), where the ship
      * is, ds.Nav.RangeLy and the universe's priors; the course line adds the
      * ship's heading and the cone. When none has changed, neither has any
      * answer. A cache key, never an answer: nothing reads it as ship state.
@@ -121,6 +130,8 @@ private:
         int32 JumpSerial = 0;
         bool bInTransit = false;
         TOptional<FSystemId> Plotted;
+        /** The in-system jump's course: the course line names it. */
+        TOptional<FBodyId> PlottedWorld;
         FUniversePosition Position;
         FQuat Orientation = FQuat::Identity;
         float RangeLy = 0.0f;
