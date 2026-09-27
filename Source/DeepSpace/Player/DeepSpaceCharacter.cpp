@@ -164,6 +164,10 @@ void ADeepSpaceCharacter::ConfigureFirstPersonBody()
     }
 }
 
+// 19 cm forward of the anchor, 2 to port, 125 up: what the sitting idle does
+// with the head, measured (DeepSpace.Player.SeatedEyeIsPilotEye).
+const FVector ADeepSpaceCharacter::SeatedEyeOffset(19.0, -2.0, 125.0);
+
 void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRotation)
 {
     const USkeletalMeshComponent* Body = GetMesh();
@@ -664,9 +668,9 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     // plain once the chart chair left the view the player's own.
     const FTransform UsePose = Screen->GetUseTransform();
     const float SeatYaw = UsePose.Rotator().Yaw;
+    const FVector Anchor(UsePose.GetLocation().X, UsePose.GetLocation().Y, Screen->GetUseFloorZ());
     SetActorLocationAndRotation(
-        FVector(UsePose.GetLocation().X, UsePose.GetLocation().Y,
-                Screen->GetUseFloorZ() + GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
+        Anchor + FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
         FRotator(0.0f, SeatYaw, 0.0f));
     bUseControllerRotationYaw = false;
 
@@ -682,16 +686,24 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     // The chart chair: sat, and the view still the player's (decision 13).
     // It starts on the screen sat at, so choosing that one is one press, as
     // it was when sitting framed it, and choosing the map beside it is a
-    // glance and the same press. The eyes are placed first so the look is
-    // aimed from where they are, not from where the body stood.
-    bEyeHeightSettled = false;
-    PlaceCamera(0.0f, FRotator(0.0f, SeatYaw, 0.0f));
+    // glance and the same press.
+    //
+    // Aimed from where the eyes will settle, not from where they are. This
+    // runs from input, before the frame's animation, so the head is still
+    // where the standing pose put it: aimed from there, the view kept a
+    // standing eye's pitch while the body sat and the eye dropped 40 cm,
+    // ended under the chart, and E -- pressed again to read it -- stood the
+    // player straight back up. The eye then settles onto the head as it
+    // always does, damped, and the view -- held -- is on the glass once it
+    // has.
+    const FVector SeatedEye = Anchor + FRotator(0.0f, SeatYaw, 0.0f).RotateVector(SeatedEyeOffset);
     const FVector Glass = Screen->GetScreen() ? Screen->GetScreen()->GetComponentLocation() : Screen->GetActorLocation();
-    const FRotator OnScreen = (Glass - GetEyeLocation()).Rotation();
+    const FRotator OnScreen = (Glass - SeatedEye).Rotation();
     if (Controller)
     {
         Controller->SetControlRotation(OnScreen);
     }
+    bEyeHeightSettled = false;
     PlaceCamera(0.0f, OnScreen);
     MarkCameraCut();
 }

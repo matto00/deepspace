@@ -49,15 +49,20 @@ public:
 
     /**
      * Where a player sits to use this screen, and which way they face:
-     * square on, at seat height, in front of the panel. Derived from the
-     * panel's own transform so a screen that moves takes its seat with it.
+     * square on, in front of the panel, on the floor under the seat. The
+     * floor, not the cushion: the sitting idle is posed against a seat
+     * anchored on the floor, as the helm's is, and lifts the hips onto the
+     * chair itself -- so no screen has a seat height to tune. Derived from
+     * the panel's own transform so a screen that moves takes its seat with
+     * it.
      */
     FTransform GetUseTransform() const;
 
     /**
-     * World Z of the floor under the seat, cm: SeatHeightCm below it. What
-     * getting up from this screen stands on -- not the height the feet were
-     * at when the player sat, which is the top of whatever they had climbed.
+     * World Z of the floor under the seat, cm: the use transform's. What
+     * the body sits on and what getting up from this screen stands on --
+     * not the height the feet were at when the player sat, which is the top
+     * of whatever they had climbed.
      */
     double GetUseFloorZ() const;
 
@@ -170,10 +175,6 @@ protected:
     /** How far in front of the panel the player sits, cm. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
     float UseDistanceCm = 62.0f;
-
-    /** Height of the seat off the floor, cm: the galley bench. */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
-    float SeatHeightCm = 45.0f;
 
     /** How far the eyes sit from the panel while using it, cm. Close: this
      *  is leaning in to read something, not looking across a room. */

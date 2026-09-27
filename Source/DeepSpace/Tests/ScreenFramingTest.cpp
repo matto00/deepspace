@@ -251,6 +251,15 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("sat in the chart's chair, unzoomed, the view keeps the walking angle (%.1f)"),
                                      Camera->FieldOfView),
                      FMath::IsNearlyEqual(Camera->FieldOfView, Walking, 0.01f));
+            // UseScreen aims the first view from where a real body's eyes
+            // settle in the chair; this body has no mesh, so its eyes are at
+            // its feet and that aim passes over the glass. Framing is the
+            // question here, so look at the glass from where these eyes are.
+            if (Controller)
+            {
+                Controller->SetControlRotation((Screen->GetScreen()->GetComponentLocation() - Player->GetEyeLocation()).Rotation());
+                Player->PlaceCamera(0.016f, Player->GetViewRotation());
+            }
             Player->PressInteract();
             TestTrue(TEXT("E, looking at the chart, zooms it"), Player->GetZoomedScreen() == Screen);
             Player->PlaceCamera(0.016f, Player->GetViewRotation());

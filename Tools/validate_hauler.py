@@ -323,16 +323,17 @@ def check_chart(grid, ship, failures):
 
 
 def check_map_sightline(grid, ship, failures):
-    """The air from the helm's eye to the map's glass is empty: the pilot
-    reads and clicks the map from the helm without leaving it (system map
-    spec, decisions 1 and 2), so a prop on that line would hide it and the
-    pointer would find the prop first. The rows run across the whole panel,
-    so the lines to its four corners are sampled as well as the line to its
-    centre: a prop that hid one corner would hide a row. Every 10 cm along
-    each line, from the eye to 5 cm short of the glass, as check_chart is for
-    the chart chair; the last 5 cm is the cell the desk screen behind the
-    glass is in."""
-    eye = ship.pilot_eye
+    """The air from each seated eye that uses the map to the map's glass is
+    empty: the pilot reads and clicks the map from the helm without leaving
+    it (system map spec, decisions 1 and 2), and the chart chair's reader
+    clicks it and zooms it from that chair (decision 13), E zooming whichever
+    screen the view's trace finds -- so a prop on either line would hide it,
+    and the pointer, or the zoom, would find the prop first. The rows run
+    across the whole panel, so the lines to its four corners are sampled as
+    well as the line to its centre: a prop that hid one corner would hide a
+    row. Every 10 cm along each line, from the eye to 5 cm short of the
+    glass, as check_chart is for the chart chair; the last 5 cm is the cell
+    the desk screen behind the glass is in."""
     x, y, z = ship.map_screen_location
     half_w, half_h = L.MAP_SCREEN_WIDTH / 2.0, L.MAP_SCREEN_HEIGHT / 2.0
     # The map faces aft (yaw 0), so its face spans y and z.
@@ -340,17 +341,18 @@ def check_map_sightline(grid, ship, failures):
         ("%s %s corner" % (vert, side), (x, y + dy, z + dz))
         for vert, dz in (("upper", half_h), ("lower", -half_h))
         for side, dy in (("port", -half_w), ("starboard", half_w))]
-    for name, glass in points:
-        length = sum((glass[a] - eye[a]) ** 2 for a in range(3)) ** 0.5
-        along = 0.0
-        while along < length - 5:
-            point = [eye[a] + (glass[a] - eye[a]) * along / length for a in range(3)]
-            i, j, k = grid.cell_of(*point)
-            if grid.solid[grid.index(i, j, k)]:
-                failures.append("Something solid at (%.0f, %.0f, %.0f) stands between the helm's "
-                                "eye and the map's %s." % (tuple(point) + (name,)))
-                break
-            along += CELL
+    for seat, eye in (("the helm", ship.pilot_eye), ("the chart chair", ship.chart_eye)):
+        for name, glass in points:
+            length = sum((glass[a] - eye[a]) ** 2 for a in range(3)) ** 0.5
+            along = 0.0
+            while along < length - 5:
+                point = [eye[a] + (glass[a] - eye[a]) * along / length for a in range(3)]
+                i, j, k = grid.cell_of(*point)
+                if grid.solid[grid.index(i, j, k)]:
+                    failures.append("Something solid at (%.0f, %.0f, %.0f) stands between %s's "
+                                    "eye and the map's %s." % (tuple(point) + (seat, name)))
+                    break
+                along += CELL
 
 
 # How far the target bracket's glass trace looks, cm (system map spec,
@@ -454,7 +456,7 @@ def main():
     print("\nPASS: plan consistent, hull sealed, one piece, every region reachable in "
           "its posture, crawlway crouch-only, %d cm slide run clear, doors and console "
           "unobstructed, the chart in clear view of its chair, the map in clear view of "
-          "the helm, glass ahead of the helm and a wall behind it." % L.SLIDE_RUN)
+          "the helm and the chart chair, glass ahead of the helm and a wall behind it." % L.SLIDE_RUN)
     return 0
 
 

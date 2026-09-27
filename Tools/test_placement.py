@@ -465,6 +465,41 @@ def test_the_chart_width_is_the_one_the_cpp_draws():
     assert "PanelWidthCm = %d.0f;" % L.NAV_SCREEN_WIDTH in cpp, L.NAV_SCREEN_WIDTH
 
 
+def test_the_chart_chair_distance_is_the_one_the_cpp_seats_at():
+    # The chart chair's eye (CHART_EYE) is placed from it, and the chart's
+    # own default is what a chart spawned without build_hauler sits at.
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipNavScreen.cpp")) as f:
+        cpp = f.read()
+    assert "UseDistanceCm = %d.0f;" % L.NAV_SCREEN_USE_DISTANCE in cpp, L.NAV_SCREEN_USE_DISTANCE
+
+
+def test_the_seated_eye_is_the_one_the_character_aims_from():
+    # ADeepSpaceCharacter::SeatedEyeOffset is where UseScreen aims the chart
+    # chair's first view from, and DeepSpace.Player.SeatedEyeIsPilotEye holds
+    # it to the measured eye; the layout's SEATED_EYE must be the same one.
+    import re
+    with open(os.path.join(ROOT, "Source/DeepSpace/Player/DeepSpaceCharacter.cpp")) as f:
+        cpp = f.read()
+    found = re.search(r"SeatedEyeOffset\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", cpp)
+    assert found, "no SeatedEyeOffset in DeepSpaceCharacter.cpp"
+    assert tuple(float(v) for v in found.groups()) == tuple(float(v) for v in L.SEATED_EYE), \
+        (found.groups(), L.SEATED_EYE)
+
+
+def test_the_chart_eye_is_a_seated_eye_over_the_chart_chair():
+    # The body sits on the starboard pilot_seat, facing the chart, with the
+    # helm's seated eye: over the chair's 60 x 60 cm footprint, at the helm's
+    # height, on the chart's centre line less the idle's 2 cm to port.
+    ship = L.generate()
+    chair = L.resolve_point(ship.plan, *L.NAV_SCREEN_CHAIR)
+    ex, ey, ez = ship.chart_eye
+    assert L.CHART_EYE[0] == L.NAV_SCREEN_CHAIR[0] == "cockpit"
+    assert ship.nav_screen_yaw == 0, "SEATED_EYE is added in the room's frame; turn it with the chart"
+    assert abs(ex - chair[0]) < 30 and abs(ey - chair[1]) < 30, (ship.chart_eye, chair)
+    assert ez == ship.pilot_eye[2], (ez, ship.pilot_eye)
+    assert ship.nav_screen_location[0] - ex == L.NAV_SCREEN_USE_DISTANCE - L.SEATED_EYE[0]
+
+
 def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
     # Plan conflict 16: the footprint plus the laptop's margin, and the strip
     # to the chair. Slice 3's clutter reads it; nothing may sit on the chart.

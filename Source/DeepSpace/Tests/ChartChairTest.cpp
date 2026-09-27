@@ -14,6 +14,7 @@
 #include "Player/DeepSpaceCharacter.h"
 #include "Ship/InteractableComponent.h"
 #include "Ship/PilotSeat.h"
+#include "Ship/ShipConsole.h"
 #include "Ship/ShipLaptop.h"
 #include "Ship/ShipMapScreen.h"
 #include "Ship/ShipNavScreen.h"
@@ -54,15 +55,26 @@ namespace ChartChairTestLocal
         return Block;
     }
 
+    /** Holds Mesh in the sitting idle's first frame. */
+    void PoseSitting(USkeletalMeshComponent* Mesh, UAnimSequence* Idle)
+    {
+        Mesh->PlayAnimation(Idle, true);
+        Mesh->SetPosition(0.0f);
+        Mesh->TickAnimation(0.0f, false);
+        Mesh->RefreshBoneTransforms();
+    }
+
     /**
      * The character as the game builds it, holding the sitting idle, possessed
      * by a controller with a camera manager: the seat's view limits and the
      * zoom's look lock are the controller's, and the eyes are where the idle
      * puts the head. Spawned into a world already playing, so its BeginPlay
-     * runs, with no controller yet to make a HUD for.
+     * runs, with no controller yet to make a HUD for. With bSitting false it
+     * is left in its reference pose, standing, as a player who walks up to
+     * the chair is.
      */
     ADeepSpaceCharacter* SpawnSitter(FAutomationTestBase& Test, UWorld* World, const FVector& Feet,
-                                     APlayerController*& OutController)
+                                     APlayerController*& OutController, bool bSitting = true)
     {
         OutController = nullptr;
         UClass* CharacterClass = LoadClass<ADeepSpaceCharacter>(
@@ -83,10 +95,10 @@ namespace ChartChairTestLocal
         {
             return nullptr;
         }
-        Character->GetMesh()->PlayAnimation(Idle, true);
-        Character->GetMesh()->SetPosition(0.0f);
-        Character->GetMesh()->TickAnimation(0.0f, false);
-        Character->GetMesh()->RefreshBoneTransforms();
+        if (bSitting)
+        {
+            PoseSitting(Character->GetMesh(), Idle);
+        }
 
         OutController = World->SpawnActor<APlayerController>();
         if (!Test.TestNotNull(TEXT("a controller spawns"), OutController))
@@ -146,11 +158,16 @@ bool FChartChairTest::RunTest(const FString& Parameters)
     APilotSeat* Helm = World->SpawnActor<APilotSeat>(HelmSeat, FRotator::ZeroRotator);
     // Far from the cockpit, so nothing there is in its view or its reach.
     AShipLaptop* Laptop = World->SpawnActor<AShipLaptop>(FVector(0.0, 3000.0, 75.0), FRotator::ZeroRotator);
+    // Another world screen, in reach of the chart chair and turned to face
+    // it from starboard (yaw 90 turns the panel's -X face to -Y): the
+    // engineering console, which no seat may drive or zoom.
+    AShipConsole* Console = World->SpawnActor<AShipConsole>(FVector(1604.0, 230.0, 125.0), FRotator(0.0, 90.0, 0.0));
     // The deck, its top at Z = 0 as the ship's is, for standing up onto.
     SpawnBlock(World, FVector(1500.0, 0.0, -10.0), FVector(600.0, 600.0, 10.0));
     SpawnBlock(World, FVector(0.0, 3000.0, -10.0), FVector(300.0, 300.0, 10.0));
     if (!TestNotNull(TEXT("the map spawns"), Map) || !TestNotNull(TEXT("the chart spawns"), Chart) ||
-        !TestNotNull(TEXT("the helm spawns"), Helm) || !TestNotNull(TEXT("the laptop spawns"), Laptop))
+        !TestNotNull(TEXT("the helm spawns"), Helm) || !TestNotNull(TEXT("the laptop spawns"), Laptop) ||
+        !TestNotNull(TEXT("the console spawns"), Console))
     {
         return false;
     }
@@ -288,6 +305,29 @@ bool FChartChairTest::RunTest(const FString& Parameters)
     Player->CycleTarget();
     TestTrue(TEXT("Tab back in the seat changes nothing"), Target() == Before);
 
+    // -- The console, from the chair: no seat's screen --------------------------
+    // The seat's gate asks for a ship screen that says what a seat may do
+    // with it. The console's glass is a world screen in reach and under the
+    // view, and is neither: the pointer stays off it, and E is a stand-up.
+    {
+        LookAt(Player, Controller, Console->GetScreen()->GetComponentLocation());
+        FHitResult Seen;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(ChartChairConsole), false, Player);
+        const FVector Eye = Player->GetEyeLocation();
+        World->LineTraceSingleByChannel(Seen, Eye, Eye + Player->GetViewRotation().Vector() * 240.0, ECC_Visibility, Params);
+        TestTrue(TEXT("from the chair, the view lands on the console's glass, in reach"),
+                 Seen.GetComponent() == static_cast<UPrimitiveComponent*>(Console->GetScreen()));
+        TestFalse(TEXT("but the pointer is off on it"), Pointer->IsActive());
+        TestEqual(TEXT("and E, looking at it, stands up"), Prompt(), FString(TEXT("Stand up")));
+        Player->PressInteract();
+        Player->Tick(0.016f);
+        TestFalse(TEXT("E looking at the console zooms nothing"), Player->IsUsingScreen());
+        TestFalse(TEXT("and stands the player up"), Player->IsInScreenChair());
+        Chart->GetInteractable()->Interact(Player);
+        Player->Tick(0.016f);
+        TestTrue(TEXT("sat back in the chart chair"), Player->IsInScreenChair());
+    }
+
     // -- On neither, E stands up ----------------------------------------------
     LookAt(Player, Controller, ChairEye + FVector(-100.0, -300.0, 0.0));
     TestEqual(TEXT("on neither screen, E stands up"), Prompt(), FString(TEXT("Stand up")));
@@ -338,6 +378,51 @@ bool FChartChairTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("E at the laptop stands up"), Player->IsInScreenChair() || Player->IsUsingScreen());
 
     Controller->UnPossess();
+
+    // -- Sat down from standing: the view is still on the chart once sat ------
+    // In the game E runs from input, before the frame's animation, so when
+    // UseScreen aims the first view the body is still in the standing pose,
+    // its eyes some 50 cm above where they settle. The sitting idle takes
+    // over in the frames after and the eyes sink onto the seated head; the
+    // view must be on the chart when they get there, or the second press --
+    // to read it -- stands the player straight back up. The sitter above
+    // was posed sitting before it sat, and cannot see this.
+    {
+        APlayerController* WalkerController = nullptr;
+        ADeepSpaceCharacter* Walker = SpawnSitter(*this, World, StoodFeet, WalkerController, false);
+        UAnimSequence* Idle = LoadObject<UAnimSequence>(
+            nullptr, TEXT("/Game/Characters/DeepSpace/Anims/RTG_sitting_idle.RTG_sitting_idle"));
+        if (Walker && WalkerController && Idle)
+        {
+            Walker->Tick(0.016f);
+            const float StandingEye = Walker->GetEyeLocation().Z;
+            TestTrue(FString::Printf(TEXT("the walker's eyes are a standing body's (%.1f cm)"), StandingEye),
+                     StandingEye > PilotEye.Z + 30.0f);
+
+            Chart->GetInteractable()->Interact(Walker);
+            PoseSitting(Walker->GetMesh(), Idle);
+            for (int32 Frame = 0; Frame < 120; ++Frame)
+            {
+                Walker->Tick(0.016f);
+            }
+            const FVector Settled = Walker->GetEyeLocation();
+            AddInfo(FString::Printf(TEXT("sat from standing: eye settled at z %.1f, pitch %.1f"),
+                                    Settled.Z, Walker->GetViewRotation().Pitch));
+            TestTrue(FString::Printf(TEXT("sat from standing, the eyes settle at the seated height (%.1f, want %.1f)"),
+                                     Settled.Z, PilotEye.Z),
+                     FMath::Abs(Settled.Z - PilotEye.Z) <= PilotEyeBob);
+            TestEqual(TEXT("and the view is on the chart, so E still names it"),
+                      Walker->GetCurrentPrompt().ToString(), FString(TEXT("Chart")));
+            Walker->PressInteract();
+            Walker->Tick(0.016f);
+            TestTrue(TEXT("one press after sitting zooms the chart"), Walker->GetZoomedScreen() == Chart);
+            Walker->StopUsingScreen();
+        }
+        if (WalkerController)
+        {
+            WalkerController->UnPossess();
+        }
+    }
     return true;
 }
 

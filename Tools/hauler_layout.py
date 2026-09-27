@@ -224,6 +224,13 @@ NAV_SCREEN_WIDTH = 68
 NAV_SCREEN_MARGIN = DRESS_MARGIN
 NAV_SCREEN_CHAIR = ("cockpit", (175, 270))    # the starboard pilot_seat
 
+# How far aft of the chart's glass its reader sits, cm: the chart's
+# use_distance_cm, which build_hauler.py sets and verify_level.py checks, and
+# AShipNavScreen's default, which test_placement.py holds equal. From the
+# glass at x 301 it lands the body on the starboard pilot_seat's centre at
+# x 175.
+NAV_SCREEN_USE_DISTANCE = 126
+
 # The system map: the middle desk screen, turned into the one the whole
 # cockpit shares (system map spec, decision 1). Shaped like NAV_SCREEN, and 1
 # cm proud of the prop's aft face (302) for the chart's reason: the prop
@@ -310,6 +317,18 @@ PILOT_EYE = (PILOT_SEAT[0],
              (PILOT_SEAT[1][0] + SEATED_EYE[0], PILOT_SEAT[1][1] + SEATED_EYE[1]),
              SEATED_EYE[2])
 
+# Where the eyes are, seated in the chart chair: the chart's use transform --
+# NAV_SCREEN_USE_DISTANCE aft of its glass, on the floor, facing it -- plus
+# SEATED_EYE, the same body in the same sitting idle as at the helm. The
+# chart faces aft (yaw 0), so its chair faces forward as the helm does and
+# SEATED_EYE adds in the room's frame. The chair's reader zooms and clicks
+# the map as well as the chart (system map spec, decision 13), so the map's
+# sightline is checked from here as well as from the helm.
+CHART_EYE = (NAV_SCREEN[0],
+             (NAV_SCREEN[1][0] - NAV_SCREEN_USE_DISTANCE + SEATED_EYE[0],
+              NAV_SCREEN[1][1] + SEATED_EYE[1]),
+             SEATED_EYE[2])
+
 SLIDE_ROOM = "corridor"
 
 
@@ -319,7 +338,7 @@ Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
                           "laptop_location laptop_yaw "
                           "nav_screen_location nav_screen_yaw nav_screen_exclude "
                           "hum_sources laptop_exclude surfaces keep_outs "
-                          "map_screen_location map_screen_yaw pilot_eye")
+                          "map_screen_location map_screen_yaw pilot_eye chart_eye")
 
 
 def generate():
@@ -380,6 +399,7 @@ def generate():
 
     eye_room, eye_at, eye_z = PILOT_EYE
     pilot_eye = resolve_point(plan, eye_room, eye_at, eye_z)
+    chart_eye = resolve_point(plan, *CHART_EYE)
 
     # (label, world location, kind). The reactor is hum_reactor; each room's
     # air is hum_<room>.
@@ -397,7 +417,7 @@ def generate():
                 laptop_location, laptop_yaw,
                 nav_screen_location, nav_screen_yaw, nav_screen_exclude,
                 hum_sources, laptop_exclude, surfaces, keep_outs(plan, keep_clear),
-                map_screen_location, map_screen_yaw, pilot_eye)
+                map_screen_location, map_screen_yaw, pilot_eye, chart_eye)
 
 
 def laptop_exclude_rect(plan, location, yaw):

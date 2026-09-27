@@ -624,7 +624,8 @@ bool FNavScreenChairTest::RunTest(const FString& Parameters)
         // perched on its front edge.
         TestTrue(TEXT("which is the chair's distance back from the glass"),
                  FMath::IsNearlyEqual(FVector::Dist2D(Seat.GetLocation(), Centre), 126.0, 0.5));
-        TestTrue(TEXT("at the chair's height"), FMath::IsNearlyEqual(Seat.GetLocation().Z, 55.0, 0.01));
+        TestTrue(TEXT("on the floor under the chair, as the helm's anchor is"),
+                 FMath::IsNearlyEqual(Seat.GetLocation().Z, 0.0, 0.01));
         TestTrue(TEXT("facing the chart"),
                  FVector::DotProduct(Player->GetActorForwardVector(),
                                      (Centre - Player->GetActorLocation()).GetSafeNormal2D()) > 0.999);

@@ -109,6 +109,18 @@ public:
     /** Where the eyes are in the world. */
     FVector GetEyeLocation() const;
 
+    /**
+     * Where a seated body's eyes settle, cm, from its seat's anchor on the
+     * floor, in the seat's own frame: (forward, starboard, up). Measured,
+     * not chosen -- the sitting idle's head, through PlaceCamera -- and held
+     * to that by DeepSpace.Player.SeatedEyeIsPilotEye, and to the layout's
+     * SEATED_EYE by test_placement.py. Every seat places the body the same
+     * way, on the floor with the idle lifting the hips, so this is every
+     * seat's eye. UseScreen aims the chart chair's first view from here,
+     * because when it runs the head is still where the standing pose left it.
+     */
+    static const FVector SeatedEyeOffset;
+
     /** The window shape a screen is framed for, and the axis it keeps. */
     struct FFramingView
     {

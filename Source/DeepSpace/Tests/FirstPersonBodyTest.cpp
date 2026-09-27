@@ -401,6 +401,12 @@ bool FSeatedEyeIsPilotEyeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the clip has a length to sample"), Length > 0.0f);
     TestTrue(FString::Printf(TEXT("PilotEye is the seated eye, to a centimetre (off by %.1f cm)"), FVector::Dist(Mean, Want)),
              Mean.Equals(Want, 1.0));
+    // The offset every seat aims its first view from (UseScreen, the chart
+    // chair) is this same eye, from the seat's anchor.
+    const FVector Offset = Mean - Seat->GetSeatTransform().GetLocation();
+    TestTrue(FString::Printf(TEXT("SeatedEyeOffset is the seated eye, to a centimetre (measured %.1f, %.1f, %.1f)"),
+                             Offset.X, Offset.Y, Offset.Z),
+             Offset.Equals(ADeepSpaceCharacter::SeatedEyeOffset, 1.0));
     TestTrue(TEXT("the idle keeps the eye within PilotEyeBob of it, up and down"),
              Range.Min.Z >= Want.Z - SkyTestWorld::PilotEyeBob && Range.Max.Z <= Want.Z + SkyTestWorld::PilotEyeBob);
     TestTrue(TEXT("and within PilotEyeBob of it sideways"),

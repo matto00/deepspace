@@ -1,5 +1,6 @@
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Camera/PlayerCameraManager.h"
@@ -33,12 +34,20 @@ namespace
         return Block;
     }
 
-    /** A chair: a box whose top is the screen's seat, under its use transform. */
-    FVector SpawnChairUnder(UWorld* World, const AShipScreen* Screen)
+    /** The ship's seats, cm off the floor: the pilot_seat cushion the
+     *  chart is read from, and the galley's bench the laptop is. Heights of
+     *  props, not of the screens: a screen seats the body on the floor under
+     *  its chair, and what matters here is what a player can climb onto. */
+    constexpr double ChairCushionCm = 55.0;
+    constexpr double BenchCm = 45.0;
+
+    /** A chair: a box under the screen's use transform, its top the cushion
+     *  -- which is what this returns. */
+    FVector SpawnChairUnder(UWorld* World, const AShipScreen* Screen, double CushionCm)
     {
-        const FVector Seat = Screen->GetUseTransform().GetLocation();
-        SpawnBlock(World, FVector(Seat.X, Seat.Y, Seat.Z * 0.5), FVector(30.0, 30.0, Seat.Z * 0.5));
-        return Seat;
+        const FVector Floor = Screen->GetUseTransform().GetLocation();
+        SpawnBlock(World, FVector(Floor.X, Floor.Y, Floor.Z + CushionCm * 0.5), FVector(30.0, 30.0, CushionCm * 0.5));
+        return FVector(Floor.X, Floor.Y, Floor.Z + CushionCm);
     }
 
     ADeepSpaceCharacter* SpawnStanding(UWorld* World, const FVector2D& At, double FloorZ = 0.0)
@@ -120,8 +129,8 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         return false;
     }
     SpawnBlock(World, FVector(15.0, 800.0, 37.0), FVector(40.0, 60.0, 37.0));
-    const FVector ChartSeat = SpawnChairUnder(World, Chart);
-    const FVector LaptopSeat = SpawnChairUnder(World, Laptop);
+    const FVector ChartSeat = SpawnChairUnder(World, Chart, ChairCushionCm);
+    const FVector LaptopSeat = SpawnChairUnder(World, Laptop, BenchCm);
 
     // 1. The spot the player left is free: they go back to it.
     {
@@ -253,7 +262,7 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
                                                                       FRotator::ZeroRotator);
         if (TestNotNull(TEXT("the chart by the edge spawns"), EdgeChart))
         {
-            const FVector EdgeSeat = SpawnChairUnder(World, EdgeChart);
+            const FVector EdgeSeat = SpawnChairUnder(World, EdgeChart, ChairCushionCm);
             const FVector2D Stood(EdgeSeat.X - 124.0, EdgeSeat.Y);
             const double DeckEdge = Stood.X - (2.0 * RingStepCm - Radius - 6.0);
             const double DeckFar = EdgeChart->GetActorLocation().X + 100.0;
@@ -302,8 +311,8 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         }
     }
 
-    // 7. The same climb at the laptop. Its bench is 45 cm (ShipScreen.h's
-    //    SeatHeightCm), the galley's benches in the level, and lower than
+    // 7. The same climb at the laptop. Its bench is 45 cm (BenchCm), the
+    //    galley's benches in the level, and lower than
     //    the chart's chair: a floor band that let anything up to 50 cm count
     //    as floor would stand this player on the bench, which is the
     //    developer's symptom moved to the laptop.
@@ -466,7 +475,12 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
                 Player->UseScreen(CutChart);
                 TestTrue(TEXT("sitting down is a camera cut"), Camera->bGameCameraCutThisFrame);
 
-                // E, the view on the chart as sitting leaves it: the zoom.
+                // E, looking at the chart: the zoom. Looked at by hand:
+                // UseScreen aims from where a real body's eyes settle, and
+                // this one's, meshless, are at its feet.
+                Controller->SetControlRotation(
+                    (CutChart->GetScreen()->GetComponentLocation() - Player->GetEyeLocation()).Rotation());
+                Player->PlaceCamera(0.016f, Player->GetViewRotation());
                 Camera->bGameCameraCutThisFrame = false;
                 Player->PressInteract();
                 TestTrue(TEXT("zooming the chart is a camera cut"), Camera->bGameCameraCutThisFrame);

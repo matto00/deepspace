@@ -583,10 +583,12 @@ beside the helm is not a second station (vision: shared presence, never
 division of labour).
 
 It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
-from `NAV_SCREEN` in `hauler_layout.py`. **Its three seat tunables,
-`UseDistanceCm`, `SeatHeightCm` and `ViewDistanceCm`, are per-instance
-`UPROPERTY`s that `place_nav_screen` sets**, so a nudge is an edit there and a
-level rebuild, not C++. Its `Reach` box sits *behind* the panel's face. A volume
+from `NAV_SCREEN` in `hauler_layout.py`. **Its two seat tunables,
+`UseDistanceCm` and `ViewDistanceCm`, are per-instance `UPROPERTY`s that
+`place_nav_screen` sets**, so a nudge is an edit there and a level rebuild, not
+C++. There is no seat height: every screen seats the body on the floor under
+its chair, as the helm does, and the sitting idle lifts the hips onto the
+chair. A `SeatHeightCm` survived that change for a while, moving nothing. Its `Reach` box sits *behind* the panel's face. A volume
 enclosing the panel blocks the channel the pointer traces on, and the screen
 draws perfectly and cannot be clicked. `DeepSpace.Ship.NavScreen` and
 `DeepSpace.UI.NavigationScreen` spawn it before `World->BeginPlay()`, as every

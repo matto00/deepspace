@@ -354,19 +354,20 @@ def place_sky(actor_sub):
 
 
 def place_nav_screen(actor_sub, ship):
-    """The chart, over the starboard desk screen (nav spec B3). The three
+    """The chart, over the starboard desk screen (nav spec B3). The two
     seat tunables are the chair playtest's knobs, per instance, so a nudge is
     this function and a level rebuild rather than C++: use_distance_cm lands
     the body on the starboard chair's centre (cockpit x 175 against the glass
-    at 301), seat_height_cm is the cushion's top, and view_distance_cm is how
-    far the eyes lean in to read. Everything else -- the panel's size, the
+    at 301; hauler_layout's NAV_SCREEN_USE_DISTANCE, from which the chair's
+    eye is placed), and view_distance_cm is how far the eyes lean in to read.
+    There is no seat height: the body sits on the floor under the chair and
+    the sitting idle lifts the hips, as at the helm. Everything else -- the panel's size, the
     widget, the reach volume -- is the class's, per ADR 0002."""
     chart = actor_sub.spawn_actor_from_class(
         unreal.ShipNavScreen, unreal.Vector(*ship.nav_screen_location),
         unreal.Rotator(0, 0, ship.nav_screen_yaw))
     chart.set_actor_label(TAG + "nav_screen")
-    chart.set_editor_property("use_distance_cm", 126.0)
-    chart.set_editor_property("seat_height_cm", 55.0)
+    chart.set_editor_property("use_distance_cm", float(L.NAV_SCREEN_USE_DISTANCE))
     chart.set_editor_property("view_distance_cm", 60.0)
     return chart
 

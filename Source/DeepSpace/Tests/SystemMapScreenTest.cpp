@@ -9,7 +9,6 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Ship/NavStart.h"
-#include "Ship/ShipConsole.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipLaptop.h"
 #include "Ship/ShipMapScreen.h"
@@ -680,8 +679,9 @@ bool FShipMapScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the laptop still zooms as you sit"), Laptop->ZoomsOnSit());
     TestFalse(TEXT("and is neither drivable seated"), Laptop->IsDrivableSeated());
     TestFalse(TEXT("nor zoomable from the chart chair"), Laptop->IsZoomableFromChartChair());
-    TestFalse(TEXT("the engineering console is no ship screen, so no seat can drive or zoom it"),
-              AShipConsole::StaticClass()->IsChildOf(AShipScreen::StaticClass()));
+    // That the engineering console, a world screen but no ship screen, is
+    // neither is behaviour, not a class fact: DeepSpace.Ship.ChartChair looks
+    // at one from the chair.
     return true;
 }
 
