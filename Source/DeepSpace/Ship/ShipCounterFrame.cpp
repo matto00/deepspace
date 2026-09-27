@@ -37,10 +37,31 @@ namespace
         TEXT("How many widths of the near field sweep past the window over one transit."),
         ECVF_Default);
 
-    TAutoConsoleVariable<float> CVarMoteFadeSpeed(
-        TEXT("ds.Sky.MoteFadeSpeed"), 2000.0f,
-        TEXT("Speed, m/s, by which the near-field motes have faded out entirely."),
+    // The dust's law is a playtest gate, not a decided default (flight-feel
+    // decision 8): three questions in play -- does the drive's first notch
+    // read as faster than cruise's top, does anything above the knee read as
+    // faster than the knee, does anything read as the fold -- with these
+    // live. Candidates: knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16}.
+    TAutoConsoleVariable<float> CVarDustKnee(
+        TEXT("ds.Sky.DustKnee"), static_cast<float>(ShipDust::DefaultKnee / 1.0e5),
+        TEXT("km/s. The dust is honest up to this speed, and a representation above it."),
         ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarDustTop(
+        TEXT("ds.Sky.DustTop"), static_cast<float>(ShipDust::DefaultDustTop / 1.0e5),
+        TEXT("km/s. The speed the dust is seen to stream at when the ship is at the drive's top."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarDustStretch(
+        TEXT("ds.Sky.DustStretch"), static_cast<float>(ShipDust::DefaultStretch),
+        TEXT("How many times its width a mote is drawn along the velocity at the drive's top; 1 at the knee."),
+        ECVF_Default);
+
+    /** cm/s from a km/s console variable. */
+    double CmPerSecond(const TAutoConsoleVariable<float>& KmPerSecond)
+    {
+        return FMath::Max(0.0f, KmPerSecond.GetValueOnGameThread()) * 1.0e5;
+    }
 
     /** Fold Value back into [-Radius, Radius). Returns true if it moved. */
     bool WrapIntoField(double& Value, double Radius)
@@ -115,6 +136,32 @@ namespace
     }
 }
 
+double ShipDust::LogFraction(double Speed, double Knee, double Top)
+{
+    const double K = FMath::Max(Knee, UE_DOUBLE_SMALL_NUMBER);
+    if (Speed <= K || Top <= K)
+    {
+        return 0.0;
+    }
+    return FMath::Clamp(FMath::Loge(Speed / K) / FMath::Loge(Top / K), 0.0, 1.0);
+}
+
+double ShipDust::SeenSpeed(double Speed, double Knee, double DustTop, double Top)
+{
+    const double V = FMath::Max(Speed, 0.0);
+    const double K = FMath::Max(Knee, UE_DOUBLE_SMALL_NUMBER);
+    if (V <= K)
+    {
+        return V;
+    }
+    return K * FMath::Pow(FMath::Max(DustTop, K) / K, LogFraction(V, K, Top));
+}
+
+double ShipDust::Stretch(double Speed, double Knee, double Top, double MaxStretch)
+{
+    return FMath::Pow(FMath::Max(MaxStretch, 1.0), LogFraction(Speed, Knee, Top));
+}
+
 AShipCounterFrame::AShipCounterFrame()
 {
     PrimaryActorTick.bCanEverTick = true;
@@ -147,6 +194,7 @@ UInstancedStaticMeshComponent* AShipCounterFrame::GetDistantStars() const { retu
 UInstancedStaticMeshComponent* AShipCounterFrame::GetNearStars() const { return NearStars; }
 UStaticMeshComponent* AShipCounterFrame::GetCourseMarker() const { return CourseMarker; }
 int32 AShipCounterFrame::GetBuiltForSerial() const { return BuiltForSerial; }
+TConstArrayView<FVector> AShipCounterFrame::GetDustField() const { return DustField; }
 double AShipCounterFrame::GetDomeRadius() const { return DistantStarRadius; }
 
 double AShipCounterFrame::GetPixelAngle() const
@@ -171,7 +219,7 @@ TArray<FString> AShipCounterFrame::FindMaterialProblems() const
     if (!DrawsWith(NearStars, SkyMaterial::StarPath))
     {
         Problems.Add(FString::Printf(
-            TEXT("NearStars draws with %s, not %s: the motes cannot fade and the course marker cannot be tinted"),
+            TEXT("NearStars draws with %s, not %s: the course marker cannot be tinted"),
             *Named(NearStars), SkyMaterial::StarPath));
     }
     return Problems;
@@ -254,7 +302,7 @@ void AShipCounterFrame::BuildDistantStars(double PixelAngle)
 void AShipCounterFrame::ScatterNearField()
 {
     NearStars->ClearInstances();
-    NearStarPositions.Reset();
+    DustField.Reset();
 
     const UShipSubsystem* Ship = UShipSubsystem::Get(this);
     if (!Ship)
@@ -263,23 +311,25 @@ void AShipCounterFrame::ScatterNearField()
     }
     const FShipFlightState& Flight = Ship->GetFlightState();
     BuiltForSerial = Ship->GetJumpSerial();
+    DustAnchor = Flight.GetUniversePosition();
 
-    // Scattered around wherever the ship happens to be, and then remembered as
-    // real universe positions: it is the conversion, not the actor, that moves
-    // them, which is what makes the parallax honest rather than a scrolling
-    // texture. Uniform in the cube, because dust has no preferred place --
-    // the one thing out here that genuinely is uniform -- and a fresh scatter
-    // after each jump, so the dust here is not the dust there.
+    // Scattered round wherever the ship happens to be, in field space: a
+    // cube in universe axes, so turning the ship turns the view of the dust
+    // and never reshuffles it. Uniform in the cube, because dust has no
+    // preferred place -- the one thing out here that genuinely is uniform --
+    // and a fresh scatter after each jump, so the dust here is not the dust
+    // there.
     FGenStream Stream(GenSeed::Derive(LocalSystem::StarfieldSeed(GetWorld(), static_cast<uint64>(StarSeed)),
                                       GenSeed::Label("sky.motes"), static_cast<uint64>(BuiltForSerial)));
     for (int32 Index = 0; Index < NearStarCount; ++Index)
     {
-        const FVector Local(
+        const FVector Offset(
             (2.0 * Stream.Unit() - 1.0) * NearFieldRadius,
             (2.0 * Stream.Unit() - 1.0) * NearFieldRadius,
             (2.0 * Stream.Unit() - 1.0) * NearFieldRadius);
-        NearStarPositions.Add(Flight.WorldToUniverse(Local));
-        NearStars->AddInstance(FTransform(FQuat::Identity, Local, FVector(NearStarScale)), true);
+        DustField.Add(Offset);
+        NearStars->AddInstance(FTransform(FQuat::Identity, Flight.UniverseDirectionToWorld(Offset), FVector(NearStarScale)),
+                               /*bWorldSpace*/ true);
     }
 }
 
@@ -325,83 +375,132 @@ void AShipCounterFrame::SyncToShip()
         BuildDistantStars(SizedForPixelAngle);
     }
 
-    // The streaks: each mote stretched along the ship's forward, most at the
-    // middle of the transit, and swept aft by a displacement that is purely
-    // for show -- the ship itself is not moving between stars any faster
-    // than it cruises. Scaling instances is the whole effect.
-    const double Progress = bInTransit ? Ship->GetTransitProgress() : 0.0;
-    const double Stretch = 1.0 + FMath::Max(0.0f, CVarStreakLength.GetValueOnGameThread()) * FMath::Sin(UE_DOUBLE_PI * Progress);
-    const double Sweep = FMath::Max(0.0f, CVarStreakSweep.GetValueOnGameThread()) * NearFieldRadius
-        * (1.0 - FMath::Cos(UE_DOUBLE_PI * Progress));
-    const FVector MoteScale(NearStarScale * Stretch, NearStarScale, NearStarScale);
-
-    for (int32 Index = 0; Index < NearStarPositions.Num(); ++Index)
-    {
-        // The ship is permanently at the world origin, so a universe position
-        // converted to world space is also its offset from the ship.
-        FVector Local = Flight.UniverseToWorld(NearStarPositions[Index]);
-
-        bool bWrapped = WrapIntoField(Local.X, NearFieldRadius);
-        bWrapped |= WrapIntoField(Local.Y, NearFieldRadius);
-        bWrapped |= WrapIntoField(Local.Z, NearFieldRadius);
-        if (bWrapped)
-        {
-            // Rewritten only on a wrap: re-deriving the universe position every
-            // frame would walk it a little further each time.
-            NearStarPositions[Index] = Flight.WorldToUniverse(Local);
-        }
-
-        // The sweep is drawn, never stored: it is not where the mote is.
-        FVector Shown = Local;
-        if (Sweep > 0.0)
-        {
-            Shown.X -= Sweep;
-            WrapIntoField(Shown.X, NearFieldRadius);
-        }
-
-        // World space, because the actor itself is rotated and the conversion
-        // has already applied that rotation -- which is also what makes the
-        // stretch lie along the ship's forward rather than the universe's.
-        // Marking the render state dirty once, on the last instance.
-        NearStars->UpdateInstanceTransform(
-            Index, FTransform(FQuat::Identity, Shown, MoteScale),
-            /*bWorldSpace*/ true,
-            /*bMarkRenderStateDirty*/ Index == NearStarPositions.Num() - 1,
-            /*bTeleport*/ true);
-    }
-
-    FadeMotes(Flight.GetSpeed(), bInTransit);
+    AdoptMoteMaterial();
+    AdvanceDust(*Ship);
+    DrawDust(*Ship);
     SyncCourseMarker(*Ship, PixelAngle);
 }
 
-void AShipCounterFrame::FadeMotes(double Speed, bool bInTransit)
+void AShipCounterFrame::AdvanceDust(const UShipSubsystem& Ship)
 {
-    if (!MoteMaterial)
+    const FShipFlightState& Flight = Ship.GetFlightState();
+    const FUniversePosition Here = Flight.GetUniversePosition();
+    // Through the chunk index, never the offsets (ADR 0007).
+    const FVector Moved = Here - DustAnchor;
+    DustAnchor = Here;
+
+    // Between stars the seen speed is not used and the field does not
+    // stream: the fold's sweep is the whole of the motion, as it always
+    // was, and whatever the ship is still shedding from the drive as the
+    // fold opens would otherwise race the dust past the streaks.
+    if (Ship.IsInTransit() || Moved.IsZero())
     {
-        if (UMaterialInterface* Authored = NearStars->GetMaterial(0))
-        {
-            float AuthoredBrightness = 1.0f;
-            if (Authored->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), AuthoredBrightness))
-            {
-                MoteBrightness = AuthoredBrightness;
-            }
-            MoteMaterial = UMaterialInstanceDynamic::Create(Authored, this);
-            NearStars->SetMaterial(0, MoteMaterial);
-        }
+        return;
     }
 
-    // Speed is shown by the nearest thing that can honestly show it. At
-    // cruise that is the motes; well before the drive has them wrapping every
-    // frame and strobing, they step aside for the planets' own parallax,
-    // which at those speeds is real. Between stars they are the streaks, and
-    // stay.
-    const double FadeSpeed = FMath::Max(1.0, CVarMoteFadeSpeed.GetValueOnGameThread() * 100.0);
-    const double Fade = bInTransit ? 1.0 : FMath::Clamp(1.0 - Speed / FadeSpeed, 0.0, 1.0);
+    // The field moves against the ship's true path -- along the nose under
+    // the drive, along cruise's slide after a turn -- by the true distance up
+    // to the knee, which is exactly the parallax of dust at universe
+    // positions, and by the seen distance above it. The ship's speed, not
+    // this frame's distance over its length, picks the scale: a placed ship
+    // has no speed, and moves the dust as far as it was moved.
+    const double Speed = Flight.GetSpeed();
+    const double Seen = ShipDust::SeenSpeed(Speed, CmPerSecond(CVarDustKnee), CmPerSecond(CVarDustTop),
+                                            Flight.GetLimits().DriveTop);
+    const FVector Advance = Speed > 0.0 ? Moved * (Seen / Speed) : Moved;
+    for (FVector& Offset : DustField)
+    {
+        Offset -= Advance;
+        WrapIntoField(Offset.X, NearFieldRadius);
+        WrapIntoField(Offset.Y, NearFieldRadius);
+        WrapIntoField(Offset.Z, NearFieldRadius);
+    }
+}
+
+void AShipCounterFrame::DrawDust(const UShipSubsystem& Ship)
+{
+    const FShipFlightState& Flight = Ship.GetFlightState();
+    const int32 Count = FMath::Min(DustField.Num(), NearStars->GetInstanceCount());
+    NearStars->SetVisibility(Count > 0);
+
+    if (Ship.IsInTransit())
+    {
+        // The streaks: each mote stretched along the ship's forward, most at
+        // the middle of the transit, and swept aft by a displacement that is
+        // purely for show -- the ship itself is not moving between stars any
+        // faster than it cruises. Exactly the formula the streaks had when
+        // the dust held universe positions, applied to where the dust is
+        // now: the mote's offset turned into ship axes and wrapped in the
+        // ship's own cube, swept, and stretched (DeepSpace.Ship.CounterFrameJump
+        // pins the shape).
+        const double Progress = Ship.GetTransitProgress();
+        const double Stretch = 1.0 + FMath::Max(0.0f, CVarStreakLength.GetValueOnGameThread()) * FMath::Sin(UE_DOUBLE_PI * Progress);
+        const double Sweep = FMath::Max(0.0f, CVarStreakSweep.GetValueOnGameThread()) * NearFieldRadius
+            * (1.0 - FMath::Cos(UE_DOUBLE_PI * Progress));
+        const FVector MoteScale(NearStarScale * Stretch, NearStarScale, NearStarScale);
+
+        for (int32 Index = 0; Index < Count; ++Index)
+        {
+            // Drawn, never stored: neither the ship-axis wrap nor the sweep
+            // is where the dust is.
+            FVector Shown = Flight.UniverseDirectionToWorld(DustField[Index]);
+            WrapIntoField(Shown.X, NearFieldRadius);
+            WrapIntoField(Shown.Y, NearFieldRadius);
+            WrapIntoField(Shown.Z, NearFieldRadius);
+            if (Sweep > 0.0)
+            {
+                Shown.X -= Sweep;
+                WrapIntoField(Shown.X, NearFieldRadius);
+            }
+
+            // World space, which is ship space -- the ship is the world
+            // origin -- so the stretch lies along the ship's forward rather
+            // than the universe's. The render state is marked dirty once, on
+            // the last instance.
+            NearStars->UpdateInstanceTransform(
+                Index, FTransform(FQuat::Identity, Shown, MoteScale),
+                /*bWorldSpace*/ true, /*bMarkRenderStateDirty*/ Index == Count - 1, /*bTeleport*/ true);
+        }
+        return;
+    }
+
+    // In flight: each mote where the dust is, through the ship's rotation,
+    // and drawn long along the true velocity above the knee. A mote's own
+    // X is stretched, so the velocity is turned onto X in universe axes and
+    // the whole thing then through the ship's rotation with the offset.
+    const FVector Velocity = Flight.GetVelocity();
+    const double Speed = Velocity.Size();
+    const double Stretch = ShipDust::Stretch(Speed, CmPerSecond(CVarDustKnee), Flight.GetLimits().DriveTop,
+                                             FMath::Max(1.0f, CVarDustStretch.GetValueOnGameThread()));
+    const FQuat Along = Stretch > 1.0 && Speed > 0.0
+        ? FQuat::FindBetweenNormals(FVector::ForwardVector, Velocity / Speed)
+        : FQuat::Identity;
+    const FQuat Drawn = Flight.GetCounterFrameTransform().GetRotation() * Along;
+    const FVector MoteScale(NearStarScale * Stretch, NearStarScale, NearStarScale);
+
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        NearStars->UpdateInstanceTransform(
+            Index, FTransform(Drawn, Flight.UniverseDirectionToWorld(DustField[Index]), MoteScale),
+            /*bWorldSpace*/ true, /*bMarkRenderStateDirty*/ Index == Count - 1, /*bTeleport*/ true);
+    }
+}
+
+void AShipCounterFrame::AdoptMoteMaterial()
+{
     if (MoteMaterial)
     {
-        MoteMaterial->SetScalarParameterValue(SkyMaterial::Brightness, static_cast<float>(MoteBrightness * Fade));
+        return;
     }
-    NearStars->SetVisibility(Fade > 0.0);
+    // A runtime copy, left at the material's authored brightness at every
+    // speed: the dust is shown whatever the ship does (flight-feel decision
+    // 8), so the look is tuned where the material is authored. The copy
+    // stays because the course marker is tinted from its parent.
+    if (UMaterialInterface* Authored = NearStars->GetMaterial(0))
+    {
+        MoteMaterial = UMaterialInstanceDynamic::Create(Authored, this);
+        NearStars->SetMaterial(0, MoteMaterial);
+    }
 }
 
 void AShipCounterFrame::SyncCourseMarker(const UShipSubsystem& Ship, double PixelAngle)

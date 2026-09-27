@@ -94,14 +94,30 @@ namespace
      * pi over the Sun's solid angle at 1 AU, about 46,000 -- and at the
      * galley's exposure that is a pixel value past 65,504, the ceiling of the
      * half-float scene colour, where it becomes infinity and the bloom goes
-     * with it. 1,000 is blinding under bloom and more than a decade under
-     * the ceiling. The projection's own default of 1 would draw the Sun three
-     * times as bright as a planet, which is not the brightest thing in the
-     * game.
+     * with it. 1,000 is blinding under bloom and puts a Sun more than a
+     * decade under the ceiling, and the hottest star, held at
+     * SkyProjection::MaxStarWarmth, under half of it. The projection's own
+     * default of 1 would draw the Sun three times as bright as a planet,
+     * which is not the brightest thing in the game. Stays 1,000 until the
+     * developer's verdict on the glare (flight-feel decision 9).
      */
     TAutoConsoleVariable<float> CVarStarSurface(
         TEXT("ds.Sky.StarSurface"), 1000.0f,
-        TEXT("A resolved Sun's surface brightness, in units of a white surface at 1 AU. Honest is ~46,000."));
+        TEXT("A resolved Sun's surface brightness, in units of a white surface at 1 AU. Honest is ~46,000. ")
+        TEXT("Candidates for the glare verdict: 1000, 700, 450."));
+
+    /**
+     * TEMPORARY, until the developer's verdict on the star's glare
+     * (flight-feel decision 9): the exponent on a star's (T / T_sun)^4. 1 is
+     * the ruled law, honest to SkyProjection::MaxStarWarmth; 0.5 is the
+     * compressed T^2 the sky shipped with. Both live, so the two can be put
+     * side by side in play. Once judged, the chosen law is written without
+     * this and it is deleted.
+     */
+    TAutoConsoleVariable<float> CVarStarWarmthGamma(
+        TEXT("ds.Sky.StarWarmthGamma"), 1.0f,
+        TEXT("TEMPORARY. A star's surface goes as ((T / T_sun)^4)^this, capped at 8x a Sun's: 1 honest (the ruled law), ")
+        TEXT("0.5 the old compressed T^2."));
 
     /** The faintest background star, so that it is just there against black
      *  at the galley's exposure and the brightest -- 400 times its flux, 20
@@ -175,6 +191,7 @@ namespace
         Params.FluxGamma = CVarFluxGamma.GetValueOnGameThread();
         Params.MinPointPixels = AShipSky::PointPixels();
         Params.StarSurface = CVarStarSurface.GetValueOnGameThread();
+        Params.StarWarmthGamma = FMath::Max(0.0f, CVarStarWarmthGamma.GetValueOnGameThread());
         return Params;
     }
 }

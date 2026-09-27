@@ -77,6 +77,12 @@ double SkyProjection::RenderedFloor(double RadiusCm, const FSkyViewParams& Param
     return FMath::Max(Params.MinRenderedAltitude, Params.MinRenderedAltitudeOfRadius * FMath::Max(RadiusCm, 0.0));
 }
 
+double SkyProjection::StarWarmth(double TemperatureK, double Gamma)
+{
+    const double Warmth = TemperatureK / UniverseUnits::SolarTemperatureK;
+    return FMath::Min(Compress(Warmth * Warmth * Warmth * Warmth, Gamma), MaxStarWarmth);
+}
+
 double SkyProjection::Compress(double Ratio, double Gamma)
 {
     return Ratio > 0.0 ? FMath::Pow(Ratio, Gamma) : 0.0;
@@ -142,8 +148,11 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
         // and its star, never on the ship.
         if (Body.Kind == ESkyBodyKind::Star)
         {
-            const double Warmth = Body.TemperatureK / UniverseUnits::SolarTemperatureK;
-            View.SurfaceBrightness = Params.StarSurface * Compress(Warmth * Warmth * Warmth * Warmth, Params.FluxGamma);
+            // Honest to the ceiling, not compressed like irradiance (flight-
+            // feel decision 9, amending sky decision 2): the arrival standoff
+            // equalises irradiance, so honest surfaces make every sun's
+            // arrival glare alike.
+            View.SurfaceBrightness = Params.StarSurface * StarWarmth(Body.TemperatureK, Params.StarWarmthGamma);
             View.Phase = 1.0;
         }
         else if (Star)

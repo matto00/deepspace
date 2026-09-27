@@ -1,8 +1,13 @@
+#include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
 #include "Tests/SkyTestFixtures.h"
+#include "Universe/GalaxyGenerator.h"
+#include "Universe/UniverseUnits.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -709,6 +714,141 @@ bool FSkyEclipseTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("each moon hides a real share (%.4f, %.4f)"), West, East), West > 0.05 && East > 0.05);
         TestTrue(FString::Printf(TEXT("and together they hide both shares, %.4f"), 1.0 - Frame.SunVisibleFraction),
             FMath::IsNearlyEqual(1.0 - Frame.SunVisibleFraction, West + East, 1e-9));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FSkyStarWarmthTest,
+    "DeepSpace.Sky.StarWarmth",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * The local star's surface (flight-feel decision 9): honest T^4 to a ceiling
+ * of 8x a Sun's, so that the arrival standoff, which equalises irradiance,
+ * makes every sun's arrival glare alike -- and never so honest that the
+ * hottest star finds the half-float ceiling, nor so dim that a disc loses
+ * to a planet in its own sky.
+ */
+bool FSkyStarWarmthTest::RunTest(const FString& Parameters)
+{
+    const double Sun = UniverseUnits::SolarTemperatureK;
+    const auto Fourth = [Sun](double TemperatureK) { return FMath::Pow(TemperatureK / Sun, 4.0); };
+
+    // Honest below the ceiling, from the coolest red dwarf to just under it.
+    {
+        double Worst = 0.0;
+        for (const double T : { 2300.0, 3200.0, 4400.0, 5772.0, 7000.0, 9000.0, 9600.0 })
+        {
+            Worst = FMath::Max(Worst, RelativeError(SkyProjection::StarWarmth(T), Fourth(T)));
+        }
+        TestTrue(FString::Printf(TEXT("below the ceiling a star's surface is (T / T_sun)^4, honest (worst %.2e)"), Worst), Worst < 1e-12);
+        TestEqual(TEXT("a Sun is 1"), SkyProjection::StarWarmth(Sun), 1.0);
+        TestEqual(TEXT("and 0 K is dark"), SkyProjection::StarWarmth(0.0), 0.0);
+    }
+
+    // The ceiling: 8x, reached at 1.68 times the Sun's temperature and held
+    // above it, continuously.
+    {
+        const double AtCeiling = Sun * FMath::Pow(SkyProjection::MaxStarWarmth, 0.25);
+        TestEqual(TEXT("the ceiling is 8x a Sun"), SkyProjection::MaxStarWarmth, 8.0);
+        TestTrue(FString::Printf(TEXT("reached at %.0f K"), AtCeiling), FMath::IsNearlyEqual(AtCeiling, 9707.0, 5.0));
+        TestTrue(TEXT("continuous there"),
+                 FMath::IsNearlyEqual(SkyProjection::StarWarmth(AtCeiling * (1.0 - 1e-9)), 8.0, 1e-6));
+        bool bHeld = true;
+        for (const double T : { AtCeiling * 1.001, 12000.0, Sun * FMath::Pow(41.0, 0.25), 30000.0, 45000.0 })
+        {
+            bHeld &= SkyProjection::StarWarmth(T) == SkyProjection::MaxStarWarmth;
+        }
+        TestTrue(TEXT("and every hotter star is held at it, differing only in colour"), bHeld);
+    }
+
+    // The temporary side-by-side: gamma 0.5 is the compressed T^2 the sky
+    // shipped with, which is what ds.Sky.StarWarmthGamma 0.5 puts back.
+    TestTrue(TEXT("at gamma 0.5 a red dwarf is the old compressed T^2"),
+             FMath::IsNearlyEqual(SkyProjection::StarWarmth(3200.0, 0.5), FMath::Square(3200.0 / Sun), 1e-12));
+    TestTrue(TEXT("the ruled law is the projection's default"), FSkyViewParams().StarWarmthGamma == 1.0);
+
+    // Through Project, with the sky's own knobs.
+    const auto Knob = [](const TCHAR* Name) { return static_cast<double>(IConsoleManager::Get().FindConsoleVariable(Name)->GetFloat()); };
+    FSkyViewParams Params;
+    Params.StarSurface = Knob(TEXT("ds.Sky.StarSurface"));
+    Params.FluxGamma = Knob(TEXT("ds.Sky.FluxGamma"));
+    {
+        FSkySystem Dwarf;
+        FSkyBody& Star = Dwarf.Bodies.Add_GetRef(MakeStar(FUniversePosition()));
+        Star.TemperatureK = 3200.0;
+        const FSkyFrame Frame = SkyProjection::Project(Dwarf, FUniversePosition() + FVector(AU, 0.0, 0.0), Params);
+        TestTrue(TEXT("Project draws a red dwarf's surface at StarSurface x (T / T_sun)^4"),
+                 FMath::IsNearlyEqual(Frame.Bodies[0].SurfaceBrightness, Params.StarSurface * Fourth(3200.0),
+                                      1e-9 * Params.StarSurface));
+    }
+
+    // The test seed's first sectors: every star at least twenty times the
+    // brightest world in its own sky, and the hottest under half of
+    // half-float's maximum at the default knobs. Honest, the dimmest star in
+    // the 10,000-system corpus is 30 times; twenty leaves the priors room.
+    {
+        const FGalaxyGenerator Galaxy(20260925, FGenPriors{});
+        const double SceneScale = Knob(TEXT("ds.Sky.Radiance")) * FMath::Pow(2.0, ShipSky::ManualExposureBias(Knob(TEXT("ds.Sky.Exposure"))));
+        int32 Systems = 0;
+        double LeastRatio = TNumericLimits<double>::Max();
+        FString LeastName;
+        double Hottest = 0.0;
+        double HottestScene = 0.0;
+        for (int32 X = -2; X <= 2; ++X)
+        {
+            for (int32 Y = -2; Y <= 2; ++Y)
+            {
+                for (int32 Z = -2; Z <= 2; ++Z)
+                {
+                    for (const FStarSystemStub& Stub : Galaxy.GenerateSector(FInt64Vector(X, Y, Z)))
+                    {
+                        const FStarSystem System = Galaxy.GenerateSystem(Stub);
+                        const FSkySystem Sky = LocalSystem::Here(TOptional<FStarSystem>(System));
+                        const int32 StarIndex = Sky.Bodies.IndexOfByPredicate([](const FSkyBody& Body) { return Body.Kind == ESkyBodyKind::Star; });
+                        if (StarIndex == INDEX_NONE)
+                        {
+                            continue;
+                        }
+                        ++Systems;
+                        const FSkyFrame Frame = SkyProjection::Project(Sky, Sky.Bodies[StarIndex].Position + FVector(0.0, 0.0, AU), Params);
+                        const double StarSurface = Frame.Bodies[StarIndex].SurfaceBrightness;
+                        double BrightestWorld = 0.0;
+                        for (int32 Index = 0; Index < Frame.Bodies.Num(); ++Index)
+                        {
+                            if (Index != StarIndex)
+                            {
+                                BrightestWorld = FMath::Max(BrightestWorld, Frame.Bodies[Index].SurfaceBrightness);
+                            }
+                        }
+                        if (BrightestWorld > 0.0 && StarSurface / BrightestWorld < LeastRatio)
+                        {
+                            LeastRatio = StarSurface / BrightestWorld;
+                            LeastName = FString::Printf(TEXT("%s (%.0f K)"), *Stub.Name, Sky.Bodies[StarIndex].TemperatureK);
+                        }
+                        if (Sky.Bodies[StarIndex].TemperatureK > Hottest)
+                        {
+                            Hottest = Sky.Bodies[StarIndex].TemperatureK;
+                            HottestScene = StarSurface * SceneScale;
+                        }
+                    }
+                }
+            }
+        }
+        TestTrue(FString::Printf(TEXT("the first 125 sectors hold systems to judge (%d)"), Systems), Systems > 40);
+        TestTrue(FString::Printf(TEXT("every star is at least 20x the brightest world in its sky: least %.1fx, %s"), LeastRatio, *LeastName),
+                 LeastRatio >= 20.0);
+        TestTrue(FString::Printf(TEXT("the hottest star there (%.0f K) is %.0f in scene colour, under half of 65,504"), Hottest, HottestScene),
+                 HottestScene > 0.0 && HottestScene < 0.5 * 65504.0);
+
+        // And the hottest a star can be, whatever the priors make: the
+        // ceiling is what holds it.
+        FSkySystem Blue;
+        FSkyBody& Star = Blue.Bodies.Add_GetRef(MakeStar(FUniversePosition()));
+        Star.TemperatureK = 45000.0;
+        const double Scene = SkyProjection::Project(Blue, FUniversePosition() + FVector(AU, 0.0, 0.0), Params).Bodies[0].SurfaceBrightness * SceneScale;
+        TestTrue(FString::Printf(TEXT("a 45,000 K star is %.0f in scene colour, under half of 65,504"), Scene), Scene < 0.5 * 65504.0);
     }
     return true;
 }

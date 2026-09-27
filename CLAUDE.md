@@ -426,6 +426,11 @@ on any other, and on any `SkyLight`, `SkyAtmosphere`, cloud or fog. When a
 planet crosses the sun, the deck darkens by the fraction covered
 (`SunVisibleFraction`; the eclipse).
 
+**A star's surface is honest to a ceiling**: `ds.Sky.StarSurface` x
+min((T / T_sun)^4, 8) (`SkyProjection::StarWarmth`, flight-feel decision 9).
+The 8x ceiling, a star of about 9,700 K, is also the half-float guard:
+hotter stars differ only in colour.
+
 **The bodies are drawn with `SM_SkyBody`, never the engine Sphere.** The
 Sphere is 32 segments round, and its polygon showed on the limb from
 10,000 km down -- where the limb's curvature is how near the world is.
@@ -729,7 +734,8 @@ tests that assert it.
 | `ds.Drive.Tau` | 15 s | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveTau` (`ShipFlightState.h`) |
 | `ds.Drive.Floor` | 100 km | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveFloor` (`ShipFlightState.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
-| `ds.Sky.MoteFadeSpeed` | 2000 m/s | `ShipCounterFrame.cpp` |
+| `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |
+| `ds.Sky.StarWarmthGamma` | 1 (honest T^4) | `ShipSky.cpp` -- TEMPORARY: 0.5 is the old compressed T^2; deleted with its test case once the glare is judged |
 | `ds.Sky.Exposure`, `.ExposureMode`, `.ExposureRange` | 0.7 (estimate), 1, 1.5 | `ShipSky.cpp` |
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |

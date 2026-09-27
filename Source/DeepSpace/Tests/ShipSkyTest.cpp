@@ -370,6 +370,32 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         }
     }
 
+    // TEMPORARY, deleted with ds.Sky.StarWarmthGamma: the developer's A/B
+    // between the compressed and the honest glare reaches the frame the sky
+    // actually projects, not only SkyProjection's own arithmetic. A red
+    // dwarf, where the two laws differ by a factor of three.
+    {
+        FSkySystem Dwarf = Fixture;
+        Dwarf.Bodies[SkyTestFixtures::StarIndex].TemperatureK = 3200.0;
+        const double Warmth = 3200.0 / UniverseUnits::SolarTemperatureK;
+        const double Surface = CVarFloat(TEXT("ds.Sky.StarSurface"));
+        {
+            FScopedCVar Compressed(TEXT("ds.Sky.StarWarmthGamma"), 0.5f);
+            Sky->DrawFrom(Dwarf);
+            const double DrawnSurface = Sky->GetLastFrame().Bodies[SkyTestFixtures::StarIndex].SurfaceBrightness;
+            TestTrue(FString::Printf(TEXT("at StarWarmthGamma 0.5 the sky draws a 3200 K star at StarSurface x (T / T_sun)^2 (%.4g)"), DrawnSurface),
+                FMath::IsNearlyEqual(DrawnSurface, Surface * FMath::Square(Warmth), 1e-6 * Surface));
+        }
+        {
+            FScopedCVar Honest(TEXT("ds.Sky.StarWarmthGamma"), 1.0f);
+            Sky->DrawFrom(Dwarf);
+            const double DrawnSurface = Sky->GetLastFrame().Bodies[SkyTestFixtures::StarIndex].SurfaceBrightness;
+            TestTrue(FString::Printf(TEXT("and at 1, at StarSurface x (T / T_sun)^4 (%.4g)"), DrawnSurface),
+                FMath::IsNearlyEqual(DrawnSurface, Surface * FMath::Square(FMath::Square(Warmth)), 1e-6 * Surface));
+        }
+        Sky->DrawFrom(Fixture);
+    }
+
     // Turned, the universe turns: the proxies, the sun and the planets'
     // light all swing with the counter-frame. The ship itself is never
     // written.
