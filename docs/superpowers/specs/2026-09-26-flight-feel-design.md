@@ -445,8 +445,28 @@ its lever from there under inertia. Every case in it is pinned
 
 From 1 c the spool takes about six seconds and cruise's braking five more.
 
-**Engaging the drive starts p at the ship's present forward speed.** Neither
-toggle has a frame in which the speed jumps.
+**Engaging the drive starts p at the ship's present forward speed.** In
+forward flight neither toggle has a frame in which the speed jumps.
+
+*Known edge (Track A review, 2026-09-26).* p starts from `max(0, v . nose)`
+and the drive sets its velocity straight along the nose, so whatever a
+cruising ship had astern or sideways is gone in the first substep: engaged
+while backing at 85 m/s, the speed changes by about 106 m/s in one substep;
+engaged while sliding sideways at 85 m/s with the nose turned 90 degrees, the
+ship stops dead. Both are faster than cruise's 40 m/s^2. It is left as it is:
+the drive is engaged from a forward cruise in every case play has shown, and
+the fix -- p from `|v|`, with the velocity's direction eased onto the nose --
+is a second ease with its own feel to judge. If a playtest ever notices, that
+is the fix.
+
+**While spooling down, the hiss and the hold read the spool, not cruise's
+lever** (Track A review). Cruise's lever is live from the press of F, and is
+often STOP, or STOP after X, while the ship is still easing down from 1 c for
+six seconds. So the hum's lever term is the larger of the drive's fading
+travel and cruise's lever, and a hold during the spool is measured against
+the speed the spool began from: a ship that sounds stopped, or a HUD that
+says HOLDING OFF by nothing, while it is still decelerating, is the change of
+speed not being felt.
 
 **Every fold is an all stop, and every jump arrives at rest.** On
 `TransitBegan` both levers go to STOP, in the same case that already spends
@@ -1304,9 +1324,14 @@ decisions 2 and 8 get an amendment note pointing here.
   range; the gate in decision 8 asks the question, and the motion line and
   the target's distance carry the rest.
 - **Sub-frame taps and Enhanced Input.** `Started` on a Boolean action should
-  fire for a press released inside the same frame; `FlightInput` injects one
-  to prove it. If it does not, the fallback is `InputComponent->BindKey` on
-  the two keys, whose pressed events are counted per event, for taps only.
+  fire for a press released inside the same frame. *Left to playtest* (Track
+  A review, 2026-09-26): `FlightInput` proves only that a press the pawn has
+  counted is one notch -- it calls `TapLever` and `HoldLever` directly -- and
+  the headless `-nullrhi` suite has no local player through whose
+  `UEnhancedPlayerInput` a key could be injected. The playtest check is a
+  quick tap of Shift under the drive: one notch, every time. If it does not,
+  the fallback is `InputComponent->BindKey` on the two keys, whose pressed
+  events are counted per event, for taps only.
 - **HOLDING OFF flickers** where a turn hovers at the 5% threshold against
   the lever. Hysteresis is one more constant if seen.
 - **Honest warmth changes three suns in four.** Red dwarfs get dimmer and,

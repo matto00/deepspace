@@ -21,10 +21,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 /**
  * The altitude corner: how far the nearest surface is, whose it is, and
- * whether the drive has settled as close as it goes. The developer could
- * not tell whether they were near enough to land; this is the line that
- * says, so every unit is checked either side of where it hands over, and
- * the floor's words either side of its band.
+ * whether the ship is held as low as it goes. The developer could not tell
+ * whether they were near enough to land; this is the line that says, so
+ * every unit is checked either side of where it hands over, and the floor's
+ * words are the flight state's own hold.
  */
 bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
 {
@@ -66,53 +66,6 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("held at the floor, it says so"), Line(104.0 * Km, false, true), FString(TEXT("104 KM ABOVE Kessa IV")) + Tag);
     TestEqual(TEXT("the edge has a floor too"), Line(100.0 * Km, true, true), FString(TEXT("100 KM TO THE EDGE")) + Tag);
 
-    // -- Whether the drive holds the ship there ------------------------------
-    // Not a height: the drive engaged, its lever toward the surface, and its
-    // room within the band. A world below -Z, so the surface falls away +Z.
-    {
-        const double Floor = 100.0 * Km;
-        const double Band = 0.05;
-        const FVector Away = FVector::UpVector;
-        const FQuat NoseDown = FRotationMatrix::MakeFromX(-FVector::UpVector).ToQuat();
-        const FQuat NoseUp = FRotationMatrix::MakeFromX(FVector::UpVector).ToQuat();
-        const auto Holds = [&](double SurfaceCm, bool bDrive, double Throttle, const FQuat& Nose)
-        {
-            FShipFlightState Flight;
-            FShipFlightLimits Limits = Flight.GetLimits();
-            Limits.DriveFloor = Floor;
-            Flight.SetLimits(Limits);
-            Flight.SetUniverseTransform(FUniversePosition(), Nose);
-            FShipFlightCommand Command;
-            Command.bDrive = bDrive;
-            Command.Throttle = Throttle;
-            Flight.SetCommand(Command);
-            return UShipHUDWidget::DriveHoldsAtFloor(Flight, SurfaceCm, Away, Band);
-        };
-        TestTrue(TEXT("settling onto the floor, nose down, the drive holds it"), Holds(104.0 * Km, true, 1.0, NoseDown));
-        TestTrue(TEXT("and at it"), Holds(Floor, true, 1.0, NoseDown));
-        TestTrue(TEXT("and under it, where the drive has no room at all"), Holds(80.0 * Km, true, 1.0, NoseDown));
-        TestFalse(TEXT("above the band the drive is still closing"), Holds(106.0 * Km, true, 1.0, NoseDown));
-        TestFalse(TEXT("at the height with the drive off, nothing holds it"), Holds(Floor, false, 1.0, NoseDown));
-        TestFalse(TEXT("the drive on and the lever at rest, nothing is pushing"), Holds(Floor, true, 0.0, NoseDown));
-        TestFalse(TEXT("leaving, nose up, it is passing the floor, not held at it"), Holds(Floor, true, 1.0, NoseUp));
-        TestTrue(TEXT("backing down onto it, nose up and the lever reversed, is held"), Holds(Floor, true, -1.0, NoseUp));
-        TestTrue(TEXT("a heading that grazes the surface still closes, and is held"),
-            Holds(Floor, true, 1.0, FRotationMatrix::MakeFromX(FVector(1.0, 0.0, -0.05)).ToQuat()));
-        TestFalse(TEXT("with no floor there is no floor to be at"), [&]
-        {
-            FShipFlightState Flight;
-            FShipFlightLimits Limits = Flight.GetLimits();
-            Limits.DriveFloor = 0.0;
-            Flight.SetLimits(Limits);
-            Flight.SetUniverseTransform(FUniversePosition(), NoseDown);
-            FShipFlightCommand Command;
-            Command.bDrive = true;
-            Command.Throttle = 1.0;
-            Flight.SetCommand(Command);
-            return UShipHUDWidget::DriveHoldsAtFloor(Flight, 0.0, Away, Band);
-        }());
-    }
-
     // -- Asked of the ship, in a real system ---------------------------------
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("HUDAltitudeTestWorld"));
     FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
@@ -145,20 +98,29 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
                 LocalSystem::NearestSurfaceDistance(LocalSystem::Current(World), Ship->GetFlightState().GetUniversePosition()) / Km,
                 250.0, 1.0e-3);
 
-            // The words follow the drive, not the height. At the floor with
-            // the drive off, only the height; with a pilot's drive on and the
-            // nose on the world, the drive is what holds the ship there.
-            const double ShipFloor = Ship->GetFlightState().GetLimits().DriveFloor;
-            const FString AtFloor = PlaceAt(ShipFloor + 1.0 * Km);
-            TestFalse(TEXT("at the floor's height with the drive off, no floor words"), AtFloor.EndsWith(Tag));
-
+            // The words follow the flight state's hold, not the height: the
+            // ship on the floor, the nose into it, the lever above STOP. At
+            // the floor's height with the lever at STOP, only the height.
+            const double ShipFloor = UShipSubsystem::FloorFor(Here.Bodies[World0]);
             APawn* Pilot = World->SpawnActor<APawn>();
             Ship->SetPilot(Pilot);
-            Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
+            const auto Settle = [&](int32 Frames)
+            {
+                for (int32 Frame = 0; Frame < Frames; ++Frame)
+                {
+                    Ship->Tick(1.0f / 30.0f);
+                }
+                return UShipHUDWidget::AltitudeLineText(*Ship).ToString();
+            };
+            PlaceAt(ShipFloor + 1.0 * Km);
+            TestFalse(TEXT("at the floor's height with the lever at STOP, no floor words"), Settle(1).EndsWith(Tag));
+
             Ship->SetDriveEngaged(Pilot, true);
-            TestTrue(TEXT("with the drive on and the nose on the world, the corner says it is the floor"),
-                UShipHUDWidget::AltitudeLineText(*Ship).ToString().EndsWith(Tag));
-            TestFalse(TEXT("but not from 250 km, where the drive is still closing"), PlaceAt(250.0 * Km).EndsWith(Tag));
+            Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+            TestTrue(TEXT("with the drive's lever up and the nose on the world, settled onto the floor, the corner says so"),
+                Settle(20 * 30).EndsWith(Tag));
+            PlaceAt(250.0 * Km);
+            TestFalse(TEXT("but not from 250 km, where the ship is still coming down"), Settle(1).EndsWith(Tag));
 
             // Turned away from it at the floor, the ship is leaving.
             const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
@@ -166,9 +128,9 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             if (TestTrue(TEXT("a placement at the floor"), Placement.IsSet()))
             {
                 Ship->PlaceShip(Placement->Position, Placement->Orientation * FQuat(FVector::UpVector, UE_DOUBLE_PI));
-                TestFalse(TEXT("nose away from the world at the floor, it is leaving, not held"),
-                    UShipHUDWidget::AltitudeLineText(*Ship).ToString().EndsWith(Tag));
+                TestFalse(TEXT("nose away from the world at the floor, it is leaving, not held"), Settle(1).EndsWith(Tag));
             }
+            Ship->AllStop(Pilot);
 
             // Asked for only its surfaces: the same line from the system
             // without its neighbours as from the one with them.

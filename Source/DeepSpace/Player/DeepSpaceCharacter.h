@@ -111,16 +111,38 @@ public:
                                            EAspectRatioAxisConstraint PlayerConstraint,
                                            const UCameraComponent& Camera);
 
-    /** The seam the input handlers go through, and what tests drive: held
-     *  attitude -1..1 per body axis, and throttle as a rate, not a position. */
-    void SetFlightInput(const FVector& Attitude, float ThrottleRate);
+    /** The seam the attitude handlers go through, and what tests drive:
+     *  held attitude, -1..1 per body axis. */
+    void SetFlightInput(const FVector& Attitude);
 
-    /** The lever's position, -1..1. */
-    float GetThrottle() const { return Throttle; }
+    /**
+     * A lever key pressed (Direction +1 is Shift, -1 is Ctrl), counted as a
+     * press and not read from a level, so a press released inside one frame
+     * is still one notch (flight-feel decision 3). What IA_LeverUp and
+     * IA_LeverDown's Started do; public so a test can tap without an input
+     * stack. Nothing is held by it.
+     */
+    void TapLever(int32 Direction);
+
+    /** Which lever key is held: +1 Shift, -1 Ctrl, 0 neither. What their
+     *  Triggered and Completed do; public for the tests. */
+    void HoldLever(int32 Direction);
 
     /** What the drive key does, exposed so a test can press it without an
      *  input stack. */
     void PressDrive() { ToggleDrive(); }
+
+    /** What the stop key does (X): all stop, both levers. */
+    void PressStop();
+
+    /**
+     * What Tab does (IA_CycleTarget): the next world in the system as the
+     * target, while the map is zoomed at the chart chair (the system map
+     * spec's decision 13). Bound now, with the lever actions, so the
+     * character's Blueprint is recompiled once for all the new input; it does
+     * nothing until the zoomed map exists to give it meaning.
+     */
+    void CycleTarget();
 
     /**
      * True when the pointer is live and over something on a ship screen.
@@ -251,27 +273,34 @@ protected:
     TObjectPtr<UInputAction> AttitudeAction;
 
     /**
-     * Held to move the throttle, not to set it: the flight command's throttle
-     * is persistent (set and leave), so this is a rate. +1 opens, -1 closes.
+     * The live lever's keys (Shift up, Ctrl down), Boolean: a press is
+     * counted on Started, and the key's being held on Triggered and
+     * Completed. Under the drive a press is one notch and a hold repeats; in
+     * cruise a hold sweeps and a fresh press leaves the detent at zero. The
+     * levers themselves are the ship's (FShipFlightCommand), not the pawn's:
+     * this only says what the hands are doing. See Tools/setup_flight_input.py.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Input")
-    TObjectPtr<UInputAction> ThrottleAction;
+    TObjectPtr<UInputAction> LeverUpAction;
+
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> LeverDownAction;
 
     /**
-     * Pressed to toggle the in-system drive (F): a second lever beside the
-     * throttle, which with the drive on closes a tenth of the distance to
-     * the nearest surface every 1.5 s at full travel. Like the throttle it
-     * stays where it is left, so an approach can be set and walked away
-     * from. See Tools/setup_flight_input.py.
+     * Pressed to toggle which lever is live (F): the drive's or cruise's.
+     * Each keeps its own setting across the toggle, so the speed F goes to is
+     * the one left there. See Tools/setup_flight_input.py.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputAction> DriveAction;
 
-    /** How fast held throttle input sweeps the throttle, fraction per second.
-     *  Four seconds lever-stop to lever-stop: slow enough to settle on a
-     *  cruise by feel rather than by tapping. */
-    UPROPERTY(EditDefaultsOnly, Category = "Flight")
-    float ThrottleSweepRate = 0.5f;
+    /** Pressed for all stop (X): both levers to STOP. */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> StopAction;
+
+    /** Pressed to cycle the target (Tab), on the zoomed map; see CycleTarget. */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> CycleTargetAction;
 
     /** How far the view may turn from the seat's facing while seated, degrees. */
     UPROPERTY(EditDefaultsOnly, Category = "Seat")
@@ -297,15 +326,21 @@ private:
     void ToggleCrouch();
     void SetAttitudeInput(const FInputActionValue& Value);
     void ClearAttitudeInput(const FInputActionValue& Value);
-    void SetThrottleInput(const FInputActionValue& Value);
-    void ClearThrottleInput(const FInputActionValue& Value);
+    void PressLeverUp() { TapLever(1); }
+    void PressLeverDown() { TapLever(-1); }
+    void HoldLeverUp() { bLeverUpHeld = true; }
+    void ReleaseLeverUp() { bLeverUpHeld = false; }
+    void HoldLeverDown() { bLeverDownHeld = true; }
+    void ReleaseLeverDown() { bLeverDownHeld = false; }
 
     /** Flips the drive. Refused by the subsystem unless we are the pilot. */
     void ToggleDrive();
 
-    /** Sweeps the throttle and hands the ship this frame's intent. Refused by
-     *  the subsystem unless we are the pilot, which is the only gate. */
-    void PushFlightCommand(float DeltaSeconds);
+    /** Hands the ship what the helm's hands did this frame, once, and zeroes
+     *  the press counts. Refused by the subsystem unless we are the pilot,
+     *  which is the only gate; a non-pilot's presses are dropped, never
+     *  saved up for when they sit down. */
+    void PushHelmInput();
 
     /** Sets MaxWalkSpeed from the sprint request and the movement rules. */
     void UpdateWalkSpeed();
@@ -383,10 +418,11 @@ private:
     /** Held attitude input, -1..1 per body axis; zero when released. */
     FVector AttitudeInput = FVector::ZeroVector;
 
-    /** Held throttle input, -1..1; a rate, see ThrottleAction. */
-    float ThrottleInput = 0.0f;
-
-    /** The lever's position, -1..1. Survives standing up: a cruise you set and
-     *  walked away from is the point (FShipFlightState::ReleaseAttitude). */
-    float Throttle = 0.0f;
+    /** Whether each lever key is down, and how many times each was pressed
+     *  since the last hand-over. The hands, not the levers: the levers are
+     *  the ship's. */
+    bool bLeverUpHeld = false;
+    bool bLeverDownHeld = false;
+    int32 LeverUpPresses = 0;
+    int32 LeverDownPresses = 0;
 };

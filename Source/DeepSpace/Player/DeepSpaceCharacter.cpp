@@ -222,7 +222,7 @@ void ADeepSpaceCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     UpdateWalkSpeed();
-    PushFlightCommand(DeltaSeconds);
+    PushHelmInput();
     PlaceCamera(DeltaSeconds, GetViewRotation());
     UpdateFocusedInteractable();
     UpdatePointer();
@@ -338,14 +338,34 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
         Input->BindAction(AttitudeAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::SetAttitudeInput);
         Input->BindAction(AttitudeAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ClearAttitudeInput);
     }
-    if (ThrottleAction)
+    // Started counts the press; Triggered and Completed say whether the key
+    // is down. Counting presses rather than reading a level is what keeps a
+    // tap released inside one frame from being lost (flight-feel decision 3).
+    if (LeverUpAction)
     {
-        Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::SetThrottleInput);
-        Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ClearThrottleInput);
+        Input->BindAction(LeverUpAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressLeverUp);
+        Input->BindAction(LeverUpAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::HoldLeverUp);
+        Input->BindAction(LeverUpAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleaseLeverUp);
+        Input->BindAction(LeverUpAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleaseLeverUp);
+    }
+    if (LeverDownAction)
+    {
+        Input->BindAction(LeverDownAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressLeverDown);
+        Input->BindAction(LeverDownAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::HoldLeverDown);
+        Input->BindAction(LeverDownAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleaseLeverDown);
+        Input->BindAction(LeverDownAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleaseLeverDown);
     }
     if (DriveAction)
     {
         Input->BindAction(DriveAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::ToggleDrive);
+    }
+    if (StopAction)
+    {
+        Input->BindAction(StopAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressStop);
+    }
+    if (CycleTargetAction)
+    {
+        Input->BindAction(CycleTargetAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::CycleTarget);
     }
 }
 
@@ -359,44 +379,73 @@ void ADeepSpaceCharacter::ToggleDrive()
     }
 }
 
-void ADeepSpaceCharacter::SetFlightInput(const FVector& Attitude, float ThrottleRate)
+void ADeepSpaceCharacter::PressStop()
+{
+    if (UShipSubsystem* Ship = UShipSubsystem::Get(this))
+    {
+        Ship->AllStop(this);
+    }
+}
+
+void ADeepSpaceCharacter::CycleTarget()
+{
+    // The zoomed map at the chart chair is what gives Tab a meaning (the
+    // system map spec's decision 13), and neither exists yet. Deliberately
+    // empty, and deliberately bound: the key reaches here already.
+}
+
+void ADeepSpaceCharacter::SetFlightInput(const FVector& Attitude)
 {
     AttitudeInput = Attitude.BoundToBox(FVector(-1.0), FVector(1.0));
-    ThrottleInput = FMath::Clamp(ThrottleRate, -1.0f, 1.0f);
+}
+
+void ADeepSpaceCharacter::TapLever(int32 Direction)
+{
+    if (Direction > 0)
+    {
+        ++LeverUpPresses;
+    }
+    else if (Direction < 0)
+    {
+        ++LeverDownPresses;
+    }
+}
+
+void ADeepSpaceCharacter::HoldLever(int32 Direction)
+{
+    bLeverUpHeld = Direction > 0;
+    bLeverDownHeld = Direction < 0;
 }
 
 void ADeepSpaceCharacter::SetAttitudeInput(const FInputActionValue& Value)
 {
-    SetFlightInput(Value.Get<FVector>(), ThrottleInput);
+    SetFlightInput(Value.Get<FVector>());
 }
 
 void ADeepSpaceCharacter::ClearAttitudeInput(const FInputActionValue& Value)
 {
-    SetFlightInput(FVector::ZeroVector, ThrottleInput);
+    SetFlightInput(FVector::ZeroVector);
 }
 
-void ADeepSpaceCharacter::SetThrottleInput(const FInputActionValue& Value)
+void ADeepSpaceCharacter::PushHelmInput()
 {
-    SetFlightInput(AttitudeInput, Value.Get<float>());
-}
+    FHelmInput Input;
+    Input.Attitude = AttitudeInput;
+    Input.bUpHeld = bLeverUpHeld;
+    Input.bDownHeld = bLeverDownHeld;
+    Input.UpPresses = LeverUpPresses;
+    Input.DownPresses = LeverDownPresses;
+    LeverUpPresses = 0;
+    LeverDownPresses = 0;
 
-void ADeepSpaceCharacter::ClearThrottleInput(const FInputActionValue& Value)
-{
-    SetFlightInput(AttitudeInput, 0.0f);
-}
-
-void ADeepSpaceCharacter::PushFlightCommand(float DeltaSeconds)
-{
+    // Once a frame, whoever we are: the subsystem is the gate, and moves the
+    // levers in its own tick. A pawn that is not flying hands over nothing,
+    // and its presses are gone rather than saved for when it sits down.
     UShipSubsystem* Ship = UShipSubsystem::Get(this);
-    if (!Ship || Ship->GetPilot() != this)
+    if (Ship && Ship->GetPilot() == this)
     {
-        return;
+        Ship->SetHelmInput(this, Input);
     }
-
-    // The throttle is a lever, not a button: input sweeps it and it stays put.
-    Throttle = FMath::Clamp(Throttle + ThrottleInput * ThrottleSweepRate * DeltaSeconds, -1.0f, 1.0f);
-
-    Ship->SetFlightCommand(this, Throttle, AttitudeInput);
 }
 
 void ADeepSpaceCharacter::Move(const FInputActionValue& Value)

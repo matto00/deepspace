@@ -50,11 +50,6 @@ namespace
      * would arrive at the heat death of the universe; with 5% they arrive at
      * "105 KM" over a 100 km floor, a minute and a half after 1,000 km.
      */
-    TAutoConsoleVariable<float> CVarFloorBand(
-        TEXT("ds.HUD.FloorBand"), 0.05f,
-        TEXT("How close to the drive floor, as a fraction of it, the drive must have settled for the altitude line to say DRIVE FLOOR."),
-        ECVF_Default);
-
     /** A dash reads as "no reading", where a zero would read as a measurement. */
     const FText Blank = NSLOCTEXT("DeepSpace", "HUDBlank", "-----");
 
@@ -447,28 +442,6 @@ FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, 
     return Line;
 }
 
-bool UShipHUDWidget::DriveHoldsAtFloor(const FShipFlightState& Flight, double SurfaceCm, const FVector& AwayFromSurface,
-                                       double FloorBand)
-{
-    const FShipFlightCommand& Command = Flight.GetCommand();
-    const double Floor = Flight.GetLimits().DriveFloor;
-    if (!Command.bDrive || Command.Throttle == 0.0 || Floor <= 0.0)
-    {
-        return false;
-    }
-    // Where the lever sends the ship, not where it is going this instant: at
-    // the floor the drive has cut the closing speed to nothing, so the
-    // velocity says nothing about which way it is being held. A heading that
-    // grazes the surface still closes, and the drive still holds it.
-    const FVector Pushed = Flight.GetUniverseOrientation().GetForwardVector() * FMath::Sign(Command.Throttle);
-    const bool bTowardSurface = (Pushed | AwayFromSurface) < 0.0;
-
-    // Room, not height either side of the floor: under the floor the drive
-    // has none, closes no further, and is as much at its floor as above it.
-    const double Room = FMath::Max(SurfaceCm - Floor, 0.0);
-    return bTowardSurface && Room <= FMath::Max(FloorBand, 0.0) * Floor;
-}
-
 FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState)
 {
     return AltitudeLineText(ShipState, ShipState.IsInTransit() ? FSkySystem() : LocalSystem::Here(ShipState.GetWorld()));
@@ -487,18 +460,10 @@ FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState, const FS
     {
         return Blank;
     }
-    // Which way the surface falls away is asked only where the answer can
-    // matter -- inside the band, with the drive on -- so a HUD far from
-    // anything pays for no probes.
-    const double Band = CVarFloorBand.GetValueOnGameThread();
-    const double Floor = Flight.GetLimits().DriveFloor;
-    bool bAtFloor = false;
-    if (Flight.GetCommand().bDrive && Nearest.Distance - Floor <= FMath::Max(Band, 0.0) * Floor)
-    {
-        const FVector Away = ShipDrive::AwayFromSurface(
-            [&Here](const FUniversePosition& At) { return LocalSystem::NearestSurfaceDistance(Here, At); }, Where);
-        bAtFloor = DriveHoldsAtFloor(Flight, Nearest.Distance, Away, Band);
-    }
+    // Asked of the flight state, the one thing that knows what the cap did
+    // this step: the ship is on a floor, its nose into it, its lever above
+    // STOP. Nothing here works it out again from the heading and the lever.
+    const bool bAtFloor = Flight.GetHold() == EFlightHold::AtFloor;
     const FString Surface = Nearest.bEdge ? FString() : Here.Bodies[Nearest.Body].Id.ToString();
     return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, bAtFloor));
 }

@@ -307,40 +307,87 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     }
     Ship->SetConsumerWeight(ShipPower::Engine, 1.0f);
 
-    // Aimed, and under way at a quarter throttle: the arrival must keep
-    // everything but the position.
+    // Aimed, with the drive at 1 c and cruise's lever open, as a pilot who
+    // set both and walked away would leave them: the fold is an all stop,
+    // and the arrival must keep everything but the position and the motion.
+    //
+    // Spooled up first on a heading that meets nothing but the edge, put
+    // back where it was every frame, so the ship is at the lever's top when
+    // it turns onto the course -- which is what makes the at-rest arrival
+    // a claim: from 1 c the ease alone takes longer than the fold.
     APawn* Pilot = World->SpawnActor<APawn>();
     Ship->SetPilot(Pilot);
-    Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
+    Ship->SetFlightCommand(Pilot, 0.25f, FVector::ZeroVector);
+    Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+    Ship->SetDriveEngaged(Pilot, true);
+    TOptional<FVector> Open;
+    for (const FVector& Candidate : {-*CourseDir, FVector::UpVector, -FVector::UpVector, FVector::ForwardVector,
+                                     -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector})
+    {
+        bool bMeetsNothing = true;
+        for (const FFlightSurface& Surface : Ship->GetFlightState().GetSurfaces())
+        {
+            bMeetsNothing &= Surface.bInsideOut || !ShipFlight::RayToFloor(Surface, Parked, Candidate).IsSet();
+        }
+        if (bMeetsNothing && !Open)
+        {
+            Open = Candidate;
+        }
+    }
+    if (!TestTrue(TEXT("a heading from here meets nothing but the edge"), Open.IsSet()))
+    {
+        DestroyWorld(World);
+        return false;
+    }
+    for (int32 Frame = 0; Frame < 100; ++Frame)
+    {
+        Ship->PlaceShip(Parked, FacingRolled(*Open));
+        Ship->Tick(0.1f);
+    }
+    TestFalse(TEXT("spooled up, still misaligned, still here"), Ship->IsInTransit());
+    const double SpeedBefore = Ship->GetShipSpeed();
+    TestTrue(FString::Printf(TEXT("at the drive's top before the fold (%.3f c)"), SpeedBefore / ShipDriveLever::LightCmPerSecond),
+             SpeedBefore > 0.99 * ShipDriveLever::LightCmPerSecond);
     Ship->PlaceShip(Parked, FacingRolled(*Ship->GetCourseDirection()));
 
-    // The fold opens on the tick it is aligned, with nobody at the helm and
-    // no confirm: the throttle is set just after, as a pilot walking away
-    // from a cruise would have left it.
+    // The fold opens on the tick it is aligned, with nobody touching the
+    // helm and no confirm.
     Ship->Tick(0.1f);
     TestTrue(TEXT("aligned, engaged and charged, the jump fires by itself"), Ship->IsInTransit());
     TestEqual(TEXT("opening the fold spends the charge"), Ship->GetJumpCharge(), 0.0f);
     TestTrue(TEXT("LocalSystem says so"), LocalSystem::InTransit(World));
     TestFalse(TEXT("a course cannot be plotted between stars"), Ship->PlotCourse(Chart.Last().Id));
     TestFalse(TEXT("nor the jump stood down"), Ship->SetJumpEngaged(false));
+    TestTrue(TEXT("the fold is an all stop: both levers at STOP"),
+             Ship->GetFlightState().GetCommand().DriveNotch == 0 && Ship->GetFlightState().GetCommand().Throttle == 0.0);
+    TestTrue(TEXT("with the mode it went in with"), Ship->IsDriveEngaged());
 
-    Ship->SetFlightCommand(Pilot, 0.25f, FVector::ZeroVector);
+    // The helm is inert between stars: no lever moves, and nothing turns.
+    FHelmInput Hands;
+    Hands.Attitude = FVector(0.0, 1.0, 0.0);
+    Hands.UpPresses = 3;
+    Hands.bUpHeld = true;
+    TestFalse(TEXT("in transit the helm's hands are refused"), Ship->SetHelmInput(Pilot, Hands));
+    TestFalse(TEXT("and so is the cruise lever"), Ship->SetFlightCommand(Pilot, 0.25f, FVector(0.0, 1.0, 0.0)));
+    TestFalse(TEXT("and the drive's"), Ship->SetDriveLever(Pilot, 5));
+    TestFalse(TEXT("and F"), Ship->SetDriveEngaged(Pilot, false));
+    TestFalse(TEXT("and X, which there is nothing to do"), Ship->AllStop(Pilot));
     Ship->Tick(1.0f);
-    TestEqual(TEXT("between stars the drive has no room"), Ship->GetFlightState().GetDriveRoom(), 0.0);
+    TestEqual(TEXT("between stars there is nothing to have room from"), Ship->GetFlightState().GetRoom(), 0.0);
+    TestEqual(TEXT("and no surface"), Ship->GetFlightState().GetSurfaces().Num(), 0);
     TestTrue(TEXT("the transit is part way"), Ship->GetTransitProgress() > 0.0 && Ship->GetTransitProgress() < 1.0);
-
-    // The helm does nothing between stars.
-    Ship->SetFlightCommand(Pilot, 0.25f, FVector(0.0, 1.0, 0.0));
     Ship->Tick(0.5f);
     TestTrue(TEXT("attitude input between stars turns nothing"),
              Ship->GetFlightState().GetAngularVelocity().IsNearlyZero(1e-12));
-    Ship->SetFlightCommand(Pilot, 0.25f, FVector::ZeroVector);
+    TestTrue(TEXT("and the levers have not moved"),
+             Ship->GetFlightState().GetCommand().DriveNotch == 0 && Ship->GetFlightState().GetCommand().Throttle == 0.0);
 
-    // Steady at cruise now; this is what arrival must not touch.
+    // What arrival must not touch, and what it must: still easing down from
+    // 1 c inside the fold, as it would be for seconds yet.
     const FQuat Orientation = Ship->GetFlightState().GetUniverseOrientation();
-    const FVector Velocity = Ship->GetFlightState().GetVelocity();
-    TestTrue(TEXT("the ship is under way into the arrival"), Velocity.Size() > 1000.0);
-
+    TickUntil(Ship, 30.0, 0.25, [Ship] { return Ship->GetTransitProgress() > 0.9 || Ship->GetJumpSerial() > 0; });
+    TestTrue(FString::Printf(TEXT("the ship is still under way near the fold's end (%.0f km/s)"), Ship->GetShipSpeed() / Km),
+             Ship->GetJumpSerial() == 0 && Ship->GetShipSpeed() > 1.0e5f);
     TickUntil(Ship, 30.0, 0.25, [Ship] { return Ship->GetJumpSerial() > 0; });
     TestEqual(TEXT("it arrives, and the serial counts it"), Ship->GetJumpSerial(), 1);
     TestEqual(TEXT("LocalSystem's serial follows"), LocalSystem::Serial(World), 1);
@@ -385,7 +432,8 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the orientation is unchanged"), Flight.GetUniverseOrientation().Equals(Orientation, 1e-12));
     TestTrue(TEXT("so the up vector has not moved"),
              Flight.GetUniverseOrientation().GetUpVector().Equals(Orientation.GetUpVector(), 1e-12));
-    TestTrue(TEXT("and the velocity is unchanged"), Flight.GetVelocity().Equals(Velocity, 1e-6));
+    TestTrue(TEXT("and it arrives at rest, exactly"), Flight.GetVelocity().IsZero());
+    TestTrue(TEXT("with both levers at STOP"), Flight.GetCommand().DriveNotch == 0 && Flight.GetCommand().Throttle == 0.0);
     TestEqual(TEXT("the charge is spent"), Ship->GetJumpCharge(), 0.0f);
 
     // Engage was a one-shot "go", and the course clears because you are there.

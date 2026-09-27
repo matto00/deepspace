@@ -219,15 +219,27 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             Ship->SetPilot(Pilot);
             Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
             Ship->SetDriveEngaged(Pilot, true);
-            Ship->Tick(0.1f);
+            Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+            for (int32 Tick = 0; Tick < 20; ++Tick)
+            {
+                Ship->Tick(0.1f);
+            }
             Motes->SyncToShip();
             TestTrue(TEXT("under the drive the ship is past the fade"), Ship->GetShipSpeed() > 2.0e5f);
             TestEqual(TEXT("and the motes are dark"), Brightness(), 0.0f);
             TestFalse(TEXT("and hidden"), Motes->GetNearStars()->IsVisible());
 
-            // Off the drive the speed is clamped to cruise, 200 m/s, a tenth
+            // Off the drive the ship spools down to cruise, 200 m/s, a tenth
             // of the way to the fade.
             Ship->SetDriveEngaged(Pilot, false);
+            for (int32 Tick = 0; Tick < 150 && Ship->GetFlightState().GetMode() != EFlightMode::Cruise; ++Tick)
+            {
+                Ship->Tick(0.1f);
+            }
+            for (int32 Tick = 0; Tick < 50; ++Tick)
+            {
+                Ship->Tick(0.1f);
+            }
             Motes->SyncToShip();
             TestTrue(TEXT("at cruise the motes are nine tenths as bright"),
                      FMath::IsNearlyEqual(Brightness(), 0.9f * Authored, 1e-4f));

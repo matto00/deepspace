@@ -6,23 +6,30 @@ arrival standoff down to the rendered-altitude floor, what the player sees at
 each step: true angular size and pixels, the resolve blend, the proxy's
 stacked distance and the depth budget the whole system uses, how far the
 eye's offset in the hull slides the body against the stars, the honest
-surface brightness and the point boost, and how long the drive has been open.
+surface brightness and the point boost, the ship's speed, and how long since
+the drive's lever went to 1 c.
 
 It mirrors SkyProjection.cpp's arithmetic (the homothety, the power-order
-stack, the photometry) and the drive's law from sky decision 8 --
+stack, the photometry) and the drive's law from the flight-feel spec
+(decisions 3-6) --
 
-    Room = max(0, NearestSurfaceDistance - DriveFloor)
-    room falls as exp(-t / DriveTau) at full throttle
+    the lever from STOP to its top, 1 c, eased in notch space at
+    ds.Drive.Response, 3 notches a second (ShipDriveLever::Ease);
+    the soft cap on the nose's own ray to the nearest floor sphere,
+    speed <= min(max(d / 4 s, sqrt(1.6 a d)), d / step) (ShipFlight::MaySpeed);
+    the floor the sky's own, max(10 km, 1.6e-3 R), one radius over a star
 
--- and the arrival standoff of plan conflict 9,
+-- flown at 120 Hz substeps as FShipFlightState flies it, and the arrival
+standoff of plan conflict 9,
 
     Standoff = max(StandoffAU * sqrt(L), 1.5 * outermost orbit).
 
 Two systems. HOME is what the developer's honest weights make most often: a
 red dwarf (three suns in four, procgen spec) with a compact system, the
-largest planet chosen for the opening view. SUNLIKE is the spec's own
-reference, a Sun with an Earth at 1 AU, so the table can be checked against
-the spec's "a point for the first 37 seconds, a world for the next 85".
+largest planet chosen for the opening view. SUNLIKE is the sky spec's own
+reference, a Sun with an Earth at 1 AU. Either table can be checked against
+the flight-feel spec's decision 5: the leg at the lever's speed, then the
+cap's last minute, about 64 s from where it binds to the floor at 1 c.
 
     python3 Tools/sky_probe.py
 """
@@ -47,9 +54,21 @@ FLUX_GAMMA = 0.5
 MIN_ALTITUDE = 1.0e6
 MIN_ALTITUDE_OF_RADIUS = 1.6e-3
 
-# The drive (sky decision 8) and the arrival (plan conflict 9).
-DRIVE_TAU = 15.0
-DRIVE_FLOOR = 1.0e7
+# The drive (flight-feel decisions 3-6) and the arrival (plan conflict 9).
+# ShipDriveLever.cpp's table, cm/s, STOP not included: a 1-2-5 series in km/s
+# to 2,000, then in fractions of light to light itself.
+LIGHT = 2.99792458e10
+NOTCHES = [v * CM_PER_KM for v in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)] + \
+          [f * LIGHT for f in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0)]
+EASE_SECONDS = 0.4
+SETTLE_NOTCHES = 1.0e-3
+RESPONSE = 3.0                  # ds.Drive.Response, notches/s
+HOLD_SECONDS = 4.0              # ds.Drive.HoldSeconds
+BRAKING_MARGIN = 0.8            # ShipFlight::BrakingMargin
+BOOSTERS = 4000.0               # cm/s^2, full thrust
+FLIGHT_FLOOR = 1.0e6            # ds.Flight.Floor, 10 km
+STEP = 1.0 / 120.0              # FShipFlightState::FixedStep
+AT_FLOOR = 100.0                # FShipFlightState::AtFloorCm
 STANDOFF_AU = 2.4
 
 # The farthest the eye gets from the ship's origin: the cockpit glass.
@@ -152,8 +171,117 @@ def parallax_pixels(view):
     return abs(math.atan2(e, view["centre"]) - math.atan2(e, view["d"])) / PIXEL_4K
 
 
-def nearest_surface(bodies, ship):
-    return min(norm(sub(b["pos"], ship)) - b["radius"] for b in bodies)
+def speed_at(p):
+    """ShipDriveLever::SpeedAt: linear from STOP, geometric between notches."""
+    if p <= 0.0:
+        return 0.0
+    if p >= len(NOTCHES):
+        return NOTCHES[-1]
+    below = int(math.floor(p))
+    frac = p - below
+    if below == 0:
+        return frac * NOTCHES[0]
+    return NOTCHES[below - 1] * (NOTCHES[below] / NOTCHES[below - 1]) ** frac
+
+
+def position_of(v):
+    """ShipDriveLever::PositionOf, the inverse of speed_at."""
+    if v <= 0.0:
+        return 0.0
+    if v >= NOTCHES[-1]:
+        return float(len(NOTCHES))
+    if v < NOTCHES[0]:
+        return v / NOTCHES[0]
+    below = 1
+    while below + 1 < len(NOTCHES) and NOTCHES[below] <= v:
+        below += 1
+    return below + math.log(v / NOTCHES[below - 1]) / math.log(NOTCHES[below] / NOTCHES[below - 1])
+
+
+def ease(p, target, dt, rate=RESPONSE, thrust=1.0):
+    """ShipDriveLever::Ease: the rate limit, then the exponential, solved."""
+    dt *= thrust
+    start = abs(target - p)
+    sign = 1.0 if target > p else -1.0
+    error, left, knee = start, dt, rate * EASE_SECONDS
+    if error > knee:
+        to_knee = (error - knee) / rate
+        if left <= to_knee:
+            error, left = error - rate * left, 0.0
+        else:
+            error, left = knee, left - to_knee
+    if left > 0.0:
+        error *= math.exp(-left / EASE_SECONDS)
+    if error <= SETTLE_NOTCHES and start <= rate * dt:
+        return target
+    return target - sign * error
+
+
+def may_speed(d, a=BOOSTERS):
+    """ShipFlight::MaySpeed: the hold, the braking curve, the substep bound."""
+    if d <= 0.0:
+        return 0.0
+    return min(max(d / HOLD_SECONDS, math.sqrt(2.0 * BRAKING_MARGIN * a * d)), d / STEP)
+
+
+def floor_of(b):
+    """UShipSubsystem::FloorFor at the default CVars."""
+    if b["kind"] == "star":
+        return b["radius"]
+    return max(FLIGHT_FLOOR, MIN_ALTITUDE_OF_RADIUS * b["radius"])
+
+
+def ray_to_floor(b, ship, u):
+    """ShipFlight::RayToFloor for a body: the near root, 0 on or under it
+    heading in, None on a miss or heading away."""
+    to_centre = sub(b["pos"], ship)
+    dist = norm(to_centre)
+    floor = b["radius"] + floor_of(b)
+    along = sum(u[i] * to_centre[i] for i in range(3))
+    if dist <= floor:
+        return 0.0 if along > 0.0 else None
+    chord = floor * floor - max(dist * dist - along * along, 0.0)
+    if along <= 0.0 or chord < 0.0:
+        return None
+    return (dist - floor) * (dist + floor) / (along + math.sqrt(chord))
+
+
+def fly(bodies, ship0, line, target):
+    """The lever from STOP to 1 c at t = 0, the nose fixed on the target:
+    (t, altitude, speed) at every substep while anything is happening, and
+    once across each stretch at the top where nothing binds -- a straight
+    run at constant speed, taken in one step rather than a million.
+    Returns the track and when the cap first bound.
+
+    The cap reads the target's floor sphere alone: the probe's line is taken
+    to be clear, as a pilot would make it. The game reads every body, and a
+    star on the line would hold the ship at its floor instead."""
+    top = float(len(NOTCHES))
+    p, s, t = 0.0, 0.0, 0.0
+    binds = None
+    track = []
+    while t < 7.2e5:
+        ship = [ship0[i] + line[i] * s for i in range(3)]
+        d = ray_to_floor(target, ship, line)
+        d = float("inf") if d is None else d
+        altitude = norm(sub(target["pos"], ship)) - target["radius"]
+        track.append((t, altitude, speed_at(p)))
+        if altitude - floor_of(target) <= AT_FLOOR:
+            break
+        if p == top and d > 2.0 * LIGHT * HOLD_SECONDS:
+            run = (d - 1.5 * LIGHT * HOLD_SECONDS) / LIGHT
+            s, t = s + LIGHT * run, t + run
+            continue
+        p = ease(p, top, STEP)
+        v = speed_at(p)
+        cap = may_speed(d)
+        if cap < v:
+            v, p = cap, position_of(cap)
+            if binds is None:
+                binds = t
+        s += v * STEP
+        t += STEP
+    return track, binds
 
 
 def approach(title, bodies, target_index):
@@ -174,46 +302,48 @@ def approach(title, bodies, target_index):
     print("%s -- arrival standoff %.3f AU (%s)" % (
         title, standoff / CM_PER_AU,
         "sqrt(L) term" if standoff > 1.5 * outermost + 1 else "1.5 x outermost orbit"))
-    print("target %s, radius %.0f km, %.4f AU from its star; drive tau %.0f s, floor %.0f km" % (
+    print("target %s, radius %.0f km, %.4f AU from its star; the drive's lever to 1 c, floor %.1f km" % (
         target["name"], target["radius"] / CM_PER_KM, norm(sub(target["pos"], star["pos"])) / CM_PER_AU,
-        DRIVE_TAU, DRIVE_FLOOR / CM_PER_KM))
+        floor_of(target) / CM_PER_KM))
     print("the star from arrival: %.2f px, irradiance %.3f (compressed; 1 = a Sun at 1 AU)" % (
         2.0 * math.asin(star["radius"] / standoff) / PIXEL_ANGLE,
         (star["luminosity"] / (standoff / CM_PER_AU) ** 2) ** FLUX_GAMMA))
     print("-" * 118)
-    print("%10s %12s %10s %8s %6s %12s %8s %9s %9s %7s %9s" % (
+    print("%10s %12s %10s %8s %6s %12s %8s %9s %9s %7s %12s" % (
         "t (s)", "distance", "altitude", "px", "blend", "proxy near", "budget", "parallax",
-        "surface", "boost", "flux"))
+        "surface", "boost", "speed"))
 
+    track, binds = fly(bodies, ship0, line, target)
     start = norm(to_target)
-    floor_room = max(nearest_surface(bodies, ship0) - DRIVE_FLOOR, 1.0)
     resolved_at = None
-    rows = 0
     altitude = start - target["radius"]
+    index = 0
     while True:
-        ship = [ship0[i] + line[i] * (start - target["radius"] - altitude) for i in range(3)]
-        room = max(nearest_surface(bodies, ship) - DRIVE_FLOOR, 1.0)
-        seconds = DRIVE_TAU * math.log(floor_room / room)
+        # The moment the flight comes down through this altitude: between
+        # the two samples either side of it, which across a run at the top is
+        # exact, the speed being constant there.
+        while index < len(track) - 1 and track[index][1] > altitude:
+            index += 1
+        seconds, flown, speed = track[index]
+        if index > 0 and flown < altitude:
+            before, above, _ = track[index - 1]
+            seconds = before + (seconds - before) * (above - altitude) / (above - flown)
+            flown = altitude
+        ship = [ship0[i] + line[i] * (start - target["radius"] - flown) for i in range(3)]
         views, budget = project(bodies, ship)
         v = next(v for v in views if v["body"] is target)
         if resolved_at is None and v["pixels"] >= MIN_POINT_PIXELS:
             resolved_at = seconds
-        flux = v["surface"] * v["phase"] * cone(max(v["radius"], 0.5 * MIN_POINT_PIXELS * PIXEL_ANGLE)) \
-            * (cone(v["radius"]) / cone(max(v["radius"], 0.5 * MIN_POINT_PIXELS * PIXEL_ANGLE))) ** FLUX_GAMMA
-        print("%10.1f %9.4g km %7.4g km %8.3g %6.2f %9.4g km %7.0fx %7.2f px %9.4g %7.2f %9.3g" % (
-            seconds, v["d"] / CM_PER_KM, altitude / CM_PER_KM, v["pixels"], v["blend"],
-            v["proxy_near"] / CM_PER_KM, budget, parallax_pixels(v), v["surface"], v["boost"], flux))
-        rows += 1
-        # The drive approaches its floor exponentially and never reaches it:
-        # the last few km are cruise, and a row there would be a time to
-        # infinity.
+        print("%10.1f %9.4g km %7.4g km %8.3g %6.2f %9.4g km %7.0fx %7.2f px %9.4g %7.2f %7.4g km/s" % (
+            seconds, v["d"] / CM_PER_KM, flown / CM_PER_KM, v["pixels"], v["blend"],
+            v["proxy_near"] / CM_PER_KM, budget, parallax_pixels(v), v["surface"], v["boost"], speed / CM_PER_KM))
         altitude /= 3.0
-        if altitude < 1.5 * DRIVE_FLOOR:
+        if altitude < 1.5 * floor_of(target):
             break
-    drive_end = DRIVE_TAU * math.log(floor_room / max(nearest_surface(bodies, [target["pos"][i] - line[i] * (target["radius"] + 4.0e9) for i in range(3)]) - DRIVE_FLOOR, 1.0))
     print("-" * 118)
-    print("resolves (2 px) %.0f s after the drive opens; 40,000 km altitude at about %.0f s; "
-          "the drive's room is spent at %.0f km" % (resolved_at or float("nan"), drive_end, DRIVE_FLOOR / CM_PER_KM))
+    print("resolves (2 px) %.0f s after the lever goes to 1 c; the cap binds at %.0f s; on the %.1f km floor at %.0f s" % (
+        resolved_at if resolved_at is not None else float("nan"), binds if binds is not None else float("nan"),
+        floor_of(target) / CM_PER_KM, track[-1][0]))
 
     # The rendered floor, where the depth budget is tightest.
     floor_alt = max(MIN_ALTITUDE, MIN_ALTITUDE_OF_RADIUS * target["radius"])
