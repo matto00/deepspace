@@ -129,6 +129,19 @@ namespace SystemMap
         /** Where a distance from the star is drawn, px from the centre.
          *  Clamped to [StarPx, RimPx]; monotonic; exact at every knot. */
         double RadiusPx(double DistanceAU) const;
+
+        /** How fast RadiusPx grows with distance at DistanceAU, px per AU,
+         *  on the side of it a ship moving outward (or inward) is about to
+         *  cross: at a knot the two sides differ. Zero where RadiusPx is
+         *  clamped, since a pinned glyph does not move radially. */
+        double RadiusSlopePxPerAU(double DistanceAU, bool bOutward) const;
+
+        /** The warp's slope in the segment a ship at DistanceAU moving
+         *  outward (or inward) is about to be in, px per dex (log10 AU): at
+         *  a knot, the side it is about to cross. Inside InnerAU the first
+         *  segment's and past RimAU the last's -- the warp continued past
+         *  where RadiusPx is clamped, for the tick of a held glyph. */
+        double WarpPxPerDex(double DistanceAU, bool bOutward) const;
     };
 
     /**
@@ -142,11 +155,13 @@ namespace SystemMap
     DEEPSPACE_API FMapScale Fit(const FStarSystem& System, double StandoffAU, const FMapPixels& Pixels = FMapPixels());
 
     /**
-     * Where a position is drawn: its true distance from the star through the
-     * warp, at its azimuth in the plane. The true distance, not the
-     * projected one, so a ship over the pole is drawn as far out as it is
-     * rather than on the star. For the worlds, which are in the plane, the
-     * two are the same.
+     * Where a position is drawn: straight down onto the plane, its distance
+     * from the star there through the warp, at its azimuth. Top-down, so a
+     * ship closing on a world closes on its dot from off the plane as well,
+     * and a point over the pole is drawn at the star's edge (developer's
+     * ruling, 2026-09-27, which reverses the true 3D distance the spec first
+     * chose). Ship places its glyph through this, then holds it clear of the
+     * star's disc; the footer says how far above the plane the ship is.
      */
     DEEPSPACE_API FVector2D Place(const FMapScale& Scale, const FUniversePosition& Where);
 
@@ -165,8 +180,13 @@ namespace SystemMap
     {
         FVector2D Centre = FVector2D::ZeroVector;
 
-        /** Unit, panel axes (+X right, +Y down): the nose projected into the
-         *  plane. Unset within NoseHiddenWithinDeg of vertical. */
+        /** Unit, panel axes (+X right, +Y down): the way the glyph moves
+         *  on the map while the ship flies nose first -- the nose carried
+         *  through the warp at the ship, not the nose's universe direction.
+         *  The warp stretches the map round a ring several times more than
+         *  across it, so the two differ by up to ~50 degrees, and a tick in
+         *  universe directions pointed off the very dot the ship was
+         *  closing on. Unset within NoseHiddenWithinDeg of vertical. */
         TOptional<FVector2D> Nose;
 
         EMapPin Pin = EMapPin::None;
@@ -174,6 +194,22 @@ namespace SystemMap
         /** Above the plane, degrees; negative below it. */
         double ElevationDeg = 0.0;
     };
+
+    /**
+     * Which way on the map the ship's glyph moves when the ship at Where
+     * moves along Direction (universe axes; any length): the derivative of
+     * Ship's placement, in panel axes, unit. The same arithmetic as Ship, so
+     * the tick and the glyph's motion cannot disagree. Where the glyph is
+     * held (pinned, or at the floor clear of the star's disc) its radius
+     * cannot move, and this is the way it would move were it free: the
+     * radial part from the warp continued past the hold (WarpPxPerDex), so
+     * a nose near radial draws a tick near radial and the tick turns
+     * smoothly with the nose, meeting the free tick where the hold ends.
+     * Unset where the azimuth is undefined (on the star's axis) or
+     * Direction is zero.
+     */
+    DEEPSPACE_API TOptional<FVector2D> MotionOnMap(const FMapScale& Scale, const FUniversePosition& Where,
+                                                   const FVector& Direction);
 
     /** The ship at Where, facing Orientation (universe axes), on Scale. Never
      *  drawn on the star: a ship inside it is held just outside the disc. */

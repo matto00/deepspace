@@ -780,6 +780,32 @@ ship, and a row per world with its surface distance; the rim is the arrival
 standoff with a margin. It stores nothing it can ask for, and caches only
 its drawing, keyed on what the drawing depends on.
 
+**The warp bends every bearing but two.** A radial log warp is stretched
+round each ring several times more than across it (`R / (r dR/dr)`, about
+3x at an outer ring), so only a bearing straight toward or away from the
+star, or between two points at the same distance from it, is drawn true;
+any other is bent, median ~4 and up to ~50 degrees. The ship's glyph
+therefore takes the same warp as the dots (on the dot at the world, closing
+on it monotonically along any straight flight:
+`DeepSpace.UI.SystemMap.StraightApproach`), and **its tick is the way the
+glyph moves, never the nose's universe direction** (`SystemMap::MotionOnMap`,
+the derivative of `Ship`'s own placement). Drawn in universe directions it
+pointed up to 90 degrees off the glyph's motion and ~50 off the dot the nose
+was on -- the playtest's "map does not track" (`.TickFollowsGlyph`, and
+`.Bearing` for the two true bearings, which also holds the bent ones' spread
+to those figures). Where the glyph is held -- pinned, or at the floor clear of
+the star's disc -- it cannot move radially, and the tick is the way it would
+move were it free, the warp continued past the hold (`WarpPxPerDex`): the true
+derivative there flipped the tick 90 degrees for a degree of heading
+(`.HeldTick`). The bent bearings stay, to be tried in play (developer's
+ruling, 2026-09-27). **The ship is drawn top-down**: radius
+and azimuth both from its position in the plane, the elevation the footer's
+line, a ship over the pole held at the star's edge (the same ruling, which
+reversed the spec's true-3D-distance radius: approaching from an interstellar
+arrival, off the plane, that stepped the glyph away from the dot about 1 time
+in 80). `.StraightApproach` flies from off the plane and from arrival points
+too.
+
 **The helm looks and clicks** (decision 2, ruling 4): E at the map sits
 nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the
 view: live only while the first thing hit is a screen whose class says

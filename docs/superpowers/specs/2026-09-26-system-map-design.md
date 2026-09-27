@@ -20,6 +20,33 @@ course as an id), ADR 0005 (the ship is the origin)
 anti-chore principle*, *shared presence, not division of labour*
 **Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
 
+## Amendment, 2026-09-27: the ship is drawn top-down
+
+After the third playtest's note -- "map seems to not track location
+precisely. let's double check that movement on the map corresponds with
+movement in the system" -- the map was measured against straight flights to
+every world of 120 generated systems. Two things were found, and the
+developer ruled on both. Binding; they override anything below.
+
+1. **Bearings: kept as built, to be tried in play.** A radial log warp is
+   stretched round each ring about 3x more than across it, so only bearings
+   toward or away from the star, or between two points equally far from it,
+   are drawn true; any other is bent (median ~4, up to ~50 degrees). That is
+   inherent in the orrery and stays. What was wrong, and is fixed, was the
+   ship's tick: it was drawn in universe directions, up to 90 degrees off the
+   way the glyph actually moves. It is now the nose carried through the warp
+   (`SystemMap::MotionOnMap`), so the glyph moves along its tick. Nothing
+   more is added (no drawn course curve, no inset, no re-centred warp).
+2. **The ship is drawn at its top-down, in-plane distance.** This reverses
+   decision 3's *true distance* rule (below, marked superseded):
+   arrivals come in off the plane, and with the radius taken from the 3D
+   distance and the azimuth from the plane, about 1 approach in 80 from an
+   arrival stepped the glyph away from the dot it was closing on, by up to
+   ~7 px, before closing. Top-down, none do. The footer's elevation line says
+   how far above or below the plane the ship is, as before, and a ship over
+   the pole is held at the star's edge (`Inside <innermost>'s orbit. 90°
+   above the plane.`).
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read this spec and the flight-feel spec together and ruled on
@@ -491,8 +518,11 @@ does not rescale as the ship flies, which would be disorienting. Beyond the
 rim, out toward the system's edge, the ship is pinned to the rim, and the
 footer says `Beyond the map.`
 
-**The ship's radius is its true distance from the star, and its azimuth is
-its position projected into the plane.** Arrivals come in along the line
+**Superseded by the 2026-09-27 ruling: the ship is drawn top-down, radius
+and azimuth both from its position projected into the plane, and a ship over
+the pole is held at the star's edge.** As first written: *The ship's radius
+is its true distance from the star, and its azimuth is its position
+projected into the plane.* Arrivals come in along the line
 from wherever the ship left, so the ship can be well above the plane. Taken
 from the projection, a ship 2 AU over the pole would be drawn on the star.
 Taken from the true distance, it is drawn 2 AU out, and the footer says
@@ -518,7 +548,7 @@ wherever it is legible. *Decisions needing sign-off*, item 2. **Ruled
 | Orbit | a 2 px ring in `Dim` | none |
 | World | a dot on its ring at its true phase, 7 px for rock and ice, 10 px for a giant, **capped at its local gap less 2 px** (the gap to the ring, star edge or rim either side), in its sky colour (`FSkyBody::Colour`, so the map's world is the window's) | its numeral, `IV`, outside its dot, away from the star |
 | Target | an `Accent` ring round its dot, the dot's size plus 6 px, capped at twice the local gap less 2 px | its row carries the chart's `›` mark |
-| Ship | a 9 px ring with a 6 px tick along its nose, projected into the plane; ring only when the nose is within 20 degrees of vertical | none |
+| Ship | a 9 px ring with a 6 px tick the way the glyph moves when the ship flies nose first -- the nose carried through the warp (`SystemMap::MotionOnMap`, the 2026-09-27 amendment; it was first the nose projected into the plane), and where the glyph is held at an edge, the way it would move were it free; ring only when the nose is within 20 degrees of vertical | none |
 | Moon (when procgen has them) | a 4 px dot at a fixed offset round its planet's dot, since a moon's orbit is sub-pixel at any system's scale | listed indented under its planet |
 
 The colour comes through `LocalSystem::Here(System)`, the pure adapter the HUD
@@ -1454,13 +1484,14 @@ so either answer is a deliberate change to those two lines.
 | File | What |
 |---|---|
 | `Source/DeepSpace/Ship/ShipMapScreen.h/.cpp` | `AShipMapScreen : AShipScreen`: `PanelWidthCm` 68, `DrawSizePixels` 600 x 424, bezel 1 cm, `bUsable = false`, `SetWidgetClass(USystemMapWidget)` (stage 1); `IsDrivableSeated()` and `IsZoomableFromChartChair()` overridden true (stage 4, once `AShipScreen` has them). No `Reach` box and no interactable: nothing sits you down here; the chart chair zooms it (decision 13). |
-| `Source/DeepSpace/UI/SystemMapLayout.h/.cpp` | `namespace SystemMap`, pure: `MinRingGap(FMapPixels)` (derived, decision 3), `FMapScale Fit(const FStarSystem&, double StandoffAU, FMapPixels)`, the knots and the two-pass warp; `FVector2D Place(const FMapScale&, const FUniversePosition&)`; `FMapShip Ship(scale, position, orientation)` (glyph centre, nose angle or none, pinned inside or beyond, elevation in degrees); `FMapLayout Layout(const FStarSystem&, scale)` (rings, dots with their capped sizes, numerals, the target ring's size rule); `TOptional<int32> Pick(const FMapLayout&, FVector2D, float MaxRadius)`. |
+| `Source/DeepSpace/UI/SystemMapLayout.h/.cpp` | `namespace SystemMap`, pure: `MinRingGap(FMapPixels)` (derived, decision 3), `FMapScale Fit(const FStarSystem&, double StandoffAU, FMapPixels)`, the knots and the two-pass warp; `FVector2D Place(const FMapScale&, const FUniversePosition&)` (top-down: the in-plane distance through the warp, 2026-09-27); `FMapShip Ship(scale, position, orientation)` (glyph centre, placed through `Place` and held clear of the star's disc; the tick or none; pinned inside or beyond; elevation in degrees); `TOptional<FVector2D> MotionOnMap(scale, position, direction)` (the tick: the way the glyph moves, the warp continued where it is held) with `FMapScale::RadiusSlopePxPerAU` and `WarpPxPerDex` under it (2026-09-27); `FMapLayout Layout(const FStarSystem&, scale)` (rings, dots with their capped sizes, numerals, the target ring's size rule); `TOptional<int32> Pick(const FMapLayout&, FVector2D, float MaxRadius)`. |
 | `Source/DeepSpace/UI/SystemMapWidget.h/.cpp` | `USystemMapWidget : UShipScreenWidget`. `BuildScreen` (the title, a `USystemMapView`, the row `UButton`s, the band), `RefreshFromShip()` public, `SelectWorld(int32)`, `FAskedAt` keyed as decision 3 says, with `GetLayoutAsked()` for tests, and getters for each row's text and for the target line, like the chart's. |
 | `Source/DeepSpace/UI/SystemMapView.h/.cpp` | `USystemMapView : UUserWidget`: paints the orrery from an `FMapLayout` and the ship's `FMapShip`; `NativeOnMouseButtonDown` asks `SystemMap::Pick` and calls back `SelectWorld`; `NativeIsInteractable()` true. |
 | `Source/DeepSpace/UI/TargetMarker.h/.cpp` | `namespace TargetMarker`, pure except `SeenThroughGlass`: `AheadFloor` (0.25 degrees); `TOptional<FTargetView> View(const FStarSystem&, const FBodyId&, const FUniversePosition&, const FQuat&, const FVector& Velocity, double FloorCm, double BrakingAccel, double HoldSeconds)` (ship-local direction, centre and surface distance, angular radius, `AheadRadians`, lit fraction, night side, name, and the ETA or the passing altitude, decision 6); `FString Line(const FTargetView&)`, which ends with `ETA ...` or `PASSING ... UP` as decision 6 says; `FVector ProgradeShipLocal(const FVector& Velocity, const FQuat&)`; `FTargetMark Place(bool bProjected, FVector2D Centre, float RadiusPx, FVector ViewSpaceDir, FVector2D ViewSize, float MinPx, float Inset, bool bPilot, bool bSeenThroughGlass)`; `bool SeenThroughGlass(const UWorld*, FVector Eye, FVector Dir, const AActor* Viewer)`, the one world query. |
 | `Source/DeepSpace/Ship/ShipTags.h` | `namespace ShipTags`: `Glass` (`Sky.Glass`), the C++ side of `placement.py`'s `GLASS_TAG`, in its own header so the level scripts (stage 1) and `TargetMarker::SeenThroughGlass` (stage 2) share it. |
 | `Source/DeepSpace/UI/ShipTargetOverlay.h/.cpp` | `UShipTargetOverlay : UUserWidget`, hit-test invisible: `PlaceFor(const UShipSubsystem&, const TOptional<FStarSystem>& Here)` projects the target and the prograde direction, asks `SeenThroughGlass` and `TargetMarker::Place`; static `ShowsTargetMark(Ship, Viewer, Here)` and `ShowsPrograde(Ship, Viewer, Here)`; `NativePaint` draws the corners, the chevron or the prograde mark; `GetLastMark()` for tests. |
 | `Source/DeepSpace/Tests/SystemMapLayoutTest.cpp` | `DeepSpace.UI.SystemMap.Scale`, `.Warp`, `.TwelveWorldsFit`, `.ShipOnTheWarp`, `.Pick` |
+| `Source/DeepSpace/Tests/SystemMapTrackingTest.cpp` | `DeepSpace.UI.SystemMap.StraightApproach`, `.TickFollowsGlyph`, `.HeldTick`, `.RadiusSlope`, `.Bearing` (the 2026-09-27 amendment) |
 | `Source/DeepSpace/Tests/SystemMapScreenTest.cpp` | `DeepSpace.UI.SystemMapScreen`, `DeepSpace.Ship.MapScreen` |
 | `Source/DeepSpace/Tests/ShipTargetTest.cpp` | `DeepSpace.Ship.Target` |
 | `Source/DeepSpace/Tests/TargetMarkerTest.cpp` | `DeepSpace.UI.TargetMarker.View`, `.Bearing`, `.Place`, `.Eta`, `DeepSpace.Ship.TargetSeenThroughGlass` (stage 2) |
@@ -1540,7 +1571,25 @@ Pure, no world:
   ship at an orbit's radius is drawn on its ring; **a ship between the star's
   surface and `r_in` is drawn just outside the star's disc and reports it is
   inside the innermost orbit**; beyond the rim it is pinned and says so; 2 AU
-  over the pole it is drawn 2 AU out and reports 90 degrees above the plane.
+  over the pole it is held at the star's edge and reports 90 degrees above the
+  plane (the 2026-09-27 ruling; first written as drawn 2 AU out).
+- **`.StraightApproach`** (2026-09-27): flying straight at any world of a
+  generated corpus -- from in the plane, off it and from interstellar arrival
+  points -- the glyph never moves away from the world's dot, and ends on it.
+- **`.TickFollowsGlyph`** (2026-09-27): along those flights and back out
+  again, so a world's own knot is left outward as well as inward, the glyph's
+  next step is along its tick to within a degree wherever it is free; near a
+  world, a nose on it puts the tick on its dot.
+- **`.HeldTick`** (2026-09-27): where the glyph is held (pinned, or at the
+  floor clear of the star's disc), the tick turns smoothly with the nose --
+  never more than 30 degrees for a degree of heading -- is straight out for a
+  nose straight out, and meets the free tick at each hold's edge.
+- **`.RadiusSlope`** (2026-09-27): the warp's slope at every world's knot is
+  the finite difference of `RadiusPx` on the side the ship is crossing to,
+  flat past either clamp, and continued past them by `WarpPxPerDex`.
+- **`.Bearing`** (2026-09-27): radial and same-orbit bearings are drawn
+  true, in the plane and off it; every other is bent, and the spread is held
+  to the ~4 degree median and ~50 degree worst the amendment quotes.
 - **`.Pick`**: a click on a dot picks it; two dots 9 px apart split at the
   midpoint (4 px from A picks A, 5 px picks B), and an exact tie picks the
   inner; a click 15 px from every dot picks nothing; a click on the star picks
