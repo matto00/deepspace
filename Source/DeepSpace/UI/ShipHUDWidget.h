@@ -9,6 +9,7 @@
 
 class ADeepSpaceCharacter;
 class APawn;
+class APlayerController;
 class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
@@ -40,6 +41,17 @@ public:
     UShipHUDWidget(const FObjectInitializer& ObjectInitializer);
 
     virtual void NativeTick(const FGeometry& Geometry, float DeltaSeconds) override;
+
+    /**
+     * Everything NativeTick does, for Controller's view: the dot, the prompt,
+     * every corner, the caret and the target's marks. NativeTick is this
+     * with the owning player and nothing else, so a headless test -- which
+     * cannot tick a widget that was never painted -- drives exactly the path
+     * play does, and with no controller sees the overlay hide. The caret
+     * still projects through the owning player, as PlaceNoseCaret always
+     * does.
+     */
+    void Refresh(float DeltaSeconds, APlayerController* Controller);
 
     /**
      * The jump corner's line: the jump in words, the course, and its bearing
@@ -238,7 +250,6 @@ private:
     void PlaceCorner(UWidget* Widget, const FVector2D& Anchor, const FVector2D& Offset);
     void SetTarget(ETarget NewTarget);
 
-    ADeepSpaceCharacter* Player() const;
     UShipSubsystem* Ship() const;
 
     UPROPERTY() TObjectPtr<UBorder> Dot;

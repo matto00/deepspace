@@ -205,6 +205,19 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("night: seen at a phase angle past 170 degrees (%.1f)"), FMath::RadiansToDegrees(FMath::Acos(PhaseCos))),
                 PhaseCos < FMath::Cos(FMath::DegreesToRadians(170.0)));
             TestTrue(TEXT("night: with the system's up kept up"), Night->Orientation.GetUpVector().Z > 0.99);
+            // The .03 AU case's geometry, not a transit: NightSideIsDrawn's
+            // 0.002 AU aside at 0.03 AU out, 3.8 degrees at the world, so
+            // from the ship the world sits beside the star's disc.
+            const FVector Sunward = (Star.Position - Home.Position).GetSafeNormal();
+            const double OffLine = FMath::RadiansToDegrees(FMath::Acos(FVector::DotProduct((-ToBody).GetSafeNormal(), -Sunward)));
+            TestTrue(FString::Printf(TEXT("night: 3.8 degrees off the anti-star line at the world, as the fixture is (%.3f)"), OffLine),
+                FMath::IsNearlyEqual(OffLine, FMath::RadiansToDegrees(FMath::Atan(0.002 / 0.03)), 0.01));
+            const double FromStar = FMath::RadiansToDegrees(FMath::Acos(FVector::DotProduct(ToBody.GetSafeNormal(), (Star.Position - Night->Position).GetSafeNormal())));
+            TestTrue(FString::Printf(TEXT("night: from the ship the world is off the star's centre, not in transit (%.2f deg)"), FromStar),
+                FromStar > 3.0 && FromStar < 4.0);
+            const FVector OutOfLine = (-ToBody).GetSafeNormal() - Sunward * FVector::DotProduct((-ToBody).GetSafeNormal(), Sunward);
+            TestTrue(TEXT("night: aside level, in the system's plane rather than above or below it"),
+                FMath::Abs(OutOfLine.GetSafeNormal().Z) < 1e-6);
         }
         const TOptional<FNavPlacement> StarNight = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::StarIndex, ThirtyAU,
                                                                           SkyTestFixtures::Opening(), ShipSky::EGotoSide::Night);
@@ -734,6 +747,9 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("Fixture"), TEXT("IIa"), TEXT("night") }, Quiet);
         TestTrue(TEXT("night with its altitude forgotten is the usage too, never 0 km onto the surface"),
             Ship->GetFlightState().GetUniversePosition() == AtNight);
+        AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("Fixture"), TEXT("IIa"), TEXT("2.5e2") }, Quiet);
+        TestTrue(TEXT("an altitude in exponent form is a number, 250 km over it, not the usage"),
+            FMath::IsNearlyEqual(Moon.Position.DistanceTo(Ship->GetFlightState().GetUniversePosition()) - Moon.Radius, 250.0 * UniverseUnits::CmPerKm, 10.0));
     }
 
     return true;

@@ -63,11 +63,6 @@ UShipHUDWidget::UShipHUDWidget(const FObjectInitializer& ObjectInitializer)
     SetIsFocusable(false);
 }
 
-ADeepSpaceCharacter* UShipHUDWidget::Player() const
-{
-    return GetOwningPlayerPawn<ADeepSpaceCharacter>();
-}
-
 UShipSubsystem* UShipHUDWidget::Ship() const
 {
     return UShipSubsystem::Get(this);
@@ -225,7 +220,11 @@ void UShipHUDWidget::SetTarget(ETarget NewTarget)
 void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 {
     Super::NativeTick(Geometry, DeltaSeconds);
+    Refresh(DeltaSeconds, GetOwningPlayer());
+}
 
+void UShipHUDWidget::Refresh(float DeltaSeconds, APlayerController* Controller)
+{
     const bool bShow = CVarHUD.GetValueOnGameThread() != 0;
     SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
     if (!bShow)
@@ -233,7 +232,7 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
         return;
     }
 
-    const ADeepSpaceCharacter* Character = Player();
+    const ADeepSpaceCharacter* Character = Controller ? Cast<ADeepSpaceCharacter>(Controller->GetPawn()) : nullptr;
     const UShipSubsystem* ShipState = Ship();
 
     // The dot: what is under it decides how much of it there is.
@@ -316,7 +315,7 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     PlaceNoseCaret(ShipState, Here);
     if (Overlay)
     {
-        Overlay->PlaceFor(*ShipState, Here, GetOwningPlayer());
+        Overlay->PlaceFor(*ShipState, Here, Controller);
     }
 
     if (AltitudeReadout)

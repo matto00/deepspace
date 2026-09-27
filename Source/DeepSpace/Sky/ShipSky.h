@@ -326,11 +326,19 @@ namespace ShipSky
         /** Between the world and its star: the world seen full and lit. */
         Day,
 
-        /** Beyond the world from its star, the star behind it: the world
-         *  seen dark, in the star's glare -- the .03 AU question's leading
-         *  hypothesis, put where eyes can judge it (system map decision 8). */
+        /** Beyond the world from its star, the star behind it and a little
+         *  aside (NightSideSlope): the world seen dark, in the star's glare
+         *  and off its disc -- the .03 AU question's leading hypothesis in
+         *  the geometry DeepSpace.Sky.NightSideIsDrawn and sky_probe --night
+         *  measure, put where eyes can judge it (system map decision 8). */
         Night,
     };
+
+    /** How far aside of the anti-star line the night side hangs, as a slope:
+     *  NightSideIsDrawn's 0.002 AU to one side at 0.03 AU out, 3.8 degrees
+     *  at the world. On the line itself the world would sit dead centre on
+     *  the star's disc, a transit, which is not the case in question. */
+    inline constexpr double NightSideSlope = 0.002 / 0.03;
 
     /**
      * ds.Sky.Goto's placement: AltitudeCm above Body's surface on the Side

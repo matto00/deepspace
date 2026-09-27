@@ -6,8 +6,10 @@
 #include "Components/TextBlock.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
+#include "Ship/PilotSeat.h"
 #include "Ship/ShipNavState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Ship/ShipTags.h"
@@ -223,6 +225,37 @@ bool FTargetOverlayTest::RunTest(const FString& Parameters)
     Overlay->PlaceFrom(*Ship, Home, nullptr, Pilot);
     TestEqual(TEXT("no camera handed in: hidden"), Overlay->GetVisibility(), ESlateVisibility::Collapsed);
 
+    // -- The HUD drives it: its refresh is NativeTick's whole body. ---------
+    // A headless widget is never painted, so never ticked; Refresh is what
+    // play runs every frame, here with no player to see through.
+    {
+        FScopedCVar Shown(TEXT("ds.HUD"), 1);
+        Overlay->SetVisibility(ESlateVisibility::HitTestInvisible);
+        HUD->Refresh(1.0f / 30.0f, nullptr);
+        const FString Line = Readout ? Readout->GetText().ToString() : FString();
+        TestFalse(TEXT("a target in hand: the HUD's refresh writes the target readout"), Line.IsEmpty());
+        TestEqual(TEXT("and it is the target line, the one the map prints"), Line,
+                  UShipHUDWidget::TargetLineText(*Ship, Home).ToString());
+        TestEqual(TEXT("the refresh reaches the overlay, which with no player to see through hides"),
+                  Overlay->GetVisibility(), ESlateVisibility::Collapsed);
+        Ship->ClearTarget();
+        HUD->Refresh(1.0f / 30.0f, nullptr);
+        TestTrue(TEXT("let go, the next refresh empties the readout"), Readout && Readout->GetText().IsEmpty());
+        TestTrue(TEXT("and the target comes back"), Ship->SetTarget(FBodyId{ Home->Stub.Id, Far, -1 }));
+    }
+
+    // -- The view is sized in slate units: a 4K display at a DPI scale of 2
+    //    is a 1080p view, the space the projection answers in.
+    TestEqual(TEXT("4K at a scale of 2 is a 1920 x 1080 view"),
+              UShipTargetOverlay::SlateViewSize(FVector2D(3840.0, 2160.0), 2.0f), FVector2D(1920.0, 1080.0));
+    TestEqual(TEXT("at a scale of 1 the pixels are the view"),
+              UShipTargetOverlay::SlateViewSize(FVector2D(2560.0, 1440.0), 1.0f), FVector2D(2560.0, 1440.0));
+    {
+        const FVector2D Unscaled = UShipTargetOverlay::SlateViewSize(FVector2D(1920.0, 1080.0), 0.0f);
+        TestTrue(TEXT("a scale of nothing is never a division by it"),
+                 FMath::IsFinite(Unscaled.X) && FMath::IsFinite(Unscaled.Y) && Unscaled.X > 0.0);
+    }
+
     // -- Through a pinhole, in a cockpit. ------------------------------------
     // The ship faces the world, so it lies along +X in the hull. Glass ahead
     // of the helm, 3 m out and 6 m wide; a wall 3 m aft of the helm, between
@@ -254,6 +287,32 @@ bool FTargetOverlayTest::RunTest(const FString& Parameters)
              FVector2D::Distance(Mark.Centre, Middle) < 0.5);
     TestEqual(TEXT("a point far off gets the least bracket"), Mark.Size, TargetMarker::DefaultMinPixels);
     TestEqual(TEXT("and the overlay shows"), Overlay->GetVisibility(), ESlateVisibility::HitTestInvisible);
+
+    // The helm's own seat, where the level has it. Its reach box, which lets
+    // a standing player's E find the chair, blocks Visibility and envelops
+    // the seated pilot's eye; the glass trace must not take it for a wall,
+    // or the one person steering never sees the bracket. It stays for the
+    // rest of the cockpit's cases, as it does aboard.
+    APilotSeat* Helm = Test.World->SpawnActor<APilotSeat>(HelmSeat, FRotator::ZeroRotator);
+    if (!TestNotNull(TEXT("the helm seat spawns"), Helm))
+    {
+        return false;
+    }
+    {
+        FHitResult Inside;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(TargetOverlayTestSeat), false, Pilot);
+        const bool bHit = Test.World->LineTraceSingleByChannel(Inside, PilotEye, PilotEye + FVector(3000.0, 0.0, 0.0),
+                                                               ECC_Visibility, Params);
+        TestTrue(TEXT("the seated eye is inside the helm seat's reach box: a trace from it starts in the seat"),
+                 bHit && Inside.bStartPenetrating && Inside.GetActor() == Helm);
+    }
+    Mark = Decide(PilotEye, Ahead, Pilot);
+    TestTrue(TEXT("sat in the helm seat, the pilot still sees the target bracketed"),
+             Mark.Shape == ETargetMarkShape::Bracket);
+    TestTrue(TEXT("seen through the glass from the seated eye, the seat stepped past"),
+             TargetMarker::SeenThroughGlass(Test.World, PilotEye, FVector::ForwardVector, Pilot));
+    TestFalse(TEXT("and past the seat a wall still hides it: only what the eye is inside is stepped past"),
+              TargetMarker::SeenThroughGlass(Test.World, PilotEye, -FVector::ForwardVector, Pilot));
 
     TestTrue(TEXT("someone else from the helm's eye is behind the pilot's body: nothing"),
              Decide(PilotEye, Ahead, Walker).Shape == ETargetMarkShape::None);

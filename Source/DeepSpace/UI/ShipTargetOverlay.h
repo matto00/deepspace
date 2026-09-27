@@ -74,6 +74,16 @@ public:
      */
     static bool ShowsPrograde(const UShipSubsystem& Ship, const APawn* Viewer, const TOptional<FStarSystem>& Here);
 
+    /**
+     * The view's size in the units the overlay places in: the viewport's
+     * pixels over its DPI scale. ProjectWorldLocationToWidgetPosition answers
+     * already divided by that scale, so on the developer's 4K display at a
+     * scale of 2 a 3840 x 2160 viewport is a 1920 x 1080 view, and the edge
+     * the chevron is pinned to is the edge the player sees. A scale of zero
+     * or less is taken as the least positive one. Pure.
+     */
+    static FVector2D SlateViewSize(const FVector2D& ViewportPixels, float ViewportScale);
+
     /** The world point the target is projected from: along its direction
      *  from the camera, as the nose caret is. Ship axes are world axes (ADR
      *  0005) and the proxy is scaled about the ship's origin, so a point

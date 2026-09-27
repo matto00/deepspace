@@ -1,6 +1,8 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Ship/ShipFlightState.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/EngineeringConsoleWidget.h"
@@ -9,6 +11,7 @@
 #include "UI/SystemMapWidget.h"
 #include "UI/TargetMarker.h"
 #include "GameFramework/Pawn.h"
+#include "Sky/LocalSystem.h"
 #include "Tests/SkyTestWorld.h"
 #include "Universe/UniverseSubsystem.h"
 
@@ -158,6 +161,56 @@ bool FShipScreensAgreeTest::RunTest(const FString& Parameters)
                 const TOptional<FTargetView> After = Aboard->GetTargetView(*HereNow());
                 TestTrue(TEXT("and it is live: half a second on, the time to arrival has fallen"),
                          Before && After && Before->EtaSeconds && After->EtaSeconds && *After->EtaSeconds < *Before->EtaSeconds);
+
+                // At the present speed (ruling 3), not the lever's or the
+                // drive's top: the cap's own law, ShipFlight::SecondsToFloor,
+                // run from the speed the ship has this moment along the ray
+                // it is on. So a notch down reads longer on the next read,
+                // before the ship has gone anywhere much.
+                const auto AtPresentSpeed = [&]() -> TOptional<double>
+                {
+                    const FSkySystem Sky = LocalSystem::Here(HereNow());
+                    if (!Sky.Bodies.IsValidIndex(Orbit + 1))
+                    {
+                        return {};
+                    }
+                    const FSkyBody& Body = Sky.Bodies[Orbit + 1];   // the star first, then the planets
+                    FFlightSurface Floor;
+                    Floor.Centre = Body.Position;
+                    Floor.Radius = Body.Radius;
+                    Floor.Floor = UShipSubsystem::FloorFor(Body);
+                    const FShipFlightState& Flight = Aboard->GetFlightState();
+                    const TOptional<double> ToFloor = ShipFlight::RayToFloor(Floor, Flight.GetUniversePosition(), Flight.GetVelocity());
+                    if (!ToFloor)
+                    {
+                        return {};
+                    }
+                    return ShipFlight::SecondsToFloor(*ToFloor, Aboard->GetShipSpeed(), Flight.GetLimits().LinearAcceleration,
+                                                      Flight.GetLimits().HoldSeconds);
+                };
+                const auto Matches = [&](const TOptional<FTargetView>& View, const TCHAR* When)
+                {
+                    const TOptional<double> Expected = AtPresentSpeed();
+                    const bool bMatch = View && View->EtaSeconds && Expected
+                        && FMath::IsNearlyEqual(*View->EtaSeconds, *Expected, 1.0e-4 * *Expected);
+                    TestTrue(FString::Printf(TEXT("%s, the ETA is the time at the present speed, %.3g m/s (%.6g s, %.6g s)"), When,
+                                             Aboard->GetShipSpeed() * 0.01, View && View->EtaSeconds ? *View->EtaSeconds : -1.0,
+                                             Expected ? *Expected : -1.0),
+                             bMatch);
+                };
+                Matches(After, TEXT("spooling toward the lever"));
+                const int32 Lower = FMath::Max(1, FMath::FloorToInt(Aboard->GetFlightState().GetDrivePosition()) - 1);
+                const float Was = Aboard->GetShipSpeed();
+                TestTrue(TEXT("the lever goes a notch under the drive"), Aboard->SetDriveLever(Pilot, Lower));
+                Aboard->Tick(0.05f);
+                const TOptional<FTargetView> Lowered = Aboard->GetTargetView(*HereNow());
+                TestTrue(FString::Printf(TEXT("a notch down, the ship eases off (%.3g to %.3g m/s)"), Was * 0.01,
+                                         Aboard->GetShipSpeed() * 0.01),
+                         Aboard->GetShipSpeed() < Was);
+                TestTrue(TEXT("and the next read of the time to arrival is longer"),
+                         Lowered && Lowered->EtaSeconds && After && After->EtaSeconds && *Lowered->EtaSeconds > *After->EtaSeconds);
+                Matches(Lowered, TEXT("eased a notch down"));
+                Agree(TEXT("a notch down"));
 
                 Aboard->ClearTarget();
                 TestTrue(TEXT("let go, both lines are empty"), Agree(TEXT("let go")).IsEmpty());

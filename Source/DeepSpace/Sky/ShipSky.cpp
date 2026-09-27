@@ -748,10 +748,28 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
     // world's day side, so it is seen full and lit; away from it for the
     // night side, so the world is dark with its star behind it; for a star,
     // back toward the ship.
+    //
+    // The night side is not the anti-sun line itself: that would hang the
+    // world dead centre on the star's disc, a transit silhouette, which is
+    // the easiest case to see and also the one most drowned in glare. It is
+    // the .03 AU question's geometry, NightSideIsDrawn's and sky_probe
+    // --night's: off the line by NightSideSlope, in the system's plane, to
+    // +Y of a star at -X -- 3.8 degrees at the world, a 176-degree phase,
+    // and the world about 3.7 degrees off the star's centre from the ship.
     FVector Out = FVector::ZeroVector;
     if (Target.Kind != ESkyBodyKind::Star && Star)
     {
-        Out = (Star->Position - Target.Position).GetSafeNormal() * (Side == EGotoSide::Night ? -1.0 : 1.0);
+        const FVector Sunward = (Star->Position - Target.Position).GetSafeNormal();
+        Out = Sunward;
+        if (Side == EGotoSide::Night)
+        {
+            FVector Aside = FVector::CrossProduct(FVector::UpVector, -Sunward).GetSafeNormal();
+            if (Aside.IsNearlyZero())
+            {
+                Aside = FVector::CrossProduct(FVector::ForwardVector, -Sunward).GetSafeNormal();
+            }
+            Out = (-Sunward + Aside * NightSideSlope).GetSafeNormal();
+        }
     }
     if (Out.IsNearlyZero())
     {
@@ -791,7 +809,10 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
     }
     // The altitude must be a number: a body's name has spaces in it, so a
     // forgotten altitude would otherwise read the name's last word as 0 km.
-    if (Rest.Num() < 2 || !FCString::IsNumeric(*Rest.Last()))
+    // Any number, exponent form included: the .03 AU case is 4500000 km,
+    // and 4.5e6 is how a person writes it.
+    double AltitudeKm = 0.0;
+    if (Rest.Num() < 2 || !LexTryParseString(AltitudeKm, *Rest.Last()) || !FMath::IsFinite(AltitudeKm))
     {
         Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night]: onto the body's day side, or its night side, ")
                 TEXT("facing it. Bodies:"));
@@ -810,7 +831,6 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
     // A body's Id can have spaces in it, so every argument but the last is
     // the body.
     const FString Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
-    const double AltitudeKm = FCString::Atod(*Rest.Last());
     const int32 Body = ShipSky::FindBody(System, Which);
     const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
         System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition(), Side);
@@ -840,7 +860,8 @@ namespace
     FAutoConsoleCommandWithWorldArgsAndOutputDevice GotoCommand(
         TEXT("ds.Sky.Goto"),
         TEXT("'ds.Sky.Goto <body> <altitude_km> [night]': place the ship above a body of this system, on its day ")
-        TEXT("side -- or with 'night' its far side from the star, the world dark in the glare -- facing it, once; ")
+        TEXT("side -- or with 'night' its far side from the star, 3.8 degrees off the star's line as the .03 AU ")
+        TEXT("case is, the world dark in the glare and not in transit -- facing it, once; ")
         TEXT("the orientation is never held. <body> is an index or a name. Then 'ds.Nav.Target <body>' brackets it."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Goto));
 }

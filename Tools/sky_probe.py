@@ -42,9 +42,12 @@ Earth at 1 AU, the ship 0.03 AU beyond the Earth on the sun-planet line and
 that and a few distances either side it prints the Earth's pixels, the phase
 angle, the Lambert phase and what it leaves of full brightness, the lit
 fraction the target line's NIGHT SIDE is judged on, and how far the world
-is from the Sun's centre. Whether those pixels can be *seen* is a question
-for eyes: in play, ds.Sky.Goto <world> 4500000 night, then ds.Nav.Target
-<world>.
+is from the Sun's centre; then the phase law alone at the spec's 150 and
+170 degrees, where its 0.015 and 0.0006 come from. Whether those pixels can
+be *seen* is a question for eyes: in play, ds.Sky.Goto <world> 4500000
+night (or 4.5e6), which hangs the ship on this geometry -- 0.002/0.03 of
+the way aside, 3.8 degrees at the world, never a transit across the star --
+then ds.Nav.Target <world>.
 """
 
 import math
@@ -428,6 +431,17 @@ def night():
             "yes" if lit < NIGHT_SIDE_LIT else "no", separation))
     print("-" * 118)
     print("'of full' is the Lambert phase against full phase from the same distance: what the disc gives back.")
+    print()
+    # The spec's own figures (decision 8's first hypothesis) are at phase
+    # angles the fixture does not reach: 0.015 at 150 degrees and 0.0006 at
+    # 170. The phase law alone, so they can be recomputed beside it.
+    print("%10s %10s %10s %8s %6s" % ("phase", "Lambert", "of full", "lit", "night"))
+    for degrees in (90.0, 120.0, 134.0, 150.0, 170.0, 176.2):
+        alpha = math.radians(degrees)
+        phase = lambert_phase(alpha)
+        lit = 0.5 * (1.0 + math.cos(alpha))
+        print("%9.1f° %10.2g %9.2g%% %8.3f %6s" % (
+            degrees, phase, 100.0 * phase, lit, "yes" if lit < NIGHT_SIDE_LIT else "no"))
 
 
 def main(argv):

@@ -64,11 +64,11 @@ namespace
         {
             return {};
         }
-        const float Scale = FMath::Max(UWidgetLayoutLibrary::GetViewportScale(WorldContext), UE_KINDA_SMALL_NUMBER);
         FTargetOverlayCamera Camera;
         Camera.Location = Manager->GetCameraLocation();
         Camera.Rotation = Manager->GetCameraRotation().Quaternion();
-        Camera.ViewSize = UWidgetLayoutLibrary::GetViewportSize(WorldContext) / Scale;
+        Camera.ViewSize = UShipTargetOverlay::SlateViewSize(UWidgetLayoutLibrary::GetViewportSize(WorldContext),
+                                                            UWidgetLayoutLibrary::GetViewportScale(WorldContext));
         if (!(Camera.ViewSize.X > 0.0) || !(Camera.ViewSize.Y > 0.0))
         {
             return {};
@@ -108,6 +108,11 @@ bool UShipTargetOverlay::ShowsPrograde(const UShipSubsystem& Ship, const APawn* 
 {
     return ShowsTargetMark(Ship, Viewer, Here) && Ship.GetPilot() == Viewer
         && Ship.GetFlightState().GetVelocity().Size() >= TargetMarker::MinSpeed;
+}
+
+FVector2D UShipTargetOverlay::SlateViewSize(const FVector2D& ViewportPixels, float ViewportScale)
+{
+    return ViewportPixels / FMath::Max(ViewportScale, UE_KINDA_SMALL_NUMBER);
 }
 
 FVector UShipTargetOverlay::TargetWorldPoint(const FVector& CameraLocation, const FVector& ShipLocalDir)
