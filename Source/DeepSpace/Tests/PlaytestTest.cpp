@@ -200,6 +200,20 @@ namespace PlaytestTestLocal
         return true;
     }
 
+    /** Straight out of the plane, or whichever of a few ways out meets no
+     *  body; zero if none does. */
+    FVector WayOut(const FShipFlightState& Flight)
+    {
+        for (const FVector& Candidate : { FVector::UpVector, FVector::DownVector, FVector(0.3, 0.2, 1.0), FVector(-0.2, 0.3, -1.0) })
+        {
+            if (MissesEveryBody(Flight, Candidate.GetSafeNormal()))
+            {
+                return Candidate.GetSafeNormal();
+            }
+        }
+        return FVector::ZeroVector;
+    }
+
     /**
      * What a pilot's hands do to put the nose on a direction given in ship
      * axes: the body rates the flight integrates, about +Z to swing the nose
@@ -419,16 +433,7 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     const FShipFlightState& Flight = Ship->GetFlightState();
     const auto Notch = [&]() { return Flight.GetCommand().DriveNotch; };
 
-    // Straight out of the plane, or whichever way meets nothing.
-    FVector Away = FVector::ZeroVector;
-    for (const FVector& Candidate : { FVector::UpVector, FVector::DownVector, FVector(0.3, 0.2, 1.0), FVector(-0.2, 0.3, -1.0) })
-    {
-        if (MissesEveryBody(Flight, Candidate.GetSafeNormal()))
-        {
-            Away = Candidate.GetSafeNormal();
-            break;
-        }
-    }
+    const FVector Away = WayOut(Flight);
     if (!TestFalse(TEXT("a way out that meets no body"), Away.IsZero()))
     {
         return false;
@@ -756,8 +761,8 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
 
 /**
  * The in-system jump to the target (ruling 1, map decision 12), flown as the
- * playtest will: a far world picked on the map, the drive under way, "Jump
- * here", the charge, the pilot's hands turning the nose onto it, and the
+ * playtest will: a far world picked on the map, the drive under way at
+ * light, "Jump here", the charge, the pilot's hands turning the nose onto it, and the
  * fold opening by itself. The fold is an all stop; the arrival is at rest,
  * both levers at STOP, at the standoff that shows the world two degrees
  * across, above its floor and still the target -- and it stays at rest
@@ -796,17 +801,28 @@ bool FPlaytestInSystemJumpToTargetTest::RunTest(const FString& Parameters)
     const FShipFlightState& Flight = Ship->GetFlightState();
     const auto Levers = [&]() { return Flight.GetCommand().DriveNotch == 0 && Flight.GetCommand().Throttle == 0.0; };
 
-    // Under way: the drive four notches up, 10 km/s.
-    Player->PressDrive();
-    for (int32 Tap = 0; Tap < 4; ++Tap)
+    // Out of the plane, where nothing is in the way, and under way at
+    // light: Shift held to the top. The fold then opens with
+    // more spool-down in hand than the fold lasts, so only the arrival's own
+    // rest can put the ship at rest.
+    const FVector Away = WayOut(Flight);
+    if (!TestFalse(TEXT("a way out that meets no body"), Away.IsZero()))
     {
-        PlaytestTestLocal::Tap(Player, Ship, 1);
+        return false;
     }
-    for (int32 Tick = 0; Tick < 60; ++Tick)
+    Ship->PlaceShip(Flight.GetUniversePosition(), Facing(Away));
+    Frame(Player, Ship, 0.0f);
+    Player->PressDrive();
+    Player->TapLever(1);
+    Player->HoldLever(1);
+    for (int32 Tick = 0; Tick < 300; ++Tick)
     {
         Frame(Player, Ship);
     }
-    TestTrue(FString::Printf(TEXT("under way under the drive (%.1f km/s)"), Flight.GetSpeed() / 1.0e5), Flight.GetSpeed() > 5.0e5);
+    Player->HoldLever(0);
+    Frame(Player, Ship);
+    TestTrue(FString::Printf(TEXT("under way under the drive at light (%.3f c)"), Flight.GetSpeed() / ShipDriveLever::LightCmPerSecond),
+             Flight.GetCommand().DriveNotch == Flight.GetDriveNotchCount() - 1 && Flight.GetSpeed() > 0.5 * ShipDriveLever::LightCmPerSecond);
 
     Map->RefreshFromShip();
     Map->SelectWorld(Orbit);
