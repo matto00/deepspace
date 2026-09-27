@@ -858,9 +858,11 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
 
     // Leaving the drive while the cap holds it off a floor faster than
     // cruise could brake from. The hold allows d / 4 s, which above the
-    // knee, 12.8 km/s 51.2 km up, beats the braking curve: 80 km up it is
-    // 20 km/s, cruise's own top, where cruise needs 100 km to stop. Cruise
-    // must not be handed that; the spool goes on down the drive's cap until
+    // knee, 12.8 km/s 51.2 km up, beats the braking curve: 70 km up it is
+    // 17.5 km/s, under cruise's top, where cruise needs 77 km to stop and
+    // would meet the floor at 5 km/s. (At 80 km it is 20 km/s, and a
+    // substep's rounding puts it either side of cruise's top.) Cruise must
+    // not be handed that; the spool goes on down the drive's cap until
     // the braking curve is the cap, and cruise takes it on the curve and
     // brings it to rest on the floor, never meeting the hard stop at speed.
     {
@@ -872,14 +874,15 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         {
             return ShipFlight::RayToFloor(Earth, State.GetUniversePosition(), Nose);
         };
-        for (int32 Sub = 0; Sub < 90 * 120 && ToFloor().Get(0.0) > 80.0 * Km; ++Sub)
+        for (int32 Sub = 0; Sub < 90 * 120 && ToFloor().Get(0.0) > 70.0 * Km; ++Sub)
         {
             State.Step(Step);
         }
         const double LeftAt = ToFloor().Get(0.0);
-        TestTrue(FString::Printf(TEXT("held off 80 km up (%.1f km, %.2f km/s)"), LeftAt / Km, State.GetSpeed() / Km),
-                 LeftAt > 79.0 * Km && LeftAt <= 80.0 * Km && State.GetHold() == EFlightHold::HoldingOff
-                 && State.GetSpeed() > ShipFlight::MaySpeed(LeftAt, State.GetLimits().LinearAcceleration, 0.0, Step) * 1.2);
+        TestTrue(FString::Printf(TEXT("held off 70 km up, under cruise's top (%.1f km, %.2f km/s)"), LeftAt / Km, State.GetSpeed() / Km),
+                 LeftAt > 69.0 * Km && LeftAt <= 70.0 * Km && State.GetHold() == EFlightHold::HoldingOff
+                 && State.GetSpeed() < Cruise && ShipDriveLever::SpeedAt(State.GetDrivePosition()) < Cruise
+                 && State.GetSpeed() > ShipFlight::MaySpeed(LeftAt, State.GetLimits().LinearAcceleration, 0.0, Step) * 1.1);
         Leave(State, 1.0);
         TestEqual(TEXT("under cruise's top but too fast to brake from: it spools down"),
                   static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
