@@ -276,6 +276,14 @@ bool FTargetOverlayTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("a walker gets nothing: a chevron following them round the galley would be noise"),
              Decide(AtGlass, Turned, Walker).Shape == ETargetMarkShape::None);
 
+    // In front of the head but outside the view: 60 degrees to the left of
+    // a 90-degree view. The projection works there, and it is what says
+    // which way to turn.
+    const FRotator Aside(0.0, 60.0, 0.0);
+    Mark = Decide(PilotEye, Aside, Pilot);
+    TestTrue(FString::Printf(TEXT("in front but off the view, a chevron pointing left (%.2f, %.2f)"), Mark.Pointing.X, Mark.Pointing.Y),
+             Mark.Shape == ETargetMarkShape::Chevron && Mark.Pointing.X < -0.99);
+
     // A disc: the bracket is its projected diameter plus padding a side.
     {
         const double Radius = Home->Planets[Far].RadiusEarth * UniverseUnits::CmPerEarthRadius;
@@ -317,8 +325,10 @@ bool FTargetOverlayTest::RunTest(const FString& Parameters)
                  Prograde && FVector2D::Distance(*Prograde, Middle) < 1.0);
         Decide(AtGlass, Ahead, Walker);
         TestFalse(TEXT("a walker's HUD has none"), Overlay->GetLastPrograde().IsSet());
-        Decide(PilotEye, Turned, Pilot);
+        Decide(PilotEye, Aside, Pilot);
         TestFalse(TEXT("off the view it is hidden, not pinned to the edge"), Overlay->GetLastPrograde().IsSet());
+        Decide(PilotEye, Turned, Pilot);
+        TestFalse(TEXT("and behind the head likewise"), Overlay->GetLastPrograde().IsSet());
         Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
     }
 
