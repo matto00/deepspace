@@ -9,6 +9,9 @@ namespace
     /** A distance too small to have a direction, cm: a millimetre. */
     constexpr double NoDirectionCm = 0.1;
 
+    /** ln 10: d(log10 x)/dx is 1 / (x ln 10). */
+    constexpr double Ln10 = 2.302585092994045684;
+
     /** The panel direction of a universe-plane offset: +X up the glass, +Y
      *  to the right. Up with no offset at all. */
     FVector2D PanelDirection(double UniverseX, double UniverseY)
@@ -16,6 +19,20 @@ namespace
         const FVector2D Dir(UniverseY, -UniverseX);
         const double Length = Dir.Size();
         return Length > UE_SMALL_NUMBER ? Dir / Length : FVector2D(0.0, -1.0);
+    }
+
+    /** A panel vector from a universe-plane one, unnormalised: the same
+     *  axes as PanelDirection. */
+    FVector2D PanelVector(double UniverseX, double UniverseY)
+    {
+        return FVector2D(UniverseY, -UniverseX);
+    }
+
+    /** The least radius the ship's glyph is drawn at, px: held clear of the
+     *  star's disc (see Ship). */
+    double GlyphFloorPx(const SystemMap::FMapScale& Scale)
+    {
+        return Scale.Pixels.StarPx + 0.5 * SystemMap::ShipRingPx;
     }
 }
 
@@ -46,6 +63,39 @@ double SystemMap::FMapScale::RadiusPx(double DistanceAU) const
         }
     }
     return Pixels.RimPx;
+}
+
+double SystemMap::FMapScale::RadiusSlopePxPerAU(double DistanceAU, bool bOutward) const
+{
+    // Clamped at either end: the side about to be crossed is flat.
+    if (KnotLog.Num() < 2 || DistanceAU <= 0.0
+        || (bOutward ? DistanceAU < InnerAU || DistanceAU >= RimAU
+                     : DistanceAU <= InnerAU || DistanceAU > RimAU))
+    {
+        return 0.0;
+    }
+
+    // The segment the ship is about to be in: probed a hair to that side.
+    // Exactly on an orbit -- where every ship sits at a world -- the two
+    // sides' slopes differ, and the ship's log and the knot's, computed
+    // apart, disagree in the last bit; a bare comparison picked the wrong
+    // side as often as the right one.
+    constexpr double ProbeDex = 1.0e-9;
+    const double Log = FMath::LogX(10.0, DistanceAU) + (bOutward ? ProbeDex : -ProbeDex);
+    for (int32 Knot = 1; Knot < KnotLog.Num(); ++Knot)
+    {
+        if (Log < KnotLog[Knot])
+        {
+            const double Span = KnotLog[Knot] - KnotLog[Knot - 1];
+            if (Span <= 0.0)
+            {
+                return 0.0;
+            }
+            // d(px)/d(log10 AU), then d(log10 AU)/d(AU) = 1 / (AU ln 10).
+            return (KnotPx[Knot] - KnotPx[Knot - 1]) / Span / (DistanceAU * Ln10);
+        }
+    }
+    return 0.0;
 }
 
 SystemMap::FMapScale SystemMap::Fit(const FStarSystem& System, double StandoffAU, const FMapPixels& Pixels)
@@ -125,6 +175,49 @@ FVector2D SystemMap::Place(const FMapScale& Scale, const FUniversePosition& Wher
     return Scale.Pixels.Centre + PanelDirection(Offset.X, Offset.Y) * RadiusPx;
 }
 
+TOptional<FVector2D> SystemMap::MotionOnMap(const FMapScale& Scale, const FUniversePosition& Where,
+                                           const FVector& Direction)
+{
+    const FVector Offset = Where - Scale.Star;
+    const double Distance = Offset.Size();
+    const double InPlane = FVector2D(Offset.X, Offset.Y).Size();
+    const FVector Step = Direction.GetSafeNormal();
+    if (InPlane <= NoDirectionCm || Step.IsNearlyZero())
+    {
+        return {};
+    }
+
+    // Ship draws the glyph at R(|offset|) along the offset's azimuth in the
+    // plane. Its derivative along Step, per cm, has two parts:
+    //  - radial: R' times the rate the true distance changes, along the
+    //    azimuth's panel direction;
+    //  - round: R times the rate the azimuth turns, which is Step's in-plane
+    //    part square to the offset over the in-plane distance.
+    // The second is R / r of the first's scale R', which for a log map is
+    // several times larger: the map is stretched round each ring, and a
+    // direction taken straight from the universe misreads it.
+    const double DistanceAU = Distance / UniverseUnits::CmPerAU;
+    const double Closing = FVector::DotProduct(Offset, Step) / Distance;
+    const double RawRadiusPx = Scale.RadiusPx(DistanceAU);
+    const double RadiusPx = FMath::Max(RawRadiusPx, GlyphFloorPx(Scale));
+    const double SlopePxPerCm = RawRadiusPx < GlyphFloorPx(Scale)
+        ? 0.0
+        : Scale.RadiusSlopePxPerAU(DistanceAU, Closing > 0.0) / UniverseUnits::CmPerAU;
+
+    const FVector2D Radial(Offset.X / InPlane, Offset.Y / InPlane);
+    const FVector2D Flat(Step.X, Step.Y);
+    const FVector2D Round = Flat - FVector2D::DotProduct(Flat, Radial) * Radial;
+
+    const FVector2D Motion = PanelVector(Radial.X, Radial.Y) * (SlopePxPerCm * Closing)
+                           + PanelVector(Round.X, Round.Y) * (RadiusPx / InPlane);
+    const double Length = Motion.Size();
+    if (Length <= UE_DOUBLE_SMALL_NUMBER * FMath::Max(SlopePxPerCm, RadiusPx / InPlane))
+    {
+        return {};
+    }
+    return Motion / Length;
+}
+
 SystemMap::FMapShip SystemMap::Ship(const FMapScale& Scale, const FUniversePosition& Where, const FQuat& Orientation)
 {
     FMapShip Glyph;
@@ -143,13 +236,18 @@ SystemMap::FMapShip SystemMap::Ship(const FMapScale& Scale, const FUniversePosit
     // the innermost knot, and a glyph drawn over it would read as "in the
     // star". Every ring is at least a gap outside the disc, so this never
     // moves a ship that is on an orbit.
-    const double RadiusPx = FMath::Max(Scale.RadiusPx(DistanceAU), Scale.Pixels.StarPx + 0.5 * ShipRingPx);
+    const double RadiusPx = FMath::Max(Scale.RadiusPx(DistanceAU), GlyphFloorPx(Scale));
     Glyph.Centre = Scale.Pixels.Centre + PanelDirection(Offset.X, Offset.Y) * RadiusPx;
 
     const FVector Nose = Orientation.RotateVector(FVector::ForwardVector).GetSafeNormal();
     if (FMath::Abs(Nose.Z) < FMath::Cos(FMath::DegreesToRadians(NoseHiddenWithinDeg)))
     {
-        Glyph.Nose = PanelDirection(Nose.X, Nose.Y);
+        // The way the glyph goes when the ship flies nose first, so the
+        // tick and the glyph's motion are one. Where the glyph cannot move
+        // (pinned, heading straight in or out; or on the star's axis) the
+        // nose's own direction in the plane is all there is to show.
+        const TOptional<FVector2D> Along = MotionOnMap(Scale, Where, Nose);
+        Glyph.Nose = Along ? *Along : PanelDirection(Nose.X, Nose.Y);
     }
     return Glyph;
 }
