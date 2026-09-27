@@ -70,6 +70,9 @@ below goes past them, it says so and is on the sign-off list.
 13. **Workflow:** this spec ends with *Decisions needing sign-off*; the
     developer approves it before any code.
 
+
+**Ruled later the same day, on the plan:** the height is normalised by the *measured* maximum of the detail sum (at least 200,000 samples), under a smooth hard cap at `PeakCm`, not by the proven worst case, which is about three times loose and would have drawn peaks at a third of the Earth-like heights of ruling 6. `MaxHeightCm` is still exactly `PeakCm`.
+
 ## Context
 
 ### What exists, and what does not
