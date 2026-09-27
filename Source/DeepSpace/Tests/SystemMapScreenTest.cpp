@@ -5,7 +5,9 @@
 #include "Layout/Geometry.h"
 #include "Widgets/SWidget.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDeviceNull.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipMapScreen.h"
@@ -13,10 +15,12 @@
 #include "Sky/LocalSystem.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/NavText.h"
+#include "UI/NavigationWidget.h"
 #include "UI/ShipHUDWidget.h"
 #include "UI/SystemMapLayout.h"
 #include "UI/SystemMapView.h"
 #include "UI/SystemMapWidget.h"
+#include "UI/TargetMarker.h"
 #include "Universe/ProcGenPriorsConfig.h"
 #include "Universe/StarSystem.h"
 #include "Universe/SystemNames.h"
@@ -57,15 +61,18 @@ namespace SystemMapScreenTestLocal
             + UShipHUDWidget::AltitudeWords(Surface);
     }
 
+    /** Every row as ExpectedRow says, and the target's -- Marked, if any --
+     *  starting with the chart's mark. */
     bool RowsAre(FAutomationTestBase& Test, const USystemMapWidget& Map, const FStarSystem& System,
-                 const FUniversePosition& Where, const TCHAR* When)
+                 const FUniversePosition& Where, const TCHAR* When, int32 Marked = INDEX_NONE)
     {
         bool bAll = Test.TestEqual(FString::Printf(TEXT("%s: one row per world"), When),
                                    Map.GetShownRowCount(), System.Planets.Num());
         for (int32 Orbit = 0; Orbit < System.Planets.Num(); ++Orbit)
         {
+            const FString Mark = Orbit == Marked ? FString(UNavigationWidget::PlottedMark) + TEXT(" ") : FString();
             bAll &= Test.TestEqual(FString::Printf(TEXT("%s: row %d"), When, Orbit),
-                                   Map.GetRowText(Orbit).ToString(), ExpectedRow(System, Orbit, Where));
+                                   Map.GetRowText(Orbit).ToString(), Mark + ExpectedRow(System, Orbit, Where));
         }
         return bAll;
     }
@@ -96,9 +103,11 @@ namespace SystemMapScreenTestLocal
  * words, the orrery laid out from the system the ship is in, and a drawing
  * asked for only when the system, transit or the priors change -- not when
  * the ship flies 100 AU within the system. Between stars it says so and
- * draws nothing. Both pick paths end at SelectWorld, which works out the
- * chart's rule for worlds. (The target itself, and what SelectWorld does
- * with it, are stage 3's.)
+ * draws nothing. Both pick paths end at SelectWorld, which marks the ship's
+ * target or lets it go; the target shows on the map however it was set, with
+ * the ship's own target line, and the band's button plots and engages the
+ * in-system jump, stands it down, or says the world is near enough to fly.
+ * An in-system fold keeps the system drawn and says so.
  *
  * Through the real screen: the actor spawned before play, its widget
  * component's own widget, refreshed as its tick refreshes it.
@@ -159,14 +168,14 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the target line is empty with no target"), Map->GetTargetText().IsEmpty());
     TestTrue(TEXT("in the plane, on the map, the footer says nothing"), Map->GetFooterText().IsEmpty());
     {
-        const SystemMap::FMapLayout Expected = SystemMap::Layout(*Home, SystemMap::Fit(*Home, NavStart::DefaultStandoffAU));
+        const SystemMap::FMapLayout Expected = SystemMap::Layout(*Home, SystemMap::Fit(*Home, UShipSubsystem::GetStandoffAU()));
         const SystemMap::FMapLayout* Drawn = Map->GetLayout();
         bool bSame = Drawn && Drawn->Dots.Num() == Expected.Dots.Num() && Drawn->RingPx == Expected.RingPx;
         for (int32 Orbit = 0; bSame && Orbit < Expected.Dots.Num(); ++Orbit)
         {
             bSame &= Drawn->Dots[Orbit].Centre.Equals(Expected.Dots[Orbit].Centre, 1.0e-9);
         }
-        TestTrue(TEXT("the orrery is the system's layout, fitted to the arrival standoff"), bSame);
+        TestTrue(TEXT("the orrery is the system's layout, fitted to the arrival standoff as tuned"), bSame);
         TestTrue(TEXT("and the view is drawing it"), Map->GetView()->HasDrawing());
     }
 
@@ -217,7 +226,7 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
 
     // -- the footer: held at the edges, and off the plane --------------------
     {
-        const SystemMap::FMapScale Scale = SystemMap::Fit(*Home, NavStart::DefaultStandoffAU);
+        const SystemMap::FMapScale Scale = SystemMap::Fit(*Home, UShipSubsystem::GetStandoffAU());
         Ship->PlaceShip(Home->Stub.Position + FVector(0.5 * Scale.InnerAU * UniverseUnits::CmPerAU, 0.0, 0.0), Facing());
         Look();
         TestEqual(TEXT("inside the inner knot, the footer names the innermost orbit"), Map->GetFooterText().ToString(),
@@ -237,29 +246,35 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("none of it asked for a drawing"), Map->GetLayoutAsked(), Asked);
     }
 
-    // -- both pick paths end at SelectWorld, which asks the chart's rule ------
-    TArray<SystemMap::FMapSelection> Selections;
-    const FDelegateHandle Handle = Map->OnSelectedForTest.AddLambda(
-        [&Selections](const SystemMap::FMapSelection& Selection) { Selections.Add(Selection); });
+    // -- both pick paths end at SelectWorld, which marks the ship's target ---
+    const auto Held = [Ship]() { return Ship->GetTarget(); };
+    const auto Is = [&Home](const TOptional<FBodyId>& Target, int32 Orbit)
+    {
+        return Target.IsSet() && *Target == FBodyId{Home->Stub.Id, Orbit, -1};
+    };
     {
         Map->PressRow(1);
+        TestTrue(TEXT("a row targets its world"), Is(Held(), 1));
+        TestTrue(TEXT("and the row carries the mark at once"), Map->GetRowText(1).ToString().StartsWith(UNavigationWidget::PlottedMark));
         const SystemMap::FMapLayout* Drawn = Map->GetLayout();
         if (Drawn)
         {
             Map->GetView()->ClickAt(Drawn->Dots[0].Centre + FVector2D(1.0, 1.0));
+            TestTrue(TEXT("a dot targets its world, replacing the last"), Is(Held(), 0));
+            TestFalse(TEXT("whose row is no longer marked"), Map->GetRowText(1).ToString().StartsWith(UNavigationWidget::PlottedMark));
             Map->GetView()->ClickAt(Drawn->Pixels.Centre);
+            TestTrue(TEXT("the star is not a pick"), Is(Held(), 0));
         }
         Map->SelectWorld(Home->Planets.Num());
-        if (TestEqual(TEXT("a row and a dot each made one selection; the star and a missing orbit none"), Selections.Num(), 2))
-        {
-            TestTrue(TEXT("the row targets its world"), Selections[0].Action == SystemMap::EMapSelect::Target
-                && Selections[0].Body == FBodyId{Home->Stub.Id, 1, -1});
-            TestTrue(TEXT("the dot targets its world"), Selections[1].Action == SystemMap::EMapSelect::Target
-                && Selections[1].Body == FBodyId{Home->Stub.Id, 0, -1});
-        }
+        TestTrue(TEXT("nor is an orbit the system lacks"), Is(Held(), 0));
+        Map->SelectWorld(0);
+        TestFalse(TEXT("selecting the target again lets it go"), Held().IsSet());
+        TestFalse(TEXT("and its row is unmarked"), Map->GetRowText(0).ToString().StartsWith(UNavigationWidget::PlottedMark));
     }
 
     // -- the orrery picks on a press released on it, as a row's button does ---
+    // A second pick of the same world clears it, so "picks nothing" is a
+    // target left exactly as it was.
     if (const SystemMap::FMapLayout* Drawn = Map->GetLayout())
     {
         // The view's own Slate widget, given the root geometry: absolute is
@@ -271,18 +286,95 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
             return FPointerEvent(0, At, At, TSet<FKey>(), EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
         };
         const FVector2D OnDot = Drawn->Dots[0].Centre;
-        Selections.Reset();
         Orrery->OnMouseButtonDown(Square, Pointer(OnDot));
-        TestEqual(TEXT("a press on a dot alone picks nothing yet"), Selections.Num(), 0);
+        TestFalse(TEXT("a press on a dot alone picks nothing yet"), Held().IsSet());
         Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
-        TestTrue(TEXT("released on it, it picks that world"),
-                 Selections.Num() == 1 && Selections[0].Body == FBodyId{Home->Stub.Id, 0, -1});
+        TestTrue(TEXT("released on it, it picks that world"), Is(Held(), 0));
         Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
-        TestEqual(TEXT("a release with no press picks nothing"), Selections.Num(), 1);
+        TestTrue(TEXT("a release with no press picks nothing"), Is(Held(), 0));
         Orrery->OnMouseButtonDown(Square, Pointer(OnDot));
         Orrery->OnMouseLeave(Pointer(FVector2D(300.0, 300.0)));
         Orrery->OnMouseButtonUp(Square, Pointer(OnDot));
-        TestEqual(TEXT("a press that left the orrery before it was released picks nothing"), Selections.Num(), 1);
+        TestTrue(TEXT("a press that left the orrery before it was released picks nothing"), Is(Held(), 0));
+    }
+
+    // -- a target set elsewhere shows here untold, with the ship's own line --
+    {
+        FOutputDeviceNull Quiet;
+        IConsoleObject* Target = IConsoleManager::Get().FindConsoleObject(TEXT("ds.Nav.Target"));
+        if (TestNotNull(TEXT("ds.Nav.Target exists"), Target) && Target->AsCommand())
+        {
+            Target->AsCommand()->Execute({TEXT("2")}, Test.World, Quiet);
+        }
+        TestTrue(TEXT("ds.Nav.Target 2 marks the second world"), Is(Held(), 1));
+        Look();
+        TestTrue(TEXT("and the map marks its row without being told"),
+                 Map->GetRowText(1).ToString().StartsWith(UNavigationWidget::PlottedMark));
+        const TOptional<FTargetView> Seen = Ship->GetTargetView(*Home);
+        if (TestTrue(TEXT("the ship sees its target"), Seen.IsSet()))
+        {
+            TestEqual(TEXT("the target line is the ship's view of it, printed"), Map->GetTargetText().ToString(),
+                      TargetMarker::Line(*Seen));
+            TestTrue(TEXT("naming the world"), Map->GetTargetText().ToString().StartsWith(
+                         FString(UNavigationWidget::PlottedMark) + TEXT(" ") + NavText::WorldName(Home->Planets[1])));
+        }
+    }
+
+    // -- the band's button: the in-system jump, from the map -----------------
+    {
+        const FUniversePosition Parked = Where();
+        const FQuat Facing0 = Facing();
+        TestTrue(TEXT("with a target the button is there"), Map->IsJumpButtonShown());
+        const FString Label = Map->GetJumpButtonText().ToString();
+        if (Ship->IsNearEnoughToFly(*Home, *Held()))
+        {
+            TestEqual(TEXT("near enough to fly: it says so"), Label, FString(TEXT("Near enough to fly")));
+        }
+        // From the far side of the system, well outside any world's reach.
+        Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 0.0, 3.0 * UniverseUnits::CmPerAU), Facing0);
+        Look();
+        TestEqual(TEXT("it reads Jump here"), Map->GetJumpButtonText().ToString(), FString(TEXT("Jump here")));
+        TestTrue(TEXT("and can be pressed"), Map->IsJumpButtonEnabled());
+        Map->PressJumpButton();
+        TestTrue(TEXT("Jump here plots the target as the course"), Ship->GetPlottedWorld() == Held() && Held().IsSet());
+        TestTrue(TEXT("and engages, in one press"), Ship->IsJumpEngaged());
+        TestFalse(TEXT("it is no star course"), Ship->GetPlottedSystem().IsSet());
+        TestEqual(TEXT("then it reads Stand down"), Map->GetJumpButtonText().ToString(), FString(TEXT("Stand down")));
+        Map->PressJumpButton();
+        TestFalse(TEXT("Stand down clears the course"), Ship->HasCourse());
+        TestFalse(TEXT("which stands the jump down"), Ship->IsJumpEngaged());
+        TestTrue(TEXT("and leaves the target"), Is(Held(), 1));
+        TestEqual(TEXT("which can be jumped to again"), Map->GetJumpButtonText().ToString(), FString(TEXT("Jump here")));
+
+        // Inside twice the standoff: near enough to fly.
+        const FVector Out = FVector(0.0, 0.0, 1.0);
+        const double Radius = Home->Planets[1].RadiusEarth * UniverseUnits::CmPerEarthRadius;
+        const double Standoff = NavStart::WorldStandoffCm(Radius, UShipSubsystem::FloorFor(LocalSystem::Here(Home).Bodies[2]));
+        Ship->PlaceShip(Home->PlanetPosition(1) + Out * (1.5 * Standoff), Facing0);
+        Look();
+        TestEqual(TEXT("inside the reach it reads Near enough to fly"), Map->GetJumpButtonText().ToString(), FString(TEXT("Near enough to fly")));
+        TestFalse(TEXT("and cannot be pressed"), Map->IsJumpButtonEnabled());
+        Map->PressJump();
+        TestFalse(TEXT("pressed anyway, nothing is plotted"), Ship->HasCourse());
+
+        Ship->ClearTarget();
+        Look();
+        TestFalse(TEXT("with no target the button is absent"), Map->IsJumpButtonShown());
+        TestTrue(TEXT("and the line is empty"), Map->GetTargetText().IsEmpty());
+        Ship->PlaceShip(Parked, Facing0);
+        Look();
+    }
+
+    // -- the standoff the rim is fitted to: drawn again when it is retuned ---
+    {
+        Asked = Map->GetLayoutAsked();
+        {
+            FScopedCVar Wider(TEXT("ds.Nav.StandoffAU"), 4.0f);
+            Look();
+            TestEqual(TEXT("a retuned ds.Nav.StandoffAU is drawn on the next frame"), Map->GetLayoutAsked(), Asked + 1);
+        }
+        Look();
+        TestEqual(TEXT("and put back, drawn again"), Map->GetLayoutAsked(), Asked + 2);
     }
 
     // -- another system, placed into without a jump: drawn again at once ------
@@ -299,6 +391,7 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
     }
     if (TestTrue(TEXT("a neighbour with a different number of worlds (or this proves little)"), Other.IsSet()))
     {
+        TestTrue(TEXT("home's first world is marked before leaving"), Ship->SetTarget(FBodyId{Home->Stub.Id, 0, -1}));
         Asked = Map->GetLayoutAsked();
         Ship->PlaceShip(Other->Stub.Position + FVector(2.0 * UniverseUnits::CmPerAU, 0.0, 0.0), Facing());
 
@@ -307,22 +400,26 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
         RowsAre(*this, *Map, *Other, Where(), TEXT("in the other system"));
         TestEqual(TEXT("and titled for it"), Map->GetTitleText().ToString(), NavText::Place(Other->Stub.Name, Other->Star.Class));
         TestTrue(TEXT("its selections are its own worlds"), SystemMap::Select(*Other, 0, {})->Body.System == Other->Stub.Id);
+        TestTrue(TEXT("home's target is still held (or the next two prove nothing)"), Is(Held(), 0));
+        TestFalse(TEXT("but it names nothing here, so no row is marked"), Map->GetRowText(0).ToString().StartsWith(UNavigationWidget::PlottedMark));
+        TestTrue(TEXT("and there is no target line"), Map->GetTargetText().IsEmpty());
+        TestFalse(TEXT("nor a button"), Map->IsJumpButtonShown());
+        TestFalse(TEXT("and it cannot be set to another system's world"), Ship->SetTarget(FBodyId{Home->Stub.Id, 1, -1}));
 
         // A press in the frame the system changes, on a row of the system
         // the glass still shows: refused, not turned into the same orbit of
         // a system the player never saw.
         Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 3.0 * UniverseUnits::CmPerAU, 0.0), Facing());
-        Selections.Reset();
+        Ship->ClearTarget();
         Asked = Map->GetLayoutAsked();
         TestTrue(TEXT("the other system's first row is still on the glass (or this proves nothing)"), Map->IsRowEnabled(0));
         Map->PressRow(0);
         TestEqual(TEXT("the press is what brought the map home"), Map->GetLayoutAsked(), Asked + 1);
-        TestEqual(TEXT("and a press made on a drawing that did not survive it picks nothing"), Selections.Num(), 0);
+        TestFalse(TEXT("and a press made on a drawing that did not survive it picks nothing"), Held().IsSet());
         Map->PressRow(0);
-        TestTrue(TEXT("pressed again, on the drawing now shown, it picks home's world"),
-                 Selections.Num() == 1 && Selections[0].Body == FBodyId{Home->Stub.Id, 0, -1});
+        TestTrue(TEXT("pressed again, on the drawing now shown, it picks home's world"), Is(Held(), 0));
+        Ship->ClearTarget();
     }
-    Map->OnSelectedForTest.Remove(Handle);
 
     // -- an inhabited world, and a system with none: the corpus near home ----
     {
@@ -418,10 +515,51 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("with no rows"), Map->GetShownRowCount(), 0);
             TestFalse(TEXT("and draws nothing"), Map->GetView()->HasDrawing());
             TestTrue(TEXT("and has no title"), Map->GetTitleText().IsEmpty());
+            Ship->ClearTarget();
             Map->SelectWorld(0);
+            TestFalse(TEXT("and a press there marks nothing"), Held().IsSet());
             Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 3.0 * UniverseUnits::CmPerAU, 0.0), Facing());
             Look();
         }
+    }
+
+    // -- an in-system fold: the system stays, and the map says so ------------
+    {
+        FScopedCVar QuickCharge(TEXT("ds.Nav.ChargeSeconds"), 0.5f);
+        const int32 Outermost = Home->Planets.Num() - 1;
+        TestTrue(TEXT("the outermost world is targeted"), Ship->SetTarget(FBodyId{Home->Stub.Id, Outermost, -1}));
+        Look();
+        Map->PressJumpButton();
+        TestTrue(TEXT("Jump here, pressed"), Ship->IsJumpEngaged() && Ship->GetPlottedWorld().IsSet());
+        const FVector Toward = (Home->PlanetPosition(Outermost) - Where()).GetSafeNormal();
+        Ship->PlaceShip(Where(), FRotationMatrix::MakeFromX(Toward).ToQuat());
+        for (int32 Tick = 0; Tick < 100 && !Ship->IsInTransit(); ++Tick)
+        {
+            Ship->Tick(0.1f);
+        }
+        if (TestTrue(TEXT("the in-system fold opens"), Ship->IsInTransit()))
+        {
+            Asked = Map->GetLayoutAsked();
+            Look();
+            TestEqual(TEXT("an in-system fold asks for no drawing"), Map->GetLayoutAsked(), Asked);
+            TestEqual(TEXT("it says it is in the fold"), Map->GetFooterText().ToString(), FString(TEXT("In the fold.")));
+            RowsAre(*this, *Map, *Home, Where(), TEXT("in the fold"), Outermost);
+            TestTrue(TEXT("and still draws the system"), Map->GetView()->HasDrawing());
+            TestTrue(TEXT("the target line is empty in the fold"), Map->GetTargetText().IsEmpty());
+            TestTrue(TEXT("the target's row is still marked"), Map->GetRowText(Outermost).ToString().StartsWith(UNavigationWidget::PlottedMark));
+            TestEqual(TEXT("the button still reads Stand down"), Map->GetJumpButtonText().ToString(), FString(TEXT("Stand down")));
+            TestFalse(TEXT("and cannot be pressed in the fold"), Map->IsJumpButtonEnabled());
+        }
+        for (int32 Tick = 0; Tick < 200 && Ship->IsInTransit(); ++Tick)
+        {
+            Ship->Tick(0.1f);
+        }
+        Look();
+        TestFalse(TEXT("the in-system jump arrives"), Ship->IsInTransit());
+        TestTrue(TEXT("with the world still marked"), Map->GetRowText(Outermost).ToString().StartsWith(UNavigationWidget::PlottedMark));
+        TestTrue(TEXT("and the line naming it"), Map->GetTargetText().ToString().Contains(NavText::WorldName(Home->Planets[Outermost])));
+        TestEqual(TEXT("which can be jumped to again only once flown away from"), Map->GetJumpButtonText().ToString(), FString(TEXT("Near enough to fly")));
+        Ship->ClearTarget();
     }
 
     // -- between stars: in the fold -------------------------------------------
@@ -444,6 +582,7 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("in a star jump's fold the map says between stars"), Map->GetFooterText().ToString(), FString(TEXT("Between stars.")));
             TestEqual(TEXT("with no rows"), Map->GetShownRowCount(), 0);
             TestFalse(TEXT("and draws nothing"), Map->GetView()->HasDrawing());
+            TestFalse(TEXT("and has no button"), Map->IsJumpButtonShown());
         }
         for (int32 Tick = 0; Tick < 200 && Ship->IsInTransit(); ++Tick)
         {

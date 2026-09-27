@@ -11,6 +11,30 @@ double ShipNav::OffBoresight(const FVector& ShipLocalDir)
     return FMath::Acos(FMath::Clamp(Dir.X, -1.0, 1.0));
 }
 
+const FPlanet* ShipNav::TargetPlanet(const FStarSystem& Here, const FBodyId& Id)
+{
+    if (Id.System != Here.Stub.Id || Id.Moon != -1 || !Here.Planets.IsValidIndex(Id.Planet))
+    {
+        return nullptr;
+    }
+    return &Here.Planets[Id.Planet];
+}
+
+TOptional<FBodyId> ShipNav::NextTarget(const FStarSystem& Here, const TOptional<FBodyId>& Target)
+{
+    if (Here.Planets.IsEmpty())
+    {
+        return {};
+    }
+    // Orbit order is innermost first (procgen), so "outward" is the next
+    // index. An id that names nothing here counts as none: Tab in a new
+    // system starts from its innermost world, not from an old system's
+    // orbit number.
+    const bool bHeld = Target.IsSet() && TargetPlanet(Here, *Target) != nullptr;
+    const int32 Next = bHeld ? (Target->Planet + 1) % Here.Planets.Num() : 0;
+    return FBodyId{ Here.Stub.Id, Next, -1 };
+}
+
 bool FShipNavState::Plot(const FSystemId& Id)
 {
     if (bInTransit)
@@ -18,6 +42,20 @@ bool FShipNavState::Plot(const FSystemId& Id)
         return false;
     }
     Plotted = Id;
+    PlottedWorld.Reset();
+    return true;
+}
+
+bool FShipNavState::PlotWorld(const FBodyId& Id)
+{
+    // Only the target: the bracket and the jump name one world or the jump
+    // names none.
+    if (bInTransit || !Target.IsSet() || *Target != Id)
+    {
+        return false;
+    }
+    PlottedWorld = Id;
+    Plotted.Reset();
     return true;
 }
 
@@ -28,6 +66,7 @@ void FShipNavState::ClearPlot()
         return;
     }
     Plotted.Reset();
+    PlottedWorld.Reset();
     bEngaged = false;
 }
 
@@ -36,9 +75,53 @@ const TOptional<FSystemId>& FShipNavState::GetPlotted() const
     return Plotted;
 }
 
+const TOptional<FBodyId>& FShipNavState::GetPlottedWorld() const
+{
+    return PlottedWorld;
+}
+
+bool FShipNavState::HasCourse() const
+{
+    return Plotted.IsSet() || PlottedWorld.IsSet();
+}
+
+bool FShipNavState::SetTarget(const FBodyId& Id)
+{
+    if (bInTransit)
+    {
+        return false;
+    }
+    if (PlottedWorld.IsSet() && *PlottedWorld != Id)
+    {
+        // The course was the old target; a jump engaged toward a world that
+        // is no longer marked would fold somewhere the bracket is not.
+        ClearPlot();
+    }
+    Target = Id;
+    return true;
+}
+
+void FShipNavState::ClearTarget()
+{
+    if (bInTransit)
+    {
+        return;
+    }
+    if (PlottedWorld.IsSet())
+    {
+        ClearPlot();
+    }
+    Target.Reset();
+}
+
+const TOptional<FBodyId>& FShipNavState::GetTarget() const
+{
+    return Target;
+}
+
 bool FShipNavState::SetEngaged(bool bOn)
 {
-    if (bInTransit || (bOn && !Plotted.IsSet()))
+    if (bInTransit || (bOn && !HasCourse()))
     {
         return false;
     }
@@ -58,12 +141,19 @@ ENavEvent FShipNavState::Step(double DeltaSeconds, double JumpCharge, double Off
 
     if (!bInTransit)
     {
-        const bool bFires = bEngaged && Plotted.IsSet() && JumpCharge >= 1.0
+        const bool bFires = bEngaged && HasCourse() && JumpCharge >= 1.0
             && OffBoresightRadians <= Tuning.ConeRadians;
         if (bFires)
         {
             bInTransit = true;
             TransitElapsed = 0.0;
+            // Leaving a system lets go of what was marked in it: the id
+            // names a system the ship is no longer in. A jump within the
+            // system keeps it, since the target is where it is going.
+            if (Plotted.IsSet())
+            {
+                Target.Reset();
+            }
             return ENavEvent::TransitBegan;
         }
         return ENavEvent::None;
@@ -78,6 +168,17 @@ ENavEvent FShipNavState::Step(double DeltaSeconds, double JumpCharge, double Off
     // Engage was a one-shot "go", and the going is done; the course clears
     // because you are there. The throttle and the drive are not ours, and
     // stay wherever they were left.
+    if (PlottedWorld.IsSet())
+    {
+        // Somewhere in the same system: nothing new has been visited, and
+        // the last star arrived at is still the last one.
+        PlottedWorld.Reset();
+        bEngaged = false;
+        bInTransit = false;
+        TransitElapsed = 0.0;
+        ++JumpSerial;
+        return ENavEvent::ArrivedAtWorld;
+    }
     LastArrival = Plotted;
     if (Plotted.IsSet())
     {

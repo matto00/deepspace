@@ -10,6 +10,7 @@
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
 #include "UI/NavText.h"
+#include "UI/TargetMarker.h"
 #include "Universe/UniverseSubsystem.h"
 #include "Universe/UniverseUnits.h"
 
@@ -58,6 +59,11 @@ namespace
     TAutoConsoleVariable<float> CVarStandoffAU(
         TEXT("ds.Nav.StandoffAU"), static_cast<float>(NavStart::DefaultStandoffAU),
         TEXT("Arrival distance from a Sun-like star, AU; scaled by the square root of the star's luminosity."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarWorldStandoffDeg(
+        TEXT("ds.Nav.WorldStandoffDeg"), static_cast<float>(NavStart::DefaultWorldStandoffDeg),
+        TEXT("How wide, degrees, an in-system jump meets the world it went to: its standoff is the distance that shows it this wide."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarRangeLy(
@@ -170,11 +176,26 @@ namespace
         {
             return;
         }
+        // The target as the course: the in-system jump (map decision 12).
+        if (!Args.IsEmpty() && Args[0].Equals(TEXT("target"), ESearchCase::IgnoreCase))
+        {
+            if (Ship->PlotTarget())
+            {
+                Out.Log(TEXT("Course plotted to the target, in this system. Engage with ds.Nav.Engage."));
+            }
+            else
+            {
+                Out.Log(Ship->GetTarget()
+                    ? TEXT("Cannot plot the target now: in the fold, or near enough to fly.")
+                    : TEXT("Nothing targeted: ds.Nav.Target <n> first."));
+            }
+            return;
+        }
         const TArray<FStarSystemStub> Chart = Ship->GetChart();
         const int32 Index = Args.IsEmpty() ? INDEX_NONE : FCString::Atoi(*Args[0]);
         if (Args.IsEmpty() || !Chart.IsValidIndex(Index))
         {
-            Out.Logf(TEXT("ds.Nav.Plot <n>: n is a row of ds.Nav.Near, 0 to %d"), Chart.Num() - 1);
+            Out.Logf(TEXT("ds.Nav.Plot <n|target>: n is a row of ds.Nav.Near, 0 to %d"), Chart.Num() - 1);
             return;
         }
         if (Ship->PlotCourse(Chart[Index].Id))
@@ -212,6 +233,99 @@ namespace
         }
     }
 
+    /**
+     * ds.Nav.Target: the worlds of the system here, numbered by orbit as
+     * their numerals are (I is 1), the target marked; with an argument,
+     * target one by number, designation, given name or numeral, "next" as
+     * Tab does, or "none".
+     */
+    void NavTarget(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Nav.Target"));
+        const UUniverseSubsystem* Cosmos = World ? World->GetSubsystem<UUniverseSubsystem>() : nullptr;
+        if (!Ship || !Cosmos)
+        {
+            return;
+        }
+        const TOptional<FStarSystem> Here = Ship->IsInTransit()
+            ? TOptional<FStarSystem>() : Cosmos->GetSystemAt(Ship->GetFlightState().GetUniversePosition());
+        if (!Here)
+        {
+            Out.Log(Ship->IsInTransit() ? TEXT("In the fold: nothing to target.") : TEXT("Between stars: nothing to target."));
+            return;
+        }
+        const TOptional<FBodyId> Target = Ship->GetTarget();
+        if (Args.IsEmpty())
+        {
+            Out.Logf(TEXT("%d worlds orbit %s. Target one with ds.Nav.Target <n|name|next|none>."),
+                     Here->Planets.Num(), *Here->Stub.Name);
+            const FUniversePosition Where = Ship->GetFlightState().GetUniversePosition();
+            for (int32 Orbit = 0; Orbit < Here->Planets.Num(); ++Orbit)
+            {
+                const FPlanet& Planet = Here->Planets[Orbit];
+                const double Surface = FMath::Max(0.0, Where.DistanceTo(Here->PlanetPosition(Orbit))
+                    - Planet.RadiusEarth * UniverseUnits::CmPerEarthRadius);
+                FString Line = FString::Printf(TEXT("%2d  %-24s %-12s %s"), Orbit + 1, *NavText::WorldName(Planet),
+                    *NavText::WorldKind(Planet.Kind), *NavText::Distance(Surface));
+                if (Target && ShipNav::TargetPlanet(*Here, *Target) == &Planet)
+                {
+                    Line += TEXT("  <- target");
+                }
+                Out.Log(Line);
+            }
+            return;
+        }
+
+        const FString& Arg = Args[0];
+        if (Arg.Equals(TEXT("none"), ESearchCase::IgnoreCase))
+        {
+            Ship->ClearTarget();
+            Out.Log(Ship->GetTarget() ? TEXT("In the fold: the target stands.") : TEXT("Target cleared."));
+            return;
+        }
+        if (Arg.Equals(TEXT("next"), ESearchCase::IgnoreCase))
+        {
+            if (!Ship->CycleTarget())
+            {
+                Out.Log(TEXT("Nothing to target."));
+                return;
+            }
+        }
+        else
+        {
+            int32 Orbit = INDEX_NONE;
+            if (Arg.IsNumeric())
+            {
+                Orbit = FCString::Atoi(*Arg) - 1;
+            }
+            else
+            {
+                // The whole of any name a world goes by; the args are split
+                // on spaces, so "Kessa II" arrives as two.
+                const FString Name = FString::Join(Args, TEXT(" "));
+                for (int32 Index = 0; Index < Here->Planets.Num() && Orbit == INDEX_NONE; ++Index)
+                {
+                    const FPlanet& Planet = Here->Planets[Index];
+                    const FString Numeral = Planet.Designation.Mid(Here->Stub.Name.Len()).TrimStartAndEnd();
+                    if (Name.Equals(Planet.Designation, ESearchCase::IgnoreCase) || Name.Equals(Numeral, ESearchCase::IgnoreCase)
+                        || (!Planet.GivenName.IsEmpty() && Name.Equals(Planet.GivenName, ESearchCase::IgnoreCase)))
+                    {
+                        Orbit = Index;
+                    }
+                }
+            }
+            if (!Here->Planets.IsValidIndex(Orbit) || !Ship->SetTarget(FBodyId{ Here->Stub.Id, Orbit, -1 }))
+            {
+                Out.Logf(TEXT("ds.Nav.Target <n|name|next|none>: n is an orbit, 1 to %d."), Here->Planets.Num());
+                return;
+            }
+        }
+        if (const FPlanet* Planet = Ship->GetTarget() ? ShipNav::TargetPlanet(*Here, *Ship->GetTarget()) : nullptr)
+        {
+            Out.Logf(TEXT("Target: %s."), *NavText::WorldName(*Planet));
+        }
+    }
+
     void NavCharge(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
     {
         if (ShipIn(World, Out, TEXT("ds.Nav.Charge")))
@@ -227,8 +341,11 @@ namespace
         TEXT("ds.Nav.Near"), TEXT("The chart: every system in range, numbered, nearest first."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavNear));
     FAutoConsoleCommandWithWorldArgsAndOutputDevice NavPlotCommand(
-        TEXT("ds.Nav.Plot"), TEXT("'ds.Nav.Plot <n>': plot a course to row n of ds.Nav.Near."),
+        TEXT("ds.Nav.Plot"), TEXT("'ds.Nav.Plot <n>': plot a course to row n of ds.Nav.Near. 'ds.Nav.Plot target': to the target, in this system."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavPlot));
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice NavTargetCommand(
+        TEXT("ds.Nav.Target"), TEXT("'ds.Nav.Target': the worlds here. 'ds.Nav.Target <n|name|next|none>': mark one, the next, or none."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavTarget));
     FAutoConsoleCommandWithWorldArgsAndOutputDevice NavClearCommand(
         TEXT("ds.Nav.Clear"), TEXT("Clear the course, which also stands the jump down."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavClear));
@@ -545,13 +662,26 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
     Tuning.ConeRadians = GetJumpConeRadians();
     Tuning.TransitSeconds = FMath::Max(0.0f, CVarTransitSeconds.GetValueOnGameThread());
 
+    // Before the step, so a fold never opens inside the reach it would
+    // carry the ship backward from.
+    LetGoOfNearWorldCourse();
+
     const TOptional<FVector> Course = GetCourseDirectionShipLocal();
     const double OffBoresight = Course ? ShipNav::OffBoresight(*Course) : UE_DOUBLE_PI;
+
+    // Which world an in-system fold is for, asked before the step that
+    // clears the course on arrival.
+    const TOptional<FBodyId> WorldCourse = NavState.GetPlottedWorld();
 
     switch (NavState.Step(DeltaSeconds, FlightState.GetJumpCharge(), OffBoresight, Tuning))
     {
     case ENavEvent::TransitBegan:
     {
+        FoldDeparture.Reset();
+        if (WorldCourse)
+        {
+            FoldDeparture = FlightState.GetUniversePosition();
+        }
         // The fold has opened, and the helm does nothing between stars. It is
         // an all stop, too (flight-feel decision 4): both levers to STOP, so
         // the ship comes out of every jump at rest -- JumpTo makes that exact
@@ -578,14 +708,95 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
         const TOptional<FStarSystem> Star = (Cosmos && Destination) ? Cosmos->GetSystem(*Destination) : TOptional<FStarSystem>();
         if (Star)
         {
-            FlightState.JumpTo(NavStart::ArrivalPoint(FlightState.GetUniversePosition(), *Star,
-                                                      CVarStandoffAU.GetValueOnGameThread()));
+            FlightState.JumpTo(NavStart::ArrivalPoint(FlightState.GetUniversePosition(), *Star, GetStandoffAU()));
+        }
+        break;
+    }
+
+    case ENavEvent::ArrivedAtWorld:
+    {
+        // The same translation, to a world (map decision 12): on the line
+        // from where the fold opened to its centre, at the standoff that
+        // shows it ds.Nav.WorldStandoffDeg across, outside every floor. The
+        // ship is at rest (JumpTo) with both levers at STOP since the fold
+        // opened, and still facing the world it aligned with.
+        const TOptional<FWorldFix> World = WorldCourse ? FixWorld(*WorldCourse) : TOptional<FWorldFix>();
+        const FUniversePosition From = FoldDeparture.Get(FlightState.GetUniversePosition());
+        FoldDeparture.Reset();
+        if (World)
+        {
+            FlightState.JumpTo(NavStart::WorldArrivalPoint(From, World->Centre, World->Radius, World->Floor,
+                                                           GetWorldStandoffDeg(), World->Others));
         }
         break;
     }
 
     case ENavEvent::None:
         break;
+    }
+}
+
+TOptional<UShipSubsystem::FWorldFix> UShipSubsystem::FixWorld(const FStarSystem& Here, const FBodyId& World)
+{
+    if (!ShipNav::TargetPlanet(Here, World))
+    {
+        return {};
+    }
+    // The world as the sky and the flight law see it -- body i + 1, the star
+    // first -- so the standoff is from the disc the window draws and the
+    // floor is the one the drive stops at.
+    const FSkySystem Sky = LocalSystem::Here(TOptional<FStarSystem>(Here));
+    const int32 Index = World.Planet + 1;
+    if (!Sky.Bodies.IsValidIndex(Index))
+    {
+        return {};
+    }
+    FWorldFix Fix;
+    Fix.Centre = Sky.Bodies[Index].Position;
+    Fix.Radius = Sky.Bodies[Index].Radius;
+    Fix.Floor = FloorFor(Sky.Bodies[Index]);
+    for (int32 Other = 0; Other < Sky.Bodies.Num(); ++Other)
+    {
+        if (Other != Index)
+        {
+            FFlightSurface Surface;
+            Surface.Centre = Sky.Bodies[Other].Position;
+            Surface.Radius = Sky.Bodies[Other].Radius;
+            Surface.Floor = FloorFor(Sky.Bodies[Other]);
+            Fix.Others.Add(Surface);
+        }
+    }
+    return Fix;
+}
+
+TOptional<UShipSubsystem::FWorldFix> UShipSubsystem::FixWorld(const FBodyId& World) const
+{
+    const UUniverseSubsystem* Cosmos = Universe();
+    const TOptional<FStarSystem> System = Cosmos ? Cosmos->GetSystem(World.System) : TOptional<FStarSystem>();
+    return System ? FixWorld(*System, World) : TOptional<FWorldFix>();
+}
+
+void UShipSubsystem::LetGoOfNearWorldCourse()
+{
+    const TOptional<FBodyId>& World = NavState.GetPlottedWorld();
+    if (!World || NavState.IsInTransit())
+    {
+        return;
+    }
+    // Resolved against the system the ship is in, not the one the id names:
+    // a PlaceShip into another system leaves a course to a world that is no
+    // longer here, and a jump to it would cross between stars.
+    const UUniverseSubsystem* Cosmos = Universe();
+    const FUniversePosition Where = FlightState.GetUniversePosition();
+    const TOptional<FSystemId> Here = Cosmos ? Cosmos->GetSystemIdAt(Where) : TOptional<FSystemId>();
+    const TOptional<FWorldFix> Fix = (Here && *Here == World->System) ? FixWorld(*World) : TOptional<FWorldFix>();
+    const bool bNear = Fix && Where.DistanceTo(Fix->Centre)
+        < NavStart::WorldReachFactor * NavStart::WorldStandoffCm(Fix->Radius, Fix->Floor, GetWorldStandoffDeg());
+    if (!Fix || bNear)
+    {
+        // As if arrived, with the charge unspent: ClearPlot stands the jump
+        // down, and the charge holds wherever it had wound to.
+        NavState.ClearPlot();
     }
 }
 
@@ -818,6 +1029,109 @@ TArray<FStarSystemStub> UShipSubsystem::GetChart() const
     return Chart;
 }
 
+bool UShipSubsystem::PlotTarget()
+{
+    const TOptional<FBodyId>& Target = NavState.GetTarget();
+    const UUniverseSubsystem* Cosmos = Universe();
+    if (NavState.IsInTransit() || !Target || !Cosmos)
+    {
+        return false;
+    }
+    const TOptional<FStarSystem> Here = Cosmos->GetSystemAt(FlightState.GetUniversePosition());
+    if (!Here || !ShipNav::TargetPlanet(*Here, *Target) || IsNearEnoughToFly(*Here, *Target))
+    {
+        return false;
+    }
+    return NavState.PlotWorld(*Target);
+}
+
+TOptional<FBodyId> UShipSubsystem::GetPlottedWorld() const
+{
+    return NavState.GetPlottedWorld();
+}
+
+bool UShipSubsystem::HasCourse() const
+{
+    return NavState.HasCourse();
+}
+
+bool UShipSubsystem::SetTarget(const FBodyId& Id)
+{
+    const UUniverseSubsystem* Cosmos = Universe();
+    if (NavState.IsInTransit() || !Cosmos)
+    {
+        return false;
+    }
+    // In the system the ship is in, asked of its position without
+    // generating it; then the orbit, which only the system itself knows.
+    const TOptional<FSystemId> Here = Cosmos->GetSystemIdAt(FlightState.GetUniversePosition());
+    if (!Here || *Here != Id.System)
+    {
+        return false;
+    }
+    const TOptional<FStarSystem> System = Cosmos->GetSystem(*Here);
+    if (!System || !ShipNav::TargetPlanet(*System, Id))
+    {
+        return false;
+    }
+    return NavState.SetTarget(Id);
+}
+
+void UShipSubsystem::ClearTarget()
+{
+    NavState.ClearTarget();
+}
+
+TOptional<FBodyId> UShipSubsystem::GetTarget() const
+{
+    return NavState.GetTarget();
+}
+
+bool UShipSubsystem::CycleTarget()
+{
+    const UUniverseSubsystem* Cosmos = Universe();
+    if (NavState.IsInTransit() || !Cosmos)
+    {
+        return false;
+    }
+    const TOptional<FStarSystem> Here = Cosmos->GetSystemAt(FlightState.GetUniversePosition());
+    const TOptional<FBodyId> Next = Here ? ShipNav::NextTarget(*Here, NavState.GetTarget()) : TOptional<FBodyId>();
+    return Next && SetTarget(*Next);
+}
+
+TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) const
+{
+    const TOptional<FBodyId>& Target = NavState.GetTarget();
+    const TOptional<FWorldFix> Fix = Target ? FixWorld(Here, *Target) : TOptional<FWorldFix>();
+    if (!Fix)
+    {
+        return {};
+    }
+    // The braking the boosters have now and the cap's hold as the flight
+    // state is running them, so the time is the flight's own law at this
+    // moment's power, not a copy of it at full thrust.
+    return TargetMarker::View(Here, *Target, FlightState.GetUniversePosition(), FlightState.GetUniverseOrientation(),
+                              FlightState.GetVelocity(), Fix->Floor, FlightState.GetLimits().LinearAcceleration,
+                              FlightState.GetLimits().HoldSeconds, NavState.IsInTransit());
+}
+
+bool UShipSubsystem::IsNearEnoughToFly(const FStarSystem& Here, const FBodyId& World) const
+{
+    const TOptional<FWorldFix> Fix = FixWorld(Here, World);
+    return Fix && FlightState.GetUniversePosition().DistanceTo(Fix->Centre)
+        < NavStart::WorldReachFactor * NavStart::WorldStandoffCm(Fix->Radius, Fix->Floor, GetWorldStandoffDeg());
+}
+
+float UShipSubsystem::GetStandoffAU()
+{
+    return FMath::Max(0.0f, CVarStandoffAU.GetValueOnGameThread());
+}
+
+double UShipSubsystem::GetWorldStandoffDeg()
+{
+    return FMath::Max(0.0, static_cast<double>(CVarWorldStandoffDeg.GetValueOnGameThread()));
+}
+
 bool UShipSubsystem::PlotCourse(const FSystemId& Id)
 {
     const UUniverseSubsystem* Cosmos = Universe();
@@ -878,16 +1192,28 @@ TOptional<FVector> UShipSubsystem::GetCourseDirection() const
 {
     const UUniverseSubsystem* Cosmos = Universe();
     const TOptional<FSystemId>& Plotted = NavState.GetPlotted();
-    if (!Cosmos || !Plotted)
+    const TOptional<FBodyId>& World = NavState.GetPlottedWorld();
+    if (!Cosmos || !(Plotted || World))
     {
         return {};
     }
-    const TOptional<FStarSystem> Star = Cosmos->GetSystem(*Plotted);
-    if (!Star)
+    const TOptional<FStarSystem> System = Cosmos->GetSystem(Plotted ? *Plotted : World->System);
+    if (!System)
     {
         return {};
     }
-    const FVector Direction = (Star->Stub.Position - FlightState.GetUniversePosition()).GetSafeNormal();
+    // The star, or the world's centre: the cone is round the direction to
+    // the middle of the disc, which is where the bracket is.
+    FUniversePosition Toward = System->Stub.Position;
+    if (World)
+    {
+        if (!ShipNav::TargetPlanet(*System, *World))
+        {
+            return {};
+        }
+        Toward = System->PlanetPosition(World->Planet);
+    }
+    const FVector Direction = (Toward - FlightState.GetUniversePosition()).GetSafeNormal();
     return Direction.IsZero() ? TOptional<FVector>() : TOptional<FVector>(Direction);
 }
 

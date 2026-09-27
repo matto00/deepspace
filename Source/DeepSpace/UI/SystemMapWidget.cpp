@@ -22,6 +22,7 @@
 #include "UI/NavigationWidget.h"
 #include "UI/ShipHUDWidget.h"
 #include "UI/SystemMapView.h"
+#include "UI/TargetMarker.h"
 #include "Universe/UniverseSubsystem.h"
 
 namespace
@@ -44,6 +45,14 @@ namespace
     constexpr float FooterTop = 374.0f;
     constexpr float PanelWidth = 600.0f;
 
+    // The band's one button (decision 12): 24 px tall and at least 120
+    // wide, at the right of the footer's row. At least, not exactly: "Near
+    // enough to fly" at the footer's size is about 150 px, and a label cut
+    // short on the one control that says why it cannot be pressed would be
+    // worse than a wider button.
+    constexpr float JumpHeight = 24.0f;
+    constexpr float JumpMinWidth = 120.0f;
+
     // A row's columns, in the list's 322 px: the target's mark, the numeral
     // (or a given name), the kind, and the distance right-aligned. The
     // numeral's is 40 px, not the spec's 34: "VIII" at size 14 is 36 px wide,
@@ -59,6 +68,10 @@ namespace
     // chart's neighbour on the desk and its rows press the same way.
     const FLinearColor Hovered(0.030f, 0.105f, 0.110f, 1.0f);
     const FLinearColor Pressed(0.045f, 0.200f, 0.200f, 1.0f);
+
+    // Raised off the panel, as the chart's Engage is: the one control on the
+    // screen that does more than mark something.
+    const FLinearColor Raised(0.022f, 0.062f, 0.068f, 1.0f);
 
     UCanvasPanelSlot* Place(UCanvasPanel* Canvas, UWidget* Content, const FVector2D& Position, const FVector2D& Size)
     {
@@ -179,6 +192,26 @@ UWidget* USystemMapWidget::BuildScreen()
     UCanvasPanelSlot* FooterCell = Place(Canvas, Footer, FVector2D(Edge, FooterTop), FVector2D::ZeroVector);
     FooterCell->SetAutoSize(true);
 
+    JumpLabel = MakeText(FText::GetEmpty(), FooterSize, Accent);
+    JumpLabel->SetJustification(ETextJustify::Center);
+    JumpButton = MakeRowButton(JumpLabel);
+    {
+        FButtonStyle Style = JumpButton->GetStyle();
+        Style.SetNormal(FSlateColorBrush(Raised));
+        Style.SetNormalPadding(FMargin(8.0f, 0.0f));
+        Style.SetPressedPadding(FMargin(8.0f, 0.0f));
+        JumpButton->SetStyle(Style);
+    }
+    JumpButton->OnClicked.AddDynamic(this, &USystemMapWidget::HandleJump);
+    JumpButton->SetVisibility(ESlateVisibility::Collapsed);
+    USizeBox* JumpSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    JumpSize->SetHeightOverride(JumpHeight);
+    JumpSize->SetMinDesiredWidth(JumpMinWidth);
+    JumpSize->SetContent(JumpButton);
+    UCanvasPanelSlot* JumpCell = Place(Canvas, JumpSize, FVector2D(PanelWidth - Edge, FooterTop), FVector2D::ZeroVector);
+    JumpCell->SetAlignment(FVector2D(1.0, 0.0));
+    JumpCell->SetAutoSize(true);
+
     UBorder* Root = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
     Root->SetBrushColor(Panel);
     Root->SetPadding(FMargin(0.0f));
@@ -199,12 +232,11 @@ void USystemMapWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
 USystemMapWidget::FAskedAt USystemMapWidget::FAskedAt::Now(const UShipSubsystem& Ship)
 {
     FAskedAt Asked;
-    // Any fold, today. Stage 3: IsInTransit() && the course is a star, so an
-    // in-system jump keeps its system drawn (see the header's stage 3 list).
-    Asked.bBetweenStars = Ship.IsInTransit();
-    // The stand-off the rim is fitted to. The default until stage 3 hands
-    // the map UShipSubsystem::GetStandoffAU(), ds.Nav.StandoffAU as tuned.
-    Asked.StandoffAU = NavStart::DefaultStandoffAU;
+    // A star jump's fold, and only that: an in-system jump's fold leaves the
+    // ship in the system it is drawing, and the drawing stands.
+    Asked.bBetweenStars = Ship.IsInTransit() && Ship.GetPlottedSystem().IsSet();
+    // The stand-off the rim is fitted to, as tuned now.
+    Asked.StandoffAU = UShipSubsystem::GetStandoffAU();
 
     if (const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(&Ship))
     {
@@ -250,7 +282,8 @@ void USystemMapWidget::RefreshFromShip()
         View->SetTarget(TargetOrbit(*Subsystem));
     }
     RefreshRows(*Subsystem);
-    RefreshFooter(Glyph);
+    RefreshFooter(*Subsystem, Glyph);
+    RefreshBand(*Subsystem);
 }
 
 void USystemMapWidget::Redraw(const UShipSubsystem& Subsystem, const FAskedAt& Now)
@@ -342,14 +375,18 @@ void USystemMapWidget::RefreshRows(const UShipSubsystem& Subsystem)
     }
 }
 
-void USystemMapWidget::RefreshFooter(const TOptional<SystemMap::FMapShip>& Glyph)
+void USystemMapWidget::RefreshFooter(const UShipSubsystem& Subsystem, const TOptional<SystemMap::FMapShip>& Glyph)
 {
     TArray<FString> Lines;
     if (!Drawing || !Glyph)
     {
-        // Stage 3: an in-system fold keeps its drawing and says "In the
-        // fold." instead; this is a star course's words.
+        // Between stars: placed there, or in a star jump's fold.
         Lines.Add(NavText::JumpWord(EJumpState::Transit) + TEXT("."));
+    }
+    else if (Subsystem.IsInTransit())
+    {
+        // An in-system fold: still here, drawn, and not between stars.
+        Lines.Add(NavText::JumpWord(EJumpState::Transit, true) + TEXT("."));
     }
     else if (Drawing->System.Planets.IsEmpty())
     {
@@ -374,14 +411,45 @@ void USystemMapWidget::RefreshFooter(const TOptional<SystemMap::FMapShip>& Glyph
     Footer->SetText(FText::FromString(FString::Join(Lines, TEXT(" "))));
 }
 
-TOptional<int32> USystemMapWidget::TargetOrbit(const UShipSubsystem& Subsystem) const
+void USystemMapWidget::RefreshBand(const UShipSubsystem& Subsystem)
 {
-    return {};
+    // The line the HUD prints, from the ship's own view of the target: one
+    // composition, so the two screens cannot disagree (ScreensAgree).
+    const TOptional<FTargetView> Seen = Drawing ? Subsystem.GetTargetView(Drawing->System) : TOptional<FTargetView>();
+    TargetLine->SetText(Seen ? FText::FromString(TargetMarker::Line(*Seen)) : FText::GetEmpty());
+
+    // The button, for a target that resolves on this drawing, and not while
+    // between stars, where there is no drawing and no target.
+    const TOptional<int32> Orbit = TargetOrbit(Subsystem);
+    if (!Orbit)
+    {
+        JumpButton->SetVisibility(ESlateVisibility::Collapsed);
+        return;
+    }
+    const TOptional<FBodyId> Target = Subsystem.GetTarget();
+    const TOptional<FBodyId> Course = Subsystem.GetPlottedWorld();
+    const bool bCourseIsTarget = Course && Target && *Course == *Target;
+    const bool bNear = !bCourseIsTarget && Subsystem.IsNearEnoughToFly(Drawing->System, *Target);
+    // Nothing can be plotted or cleared in the fold; the words stay as they
+    // were when it opened.
+    const bool bCanPress = !Subsystem.IsInTransit() && !bNear;
+
+    JumpButton->SetVisibility(ESlateVisibility::Visible);
+    JumpButton->SetIsEnabled(bCanPress);
+    JumpLabel->SetText(bCourseIsTarget ? NSLOCTEXT("DeepSpace", "MapStandDown", "Stand down")
+                     : bNear ? NSLOCTEXT("DeepSpace", "MapNearEnough", "Near enough to fly")
+                             : NSLOCTEXT("DeepSpace", "MapJumpHere", "Jump here"));
+    JumpLabel->SetColorAndOpacity(FSlateColor(bCanPress ? Accent : Dim));
 }
 
-TOptional<FBodyId> USystemMapWidget::TargetHeld(const UShipSubsystem& Subsystem) const
+TOptional<int32> USystemMapWidget::TargetOrbit(const UShipSubsystem& Subsystem) const
 {
-    return {};
+    const TOptional<FBodyId> Target = Subsystem.GetTarget();
+    if (!Drawing || !Target || !ShipNav::TargetPlanet(Drawing->System, *Target))
+    {
+        return {};
+    }
+    return Target->Planet;
 }
 
 void USystemMapWidget::SelectWorld(int32 Orbit)
@@ -397,19 +465,50 @@ void USystemMapWidget::SelectWorld(int32 Orbit)
     {
         return;
     }
-    const TOptional<SystemMap::FMapSelection> Selection = SystemMap::Select(Drawing->System, Orbit, TargetHeld(*Subsystem));
+    const TOptional<SystemMap::FMapSelection> Selection = SystemMap::Select(Drawing->System, Orbit, Subsystem->GetTarget());
     if (!Selection)
     {
         return;
     }
-#if WITH_DEV_AUTOMATION_TESTS
-    OnSelectedForTest.Broadcast(*Selection);
-#endif
+    // Not the pilot's alone: anyone at the map marks the one target the ship
+    // has, and everyone aboard sees it.
+    UShipSubsystem* Marker = Ship();
+    if (Selection->Action == SystemMap::EMapSelect::Clear)
+    {
+        Marker->ClearTarget();
+    }
+    else
+    {
+        Marker->SetTarget(Selection->Body);
+    }
+    // So the mark and the band move in the frame of the click.
+    RefreshFromShip();
+}
 
-    // Stage 3: act on it --
-    //   Target: Ship()->SetTarget(Selection->Body)
-    //   Clear:  Ship()->ClearTarget()
-    // -- and refresh, so the mark moves this frame.
+void USystemMapWidget::PressJump()
+{
+    UShipSubsystem* Subsystem = Ship();
+    if (!Subsystem)
+    {
+        return;
+    }
+    const TOptional<FBodyId> Target = Subsystem->GetTarget();
+    const TOptional<FBodyId> Course = Subsystem->GetPlottedWorld();
+    if (Course && Target && *Course == *Target)
+    {
+        // Stand down: clearing the course stands the jump down, as on the
+        // chart. The target stays; it was chosen before the jump was.
+        Subsystem->ClearCourse();
+    }
+    else if (Subsystem->PlotTarget())
+    {
+        // One press plots and engages: the in-system jump is chosen where
+        // the map is used, from the helm, and the chart's engage is out of
+        // the helm's reach. It is still the one engage lever, which the
+        // chart shows and can stand down.
+        Subsystem->SetJumpEngaged(true);
+    }
+    RefreshFromShip();
 }
 
 void USystemMapWidget::PressRow(int32 Index)
@@ -432,6 +531,7 @@ void USystemMapWidget::HandleRow8() { SelectWorld(8); }
 void USystemMapWidget::HandleRow9() { SelectWorld(9); }
 void USystemMapWidget::HandleRow10() { SelectWorld(10); }
 void USystemMapWidget::HandleRow11() { SelectWorld(11); }
+void USystemMapWidget::HandleJump() { PressJump(); }
 
 int32 USystemMapWidget::GetShownRowCount() const
 {
@@ -488,6 +588,29 @@ FText USystemMapWidget::GetFooterText() const
 FText USystemMapWidget::GetTargetText() const
 {
     return TargetLine ? TargetLine->GetText() : FText::GetEmpty();
+}
+
+bool USystemMapWidget::IsJumpButtonShown() const
+{
+    return JumpButton && JumpButton->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+FText USystemMapWidget::GetJumpButtonText() const
+{
+    return IsJumpButtonShown() && JumpLabel ? JumpLabel->GetText() : FText::GetEmpty();
+}
+
+bool USystemMapWidget::IsJumpButtonEnabled() const
+{
+    return IsJumpButtonShown() && JumpButton->GetIsEnabled();
+}
+
+void USystemMapWidget::PressJumpButton()
+{
+    if (IsJumpButtonEnabled())
+    {
+        JumpButton->OnClicked.Broadcast();
+    }
 }
 
 const SystemMap::FMapLayout* USystemMapWidget::GetLayout() const
