@@ -36,8 +36,9 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         const auto Throttle = [&]() { return Flight.GetCommand().Throttle; };
         const auto Notch = [&]() { return Flight.GetCommand().DriveNotch; };
 
-        // One frame as the game runs it: the ship ticks before actors, so
-        // what the pawn hands over this frame moves the lever next frame.
+        // One frame as the game runs it: the pawn ticks in the actor tick
+        // groups and hands its keys over, and the ship, a tickable world
+        // subsystem, ticks after them and applies them in the same frame.
         const auto Frame = [&](float Seconds)
         {
             Player->Tick(Seconds);
@@ -187,6 +188,43 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         Frame(0.1f);
         TestTrue(TEXT("a player who is not the pilot can neither toggle, nor stop, nor tap"),
                  Ship->IsDriveEngaged() && Notch() == 1);
+
+        // A key held from before sitting down is not a press at the helm.
+        // Shift is sprint too: a player who runs to the helm and sits down
+        // arrives holding it, and the lever must not climb on its own.
+        Player->HoldLever(1);
+        Frame(0.5f);
+        Ship->SetPilot(Player);
+        for (int32 Index = 0; Index < 2 * 30; ++Index)
+        {
+            Frame(1.0f / 30.0f);
+        }
+        TestEqual(TEXT("under the drive, Shift held while sitting down moves no notch"), Notch(), 1);
+        Player->HoldLever(0);
+        Frame(0.1f);
+        Player->TapLever(1);
+        Frame(0.1f);
+        TestTrue(TEXT("let go and pressed again, it does"), Notch() > 1);
+
+        Player->PressDrive();
+        Ship->SetFlightCommand(Player, 0.3f, FVector::ZeroVector);
+        Ship->ClearPilot();
+        Player->HoldLever(1);
+        Frame(0.5f);
+        Ship->SetPilot(Player);
+        for (int32 Index = 0; Index < 30; ++Index)
+        {
+            Frame(1.0f / 30.0f);
+        }
+        TestTrue(FString::Printf(TEXT("in cruise, Shift held while sitting down does not sweep the lever: %.3f"), Throttle()),
+                 FMath::IsNearlyEqual(Throttle(), 0.3, 1e-6));
+        Player->HoldLever(0);
+        Frame(0.1f);
+        Player->HoldLever(1);
+        Frame(0.5f);
+        TestTrue(TEXT("let go and held again, it does"), Throttle() > 0.3 + 1e-3);
+        Player->HoldLever(0);
+        Ship->ClearPilot();
     }
 
     GEngine->DestroyWorldContext(World);

@@ -639,6 +639,14 @@ bool UShipSubsystem::IsPowerOverloaded() const
 
 void UShipSubsystem::SetPilot(APawn* NewPilot)
 {
+    // Marked at the first handover rather than here, because the pawn has
+    // handed nothing over yet: the ship may tick between the seat and the
+    // pawn's next frame, and a spent flag set now would be cleared by a
+    // frame with no key in it before the held key ever arrived.
+    if (NewPilot != Pilot.Get())
+    {
+        bAwaitingFirstHands = true;
+    }
     Pilot = NewPilot;
 }
 
@@ -715,6 +723,14 @@ bool UShipSubsystem::SetHelmInput(APawn* Commander, const FHelmInput& Input)
     Command.AttitudeRate = Input.Attitude;
     FlightState.SetCommand(Command);
 
+    if (bAwaitingFirstHands)
+    {
+        // A key held from before sitting down moves nothing until it is
+        // let go and pressed again -- the same rule as a key held through X.
+        bAwaitingFirstHands = false;
+        bUpHoldSpent = Input.bUpHeld;
+        bDownHoldSpent = Input.bDownHeld;
+    }
     Helm.Attitude = Input.Attitude;
     Helm.bUpHeld = Input.bUpHeld;
     Helm.bDownHeld = Input.bDownHeld;

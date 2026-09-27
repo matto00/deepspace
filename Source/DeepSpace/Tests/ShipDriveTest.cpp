@@ -54,8 +54,9 @@ namespace
  * handed over from the CVars at use; a tap under the cap slows the ship at
  * once; starved boosters take four times as long, and no longer; and the
  * surfaces the flight law reads are every body here and the edge, each at
- * FloorFor. FShipFlightState's own tests cover the law; this covers what the
- * subsystem feeds it.
+ * FloorFor; Shift after X counts from the ship's speed; and an empty helm
+ * holds no key. FShipFlightState's own tests cover the law; this covers what
+ * the subsystem feeds it.
  */
 bool FShipDriveTest::RunTest(const FString& Parameters)
 {
@@ -257,6 +258,65 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
             }
             TestTrue(TEXT("and the ship is at that notch or below it within three seconds"),
                      Flight.GetSpeed() <= ShipDriveLever::NotchSpeed(Flight.GetCommand().DriveNotch) * (1.0 + 1e-9));
+
+            // -- Shift stops a fall where it is (decision 3) ---------------------
+            // At 1 c with the nose away from everything, X, and a moment into
+            // the ease down one Shift: the notch above the ship, not the notch
+            // above STOP, so the ship stops slowing rather than falling on to
+            // 1 km/s. This is the subsystem's wiring of TapUp; the lever's
+            // own test covers TapUp.
+            Ship->PlaceShip(Opening.Position, Opening.Orientation * FQuat(FVector::UpVector, UE_DOUBLE_PI));
+            Ship->SetDriveLever(Pilot, Top);
+            for (int32 Frame = 0; Frame < 20 * 30 && Flight.GetDrivePosition() < Top - 1e-3; ++Frame)
+            {
+                Ship->Tick(1.0f / 30.0f);
+            }
+            TestTrue(FString::Printf(TEXT("away from everything the ship reaches 1 c (position %.3f)"), Flight.GetDrivePosition()),
+                     Flight.GetDrivePosition() > Top - 1e-3);
+            Ship->AllStop(Pilot);
+            for (int32 Frame = 0; Frame < 30; ++Frame)
+            {
+                Ship->Tick(1.0f / 30.0f);
+            }
+            const double Falling = Flight.GetDrivePosition();
+            const double FallingSpeed = Flight.GetSpeed();
+            FHelmInput Faster;
+            Faster.UpPresses = 1;
+            Ship->SetHelmInput(Pilot, Faster);
+            Ship->Tick(1.0f / 30.0f);
+            TestTrue(FString::Printf(TEXT("a second after X the ship is still well up the lever (position %.3f)"), Falling),
+                     Falling > 3.0 && Falling < Top - 1.0);
+            TestEqual(FString::Printf(TEXT("one Shift a second after X lands the notch above the ship at position %.3f"), Falling),
+                      Flight.GetCommand().DriveNotch, FMath::FloorToInt32(Falling) + 1);
+            for (int32 Frame = 0; Frame < 5 * 30; ++Frame)
+            {
+                Ship->Tick(1.0f / 30.0f);
+            }
+            TestTrue(FString::Printf(TEXT("and the ship stops falling: %.4g km/s against %.4g at the press"),
+                                     Flight.GetSpeed() / Km, FallingSpeed / Km),
+                     Flight.GetSpeed() >= FallingSpeed);
+
+            // -- An empty helm holds no key -----------------------------------------
+            // A pilot who stands up holding Shift leaves the pawn's held flag
+            // behind, and the pawn stops handing over once it is not flying:
+            // ClearPilot drops it, or the empty helm would sweep the cruise
+            // lever to full by itself.
+            Ship->AllStop(Pilot);
+            Ship->SetDriveEngaged(Pilot, false);
+            Ship->SetFlightCommand(Pilot, 0.5f, FVector::ZeroVector);
+            FHelmInput Holding;
+            Holding.bUpHeld = true;
+            Ship->SetHelmInput(Pilot, Holding);
+            Ship->Tick(0.1f);
+            const double Left = Flight.GetCommand().Throttle;
+            TestTrue(FString::Printf(TEXT("held, cruise's lever sweeps up from 0.5 (%.3f)"), Left), Left > 0.5);
+            Ship->ClearPilot();
+            for (int32 Frame = 0; Frame < 2 * 30; ++Frame)
+            {
+                Ship->Tick(1.0f / 30.0f);
+            }
+            TestEqual(TEXT("and standing up with the key held leaves the lever where it was"),
+                      Flight.GetCommand().Throttle, Left);
         }
     }
 

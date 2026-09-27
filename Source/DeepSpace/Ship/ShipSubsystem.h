@@ -366,6 +366,12 @@ private:
     bool bUpHoldSpent = false;
     bool bDownHoldSpent = false;
 
+    /** Set by SetPilot for a new pilot; the first hands it hands over mark
+     *  whatever they already hold as spent. Shift is sprint as well as the
+     *  lever, so a player who runs to the helm sits down holding it, and a
+     *  key held from before sitting down is not a press at the helm. */
+    bool bAwaitingFirstHands = false;
+
     /** NavState.Step, then act on what it asks for. */
     void StepNavigation(float DeltaSeconds);
 
