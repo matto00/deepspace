@@ -784,7 +784,7 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
     // is then the usage, never night read as 0 km, onto the surface.
     TConstArrayView<FString> Rest = Args;
     ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
-    if (Rest.Num() >= 1 && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
+    if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
         Side = ShipSky::EGotoSide::Night;
         Rest = Rest.Slice(0, Rest.Num() - 1);
