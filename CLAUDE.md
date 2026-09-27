@@ -752,6 +752,23 @@ ship, and a row per world with its surface distance; the rim is the arrival
 standoff with a margin. It stores nothing it can ask for, and caches only
 its drawing, keyed on what the drawing depends on.
 
+**The warp bends every bearing but two.** A radial log warp is stretched
+round each ring several times more than across it (`R / (r dR/dr)`, about
+3x at an outer ring), so only a bearing straight toward or away from the
+star, or between two points at the same distance from it, is drawn true;
+any other is bent, median ~4 and up to ~50 degrees. The ship's glyph
+therefore takes the same warp as the dots (on the dot at the world, closing
+on it monotonically along any straight flight in the plane:
+`DeepSpace.UI.SystemMap.StraightApproach`), and **its tick is the way the
+glyph moves, never the nose's universe direction** (`SystemMap::MotionOnMap`,
+the derivative of `Ship`'s own placement). Drawn in universe directions it
+pointed up to 90 degrees off the glyph's motion and ~50 off the dot the nose
+was on -- the playtest's "map does not track" (`.TickFollowsGlyph`, and
+`.Bearing` for the two true bearings). Off the plane the glyph's radius is
+the true 3D distance while its azimuth is top-down, so about 1 approach in
+80 from an interstellar arrival steps the glyph away from the dot for a
+while (up to ~7 px) before closing: a known open question, not guarded.
+
 **The helm looks and clicks** (decision 2, ruling 4): E at the map sits
 nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the
 view: live only while the first thing hit is a screen whose class says
