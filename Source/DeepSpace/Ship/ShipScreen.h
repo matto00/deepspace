@@ -99,6 +99,37 @@ public:
     UFUNCTION(BlueprintPure, Category = "Screen")
     bool IsUsable() const { return bUsable; }
 
+    // What a seat may do with a screen (system map spec, decisions 2 and 13).
+    // Each is a class decision, never a per-instance one: none is reflected,
+    // so no edit to a placed actor in the level can change it, and the
+    // character's Blueprint layout does not depend on them.
+
+    /**
+     * Whether the view-aimed pointer reaches this screen from a seat -- the
+     * helm, or the chart chair while nothing is zoomed. Only a screen meant
+     * to be glanced at and touched while flying says yes: the map. The chart
+     * is two metres from the helm's eye, inside the hands' reach, and sized
+     * to be read from 60 cm in its own chair; it says no, so nothing in the
+     * level can make it drivable from the helm.
+     */
+    virtual bool IsDrivableSeated() const { return false; }
+
+    /**
+     * Whether sitting at this screen frames it at once. True by default: the
+     * laptop has one screen and a bench in front of it, and nothing else to
+     * look at from there. The chart says no -- its chair is a seat beside two
+     * screens, and the seated player chooses which to zoom.
+     */
+    virtual bool ZoomsOnSit() const { return true; }
+
+    /** Whether E, from the chart chair with this screen in view, frames it:
+     *  the chart and the map. */
+    virtual bool IsZoomableFromChartChair() const { return false; }
+
+    /** What E's prompt names when it would zoom this screen from the chart
+     *  chair: "Chart", "Map". Empty for a screen that is not zoomable. */
+    virtual FText GetZoomPrompt() const { return FText::GetEmpty(); }
+
 protected:
     virtual void OnConstruction(const FTransform& Transform) override;
 

@@ -607,11 +607,15 @@ bool FNavScreenChairTest::RunTest(const FString& Parameters)
                  Pointer->GetLastHitResult().GetComponent() == Panel);
     }
 
-    // Sitting down: through the interactable, as E does it.
+    // Sitting down: through the interactable, as E does it. The chair is a
+    // seat, not a lock (system map spec, decision 13): the body sits and the
+    // view stays the player's. Zooming the chart from it, E looking at it,
+    // is DeepSpace.Ship.ChartChair's.
     Chart->GetInteractable()->Interact(Player);
-    if (TestTrue(TEXT("interacting sits the player at the chart"), Player->IsUsingScreen()))
+    if (TestTrue(TEXT("interacting sits the player in the chart's chair"), Player->IsInScreenChair()))
     {
         TestEqual(TEXT("seated"), Player->GetPosture(), EPosture::Seated);
+        TestFalse(TEXT("and the chart is not framed by sitting"), Player->IsUsingScreen());
 
         const FTransform Seat = Chart->GetUseTransform();
         TestTrue(TEXT("on the chair"), FVector::Dist2D(Player->GetActorLocation(), Seat.GetLocation()) < 1.0);
@@ -625,12 +629,12 @@ bool FNavScreenChairTest::RunTest(const FString& Parameters)
                  FVector::DotProduct(Player->GetActorForwardVector(),
                                      (Centre - Player->GetActorLocation()).GetSafeNormal2D()) > 0.999);
 
-        Player->PlaceCamera(0.016f, Player->GetViewRotation());
-        TestTrue(TEXT("the eyes lean in to 60 cm, square on"),
-                 Player->GetEyeLocation().Equals(Centre + Normal * 60.0, 1.0));
+        // Zoomed, the eyes lean in to the chart's own 60 cm, square on.
+        TestTrue(TEXT("its framing is 60 cm off the glass, square on"),
+                 Chart->GetViewTransform().GetLocation().Equals(Centre + Normal * 60.0, 1.0));
 
         Player->StopUsingScreen();
-        TestFalse(TEXT("and standing up leaves it"), Player->IsUsingScreen());
+        TestFalse(TEXT("and standing up leaves it"), Player->IsInScreenChair());
     }
 
     DestroyWorld(World);

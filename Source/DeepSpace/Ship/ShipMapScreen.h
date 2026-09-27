@@ -13,9 +13,11 @@
  * with the mouse already turning their head, so E here sits nobody down:
  * there is no chair in front of it, and a sit-down map would send the pilot
  * out of the helm, where the map is needed. It is driven by the view-aimed
- * pointer, standing as every screen is; from a seat once AShipScreen can say
- * so (stage 4 of the build order: IsDrivableSeated and
- * IsZoomableFromChartChair, overridden here).
+ * pointer, standing as every screen is, and from a seat: the only screen
+ * that says yes to IsDrivableSeated, so the pilot looks at it and clicks it
+ * without leaving the helm (decision 2). From the chart chair beside it, E
+ * zooms it as it zooms the chart, and Tab then cycles the target (decision
+ * 13).
  *
  * Drawn at the resolution it is seen at. From the helm's eye the 68 cm panel
  * spans about 575 x 424 screen pixels on the 4K display, and a widget
@@ -34,4 +36,8 @@ class DEEPSPACE_API AShipMapScreen : public AShipScreen
 
 public:
     AShipMapScreen();
+
+    virtual bool IsDrivableSeated() const override { return true; }
+    virtual bool IsZoomableFromChartChair() const override { return true; }
+    virtual FText GetZoomPrompt() const override;
 };

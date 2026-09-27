@@ -99,6 +99,11 @@ void AShipNavScreen::BeginPlay()
     }
 }
 
+FText AShipNavScreen::GetZoomPrompt() const
+{
+    return NSLOCTEXT("DeepSpace", "ZoomChart", "Chart");
+}
+
 void AShipNavScreen::HandleInteracted(AActor* InteractInstigator)
 {
     if (ADeepSpaceCharacter* Character = Cast<ADeepSpaceCharacter>(InteractInstigator))

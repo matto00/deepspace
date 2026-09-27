@@ -131,7 +131,7 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         {
             Player->UseScreen(Chart);
             TestTrue(TEXT("sitting at the chart puts the body on its chair"),
-                     Player->IsUsingScreen() && Player->GetActorLocation().Z > ChartSeat.Z);
+                     Player->IsInScreenChair() && Player->GetActorLocation().Z > ChartSeat.Z);
             // A frame seated: the camera goes out to frame the screen.
             Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
@@ -184,7 +184,7 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         {
             Player->UseScreen(Laptop);
             TestTrue(TEXT("sitting at the laptop puts the body on its bench"),
-                     Player->IsUsingScreen() && Player->GetActorLocation().Z > LaptopSeat.Z);
+                     Player->IsInScreenChair() && Player->GetActorLocation().Z > LaptopSeat.Z);
             Player->PlaceCamera(0.016f, Player->GetViewRotation());
 
             Player->StopUsingScreen();
@@ -434,11 +434,16 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
         }
     }
 
-    // 11. Sitting and standing move the view up to 60 cm in one frame. The
-    //    camera manager must be told each is a cut, or temporal AA and motion
-    //    blur build that frame from a history of somewhere else.
+    // 11. Sitting, zooming, going back and standing move the view up to 60 cm
+    //    in one frame. The camera manager must be told each is a cut, or
+    //    temporal AA and motion blur build that frame from a history of
+    //    somewhere else.
+    //    Its own chart, with no chair block under it: this character has no
+    //    mesh, so its eyes are at its feet, and at the chair they would be
+    //    inside the block, where no look reaches the glass to zoom it.
     {
-        const FVector2D Stood(ChartSeat.X - 124.0, 0.0);
+        AShipNavScreen* CutChart = World->SpawnActor<AShipNavScreen>(FVector(600.0, -1500.0, 105.0), FRotator::ZeroRotator);
+        const FVector2D Stood(CutChart->GetUseTransform().GetLocation().X - 124.0, -1500.0);
         ADeepSpaceCharacter* Player = SpawnStanding(World, Stood);
         APlayerController* Controller = World->SpawnActor<APlayerController>();
         if (TestNotNull(TEXT("the player spawns with a controller"), Player) &&
@@ -458,17 +463,29 @@ bool FScreenStandUpTest::RunTest(const FString& Parameters)
                 // The viewport clears it after drawing; headless, nothing
                 // draws, so each step starts it clear by hand.
                 Camera->bGameCameraCutThisFrame = false;
-                Player->UseScreen(Chart);
+                Player->UseScreen(CutChart);
                 TestTrue(TEXT("sitting down is a camera cut"), Camera->bGameCameraCutThisFrame);
+
+                // E, the view on the chart as sitting leaves it: the zoom.
+                Camera->bGameCameraCutThisFrame = false;
+                Player->PressInteract();
+                TestTrue(TEXT("zooming the chart is a camera cut"), Camera->bGameCameraCutThisFrame);
                 TestTrue(TEXT("and the camera is at the screen in that same frame"),
-                         FVector::Dist(Player->GetEyeLocation(), Chart->GetViewTransform().GetLocation()) < 1.0);
+                         FVector::Dist(Player->GetEyeLocation(), CutChart->GetViewTransform().GetLocation()) < 1.0);
 
                 Camera->bGameCameraCutThisFrame = false;
                 Player->PlaceCamera(0.016f, Player->GetViewRotation());
                 TestFalse(TEXT("a frame sat still is not a cut"), Camera->bGameCameraCutThisFrame);
 
+                Player->PressInteract();
+                TestTrue(TEXT("going back to the seat is a camera cut"), Camera->bGameCameraCutThisFrame);
+                TestTrue(TEXT("and the camera has left the screen in that same frame"),
+                         FVector::Dist(Player->GetEyeLocation(), CutChart->GetViewTransform().GetLocation()) > 30.0);
+
+                Player->PressInteract();
+                Camera->bGameCameraCutThisFrame = false;
                 Player->StopUsingScreen();
-                TestTrue(TEXT("standing up is a camera cut"), Camera->bGameCameraCutThisFrame);
+                TestTrue(TEXT("standing up from a zoom is a camera cut"), Camera->bGameCameraCutThisFrame);
             }
             Controller->UnPossess();
             Controller->Destroy();

@@ -19,8 +19,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
  * that make it feel like pointing at a thing in the room are what is guarded
  * here: it aims along the *view* rather than along some component's idea of
  * forward, it reaches exactly as far as the hands do, it finds the panel's
- * real surface, and it is switched off in the one place it would fight the
- * player -- the pilot's seat.
+ * real surface, and at the helm it is switched off unless the view is on a
+ * screen meant to be driven from a seat -- here, a laptop, which is not.
+ * DeepSpace.Ship.MapFromHelm has the one that is: the map.
  *
  * What is deliberately *not* asserted is Slate's own hit path: whether the
  * ray lands on a particular button. A UWidgetComponent only builds its
@@ -90,7 +91,8 @@ bool FScreenPointerTest::RunTest(const FString& Parameters)
             TestFalse(TEXT("and nothing reports as pointed at"),
                       Character->IsPointingAtScreen());
 
-            // Seated, the controls belong to the ship.
+            // Seated, the controls belong to the ship, and the laptop is no
+            // screen for a seat: straight ahead and in reach, it is still off.
             APilotSeat* Seat = World->SpawnActor<APilotSeat>(
                 FVector::ZeroVector, FRotator::ZeroRotator);
             Character->SitIn(Seat);
