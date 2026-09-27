@@ -22,6 +22,17 @@ namespace SystemNames
      *  `givenname` stream, so it sounds as if the same people named it. */
     DEEPSPACE_API FString MakeGivenName(uint64 Seed);
 
+    /**
+     * The widest name the tables can make, under Width: every syllable count,
+     * every sound, and the coda a joint drops, as MakeName builds them.
+     * Width measures a piece of a name, and a name's width is taken as the
+     * sum of its pieces' -- true of a per-letter measure, and of a font but
+     * for kerning. A layout that must hold every name asks this rather than
+     * trusting the corpus, which is one seed's ten thousand nearest systems
+     * and not the limit of what the tables can say.
+     */
+    DEEPSPACE_API FString WidestName(TFunctionRef<double(const FString&)> Width);
+
     /** 1 -> "I", 4 -> "IV", 12 -> "XII". Value must be positive. */
     DEEPSPACE_API FString RomanNumeral(int32 Value);
 

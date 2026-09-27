@@ -111,11 +111,12 @@ public:
 
     /**
      * Whether the view-aimed pointer reaches this screen from a seat -- the
-     * helm, or the chart chair while nothing is zoomed. Only a screen meant
-     * to be glanced at and touched while flying says yes: the map. The chart
-     * is two metres from the helm's eye, inside the hands' reach, and sized
-     * to be read from 60 cm in its own chair; it says no, so nothing in the
-     * level can make it drivable from the helm.
+     * helm, or the chart chair while nothing is zoomed. The two cockpit desk
+     * screens say yes, the map and the chart: both are looked at and clicked
+     * from either seat, with no zoom needed (the developer's ruling,
+     * 2026-09-27: "the chart is clickable from the helm too, for full parity
+     * with the map"). Zooming only brings a screen closer. Every other screen
+     * says no, so a seat never drives the laptop or the console.
      */
     virtual bool IsDrivableSeated() const { return false; }
 

@@ -13,9 +13,9 @@
  * with the mouse already turning their head, so E here sits nobody down:
  * there is no chair in front of it, and a sit-down map would send the pilot
  * out of the helm, where the map is needed. It is driven by the view-aimed
- * pointer, standing as every screen is, and from a seat: the only screen
- * that says yes to IsDrivableSeated, so the pilot looks at it and clicks it
- * without leaving the helm (decision 2). From the chart chair beside it, E
+ * pointer, standing as every screen is, and from a seat: it says yes to
+ * IsDrivableSeated, as the chart beside it does (ruling, 2026-09-27), so the
+ * pilot looks at it and clicks it without leaving the helm (decision 2). From the chart chair beside it, E
  * zooms it as it zooms the chart, and Tab then cycles the target (decision
  * 13).
  *

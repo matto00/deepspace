@@ -31,8 +31,8 @@ class UTextBlock;
  *
  * Its band carries the target line (decision 6, with the live ETA) and one
  * button, the in-system jump's (decision 12): "Jump here" plots the target
- * as the course and engages, in one press, because the chart that engages
- * is out of the helm's reach; "Stand down" while the course is the target;
+ * as the course and engages, in one press, so the in-system jump needs no
+ * second screen; "Stand down" while the course is the target;
  * disabled as "Near enough to fly" inside the target's reach; absent with
  * no target.
  *

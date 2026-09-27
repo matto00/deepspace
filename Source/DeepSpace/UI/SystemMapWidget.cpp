@@ -509,10 +509,9 @@ void USystemMapWidget::PressJump()
     }
     else if (Subsystem->PlotTarget())
     {
-        // One press plots and engages: the in-system jump is chosen where
-        // the map is used, from the helm, and the chart's engage is out of
-        // the helm's reach. It is still the one engage lever, which the
-        // chart shows and can stand down.
+        // One press plots and engages: the in-system jump is chosen here, on
+        // the map, and needs no second screen. It is still the one engage
+        // lever, which the chart shows and can stand down.
         Subsystem->SetJumpEngaged(true);
     }
     RefreshFromShip();

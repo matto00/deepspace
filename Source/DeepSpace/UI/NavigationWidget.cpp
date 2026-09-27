@@ -4,8 +4,12 @@
 #include "Brushes/SlateColorBrush.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/SizeBox.h"
 #include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -28,15 +32,78 @@ const TCHAR* const UNavigationWidget::InSystemWords = TEXT("in this system");
 
 namespace
 {
-    // Point sizes against the real panel: 12 px/cm read from 60 cm, the
-    // laptop's density at the laptop's distance. Smaller than the console's
-    // 28, because this screen has eleven lines where that one has four.
-    constexpr float ChartTitleSize = 26.0f;
-    constexpr float ChartSize = 22.0f;
+    // The panel's layout, in its 816 x 576 pixels: the map's (SystemMapWidget.cpp)
+    // times 816 / 600. The two desk screens are the same 68 cm panel, so at
+    // these sizes their text is the same physical size, and a reader in the
+    // chart chair sees one type across the desk. From the chair's eye the
+    // panel spans about 970 x 660 screen pixels on the 4K display, so these
+    // are close to chair pixels (1.19 screen pixels each): magnified a
+    // little, never minified, as the map is at the helm.
+    //
+    // The first cut stacked eleven lines of 22-26 pt in a vertical box, with
+    // each row's columns in a button that centred them. The rows' columns
+    // were laid out at their own widths and no two rows lined up; the
+    // distance and the class were given less room than their words and ran
+    // into each other; and a course that wrapped pushed the band off the
+    // bottom of the glass. DeepSpace.UI.ChartLayout lays the tree out as
+    // Slate does and holds every word to the room it is given.
+    constexpr float TextSize = 19.0f;
+    constexpr float ButtonSize = 18.0f;
+
+    constexpr float PanelWidth = 816.0f;
+    constexpr float PanelHeight = 576.0f;
+    constexpr float Edge = 8.0f;
+    constexpr float TitleTop = 8.0f;
+    constexpr float BodyTop = 49.0f;
+    constexpr float ListWidth = PanelWidth - 2.0f * Edge;
+
+    // Six rows, taller than the map's 33 would be: they are the chart's
+    // controls, and the pointer aims them with the head from about a metre.
+    constexpr float RowHeight = 44.0f;
+
+    // The band, from the bottom up: the course, wrapping to at most two
+    // lines, and above it the jump's word with the toggle at its right. The
+    // toggle sits by the jump because it is the jump's; the course then has
+    // the band's whole width to wrap in.
+    constexpr float LabelWidth = 96.0f;
+    // A line at TextSize is 30 px; centred in the jump's 44 it sits 7 px
+    // down, and the course's first line is set the same 7 px into its own
+    // band so the two lines keep the rows' 44 px rhythm. Two lines, 60 px,
+    // and the inset: 72.
+    constexpr float LineInset = 7.0f;
+    constexpr float CourseHeight = 72.0f;
+    constexpr float CourseTop = PanelHeight - Edge - CourseHeight;
+    constexpr float JumpHeight = 44.0f;
+    constexpr float JumpTop = CourseTop - JumpHeight;
+    constexpr float CourseWidth = ListWidth - LabelWidth;
+
+    // The toggle: the map's jump button, 24 x 120, times 816 / 600, and at
+    // least: "STAND DOWN" is the widest label, and a label cut short on the
+    // one control that engages would be worse than a wider button.
+    constexpr float EngageHeight = 33.0f;
+    constexpr float EngageMinWidth = 164.0f;
+    constexpr float EngageGap = 16.0f;
+
+    // A row's columns, in the list's 800 px, as the map's are in its 322:
+    // the mark, the name, the distance right-aligned, a gap, the class, and
+    // whether visited. Each is wider than the widest it prints at TextSize:
+    // the widest name the syllable tables can make (SystemNames::WidestName,
+    // "Shaemshaemshaesh", 233 px -- the corpus's longest, "Sharsathhaith",
+    // is one seed's nearest systems and not the limit), "10.0 ly",
+    // "yellow-white star", "visited". DeepSpace.UI.ChartLayout asks each of
+    // what makes it and holds the columns to them.
+    constexpr float MarkColumn = 16.0f;
+    constexpr float NameColumn = 256.0f;
+    constexpr float DistanceColumn = 112.0f;
+    constexpr float GapColumn = 32.0f;
+    constexpr float ClassColumn = 248.0f;
+    constexpr float VisitedColumn = 136.0f;
+    static_assert(MarkColumn + NameColumn + DistanceColumn + GapColumn + ClassColumn + VisitedColumn == ListWidth,
+                  "the columns fill the list");
 
     // A button's own colours, from the ship's palette: the panel at rest, a
     // teal wash under the cursor, and deeper while pressed. A default UMG
-    // button is a grey slab that belongs to no ship.
+    // button is a grey slab that belongs to no ship. The map's are these.
     const FLinearColor Hovered(0.030f, 0.105f, 0.110f, 1.0f);
     const FLinearColor Pressed(0.045f, 0.200f, 0.200f, 1.0f);
     const FLinearColor Raised(0.022f, 0.062f, 0.068f, 1.0f);
@@ -62,10 +129,20 @@ namespace
         return (Universe && Plotted) ? Universe->GetSystem(*Plotted) : TOptional<FStarSystem>();
     }
 
-    void AddFill(UHorizontalBox* Box, UWidget* Content, float Fill, EHorizontalAlignment Align = HAlign_Left)
+    UCanvasPanelSlot* Place(UCanvasPanel* Canvas, UWidget* Content, const FVector2D& Position, const FVector2D& Size)
+    {
+        UCanvasPanelSlot* Cell = Canvas->AddChildToCanvas(Content);
+        Cell->SetPosition(Position);
+        Cell->SetSize(Size);
+        return Cell;
+    }
+
+    /** A column Width px wide, as a fill share: the columns' shares are
+     *  their widths, so they take exactly those widths across the list. */
+    void AddColumn(UHorizontalBox* Box, UWidget* Content, float Width, EHorizontalAlignment Align = HAlign_Left)
     {
         FSlateChildSize Size(ESlateSizeRule::Fill);
-        Size.Value = Fill;
+        Size.Value = Width;
         UHorizontalBoxSlot* Cell = Box->AddChildToHorizontalBox(Content);
         Cell->SetSize(Size);
         Cell->SetHorizontalAlignment(Align);
@@ -73,7 +150,7 @@ namespace
     }
 }
 
-UButton* UNavigationWidget::MakeButton(UWidget* Content)
+UButton* UNavigationWidget::MakeButton(UWidget* Content, const FMargin& Padding)
 {
     UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
     FButtonStyle Style;
@@ -81,53 +158,40 @@ UButton* UNavigationWidget::MakeButton(UWidget* Content)
     Style.SetHovered(FSlateColorBrush(Hovered));
     Style.SetPressed(FSlateColorBrush(Pressed));
     Style.SetDisabled(FSlateColorBrush(Panel));
-    Style.SetNormalPadding(FMargin(8.0f, 3.0f));
-    Style.SetPressedPadding(FMargin(8.0f, 3.0f));
+    Style.SetNormalPadding(Padding);
+    Style.SetPressedPadding(Padding);
     Button->SetStyle(Style);
-    Button->SetContent(Content);
+    // Across the button's whole width. A button centres its content by
+    // default, which lays each row's columns out at their own desired width,
+    // squeezed and centred, so no two rows lined up -- the chart's spacing
+    // fault, which the map had already met and fixed.
+    if (UButtonSlot* Cell = Cast<UButtonSlot>(Button->SetContent(Content)))
+    {
+        Cell->SetHorizontalAlignment(HAlign_Fill);
+        Cell->SetVerticalAlignment(VAlign_Center);
+    }
     return Button;
 }
 
 UWidget* UNavigationWidget::BuildScreen()
 {
-    UVerticalBox* Column = MakeColumn();
+    UCanvasPanel* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
 
-    Column->AddChildToVerticalBox(MakeText(
-        NSLOCTEXT("DeepSpace", "ChartTitle", "NAVIGATION"), ChartTitleSize, Accent));
+    // The title: what this is at the left, where the ship is at the right,
+    // as the map's title names its system.
+    UTextBlock* Title = MakeText(NSLOCTEXT("DeepSpace", "ChartTitle", "CHART"), TextSize, Accent);
+    Place(Canvas, Title, FVector2D(Edge, TitleTop), FVector2D::ZeroVector)->SetAutoSize(true);
 
-    // A labelled line: the label dim, in a column of its own so the values
-    // line up down the screen.
-    const auto MakeLine = [this, Column](const FText& Label, UTextBlock* Value, UWidget* Trailing)
-    {
-        UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-        AddFill(Line, MakeText(Label, ChartSize, Dim), 1.0f);
-        AddFill(Line, Value, Trailing ? 3.6f : 5.0f);
-        if (Trailing)
-        {
-            UHorizontalBoxSlot* TrailingCell = Line->AddChildToHorizontalBox(Trailing);
-            TrailingCell->SetVerticalAlignment(VAlign_Center);
-        }
-        UVerticalBoxSlot* LineCell = Column->AddChildToVerticalBox(Line);
-        LineCell->SetPadding(FMargin(0.0f, 6.0f));
-    };
+    HereLine = MakeText(FText::GetEmpty(), TextSize, Ink);
+    UCanvasPanelSlot* HereCell = Place(Canvas, HereLine, FVector2D(PanelWidth - Edge, TitleTop), FVector2D::ZeroVector);
+    HereCell->SetAlignment(FVector2D(1.0, 0.0));
+    HereCell->SetAutoSize(true);
 
-    const auto MakeRule = [this, Column]()
-    {
-        USpacer* Thin = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass());
-        Thin->SetSize(FVector2D(1.0f, 2.0f));
-        UBorder* Rule = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-        Rule->SetBrushColor(Dim);
-        Rule->SetPadding(FMargin(0.0f));
-        Rule->SetContent(Thin);
-        UVerticalBoxSlot* RuleCell = Column->AddChildToVerticalBox(Rule);
-        RuleCell->SetPadding(FMargin(0.0f, 10.0f));
-    };
-
-    HereLine = MakeText(FText::GetEmpty(), ChartSize, Ink);
-    MakeLine(NSLOCTEXT("DeepSpace", "ChartHere", "Here"), HereLine, nullptr);
-    MakeRule();
-
+    // The list: a row per system, nearest first.
+    UVerticalBox* List = MakeColumn();
+    Place(Canvas, List, FVector2D(Edge, BodyTop), FVector2D(ListWidth, RowHeight * RowCount));
     RowButtons.Reset();
+    RowMarks.Reset();
     RowNames.Reset();
     RowDistances.Reset();
     RowClasses.Reset();
@@ -135,20 +199,31 @@ UWidget* UNavigationWidget::BuildScreen()
     for (int32 Index = 0; Index < RowCount; ++Index)
     {
         UHorizontalBox* Columns = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-        UTextBlock* Name = MakeText(FText::GetEmpty(), ChartSize, Ink);
-        UTextBlock* Distance = MakeText(FText::GetEmpty(), ChartSize, Ink);
-        UTextBlock* Class = MakeText(FText::GetEmpty(), ChartSize, Ink);
-        UTextBlock* Visited = MakeText(FText::GetEmpty(), ChartSize, Dim);
-        AddFill(Columns, Name, 3.0f);
-        AddFill(Columns, Distance, 1.6f, HAlign_Right);
-        AddFill(Columns, MakeText(FText::GetEmpty(), ChartSize, Dim), 0.3f);
-        AddFill(Columns, Class, 3.2f);
-        AddFill(Columns, Visited, 1.4f);
+        UTextBlock* Mark = MakeText(FText::GetEmpty(), TextSize, Accent);
+        UTextBlock* Name = MakeText(FText::GetEmpty(), TextSize, Ink);
+        UTextBlock* Distance = MakeText(FText::GetEmpty(), TextSize, Ink);
+        // The class dim, as the map's kind column is: the name and the
+        // distance are what a row is chosen by.
+        UTextBlock* Class = MakeText(FText::GetEmpty(), TextSize, Dim);
+        UTextBlock* Visited = MakeText(FText::GetEmpty(), TextSize, Dim);
+        // A name wider than its column is cut at it, never written over the
+        // distance.
+        Name->SetClipping(EWidgetClipping::ClipToBounds);
+        AddColumn(Columns, Mark, MarkColumn);
+        AddColumn(Columns, Name, NameColumn);
+        AddColumn(Columns, Distance, DistanceColumn, HAlign_Right);
+        AddColumn(Columns, WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()), GapColumn);
+        AddColumn(Columns, Class, ClassColumn);
+        AddColumn(Columns, Visited, VisitedColumn);
 
-        UButton* Row = MakeButton(Columns);
-        Column->AddChildToVerticalBox(Row);
+        UButton* Row = MakeButton(Columns, FMargin(0.0f));
+        USizeBox* Height = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        Height->SetHeightOverride(RowHeight);
+        Height->SetContent(Row);
+        List->AddChildToVerticalBox(Height);
 
         RowButtons.Add(Row);
+        RowMarks.Add(Mark);
         RowNames.Add(Name);
         RowDistances.Add(Distance);
         RowClasses.Add(Class);
@@ -162,24 +237,66 @@ UWidget* UNavigationWidget::BuildScreen()
     RowButtons[5]->OnClicked.AddDynamic(this, &UNavigationWidget::HandleRow5);
     static_assert(RowCount == 6, "one handler per row: add or remove them with RowCount");
 
-    MakeRule();
+    // The band. A label dim in a column of its own, so the two values line
+    // up. The jump's line is one row -- the label, the word, and the toggle
+    // at its right -- centred on one line, so the word and the button sit
+    // level; the course has the band's whole width to wrap in below it.
+    const auto MakeLabel = [this](const FText& Label)
+    {
+        USizeBox* Column = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        Column->SetWidthOverride(LabelWidth);
+        Column->SetContent(MakeText(Label, TextSize, Dim));
+        return Column;
+    };
 
-    JumpLine = MakeText(FText::GetEmpty(), ChartSize, Ink);
-    MakeLine(NSLOCTEXT("DeepSpace", "ChartJump", "Jump"), JumpLine, nullptr);
+    UHorizontalBox* JumpRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    Place(Canvas, JumpRow, FVector2D(Edge, JumpTop), FVector2D(ListWidth, JumpHeight));
+    UHorizontalBoxSlot* JumpLabelCell = JumpRow->AddChildToHorizontalBox(MakeLabel(NSLOCTEXT("DeepSpace", "ChartJump", "Jump")));
+    JumpLabelCell->SetVerticalAlignment(VAlign_Center);
+    JumpLine = MakeText(FText::GetEmpty(), TextSize, Ink);
+    AddColumn(JumpRow, JumpLine, 1.0f);
 
-    EngageLabel = MakeText(FText::GetEmpty(), ChartSize, Ink);
-    EngageButton = MakeButton(EngageLabel);
-    FButtonStyle EngageStyle = EngageButton->GetStyle();
-    EngageStyle.SetNormal(FSlateColorBrush(Raised));
-    EngageButton->SetStyle(EngageStyle);
+    EngageLabel = MakeText(FText::GetEmpty(), ButtonSize, Ink);
+    EngageLabel->SetJustification(ETextJustify::Center);
+    EngageButton = MakeButton(EngageLabel, FMargin(11.0f, 0.0f));
+    {
+        FButtonStyle Style = EngageButton->GetStyle();
+        Style.SetNormal(FSlateColorBrush(Raised));
+        EngageButton->SetStyle(Style);
+    }
     EngageButton->OnClicked.AddDynamic(this, &UNavigationWidget::HandleEngage);
+    USizeBox* EngageSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    EngageSize->SetHeightOverride(EngageHeight);
+    EngageSize->SetMinDesiredWidth(EngageMinWidth);
+    EngageSize->SetContent(EngageButton);
+    UHorizontalBoxSlot* EngageCell = JumpRow->AddChildToHorizontalBox(EngageSize);
+    EngageCell->SetVerticalAlignment(VAlign_Center);
+    EngageCell->SetPadding(FMargin(EngageGap, 0.0f, 0.0f, 0.0f));
 
-    CourseLine = MakeText(FText::GetEmpty(), ChartSize, Ink);
-    CourseLine->SetAutoWrapText(true);
-    MakeLine(NSLOCTEXT("DeepSpace", "ChartCourse", "Course"), CourseLine, EngageButton);
+    UHorizontalBox* CourseRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    Place(Canvas, CourseRow, FVector2D(Edge, CourseTop), FVector2D(ListWidth, CourseHeight));
+    UHorizontalBoxSlot* CourseLabelCell = CourseRow->AddChildToHorizontalBox(MakeLabel(NSLOCTEXT("DeepSpace", "ChartCourse", "Course")));
+    CourseLabelCell->SetVerticalAlignment(VAlign_Top);
+    CourseLabelCell->SetPadding(FMargin(0.0f, LineInset, 0.0f, 0.0f));
+    CourseLine = MakeText(FText::GetEmpty(), TextSize, Ink);
+    // Wrapped at a width, not automatically: an automatic wrap takes its
+    // width from the last frame painted, and the layout would then depend on
+    // having been drawn.
+    CourseLine->SetWrapTextAt(CourseWidth);
+    UHorizontalBoxSlot* CourseCell = CourseRow->AddChildToHorizontalBox(CourseLine);
+    CourseCell->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+    CourseCell->SetVerticalAlignment(VAlign_Top);
+    CourseCell->SetPadding(FMargin(0.0f, LineInset, 0.0f, 0.0f));
+
+    UBorder* Root = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    Root->SetBrushColor(Panel);
+    Root->SetPadding(FMargin(0.0f));
+    Root->SetHorizontalAlignment(HAlign_Fill);
+    Root->SetVerticalAlignment(VAlign_Fill);
+    Root->SetContent(Canvas);
 
     RefreshFromShip();
-    return MakePanel(Column);
+    return Root;
 }
 
 void UNavigationWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
@@ -296,6 +413,7 @@ void UNavigationWidget::RefreshSystems(const UShipSubsystem& Subsystem)
         if (!Chart.IsValidIndex(Index))
         {
             RowButtons[Index]->SetVisibility(ESlateVisibility::Collapsed);
+            RowMarks[Index]->SetText(FText::GetEmpty());
             RowNames[Index]->SetText(FText::GetEmpty());
             RowDistances[Index]->SetText(FText::GetEmpty());
             RowClasses[Index]->SetText(FText::GetEmpty());
@@ -308,10 +426,9 @@ void UNavigationWidget::RefreshSystems(const UShipSubsystem& Subsystem)
         RowButtons[Index]->SetVisibility(ESlateVisibility::Visible);
         RowButtons[Index]->SetIsEnabled(!bTransit);
 
-        // Three spaces where the mark would be, so a plotted name does not
-        // shift its row's columns.
-        RowNames[Index]->SetText(FText::FromString(
-            (bPlotted ? FString(PlottedMark) + TEXT(" ") : FString(TEXT("   "))) + Stub.Name));
+        // The mark in its own column, so a plotted name does not shift.
+        RowMarks[Index]->SetText(bPlotted ? FText::FromString(PlottedMark) : FText::GetEmpty());
+        RowNames[Index]->SetText(FText::FromString(Stub.Name));
         RowNames[Index]->SetColorAndOpacity(FSlateColor(bPlotted ? Accent : Ink));
         RowDistances[Index]->SetText(FText::FromString(NavText::Distance(Position.DistanceTo(Stub.Position))));
         RowClasses[Index]->SetText(FText::FromString(NavText::StarClass(Stub.Class)));
@@ -417,11 +534,15 @@ FText UNavigationWidget::GetRowText(int32 Index) const
     }
 
     // What the row shows, read back off the row: a test of this is a test
-    // of the glass, not of a second description of it.
+    // of the glass, not of a second description of it. The mark and the
+    // name are one part, as on the map.
+    const FString Mark = RowMarks[Index]->GetText().ToString();
+    const FString Name = RowNames[Index]->GetText().ToString();
     TArray<FString> Parts;
-    for (const TArray<TObjectPtr<UTextBlock>>* Column : {&RowNames, &RowDistances, &RowClasses, &RowVisited})
+    Parts.Add(Mark.IsEmpty() ? Name : Mark + TEXT(" ") + Name);
+    for (const TArray<TObjectPtr<UTextBlock>>* Column : {&RowDistances, &RowClasses, &RowVisited})
     {
-        const FString Part = (*Column)[Index]->GetText().ToString().TrimStart();
+        const FString Part = (*Column)[Index]->GetText().ToString();
         if (!Part.IsEmpty())
         {
             Parts.Add(Part);

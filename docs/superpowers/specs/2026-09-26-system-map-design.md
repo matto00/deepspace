@@ -47,6 +47,20 @@ developer ruled on both. Binding; they override anything below.
    the pole is held at the star's edge (`Inside <innermost>'s orbit. 90°
    above the plane.`).
 
+## Amendment, 2026-09-27: the chart is driven from either seat
+
+After the developer's playtest note of 2026-09-27 ("let's make sure that the jump menu has
+parity with the map. map is configured correctly, jump menu has spacing
+issues / can't be used without focusing"), the developer ruled: **the chart
+is clickable from the helm too, for full parity with the map.**
+`AShipNavScreen::IsDrivableSeated` is true: the chart, like the map, is
+looked at and clicked unzoomed from the chart chair and from the helm, the
+pointer handed the gate's own hit. E and Tab are unchanged: E zooms the chart
+or the map only from the chart chair, and Tab cycles only on the zoomed map.
+Decisions 2, 12 and 13 are amended below, each at the sentences the ruling
+changes; where anything below still disagrees, this ruling holds. The chart was also relaid to the map's
+standard (`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`).
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read this spec and the flight-feel spec together and ruled on
@@ -346,7 +360,9 @@ share one map rather than each have their own.
 *Ruled (ruling 4): "pilot just has look and click control of map". At the
 helm this decision is unchanged in substance. The same gate now also serves
 the chart chair while it is not zoomed (decision 13), so the virtual is named
-for a seat rather than for the helm.*
+for a seat rather than for the helm.* *Amended 2026-09-27: the chart says
+yes too, from both seats (the ruling at the top); "only the map" below is
+superseded.*
 
 `AShipScreen` gains one virtual, not a property:
 
@@ -364,6 +380,13 @@ any code exists.) Because it is not a
 `UPROPERTY`, no placed instance in `L_Hauler` can change it, and
 `DeepSpace.Ship.MapScreen` holds that the map says yes and the chart, the
 laptop and the engineering console say no.
+
+*Amended 2026-09-27 (the ruling at the top): `AShipNavScreen` overrides it
+to return true as well, and the comment above now names both desk screens.
+It is still a class decision -- no placed instance can change it -- but it is
+the chart's class that says yes. `DeepSpace.Ship.MapScreen` holds that the
+map and the chart say yes and the laptop says no; the engineering console
+carries no `AShipScreen` and is never asked.*
 
 `UpdatePointer`'s seated branch stops deactivating the pointer outright and
 gates it instead. It runs a line trace from the eye along the view on the
@@ -401,7 +424,10 @@ still "stand up", and the flight keys are still the ship's. What the rule
 protected against was the pointer finding *any* screen in reach from the
 seat. The chart is 2 m from the helm's eye, inside the 250 cm reach, and it
 is sized to be read from 60 cm in its own chair. It stays unreachable from
-the helm, because it does not say yes.
+the helm, because it does not say yes. *Amended 2026-09-27: it says yes now,
+by ruling, and is clicked from the helm as the map is. What the rule still
+protects is the rest: the laptop and anything else in reach say no, so a
+seat never drives a screen it was not meant to.*
 
 The HUD's dot already turns teal over a screen (`IsPointingAtScreen`), so the
 pilot sees they can click without anything new.
@@ -417,8 +443,9 @@ clicked from the helm at all.
 
 **Rejected: a per-instance `bDrivableFromHelm` `UPROPERTY`.** It was the first
 draft too. An `EditAnywhere` flag can be changed on one placed instance, which
-would make the chart drivable from the helm with nothing to catch it. It is
-also a reflected-layout change for no benefit.
+would make a screen drivable from a seat with nothing to catch it -- the
+chart, when this was written; the laptop, now that the chart is drivable by
+class (2026-09-27). It is also a reflected-layout change for no benefit.
 
 **Rejected: a helm key that cycles the target** (say T, with the map
 following). It is attractive, since cycling while looking out of the glass
@@ -1165,11 +1192,14 @@ map's band shows one button (decision 3's layout). `Jump here` plots the
 target as the course *and* engages the jump, in one press. Pressed again it
 reads `Stand down`, and clears the course, which stands the jump down, as
 clearing does on the chart. One press does both because the in-system jump is
-chosen where the map is used, from the helm, and the chart that engages is
-out of the helm's reach (decision 2). A plot that still needed the chart
-would send the pilot out of the helm, into the other chair and back, for
-every hop. It is still the one engage lever the chart's toggle moves, and the
-chart shows it. Console: `ds.Nav.Plot target` plots the target as the
+chosen where the map is used, from the helm, and needs no second screen.
+(As signed off, the reason was that the chart that engages was out of the
+helm's reach (decision 2), and a plot that still needed it would send the
+pilot out of the helm, into the other chair and back, for every hop. *Amended
+2026-09-27:* the chart is clickable from the helm now, so that reason is
+gone; the one press stays, because a hop chosen on the map should not need a
+glance to another screen to send it.) It is still the one engage lever the
+chart's toggle moves, and the chart shows it. Console: `ds.Nav.Plot target` plots the target as the
 course, and `ds.Nav.Engage` engages, as they do for a star.
 
 **One course.** `FShipNavState` holds a course that is a star *or* a world:
@@ -1357,6 +1387,19 @@ widget for the copilot.** It is the same panel, framed: one map, one ship.
 
 **Cost to change:** low. Which press does what is a few lines in the pawn;
 the virtuals are one line each.
+
+**Amended 2026-09-27 (the ruling at the top): the chart is driven unzoomed,
+from its chair and from the helm.** The playtest note of 2026-09-27 found the chart
+"can't be used without focusing": seated, the pointer was gated off it, so a
+row could be clicked only after E. Now `AShipNavScreen::IsDrivableSeated` is
+true, and the chart is looked at and clicked from either seat as the map is.
+Zooming is kept, from the chart chair only, as a closer look; it is no longer
+a step before the chart can be used. From the helm the chart is 191 cm off
+and 56 degrees round: about 306 x 382 screen pixels on the 4K display for its
+816 x 576, 2.7 times minified across and 1.5 down, so its 44 px rows are
+about 29 px tall on screen (the map's 24 px rows are about 31 at the helm)
+and its words are narrow; whether they read, or shimmer, is the next
+playtest's question.
 
 ## Open questions
 

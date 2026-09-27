@@ -32,6 +32,15 @@ class UTextBlock;
  * countdown and no ETA -- the charge is a wait, and a number that fills is a
  * clock to watch -- and no row is ranked or recommended. Distances are facts about the sky, and so
  * are bearings; nothing here is late and nothing gets worse.
+ *
+ * Laid out as the map beside it is, on a canvas with every size a constant
+ * (NavigationWidget.cpp): the title with where the ship is at its right, a
+ * row per system with the mark in a column of its own, and the band at the
+ * bottom -- the jump's word with the one toggle at its right, then the
+ * course. Its 816 x 576 is what the panel spans from its own chair (about
+ * 970 x 660 screen pixels on the 4K display), so it is never minified where
+ * it is read; and every size is the map's times 816 / 600, so the two desk
+ * screens' text is one physical size.
  */
 UCLASS()
 class DEEPSPACE_API UNavigationWidget : public UShipScreenWidget
@@ -114,7 +123,7 @@ private:
     UFUNCTION()
     void HandleEngage();
 
-    UButton* MakeButton(UWidget* Content);
+    UButton* MakeButton(UWidget* Content, const FMargin& Padding);
 
     /**
      * Everything the chart's costly answers depend on, asked of their owners
@@ -162,7 +171,11 @@ private:
     UPROPERTY()
     TArray<TObjectPtr<UButton>> RowButtons;
 
-    /** Per row: the name, the distance, the class, and whether visited. */
+    /** Per row: the plotted mark, the name, the distance, the class, and
+     *  whether visited. The mark has a column of its own, as on the map, so
+     *  a plotted row's name does not shift. */
+    UPROPERTY()
+    TArray<TObjectPtr<UTextBlock>> RowMarks;
     UPROPERTY()
     TArray<TObjectPtr<UTextBlock>> RowNames;
     UPROPERTY()
@@ -172,6 +185,8 @@ private:
     UPROPERTY()
     TArray<TObjectPtr<UTextBlock>> RowVisited;
 
+    /** The title's right-hand side: where the ship is, as the map's title
+     *  names its system. */
     UPROPERTY()
     TObjectPtr<UTextBlock> HereLine;
     UPROPERTY()

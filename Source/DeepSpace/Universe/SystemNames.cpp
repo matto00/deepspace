@@ -45,6 +45,7 @@ namespace
      *  down with use. */
     constexpr double SyllableWeights[] = {3.0, 1.0};
     constexpr int32 MinSyllables = 2;
+    constexpr int32 MaxSyllables = MinSyllables + UE_ARRAY_COUNT(SyllableWeights) - 1;
 
     /** Coda-then-onset pairs a mouth trips over. The coda is dropped rather
      *  than the syllable redrawn, so fixing a name costs no draws. */
@@ -125,6 +126,96 @@ namespace
         Name[0] = FChar::ToUpper(Name[0]);
         return Name;
     }
+}
+
+FString SystemNames::WidestName(TFunctionRef<double(const FString&)> Width)
+{
+    struct FWidest
+    {
+        double Width = -1.0;
+        FString Text;
+    };
+
+    // Past the first syllable no joint touches the nucleus: the widest one.
+    FWidest Nucleus;
+    for (const FSound& Sound : Nuclei)
+    {
+        if (Sound.Weight > 0.0 && Width(Sound.Text) > Nucleus.Width)
+        {
+            Nucleus = {Width(Sound.Text), Sound.Text};
+        }
+    }
+
+    // Rest[R][C]: the widest a name can go on after a syllable that drew
+    // coda C, with R syllables still to come. With none, the coda ends the
+    // name. Otherwise the next onset -- never the empty one past the first
+    // syllable -- decides whether the joint keeps C (IsSayable), so the two
+    // are chosen together.
+    constexpr int32 NumCodas = UE_ARRAY_COUNT(Codas);
+    TArray<FWidest> Rest;
+    Rest.SetNum(MaxSyllables * NumCodas);
+    const auto At = [](int32 Remaining, int32 Coda) { return Remaining * NumCodas + Coda; };
+    for (int32 Coda = 0; Coda < NumCodas; ++Coda)
+    {
+        if (Codas[Coda].Weight > 0.0)
+        {
+            Rest[At(0, Coda)] = {Width(Codas[Coda].Text), Codas[Coda].Text};
+        }
+    }
+    for (int32 Remaining = 1; Remaining < MaxSyllables; ++Remaining)
+    {
+        for (int32 Before = 0; Before < NumCodas; ++Before)
+        {
+            FWidest& Best = Rest[At(Remaining, Before)];
+            for (int32 Onset = 0; Onset < UE_ARRAY_COUNT(Onsets); ++Onset)
+            {
+                if (Onset == EmptyOnset || Onsets[Onset].Weight <= 0.0)
+                {
+                    continue;
+                }
+                const FString Joint = IsSayable(Codas[Before].Text, Onsets[Onset].Text)
+                    ? FString(Codas[Before].Text) : FString();
+                const double Head = Width(Joint) + Width(Onsets[Onset].Text) + Nucleus.Width;
+                for (int32 Coda = 0; Coda < NumCodas; ++Coda)
+                {
+                    const FWidest& After = Rest[At(Remaining - 1, Coda)];
+                    if (After.Width >= 0.0 && Head + After.Width > Best.Width)
+                    {
+                        Best = {Head + After.Width, Joint + Onsets[Onset].Text + Nucleus.Text + After.Text};
+                    }
+                }
+            }
+        }
+    }
+
+    // The first syllable whole, since its first letter is capitalised and a
+    // capital is not the lower case's width: any onset, the empty one too,
+    // and every nucleus.
+    FWidest Name;
+    for (int32 Syllables = MinSyllables; Syllables <= MaxSyllables; ++Syllables)
+    {
+        for (const FSound& Onset : Onsets)
+        {
+            for (const FSound& First : Nuclei)
+            {
+                if (Onset.Weight <= 0.0 || First.Weight <= 0.0)
+                {
+                    continue;
+                }
+                FString Opening = FString(Onset.Text) + First.Text;
+                Opening[0] = FChar::ToUpper(Opening[0]);
+                for (int32 Coda = 0; Coda < NumCodas; ++Coda)
+                {
+                    const FWidest& After = Rest[At(Syllables - 1, Coda)];
+                    if (After.Width >= 0.0 && Width(Opening) + After.Width > Name.Width)
+                    {
+                        Name = {Width(Opening) + After.Width, Opening + After.Text};
+                    }
+                }
+            }
+        }
+    }
+    return Name.Text;
 }
 
 FString SystemNames::MakeSystemName(uint64 Seed)

@@ -499,6 +499,43 @@ bool FStarSystemGenerationTest::RunTest(const FString& Parameters)
             *All[3].Name, *All[4].Name, *All[5].Name));
     }
 
+    // The widest name: a bound on every name the tables make, under any
+    // measure that adds up letter by letter, and one they can make. Three
+    // syllables of two-letter onsets and nuclei, three-letter joints (a
+    // two-letter coda before a one-letter onset, or the reverse; two
+    // two-letter ones never join) and a two-letter coda: sixteen letters.
+    {
+        const auto Letters = [](const FString& Text) { return double(Text.Len()); };
+        // Uneven, as a font is: every letter its own width, a capital wider.
+        const auto Uneven = [](const FString& Text)
+        {
+            double Sum = 0.0;
+            for (const TCHAR C : Text)
+            {
+                Sum += FChar::IsUpper(C) ? 1.4 + 0.07 * (C - 'A') : 0.5 + 0.11 * ((C - 'a') * 7 % 26);
+            }
+            return Sum;
+        };
+        const FString ByLetters = SystemNames::WidestName(Letters);
+        const FString ByUneven = SystemNames::WidestName(Uneven);
+        AddInfo(FString::Printf(TEXT("widest names: %s by letters, %s by an uneven measure"), *ByLetters, *ByUneven));
+        TestEqual(TEXT("the widest name by letters is sixteen letters"), ByLetters.Len(), 16);
+        TestTrue(TEXT("and it is a name: one capitalised word"),
+                 ByLetters.Len() > 1 && FChar::IsUpper(ByLetters[0]) && ByLetters.Mid(1).ToLower() == ByLetters.Mid(1));
+        int32 Wider = 0;
+        FString Example;
+        for (uint64 Seed = 0; Seed < 50000; ++Seed)
+        {
+            const FString Name = SystemNames::MakeSystemName(Seed * 0x9E3779B97F4A7C15ull + 1);
+            if (Letters(Name) > Letters(ByLetters) + 1e-9 || Uneven(Name) > Uneven(ByUneven) + 1e-9)
+            {
+                ++Wider;
+                Example = Name;
+            }
+        }
+        TestEqual(TEXT("no drawn name is wider than the widest, by either measure: ") + Example, Wider, 0);
+    }
+
     return true;
 }
 

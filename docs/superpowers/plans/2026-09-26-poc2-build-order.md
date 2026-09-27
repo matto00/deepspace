@@ -468,13 +468,16 @@ depends on.
     Tab focus navigation could take the key first (the map spec's *Risks*).
     `DeepSpace.Ship.ChartChair` calls `CycleTarget` directly. If Tab does
     nothing on the zoomed map, the spec's fallback applies.
-  - **The dot in the chart chair.** Looking at the chart unzoomed the dot
-    stays idle (the chart is not drivable seated, so the pointer is off),
-    and only the prompt says `(E) Chart`; looking at the map the dot turns
-    teal. The chair's two choices look different and behave the same. Whether
-    that reads as "the chart is not a choice" is the playtest's call; the
-    change, if wanted, is for the HUD to emphasise the dot whenever E's
-    prompt names a zoom.
+  - **The dot in the chart chair.** *Revised 2026-09-27 (the map spec's
+    ruling that the chart is clickable from either seat):* looking at the
+    chart unzoomed, or at the map, the dot turns teal and the pointer is
+    live -- both are clicked in place from the chair, and from the helm --
+    and the prompt says `(E) Chart` or `(E) Map` for the zoom. The check is
+    that a row or the toggle clicked unzoomed does what it says, from both
+    seats: headless tests stop at the glass the ray lands on (`-nullrhi`
+    cannot hit-test Slate). (As first written: the dot stayed idle on the
+    chart, which was not drivable seated, and the question was whether that
+    read as "the chart is not a choice". The ruling answered it.)
 - **CLAUDE.md**, after the merges: the flight-feel spec's *Documentation*
   list, and the map spec's *The system map* section (the screen, the seated
   pointer, the chart chair and Tab, the in-system jump, the live ETA, the two

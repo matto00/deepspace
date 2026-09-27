@@ -251,11 +251,11 @@ void ADeepSpaceCharacter::UpdatePointer()
 
     // Seated -- at the helm, or in the chart chair with nothing zoomed --
     // the keys are the ship's and E means the seat's business, and a pointer
-    // live on any screen in reach would find the chart from the helm, two
-    // metres off and sized for its own chair. So seated it is live only on
-    // a screen that says it is drivable seated: the map (system map spec,
-    // decision 2). The left button is bound to nothing else at a seat, so a
-    // live pointer fights nothing.
+    // live on any screen in reach would find the laptop or the console. So
+    // seated it is live only on a screen that says it is drivable seated:
+    // the map and the chart, the cockpit's two desk screens (system map spec,
+    // decision 2, and the ruling of 2026-09-27). The left button is bound to
+    // nothing else at a seat, so a live pointer fights nothing.
     //
     // Seated, the pointer is handed the gate's own hit (the Custom source)
     // rather than tracing for itself. Its own trace ignores only this pawn,
