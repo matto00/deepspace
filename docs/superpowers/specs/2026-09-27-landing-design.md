@@ -73,6 +73,9 @@ below goes past them, it says so and is on the sign-off list.
 
 **Ruled later the same day, on the plan:** the height is normalised by the *measured* maximum of the detail sum (at least 200,000 samples), under a smooth hard cap at `PeakCm`, not by the proven worst case, which is about three times loose and would have drawn peaks at a third of the Earth-like heights of ruling 6. `MaxHeightCm` is still exactly `PeakCm`.
 
+**Ruled after the spike (R1), same day:** parity is judged per footprint and per term. Values, and every term at the coarser footprints (1/12, 1/96, 1/768), are held to 1e-3; at the two finest footprints (1/3072, 1/12288) slopes are held to the measured float floor, 5e-3, since there every float evaluation -- the engine's own nodes included -- differs from double by 1e-3 to 5e-3 at those noise coordinates (spike: shared vs engine 3.11e-3, C++ double vs engine 3.51e-3; the coarse band bit-exact). The step mask counts only held crater sites, and bisectors only where a held site lies within 1.5 radii (0.467% left out, under the 1% cap).
+
+
 ## Context
 
 ### What exists, and what does not
