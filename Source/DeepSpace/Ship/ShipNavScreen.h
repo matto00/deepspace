@@ -37,11 +37,11 @@ public:
 
     /** Sitting here no longer frames the chart (decision 13): the chair sits
      *  beside the map too, and the seated player chooses. E, looking at
-     *  either, zooms it. Drivable from its own chair unzoomed, as the map is
-     *  from the helm, by looking and clicking; never from the helm, where
-     *  IsDrivableSeated keeps its no. */
+     *  either, zooms it. Drivable seated, as the map is: looked at and
+     *  clicked unzoomed from its own chair and from the helm (ruling,
+     *  2026-09-27). */
     virtual bool ZoomsOnSit() const override { return false; }
-    virtual bool IsDrivableFromChartChair() const override { return true; }
+    virtual bool IsDrivableSeated() const override { return true; }
     virtual bool IsZoomableFromChartChair() const override { return true; }
     virtual FText GetZoomPrompt() const override;
 

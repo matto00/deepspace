@@ -231,7 +231,7 @@ bool FChartChairTest::RunTest(const FString& Parameters)
              FMath::Abs(ChairEye.Z - PilotEye.Z) <= PilotEyeBob);
 
     TestEqual(TEXT("the view starts on the chart, so E names it"), Prompt(), FString(TEXT("Chart")));
-    // Usable without zooming (the second playtest: "can't be used without
+    // Usable without zooming (the playtest note of 2026-09-27: "can't be used without
     // focusing"): from its own chair the chart is looked at and clicked, as
     // the map is from the helm, and handed the gate's own hit.
     TestTrue(TEXT("the pointer is live on the chart from its chair, unzoomed"), Pointer->IsActive());

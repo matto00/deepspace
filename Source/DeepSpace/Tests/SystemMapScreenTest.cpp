@@ -671,7 +671,8 @@ bool FShipMapScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the map is drivable seated: the helm looks and clicks"), Screen->IsDrivableSeated());
     TestTrue(TEXT("and zoomable from the chart chair"), Screen->IsZoomableFromChartChair());
     TestEqual(TEXT("where E calls it the map"), Screen->GetZoomPrompt().ToString(), FString(TEXT("Map")));
-    TestFalse(TEXT("the chart is not drivable seated: never from the helm"), Chart->IsDrivableSeated());
+    TestTrue(TEXT("the chart is drivable seated too: the helm looks and clicks it (ruling, 2026-09-27)"),
+             Chart->IsDrivableSeated());
     TestTrue(TEXT("it is zoomable from its chair"), Chart->IsZoomableFromChartChair());
     TestFalse(TEXT("and sitting at it no longer zooms it"), Chart->ZoomsOnSit());
     TestEqual(TEXT("where E calls it the chart"), Chart->GetZoomPrompt().ToString(), FString(TEXT("Chart")));

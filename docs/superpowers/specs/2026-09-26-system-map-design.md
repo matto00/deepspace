@@ -20,6 +20,19 @@ course as an id), ADR 0005 (the ship is the origin)
 anti-chore principle*, *shared presence, not division of labour*
 **Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
 
+## Amendment, 2026-09-27: the chart is driven from either seat
+
+After the developer's playtest note of 2026-09-27 ("let's make sure that the jump menu has
+parity with the map. map is configured correctly, jump menu has spacing
+issues / can't be used without focusing"), the developer ruled: **the chart
+is clickable from the helm too, for full parity with the map.**
+`AShipNavScreen::IsDrivableSeated` is true: the chart, like the map, is
+looked at and clicked unzoomed from the chart chair and from the helm, the
+pointer handed the gate's own hit. E and Tab are unchanged: E zooms the chart
+or the map only from the chart chair, and Tab cycles only on the zoomed map.
+Decisions 2 and 13 are amended below. The chart was also relaid to the map's
+standard (`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`).
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read this spec and the flight-feel spec together and ruled on
@@ -319,7 +332,9 @@ share one map rather than each have their own.
 *Ruled (ruling 4): "pilot just has look and click control of map". At the
 helm this decision is unchanged in substance. The same gate now also serves
 the chart chair while it is not zoomed (decision 13), so the virtual is named
-for a seat rather than for the helm.*
+for a seat rather than for the helm.* *Amended 2026-09-27: the chart says
+yes too, from both seats (the ruling at the top); "only the map" below is
+superseded.*
 
 `AShipScreen` gains one virtual, not a property:
 
@@ -1327,6 +1342,19 @@ widget for the copilot.** It is the same panel, framed: one map, one ship.
 
 **Cost to change:** low. Which press does what is a few lines in the pawn;
 the virtuals are one line each.
+
+**Amended 2026-09-27 (the ruling at the top): the chart is driven unzoomed,
+from its chair and from the helm.** The playtest note of 2026-09-27 found the chart
+"can't be used without focusing": seated, the pointer was gated off it, so a
+row could be clicked only after E. Now `AShipNavScreen::IsDrivableSeated` is
+true, and the chart is looked at and clicked from either seat as the map is.
+Zooming is kept, from the chart chair only, as a closer look; it is no longer
+a step before the chart can be used. From the helm the chart is 191 cm off
+and 56 degrees round: about 306 x 382 screen pixels on the 4K display for its
+816 x 576, 2.7 times minified across and 1.5 down, so its 44 px rows are
+about 29 px tall on screen (the map's 24 px rows are about 31 at the helm)
+and its words are narrow; whether they read, or shimmer, is the next
+playtest's question.
 
 ## Open questions
 

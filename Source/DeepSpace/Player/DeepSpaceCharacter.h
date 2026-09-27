@@ -406,9 +406,7 @@ private:
     void UpdateFocusedInteractable();
 
     /** Aims the pointer along the view and switches it off when it cannot be
-     *  used: seated, unless the view is on a screen that seat may drive --
-     *  IsDrivableSeated at the helm, IsDrivableFromChartChair in the chart
-     *  chair. */
+     *  used: seated, unless the view is on a screen that IsDrivableSeated. */
     void UpdatePointer();
 
     /**

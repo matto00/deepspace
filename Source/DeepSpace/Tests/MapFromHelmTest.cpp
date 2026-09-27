@@ -59,10 +59,10 @@ namespace MapFromHelmTestLocal
  * The map from the helm (system map spec, decision 2, as ruled: "pilot just
  * has look and click control of map"). Seated at the helm, the pointer is
  * live only while the view is on a screen that says it is drivable seated --
- * the map -- and it then lands on the map's glass; on the chart, two metres
- * off and inside the hands' reach, it is off, because the chart says no.
- * Looking away mid-press lets the button go, so the next click on the map is
- * a click and not a dropped repeat.
+ * the map and, by the ruling of 2026-09-27, the chart two metres off -- and
+ * it then lands on that screen's glass. Looking away mid-press lets the
+ * button go, so the next click on the map is a click and not a dropped
+ * repeat.
  *
  * The real character in the helm seat, holding the sitting idle, so the
  * pointer traces from the pilot's own eye. As with ScreenPointer, it checks
@@ -142,16 +142,26 @@ bool FMapFromHelmTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("E is still stand up: nothing sits you at the map, and the helm never zooms"),
               Pilot->GetCurrentPrompt().ToString(), FString(TEXT("Stand up")));
 
-    // The chart is within the hands' reach of the helm; only its class keeps
-    // the pointer off it.
+    // The chart, within the hands' reach of the helm, is looked at and
+    // clicked as the map is (the developer's ruling, 2026-09-27: "the chart
+    // is clickable from the helm too, for full parity with the map").
     TestTrue(TEXT("the chart is within reach of the helm's eye"), FVector::Dist(Eye, ChartGlass) < Pointer->InteractionDistance);
+    LookAt(Pilot, Controller, ChartGlass);
+    TestTrue(TEXT("looking at the chart from the helm, the pointer is live"), Pointer->IsActive());
+    TestEqual(TEXT("handed the view's own trace there too"), Pointer->InteractionSource, EWidgetInteractionSource::Custom);
+    Pointer->TickComponent(0.016f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("and it lands on the chart's glass"),
+             Pointer->GetLastHitResult().GetComponent() == static_cast<UPrimitiveComponent*>(Chart->GetScreen()));
+    TestEqual(TEXT("E is still stand up: the helm never zooms the chart either"),
+              Pilot->GetCurrentPrompt().ToString(), FString(TEXT("Stand up")));
 
-    // A press on the map, then the head turns to the chart before the
+    // A press on the map, then the head turns out along the nose before the
     // button comes up.
+    LookAt(Pilot, Controller, MapGlass);
     Pilot->PressPointer();
     TestTrue(TEXT("a press on the map holds the button"), FPointerKeys::IsDown(*Pointer, EKeys::LeftMouseButton));
-    LookAt(Pilot, Controller, ChartGlass);
-    TestFalse(TEXT("looking at the chart from the helm, the pointer is off"), Pointer->IsActive());
+    LookAt(Pilot, Controller, Eye + FVector(1000.0, 0.0, 0.0));
+    TestFalse(TEXT("looking ahead from the helm, the pointer is off"), Pointer->IsActive());
     TestFalse(TEXT("so nothing reports as pointed at"), Pilot->IsPointingAtScreen());
     TestFalse(TEXT("and the button was let go on looking away"), FPointerKeys::IsDown(*Pointer, EKeys::LeftMouseButton));
 

@@ -683,13 +683,16 @@ zoomed goes back to the seat, and E on neither stands up; the prompt says
 which (`(E)  Chart`, `Map`, `Back`, `Stand up`, from
 `AShipScreen::GetZoomPrompt`). A screen says what it allows by class, never
 per instance: `IsZoomableFromChartChair`, `ZoomsOnSit` (the laptop, which
-frames as it always did), `IsDrivableSeated` (from the helm: the map alone)
-and `IsDrivableFromChartChair` (from the chair unzoomed: the map and the
-chart). **The chart is used without zooming** (second playtest: "can't be
-used without focusing"): seated in its chair, look at a row or the toggle and
-click, as the pilot does the map; zooming only brings it closer. It is still
-never driven from the helm, two metres off and inside the hands' reach
-(`DeepSpace.Ship.MapFromHelm`). **Tab on the zoomed map** cycles the target
+frames as it always did) and `IsDrivableSeated` (the map and the chart).
+**The chart is used without zooming** (playtest note, 2026-09-27: "can't be used
+without focusing"): seated in its chair, or at the helm (developer's ruling,
+2026-09-27: "the chart is clickable from the helm too, for full parity with
+the map"), look at a row or the toggle and click, as the pilot does the map;
+zooming only brings it closer, and only from the chair. From the helm the
+chart is two metres off and seen obliquely -- about 2.7 times minified
+across and 1.5 down -- so its rows are as tall on screen as the map's but its
+words are narrow and may shimmer; reading it is a playtest question.
+**Tab on the zoomed map** cycles the target
 outward (`CycleTarget`); anywhere else it does nothing -- at the helm too,
 where the pilot clicks (developer's ruling, 2026-09-26). The chair's first
 view is aimed from the *seated* eye (`ADeepSpaceCharacter::SeatedEyeOffset`,
@@ -777,9 +780,8 @@ its drawing, keyed on what the drawing depends on.
 **The helm looks and clicks** (decision 2, ruling 4): E at the map sits
 nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the
 view: live only while the first thing hit is a screen whose class says
-that seat may drive it -- from the helm `IsDrivableSeated`, the map alone;
-from the chart chair unzoomed `IsDrivableFromChartChair`, the map and the
-chart -- and then **handed the gate's own hit**
+`IsDrivableSeated` -- the map or the chart, from either seat -- and then
+**handed the gate's own hit**
 (`EWidgetInteractionSource::Custom`, `SetCustomHitResult`). The pointer's own
 trace ignores only its pawn, and the helm's seated eye is *inside* the helm
 seat's reach box, so it met the seat and never the map; the gate's trace
@@ -824,8 +826,8 @@ on black and only the bracket finds it (`DeepSpace.Sky.NightSideIsDrawn`;
 look with `ds.Sky.Goto <world> 4.5e6 night`).
 
 **The band's button** is the in-system jump's: `Jump here` plots the target
-and engages in one press (the chart that engages is out of the helm's
-reach), `Stand down` while the course is the target, and `Near enough to
+and engages in one press, so the in-system jump needs no second screen,
+`Stand down` while the course is the target, and `Near enough to
 fly`, disabled, inside the target's reach.
 
 **Landing works from the nearest surface** and uses the target only to name

@@ -5,8 +5,6 @@
 #include "Layout/ArrangedChildren.h"
 #include "Misc/AutomationTest.h"
 #include "Player/DeepSpaceCharacter.h"
-#include "Ship/ShipLaptop.h"
-#include "Ship/ShipMapScreen.h"
 #include "Ship/ShipNavScreen.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/NavText.h"
@@ -102,7 +100,7 @@ namespace ChartLayoutTestLocal
 }
 
 /**
- * The chart's layout, at the map's standard (the second playtest: "the jump
+ * The chart's layout, at the map's standard (the playtest note of 2026-09-27: "the jump
  * menu has spacing issues"). The tree is laid out as Slate lays it out, with
  * no renderer, and every word on the glass is held to three things: it is on
  * the panel, it is given at least the room it asks for (nothing clipped, and
@@ -113,7 +111,8 @@ namespace ChartLayoutTestLocal
  *
  * Its draw size is held to how it is seen: from its own chair's eye the panel
  * spans at least its pixels on the 4K display, so it is never minified where
- * it is read. And the chart is drivable from its own chair, and only there.
+ * it is read. Who may drive it from a seat is DeepSpace.UI.SystemMapScreen's
+ * and DeepSpace.Ship.ChartChair's.
  */
 bool FChartLayoutTest::RunTest(const FString& Parameters)
 {
@@ -156,14 +155,6 @@ bool FChartLayoutTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("nor magnified past 1.25 times, so text stays crisp"),
                  Seen.X <= 1.25 * Draw.X && Seen.Y <= 1.25 * Draw.Y);
     }
-
-    // -- who may drive it, from where: class decisions, not placed ones -----
-    TestTrue(TEXT("the chart is drivable from its own chair, unzoomed"), GetDefault<AShipNavScreen>()->IsDrivableFromChartChair());
-    TestFalse(TEXT("and still not from the helm"), GetDefault<AShipNavScreen>()->IsDrivableSeated());
-    TestTrue(TEXT("the map is drivable from both seats"),
-             GetDefault<AShipMapScreen>()->IsDrivableSeated() && GetDefault<AShipMapScreen>()->IsDrivableFromChartChair());
-    TestFalse(TEXT("the laptop from neither"),
-              GetDefault<AShipLaptop>()->IsDrivableSeated() || GetDefault<AShipLaptop>()->IsDrivableFromChartChair());
 
     const auto CheckWords = [this, &Draw](const TArray<FWord>& Words, const TCHAR* When)
     {
