@@ -792,8 +792,11 @@ is honest about the present.
 
 **Words**, `NavText::Duration(Seconds)`: whole seconds under 100 s (`ETA 52
 S`), whole minutes under an hour (`ETA 12 MIN`), hours to a tenth under two
-days (`ETA 4.2 H`), whole days above (`ETA 3 D`, which is cruise's 200 m/s
-across 0.2 AU). It ticks each second only in the last hundred seconds of an
+days (`ETA 4.2 H`), whole days above (`ETA 3 D`, which is the drive's
+lowest notch, 1 km/s, across 260 thousand km). The days have no ceiling and
+no grouping: cruise's 200 m/s across 0.2 AU is `ETA 1731 D`, and a 1 m/s
+creep at the same world about `ETA 346000 D` (see *Open questions*, "The ETA's long
+end"). It ticks each second only in the last hundred seconds of an
 approach, and is calm before. The map prints the same line (`ScreensAgree`).
 
 **What it does not do.** It is never the jump's: the charge still has no
@@ -1332,6 +1335,29 @@ recovers while the ship cruises (the limit felt as the wind-up, never
 counted); a limit on in-system jumps only; a wear cost carried by a later
 wear model. **Cost of deferring:** none. `FShipNavState` has room for any of
 them, and nothing built here assumes jumps are unlimited.
+
+### The ETA's long end (for the developer; not tuned)
+
+`Duration` prints whole days with no upper bound and no digit grouping, so a
+slow approach across a system reads `ETA 1731 D` (cruise's 200 m/s across
+0.2 AU) or about `ETA 346000 D` (a 1 m/s creep), beside a distance worded as
+`THOUSAND KM`. It is honest, and the developer has not seen it. Whether a
+four-to-six digit day count reads as information or as a clock telling the
+player they are *behind* is the anti-chore test, and the developer's call.
+Shapes worth weighing: leave it; group the digits (`1,731 D`); past some
+number of days drop the time and let the distance stand, as `PASSING` does
+for a miss. `DeepSpace.UI.TargetMarker.Eta` pins the present words, so any
+change is deliberate.
+
+### Two bearings for one world (for the stage 3 and 4 playtests)
+
+With an in-system jump plotted to the target, the jump line reads the
+8-degree cone (`JUMP READY · Kessa II · dead ahead`) while the target line
+reads the tight floor (`› Kessa II · 5.0° to port`). Decision 12 sanctions
+it: the cone is where the fold will open, the floor is where the world is.
+But it is the same shape of confusion the developer reported ("heading
+straight to it"). Watch for it in play. One option, needing an amendment: on
+a world course the jump line says `in the cone` rather than `dead ahead`.
 
 ## The anti-chore audit
 
