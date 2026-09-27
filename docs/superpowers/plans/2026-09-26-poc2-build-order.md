@@ -239,6 +239,47 @@ it must not be lost here: at 1 c from 0.2 AU, stepped through
 stepped cruise slide, nose and velocity apart, pins that the ETA follows the
 velocity's ray as it swings (2b pins the unstepped half).
 
+*As built (3c):* the API the map coded against in stage 1 is
+`UShipSubsystem::SetTarget`, `ClearTarget`, `GetTarget`, `ShipNav::TargetPlanet`
+and `GetStandoffAU`; 3c added `CycleTarget`, `PlotTarget` (the in-system
+course, which is only ever the target), `GetPlottedWorld`, `HasCourse`,
+`IsNearEnoughToFly(Here, World)`, `GetWorldStandoffDeg`, and
+`GetTargetView(Here)`, which fills `TargetMarker::View` with the ship's own
+position, attitude, velocity, the world's `FloorFor`, the boosters' braking
+and `ds.Drive.HoldSeconds` -- so **4b's HUD line should print
+`TargetMarker::Line(*Ship->GetTargetView(Here))`**, as the map does, and
+`ScreensAgree` then holds by construction. Four things differ from the map
+spec as written:
+
+- **The chart's test is `DeepSpace.UI.ChartInSystemCourse`**, not
+  `DeepSpace.UI.NavigationScreen.InSystemCourse`: a child path would turn the
+  chart's own `DeepSpace.UI.NavigationScreen` into a group that silently runs
+  nothing. It lives in `InSystemJumpTest.cpp` with the other two.
+- **The in-system arrival is on the line from where the fold *opened***,
+  held for the fold as `UShipSubsystem::FoldDeparture` (ADR 0003's new
+  amendment), not from where the ship is when it ends: the ship coasts on
+  through the fold, about 130,000 km in half of it from 1 c, which moves an
+  arrival worked out at the end off the line by hundreds of kilometres when
+  the nose was a few degrees off the world's centre.
+- **The spec's "a body of 100 km radius (where 10 x Floor governs)" is an
+  arithmetic slip.** `R / sin(1 degree)` is 57.3 R, so the ten floors govern
+  only under about 1.8 km of radius over a 10 km floor; a 100 km body is met
+  5,700 km out, by the angle. `DeepSpace.Ship.InSystemJump` tests both a
+  100 km body and a 1 km one.
+- **Through an in-system fold the map draws the ship where it is**, not
+  where it left from: it coasts about 0.001 AU, well under a pixel of the
+  warped-log map, so nothing is held for the glyph. The footer says `In the
+  fold.` and the drawing stands.
+
+`Eyes.MapFromHelm` was run again with a target, two new frames:
+`home_target_ahead` (the target ring, `› Baemsekai III · dead ahead · 46
+THOUSAND KM · ETA 16 MIN` while the drive spools up, and `Near enough to fly`,
+disabled) and `home_target_far` (`Jump here`). In the implementer's reading
+the ring, the line and the button all read at the helm's pixels; the
+button's raised backdrop is barely distinguishable from the panel, and the
+disabled words are dim by design. **The verdict is the developer's**, so the
+file is kept until it is given, and deleted with it.
+
 ### Stage 3 ownership check
 
 | File | Owner |
