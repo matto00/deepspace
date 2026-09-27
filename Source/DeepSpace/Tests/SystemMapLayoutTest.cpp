@@ -215,6 +215,20 @@ bool FSystemMapScaleTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("universe +X is up the glass"), Up.Y < Scale.Pixels.Centre.Y && FMath::IsNearlyEqual(Up.X, Scale.Pixels.Centre.X, 1.0e-9));
     TestTrue(TEXT("universe +Y is to the right, not the mirror image"), Right.X > Scale.Pixels.Centre.X);
 
+    // Top-down (developer's ruling, 2026-09-27): a point off the plane is
+    // drawn where the point under it is, and one over the pole on the star's
+    // edge.
+    for (const double Height : {4.0, -2.5})
+    {
+        const FVector Flat(-1.2, 2.1, 0.0);
+        const FVector2D Under = Place(Scale, StarAt + Flat * UniverseUnits::CmPerAU);
+        const FVector2D Over = Place(Scale, StarAt + (Flat + FVector(0.0, 0.0, Height)) * UniverseUnits::CmPerAU);
+        TestTrue(FString::Printf(TEXT("%.1f AU off the plane is drawn over the point under it"), Height), Over.Equals(Under, 1.0e-9));
+    }
+    const FVector2D OverPole = Place(Scale, StarAt + FVector(0.0, 0.0, 3.0 * UniverseUnits::CmPerAU));
+    TestTrue(TEXT("over the pole is the star's edge"),
+             FMath::IsNearlyEqual(FVector2D::Distance(OverPole, Scale.Pixels.Centre), Scale.Pixels.StarPx, 1.0e-9));
+
     // A function of the system alone: nothing about the ship goes in, so
     // asked twice it is the same scale to the bit.
     const FMapScale Again = Fit(System, NavStart::DefaultStandoffAU);
@@ -336,7 +350,9 @@ bool FSystemMapTwelveWorldsFitTest::RunTest(const FString& Parameters)
  * The ship goes through the same warp as the worlds: on a world's dot at the
  * world, on a ring at its orbit's radius, between two rings between them,
  * held just outside the star's disc inside the inner knot, on the rim past
- * it, and drawn as far out as it is when it is over the pole.
+ * it, and top-down off the plane: over the pole it is held at the star's
+ * edge, and over a ring it is on the ring (developer's ruling, 2026-09-27).
+ * Its tick is the way the glyph moves, not the nose's universe direction.
  */
 bool FSystemMapShipOnTheWarpTest::RunTest(const FString& Parameters)
 {
@@ -390,7 +406,9 @@ bool FSystemMapShipOnTheWarpTest::RunTest(const FString& Parameters)
     const FMapShip Below = Ship(Scale, StarAt + FVector(1.0, 0.0, -1.0) * UniverseUnits::CmPerAU, FQuat::Identity);
     TestTrue(TEXT("below the plane is negative"), FMath::IsNearlyEqual(Below.ElevationDeg, -45.0, 1.0e-6));
 
-    // The nose, projected into the plane.
+    // The tick. Straight round the star or straight out, the glyph's motion
+    // and the nose's own direction in the plane are one, so these read the
+    // map's axes; an oblique nose is where they part.
     const FUniversePosition Out = StarAt + FVector(0.0, 3.0 * UniverseUnits::CmPerAU, 0.0);
     const FMapShip Forward = Ship(Scale, Out, FQuat::Identity);
     TestTrue(TEXT("a nose along universe +X points up the glass"), Forward.Nose.IsSet() && Forward.Nose->Equals(FVector2D(0.0, -1.0), 1.0e-9));
@@ -400,6 +418,21 @@ bool FSystemMapShipOnTheWarpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("pitched 65 degrees, 25 from vertical, it still has a direction"), Climbing.Nose.IsSet());
     const FMapShip Vertical = Ship(Scale, Out, FRotator(80.0, 30.0, 0.0).Quaternion());
     TestFalse(TEXT("within 20 degrees of vertical the glyph is a ring alone"), Vertical.Nose.IsSet());
+
+    // Yawed 45 degrees, between round and out: the tick is the nose carried
+    // through the warp, which is stretched round the ring more than across
+    // it, so it leans round from the nose's own 45 degrees.
+    const FQuat Oblique = FRotator(0.0, 45.0, 0.0).Quaternion();
+    const FMapShip Leaning = Ship(Scale, Out, Oblique);
+    const TOptional<FVector2D> Moves = MotionOnMap(Scale, Out, Oblique.GetForwardVector());
+    const FVector2D NoseInPlane = FVector2D(1.0, -1.0).GetSafeNormal();
+    TestTrue(TEXT("an oblique nose's tick is the way the glyph moves"),
+             Leaning.Nose.IsSet() && Moves.IsSet() && Leaning.Nose->Equals(*Moves, 1.0e-9));
+    TestTrue(TEXT("and not the nose's own direction in the plane"),
+             Leaning.Nose.IsSet() && FMath::Abs(FVector2D::DotProduct(*Leaning.Nose, NoseInPlane)) < FMath::Cos(FMath::DegreesToRadians(5.0)));
+    const FVector2D Stepped = Ship(Scale, Out + Oblique.GetForwardVector() * (1.0e-6 * UniverseUnits::CmPerAU), Oblique).Centre - Leaning.Centre;
+    TestTrue(TEXT("and the glyph steps along it"), Leaning.Nose.IsSet() && Stepped.Size() > 0.0
+             && FVector2D::DotProduct(Stepped / Stepped.Size(), *Leaning.Nose) > FMath::Cos(FMath::DegreesToRadians(0.1)));
     return true;
 }
 

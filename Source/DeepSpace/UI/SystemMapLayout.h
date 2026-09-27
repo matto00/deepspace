@@ -135,6 +135,13 @@ namespace SystemMap
          *  cross: at a knot the two sides differ. Zero where RadiusPx is
          *  clamped, since a pinned glyph does not move radially. */
         double RadiusSlopePxPerAU(double DistanceAU, bool bOutward) const;
+
+        /** The warp's slope in the segment a ship at DistanceAU moving
+         *  outward (or inward) is about to be in, px per dex (log10 AU): at
+         *  a knot, the side it is about to cross. Inside InnerAU the first
+         *  segment's and past RimAU the last's -- the warp continued past
+         *  where RadiusPx is clamped, for the tick of a held glyph. */
+        double WarpPxPerDex(double DistanceAU, bool bOutward) const;
     };
 
     /**
@@ -150,10 +157,11 @@ namespace SystemMap
     /**
      * Where a position is drawn: straight down onto the plane, its distance
      * from the star there through the warp, at its azimuth. Top-down, so a
-     * ship closing on a world closes on its dot from off the plane as well;
-     * a ship over the pole is drawn at the star's edge, and the footer says
-     * how far above the plane it is (developer's ruling, 2026-09-27, which
-     * reverses the true 3D distance the spec first chose).
+     * ship closing on a world closes on its dot from off the plane as well,
+     * and a point over the pole is drawn at the star's edge (developer's
+     * ruling, 2026-09-27, which reverses the true 3D distance the spec first
+     * chose). Ship places its glyph through this, then holds it clear of the
+     * star's disc; the footer says how far above the plane the ship is.
      */
     DEEPSPACE_API FVector2D Place(const FMapScale& Scale, const FUniversePosition& Where);
 
@@ -191,9 +199,14 @@ namespace SystemMap
      * Which way on the map the ship's glyph moves when the ship at Where
      * moves along Direction (universe axes; any length): the derivative of
      * Ship's placement, in panel axes, unit. The same arithmetic as Ship, so
-     * the tick and the glyph's motion cannot disagree. Unset where the
-     * glyph does not move at all (pinned and heading radially) or the
-     * azimuth is undefined (on the star's axis).
+     * the tick and the glyph's motion cannot disagree. Where the glyph is
+     * held (pinned, or at the floor clear of the star's disc) its radius
+     * cannot move, and this is the way it would move were it free: the
+     * radial part from the warp continued past the hold (WarpPxPerDex), so
+     * a nose near radial draws a tick near radial and the tick turns
+     * smoothly with the nose, meeting the free tick where the hold ends.
+     * Unset where the azimuth is undefined (on the star's axis) or
+     * Direction is zero.
      */
     DEEPSPACE_API TOptional<FVector2D> MotionOnMap(const FMapScale& Scale, const FUniversePosition& Where,
                                                    const FVector& Direction);

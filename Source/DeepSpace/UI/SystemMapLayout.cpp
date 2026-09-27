@@ -65,6 +65,30 @@ double SystemMap::FMapScale::RadiusPx(double DistanceAU) const
     return Pixels.RimPx;
 }
 
+double SystemMap::FMapScale::WarpPxPerDex(double DistanceAU, bool bOutward) const
+{
+    if (KnotLog.Num() < 2 || DistanceAU <= 0.0)
+    {
+        return 0.0;
+    }
+
+    // The segment the ship is about to be in: probed a hair to that side.
+    // Exactly on an orbit -- where every ship sits at a world -- the two
+    // sides' slopes differ, and the ship's log and the knot's, computed
+    // apart, disagree in the last bit; a bare comparison picked the wrong
+    // side as often as the right one. Inside the inner knot this is the
+    // first segment, and past the rim the last: the warp continued.
+    constexpr double ProbeDex = 1.0e-9;
+    const double Log = FMath::LogX(10.0, DistanceAU) + (bOutward ? ProbeDex : -ProbeDex);
+    int32 Knot = 1;
+    while (Knot < KnotLog.Num() - 1 && Log >= KnotLog[Knot])
+    {
+        ++Knot;
+    }
+    const double Span = KnotLog[Knot] - KnotLog[Knot - 1];
+    return Span > 0.0 ? (KnotPx[Knot] - KnotPx[Knot - 1]) / Span : 0.0;
+}
+
 double SystemMap::FMapScale::RadiusSlopePxPerAU(double DistanceAU, bool bOutward) const
 {
     // Clamped at either end: the side about to be crossed is flat.
@@ -74,28 +98,8 @@ double SystemMap::FMapScale::RadiusSlopePxPerAU(double DistanceAU, bool bOutward
     {
         return 0.0;
     }
-
-    // The segment the ship is about to be in: probed a hair to that side.
-    // Exactly on an orbit -- where every ship sits at a world -- the two
-    // sides' slopes differ, and the ship's log and the knot's, computed
-    // apart, disagree in the last bit; a bare comparison picked the wrong
-    // side as often as the right one.
-    constexpr double ProbeDex = 1.0e-9;
-    const double Log = FMath::LogX(10.0, DistanceAU) + (bOutward ? ProbeDex : -ProbeDex);
-    for (int32 Knot = 1; Knot < KnotLog.Num(); ++Knot)
-    {
-        if (Log < KnotLog[Knot])
-        {
-            const double Span = KnotLog[Knot] - KnotLog[Knot - 1];
-            if (Span <= 0.0)
-            {
-                return 0.0;
-            }
-            // d(px)/d(log10 AU), then d(log10 AU)/d(AU) = 1 / (AU ln 10).
-            return (KnotPx[Knot] - KnotPx[Knot - 1]) / Span / (DistanceAU * Ln10);
-        }
-    }
-    return 0.0;
+    // d(px)/d(log10 AU), then d(log10 AU)/d(AU) = 1 / (AU ln 10).
+    return WarpPxPerDex(DistanceAU, bOutward) / (DistanceAU * Ln10);
 }
 
 SystemMap::FMapScale SystemMap::Fit(const FStarSystem& System, double StandoffAU, const FMapPixels& Pixels)
@@ -196,15 +200,21 @@ TOptional<FVector2D> SystemMap::MotionOnMap(const FMapScale& Scale, const FUnive
     // The second is R / r of the first's scale R', which for a log map is
     // several times larger: the map is stretched round each ring, and a
     // direction taken straight from the universe misreads it.
+    //
+    // Where the glyph is held -- pinned inside or beyond, or at the floor
+    // clear of the star's disc -- its radius does not move, and the true
+    // derivative has no radial part: a nose 1 degree off radial drew a tick
+    // square to it, and exactly radial fell back to the nose, a 90 degree
+    // flip for a degree of heading. So R' there is the warp continued past
+    // the hold (the segment beside it, at the held radius): the tick is the
+    // way the glyph would move were it free, turns smoothly with the nose,
+    // and meets the free glyph's tick exactly where the hold lets go.
     const FVector2D Radial(Offset.X / InPlane, Offset.Y / InPlane);
     const FVector2D Flat(Step.X, Step.Y);
     const double DistanceAU = InPlane / UniverseUnits::CmPerAU;
     const double Closing = FVector2D::DotProduct(Flat, Radial);
-    const double RawRadiusPx = Scale.RadiusPx(DistanceAU);
-    const double RadiusPx = FMath::Max(RawRadiusPx, GlyphFloorPx(Scale));
-    const double SlopePxPerCm = RawRadiusPx < GlyphFloorPx(Scale)
-        ? 0.0
-        : Scale.RadiusSlopePxPerAU(DistanceAU, Closing > 0.0) / UniverseUnits::CmPerAU;
+    const double RadiusPx = FMath::Max(Scale.RadiusPx(DistanceAU), GlyphFloorPx(Scale));
+    const double SlopePxPerCm = Scale.WarpPxPerDex(DistanceAU, Closing > 0.0) / (DistanceAU * Ln10) / UniverseUnits::CmPerAU;
 
     const FVector2D Round = Flat - FVector2D::DotProduct(Flat, Radial) * Radial;
 
@@ -242,16 +252,20 @@ SystemMap::FMapShip SystemMap::Ship(const FMapScale& Scale, const FUniversePosit
     // the innermost knot, and a glyph drawn over it would read as "in the
     // star". Every ring is at least a gap outside the disc, so this never
     // moves a ship that is on an orbit.
-    const double RadiusPx = FMath::Max(Scale.RadiusPx(DistanceAU), GlyphFloorPx(Scale));
-    Glyph.Centre = Scale.Pixels.Centre + PanelDirection(Offset.X, Offset.Y) * RadiusPx;
+    Glyph.Centre = Place(Scale, Where);
+    if (Scale.RadiusPx(DistanceAU) < GlyphFloorPx(Scale))
+    {
+        Glyph.Centre = Scale.Pixels.Centre + PanelDirection(Offset.X, Offset.Y) * GlyphFloorPx(Scale);
+    }
 
     const FVector Nose = Orientation.RotateVector(FVector::ForwardVector).GetSafeNormal();
     if (FMath::Abs(Nose.Z) < FMath::Cos(FMath::DegreesToRadians(NoseHiddenWithinDeg)))
     {
         // The way the glyph goes when the ship flies nose first, so the
-        // tick and the glyph's motion are one. Where the glyph cannot move
-        // (pinned, heading straight in or out; or on the star's axis) the
-        // nose's own direction in the plane is all there is to show.
+        // tick and the glyph's motion are one (where it is held, the way it
+        // would go were it free; see MotionOnMap). On the star's axis, where
+        // the map has no azimuth, the nose's own direction in the plane is
+        // all there is to show.
         const TOptional<FVector2D> Along = MotionOnMap(Scale, Where, Nose);
         Glyph.Nose = Along ? *Along : PanelDirection(Nose.X, Nose.Y);
     }

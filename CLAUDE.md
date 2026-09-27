@@ -764,8 +764,13 @@ glyph moves, never the nose's universe direction** (`SystemMap::MotionOnMap`,
 the derivative of `Ship`'s own placement). Drawn in universe directions it
 pointed up to 90 degrees off the glyph's motion and ~50 off the dot the nose
 was on -- the playtest's "map does not track" (`.TickFollowsGlyph`, and
-`.Bearing` for the two true bearings). The bent bearings stay, to be tried in
-play (developer's ruling, 2026-09-27). **The ship is drawn top-down**: radius
+`.Bearing` for the two true bearings, which also holds the bent ones' spread
+to those figures). Where the glyph is held -- pinned, or at the floor clear of
+the star's disc -- it cannot move radially, and the tick is the way it would
+move were it free, the warp continued past the hold (`WarpPxPerDex`): the true
+derivative there flipped the tick 90 degrees for a degree of heading
+(`.HeldTick`). The bent bearings stay, to be tried in play (developer's
+ruling, 2026-09-27). **The ship is drawn top-down**: radius
 and azimuth both from its position in the plane, the elevation the footer's
 line, a ship over the pole held at the star's edge (the same ruling, which
 reversed the spec's true-3D-distance radius: approaching from an interstellar
