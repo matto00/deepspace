@@ -283,7 +283,7 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
         Ship->SetDriveEngaged(Pilot, true);
         Tick(0.5f);
         const float Early = UShipHumComponent::AskShip(*Ship).Push;
-        TestTrue(FString::Printf(TEXT("half a second after the lever went to 1 c, the hiss has only begun (push %.3f)"), Early),
+        TestTrue(FString::Printf(TEXT("half a second after the lever went to 0.1 c, the hiss has only begun (push %.3f)"), Early),
                  Early > 0.0f && Early < 0.5f * CruiseHiss);
         TestTrue(TEXT("it is ds.Hum.CruiseHiss times the eased position over the lever's length"),
                  Near(Early, CruiseHiss * static_cast<float>(Flight.GetDrivePosition()) / LastNotch));
@@ -295,13 +295,13 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("spooled up, it has swelled (push %.3f at position %.2f)"), Spooled, Flight.GetDrivePosition()),
                  Spooled > Early && Near(Spooled, CruiseHiss * static_cast<float>(Flight.GetDrivePosition()) / LastNotch));
 
-        // F at 1 c with cruise's lever at STOP: the ship spools down for
-        // six seconds, and the hiss fades with it rather than cutting out.
+        // F at 0.1 c with cruise's lever at STOP: the ship spools down for
+        // 3.3 seconds, and the hiss fades with it rather than cutting out.
         Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
         Ship->SetDriveEngaged(Pilot, false);
         Tick(1.0f);
         const float Spooling = UShipHumComponent::AskShip(*Ship).Push;
-        TestEqual(TEXT("F at 1 c spools down"), static_cast<int32>(Flight.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
+        TestEqual(TEXT("F at 0.1 c spools down"), static_cast<int32>(Flight.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
         TestTrue(FString::Printf(TEXT("spooling down with cruise's lever at STOP, the drive still hisses, fading (push %.3f at position %.2f)"),
                                  Spooling, Flight.GetDrivePosition()),
                  Spooling > 0.0f && Spooling < Spooled

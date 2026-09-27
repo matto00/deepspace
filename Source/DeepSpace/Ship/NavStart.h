@@ -101,7 +101,7 @@ namespace NavStart
      * ds.Nav.WorldStandoffDeg's default: an in-system jump meets its world
      * as a disc 2 degrees across, 53 px on 4K, inside the cone of the nose
      * and lit as its phase is. Arrived, not landed: an Earth's floor is
-     * 64 s away at 1 c and a Jupiter's 79 s, so the approach, which the
+     * 47 s away at 0.1 c and a Jupiter's 2 min 46 s, so the approach, which the
      * vision says is the content, is still the player's to fly. The opening
      * shot's 18 degrees would skip most of it; half a degree would look like
      * not having arrived.
@@ -120,8 +120,8 @@ namespace NavStart
      * Within this many of a world's standoffs of its centre, the world is
      * near enough to fly: an in-system course to it is refused, and one the
      * ship flies inside is let go. Inside the standoff itself the fold would
-     * carry the ship backward, and from twice it the drive at 1 c is there
-     * in a little over a minute -- about 730,000 km for an Earth.
+     * carry the ship backward, and from twice it the drive at 0.1 c is
+     * there in about a minute -- about 730,000 km for an Earth.
      */
     inline constexpr double WorldReachFactor = 2.0;
 

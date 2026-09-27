@@ -309,13 +309,15 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
     // and ds.Drive.HoldSeconds, held to the approach the soft cap actually
     // flies through Tick. DeepSpace.UI.TargetMarker.Eta steps the flight
     // state against its own rated limits; this is the one check that the
-    // time the map and the HUD print is the moment this ship arrives. At 1 c
-    // from 0.25 AU, sampled once the lever has settled, to within 0.5 s all
+    // time the map and the HUD print is the moment this ship arrives. At
+    // 0.1 c from 0.025 AU, sampled once the lever has settled, to within 0.5 s all
     // the way down -- on fed boosters, and again browned out, where the
     // braking is a quarter and so is the knee the approach brakes from.
     {
         const double C = ShipDriveLever::LightCmPerSecond;
+        const double Top = 0.1 * C;     // the drive's top
         const double AU = UniverseUnits::CmPerAU;
+        const double Out25 = 0.025 * AU; // 3.7 million km: 125 s at 0.1 c, and the cap's 40
         const FSkySystem Sky = LocalSystem::Here(Home);
         // A world, and a side of it from which the straight line in meets
         // its floor before any other body's, from a point still in home.
@@ -330,7 +332,7 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
             const FFlightSurface Surface{ Body.Position, Body.Radius, UShipSubsystem::FloorFor(Body), false };
             for (const FVector& Side : Sides)
             {
-                const FUniversePosition From = Body.Position + Side * (0.25 * AU);
+                const FUniversePosition From = Body.Position + Side * Out25;
                 if (Universe->GetSystemIdAt(From) != TOptional<FSystemId>(HomeId))
                 {
                     continue;
@@ -357,10 +359,10 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
                 }
             }
         }
-        if (TestTrue(TEXT("eta: a world with a clear line in from 0.25 AU"), Orbit != INDEX_NONE))
+        if (TestTrue(TEXT("eta: a world with a clear line in from 0.025 AU"), Orbit != INDEX_NONE))
         {
             Ship->SetTarget(World(HomeId, Orbit));
-            const FUniversePosition From = Own.Centre + Out * (0.25 * AU);
+            const FUniversePosition From = Own.Centre + Out * Out25;
             const auto Fly = [&](float BoosterWeight, const TCHAR* How)
             {
                 Ship->SetConsumerWeight(ShipPower::Boosters, BoosterWeight);
@@ -371,7 +373,7 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
                 constexpr float Step = 0.25f;
                 const auto Room = [&]() { return Where().DistanceTo(Own.Centre) - Own.Radius - Own.Floor; };
                 double Clock = 0.0;
-                while (Clock < 120.0 && Ship->GetShipSpeed() < 0.999 * C)
+                while (Clock < 120.0 && Ship->GetShipSpeed() < 0.999 * Top)
                 {
                     Ship->Tick(Step);
                     Clock += Step;
@@ -379,8 +381,8 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
                 const double Braking = Ship->GetFlightState().GetLimits().LinearAcceleration;
                 AddInfo(FString::Printf(TEXT("eta, %s: at %.4f c after %.1f s, %.0f km out, braking %.0f cm/s^2"), How,
                                         Ship->GetShipSpeed() / C, Clock, Room() / UniverseUnits::CmPerKm, Braking));
-                TestTrue(FString::Printf(TEXT("eta, %s: the lever settles at 1 c before the cap binds"), How),
-                         Ship->GetShipSpeed() >= 0.999 * C && Room() > 2.0 * C * Ship->GetFlightState().GetLimits().HoldSeconds);
+                TestTrue(FString::Printf(TEXT("eta, %s: the lever settles at 0.1 c before the cap binds"), How),
+                         Ship->GetShipSpeed() >= 0.999 * Top && Room() > 2.0 * Top * Ship->GetFlightState().GetLimits().HoldSeconds);
 
                 TArray<TPair<double, double>> Predicted;   // (when, when it says it will arrive)
                 TOptional<double> Arrived;
@@ -395,9 +397,9 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
                     {
                         // The flight is at the floor a metre off it; the ETA
                         // is to the floor itself. The braking curve's last
-                        // metre is 0.25 s on fed boosters and 0.5 s browned
-                        // out -- the whole tolerance -- so it is added back,
-                        // from the flight's own limits, not the view's.
+                        // metre is 0.04 s on fed boosters and 0.07 s browned
+                        // out, and it is added back, from the flight's own
+                        // limits, not the view's.
                         const FShipFlightLimits& Flown = Ship->GetFlightState().GetLimits();
                         Arrived = Clock + ShipFlight::SecondsToFloor(FMath::Max(0.0, Room()), Ship->GetShipSpeed(),
                                                                      Flown.LinearAcceleration, Flown.HoldSeconds);

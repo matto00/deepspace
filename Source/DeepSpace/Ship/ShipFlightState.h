@@ -11,11 +11,20 @@
  */
 struct DEEPSPACE_API FShipFlightLimits
 {
-    /** Top speed under cruise assist, cm/s. */
-    double MaxSpeed = 20000.0;
+    /** Top speed under cruise assist, cm/s: 20 km/s (the 2026-09-27 ruling),
+     *  which is also the drive's first notch, so leaving the drive hands the
+     *  ship to cruise at the speed cruise can hold. */
+    double MaxSpeed = 2.0e6;
 
-    /** How hard the ship changes velocity, cm/s^2. */
-    double LinearAcceleration = 4000.0;
+    /** The fastest cruise goes astern, cm/s: 200 m/s. Backing off a thing is
+     *  a manoeuvre, not a way to travel; the lever's astern travel ends here
+     *  (ShipDriveLever::CruiseAsternLimit). */
+    double AsternSpeed = 2.0e4;
+
+    /** How hard the ship changes velocity, cm/s^2: 2 km/s^2, rest to cruise's
+     *  top in ten seconds. The braking curve plans on 80% of it
+     *  (ShipFlight::BrakingMargin), so from 20 km/s it stops in 125 km. */
+    double LinearAcceleration = 2.0e5;
 
     /** Peak turn rate, radians/s, about each body axis: X roll, Y pitch, Z
      *  yaw. The 0.3 was meant for roll when the axes were misnamed (X pitch,
@@ -36,9 +45,10 @@ struct DEEPSPACE_API FShipFlightLimits
     double HoldSeconds = ShipFlight::DefaultHoldSeconds;
 
     /**
-     * The drive lever's top, cm/s: 1 c, which is as fast as the drive ever
-     * goes (ruling 1: anything faster is a jump). ds.Drive.Top, which may
-     * shorten the lever and never lengthen it; notches above it are gone.
+     * The drive lever's top, cm/s: 0.1 c, which is as fast as the drive ever
+     * goes (the 2026-09-27 ruling: anything faster is a jump). ds.Drive.Top,
+     * which may shorten the lever and never lengthen it; notches above it are
+     * gone.
      */
     double DriveTop = ShipDriveLever::DefaultTopLight * ShipDriveLever::LightCmPerSecond;
 
@@ -71,8 +81,11 @@ struct DEEPSPACE_API FShipFlightLimits
  */
 struct DEEPSPACE_API FShipFlightCommand
 {
-    /** The cruise lever: fraction of MaxSpeed to hold, -1..1. Persistent: set
-     *  and leave. */
+    /** The cruise lever's position, -1..1: what it asks for is read on a log
+     *  scale, ShipDriveLever::CruiseSpeed, 1 m/s just off zero to MaxSpeed at
+     *  full, and mirrored astern to AsternSpeed, where the lever's astern
+     *  travel ends (clamped to it on the way in). Persistent: set and
+     *  leave. */
     double Throttle = 0.0;
 
     /** Fraction of MaxAngularRate about each body axis, -1..1: X roll, Y
@@ -91,8 +104,8 @@ struct DEEPSPACE_API FShipFlightCommand
 
     /** The drive lever: 0 is STOP, 1..NotchCount(DriveTop) - 1 the notches of
      *  the 1-2-5 series (ShipDriveLever). Kept across F in both directions, so
-     *  a drive set to 1 c, left for a look round in cruise, is at 1 c again
-     *  the moment F is pressed. */
+     *  a drive set to 0.1 c, left for a look round in cruise, is at 0.1 c
+     *  again the moment F is pressed. */
     int32 DriveNotch = 0;
 };
 
@@ -214,8 +227,8 @@ public:
     double GetHeldFraction() const;
 
     /** What the live lever asks for, cm/s: the drive's notch speed, or
-     *  cruise's Throttle x MaxSpeed, signed, negative astern -- cruise's
-     *  while spooling down, which is live from the press of F. */
+     *  cruise's CruiseSpeed of its Throttle, signed, negative astern --
+     *  cruise's while spooling down, which is live from the press of F. */
     double GetLeverSpeed() const;
 
     /** What the other lever asks for, cm/s, the same way: the speed F would
@@ -229,6 +242,10 @@ public:
 
     /** Positions on the drive lever at the present top, STOP included. */
     int32 GetDriveNotchCount() const;
+
+    /** How far astern the cruise lever travels under the present limits,
+     *  0..1 (ShipDriveLever::CruiseAsternLimit): Throttle's lower end. */
+    double CruiseAsternLimit() const;
 
     /** Ship -> universe, rotation only. Translation is deliberately absent:
      *  a universe position does not fit in an FTransform (ADR 0007) and must
@@ -283,7 +300,7 @@ public:
      * eased position go to zero and any spool-down ends. The subsystem puts
      * both levers at STOP when the fold opens; this makes the arrival exact
      * rather than relying on the ease to finish inside the fold, which from
-     * 1 c it does not. Without it a lever left at 1 c would fly the arrival
+     * 0.1 c it does not. Without it a lever left at 0.1 c would fly the arrival
      * at the star, or straight down onto a world an in-system jump had just
      * framed. Every jump, interstellar or in-system, arrives through here,
      * and the first thing the pilot does after any of them is choose a
@@ -303,12 +320,15 @@ public:
 
     /**
      * Within this of a floor, cm, the nose into it, the ship is at it: a
-     * metre, which the braking curve closes in a quarter of a second and no
+     * metre, which the braking curve closes in a thirtieth of a second and no
      * one can see from the glass. What AtFloor means.
      */
     static constexpr double AtFloorCm = 100.0;
 
 private:
+    /** What cruise's lever asks for, cm/s, signed: CruiseSpeed of Throttle. */
+    double CruiseLeverSpeed() const;
+
     void SubStep(double FixedDelta);
 
     /** The drive and the spool-down: the eased position, along the nose,

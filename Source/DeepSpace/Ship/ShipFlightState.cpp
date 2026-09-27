@@ -10,8 +10,20 @@ void FShipFlightState::SetLimits(const FShipFlightLimits& NewLimits)
     Limits = NewLimits;
 
     // A top lowered in play takes the notches above it away, the lever's
-    // with them; the ease then brings the ship down to the new top.
+    // with them; the ease then brings the ship down to the new top. And
+    // cruise's astern end-stop moves with cruise's two tops.
     Command.DriveNotch = FMath::Clamp(Command.DriveNotch, 0, GetDriveNotchCount() - 1);
+    Command.Throttle = FMath::Clamp(Command.Throttle, -CruiseAsternLimit(), 1.0);
+}
+
+double FShipFlightState::CruiseAsternLimit() const
+{
+    return ShipDriveLever::CruiseAsternLimit(Limits.MaxSpeed, Limits.AsternSpeed);
+}
+
+double FShipFlightState::CruiseLeverSpeed() const
+{
+    return ShipDriveLever::CruiseSpeed(Command.Throttle, Limits.MaxSpeed, Limits.AsternSpeed);
 }
 
 const FShipFlightLimits& FShipFlightState::GetLimits() const
@@ -23,7 +35,7 @@ void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
 {
     const bool bWasDrive = Command.bDrive;
 
-    Command.Throttle = FMath::Clamp(NewCommand.Throttle, -1.0, 1.0);
+    Command.Throttle = FMath::Clamp(NewCommand.Throttle, -CruiseAsternLimit(), 1.0);
     Command.AttitudeRate = FVector(
         FMath::Clamp(NewCommand.AttitudeRate.X, -1.0, 1.0),
         FMath::Clamp(NewCommand.AttitudeRate.Y, -1.0, 1.0),
@@ -210,8 +222,9 @@ bool FShipFlightState::DriveSubStep(double FixedDelta)
     // settles in a second, a hold climbs in step with the lever, and thrust
     // slows the whole ease, never the top. A spool-down is the drive's own
     // all stop, eased toward STOP exactly as X would ease it, and it ends the
-    // substep it passes under cruise's top: about six seconds from 1 c, the
-    // same as X's, so the two ways down from the drive feel alike.
+    // substep it passes under cruise's top, the drive's first notch: about
+    // 3.3 seconds from 0.1 c, the same as X's to there, so the two ways down
+    // from the drive feel alike.
     const double Target = bSpoolingDown ? 0.0 : static_cast<double>(Command.DriveNotch);
     DrivePosition = ShipDriveLever::Ease(DrivePosition, Target, FixedDelta, Limits.DriveResponse, Limits.DriveThrust);
 
@@ -267,7 +280,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     // is held to what that direction's path may have, so a cruising ship
     // brakes to rest on a floor under its own inertia. Far from anything
     // this is exactly the cruise there always was.
-    const double Want = Command.Throttle * Limits.MaxSpeed;
+    const double Want = CruiseLeverSpeed();
     const FVector Along = Orientation.GetForwardVector() * (Want < 0.0 ? -1.0 : 1.0);
     double TargetSpeed = FMath::Abs(Want);
     LastHold = EFlightHold::Free;
@@ -279,12 +292,11 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
             // The braking curve alone, not the hold: cruise has inertia, and
             // its boosters must deliver whatever slowing the target asks. The
             // hold's d / N falls at v / N, which above the knee is more than
-            // the boosters have -- five times more at a quarter thrust from
+            // the boosters have -- ten times more at a quarter thrust from
             // cruise's top -- and the ship would meet the hard stop at speed.
             // The braking curve asks for 80% of them and no more: a full-
-            // thrust ship starts braking 625 m up, a starved one 2.5 km up
-            // (decision 5). At full thrust the two are the same thing under
-            // cruise's top, the knee being 256 m/s.
+            // thrust ship at cruise's 20 km/s starts braking 125 km up, a
+            // starved one 500 km up (decision 5).
             const double May = ShipFlight::MaySpeed(*D, Limits.LinearAcceleration, 0.0, FixedStep);
             if (May < TargetSpeed)
             {
@@ -310,9 +322,12 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     // The hard stop. Cruise can slide after a turn, so its velocity need not
     // be along the path the cap read; no substep may end inside a floor all
     // the same. A velocity that would carry the ship in loses its inward
-    // part at the sphere, and slides. Under a floor already -- the floor
-    // raised in play -- it may climb and may not descend, and is never
-    // lifted: a ship does not teleport because a number changed.
+    // part at the sphere, and the ship ends the substep on it and slides:
+    // on it, not where it was, since it would have reached it inside the
+    // substep, and at 20 km/s a substep is 167 m -- a ship left where it
+    // was would slide along that far above its floor. Under a floor already
+    // -- the floor raised in play -- it may climb and may not descend, and
+    // is never lifted: a ship does not teleport because a number changed.
     FUniversePosition Next = Position + Velocity * FixedDelta;
     for (const FFlightSurface& Surface : Surfaces)
     {
@@ -331,11 +346,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
         Next = Position + Velocity * FixedDelta;
         if (ShipFlight::FloorClearance(Surface, Position) >= 0.0)
         {
-            const double Still = ShipFlight::FloorClearance(Surface, Next);
-            if (Still < 0.0)
-            {
-                Next = Next + Out * (-Still);
-            }
+            Next = Next + Out * (-ShipFlight::FloorClearance(Surface, Next));
         }
     }
     Position = Next;
@@ -359,12 +370,12 @@ double FShipFlightState::GetHeldFraction() const { return LastHeldFraction; }
 
 double FShipFlightState::GetLeverSpeed() const
 {
-    return Command.bDrive ? ShipDriveLever::NotchSpeed(Command.DriveNotch) : Command.Throttle * Limits.MaxSpeed;
+    return Command.bDrive ? ShipDriveLever::NotchSpeed(Command.DriveNotch) : CruiseLeverSpeed();
 }
 
 double FShipFlightState::GetOtherLeverSpeed() const
 {
-    return Command.bDrive ? Command.Throttle * Limits.MaxSpeed : ShipDriveLever::NotchSpeed(Command.DriveNotch);
+    return Command.bDrive ? CruiseLeverSpeed() : ShipDriveLever::NotchSpeed(Command.DriveNotch);
 }
 
 double FShipFlightState::GetDrivePosition() const { return DrivePosition; }

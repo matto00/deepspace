@@ -247,7 +247,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     // Aimed by the words in the corner and nothing else. The only calls
     // from here to the fold are the pilot's hands on the helm: there is no
     // confirm to make.
-    // With the drive's lever left at 1 c while aiming, as a pilot might: the
+    // With the drive's lever left at its top, 0.1 c, while aiming, as a pilot might: the
     // fold is an all stop, and the ship must arrive at rest, both levers at
     // STOP (flight-feel decision 4) -- not fly the arrival at the new star.
     APawn* Pilot = Test.World->SpawnActor<APawn>();
@@ -378,7 +378,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 /**
  * The drive, flown from the opening shot with the sky drawing it
- * (flight-feel decisions 3-6). The lever from STOP to 1 c with the nose on
+ * (flight-feel decisions 3-6). The lever from STOP to 0.1 c with the nose on
  * the framed planet: the ship closes, the planet grows without ever
  * shrinking, and within about a minute it is on the floor -- the sky's own
  * rendered floor, where the world is drawn at its true size -- and at rest.
@@ -467,7 +467,7 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
     };
 
     const double Arrived = Approach(Opening.Orientation, true);
-    TestTrue(FString::Printf(TEXT("from the opening shot at 1 c, on the floor within 70 s (%.2f s)"), Arrived),
+    TestTrue(FString::Printf(TEXT("from the opening shot at 0.1 c, on the floor within 70 s (%.2f s)"), Arrived),
              Arrived > 0.0 && Arrived <= 70.0);
     TestTrue(FString::Printf(TEXT("the floor is the sky's rendered floor (%.1f km)"), Floor / UniverseUnits::CmPerKm),
              Floor == FMath::Max(10.0 * UniverseUnits::CmPerKm, SkyProjection::RenderedFloor(Radius, FSkyViewParams())));
@@ -488,15 +488,15 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
                              Offset, Arrived),
              Offset > 0.0 && FMath::Abs(Offset - Arrived) <= 1.0);
 
-    // Out at the edge. Placed 0.05 AU inside it and flown out at 1 c, which
-    // uncapped would carry it 0.12 AU in the first minute: it stays home,
+    // Out at the edge. Placed 0.01 AU inside it and flown out at 0.1 c, which
+    // uncapped would carry it 0.012 AU in the first minute: it stays home,
     // and settles on the edge's floor, 10 km inside.
     Ship->AllStop(Pilot);
     Test.Step(0.25f);
     const FUniversePosition Star = Home->Stub.Position;
     const FVector Out = (Opening.Position - Star).GetSafeNormal();
     const double Edge = FStarSystem::InSystemRadiusCm;
-    Ship->PlaceShip(Star + Out * (Edge - 0.05 * UniverseUnits::CmPerAU), FRotationMatrix::MakeFromX(Out).ToQuat());
+    Ship->PlaceShip(Star + Out * (Edge - 0.01 * UniverseUnits::CmPerAU), FRotationMatrix::MakeFromX(Out).ToQuat());
     Ship->SetDriveLever(Pilot, Top);
     bool bAlwaysHome = true;
     double Farthest = 0.0;
@@ -508,7 +508,7 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
         Farthest = FMath::Max(Farthest, Ship->GetFlightState().GetUniversePosition().DistanceTo(Star));
     }
     const double Inside = Edge - Ship->GetFlightState().GetUniversePosition().DistanceTo(Star);
-    TestTrue(TEXT("flown out at the edge at 1 c, the ship never leaves its system"), bAlwaysHome);
+    TestTrue(TEXT("flown out at the edge at 0.1 c, the ship never leaves its system"), bAlwaysHome);
     TestTrue(FString::Printf(TEXT("never past the edge's floor (%.1f m inside the edge at most)"), (Edge - Farthest) / 100.0),
              Farthest <= Edge - UShipSubsystem::EdgeFloor() + 1000.0);
     TestTrue(FString::Printf(TEXT("and settles on it, 10 km inside: %.3f km"), Inside / UniverseUnits::CmPerKm),

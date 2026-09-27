@@ -17,16 +17,18 @@ class UStaticMeshComponent;
  * speeds cm/s.
  *
  * Optic flow says *that* the ship moves, which way, and roughly how fast
- * within a decade or so; it cannot tell 0.1 c from 1 c at any honest scale,
- * and past about 3.6 km/s a 400 m field's motes (some 120 m apart) step
- * further than half their spacing in a 60 Hz frame and strobe. So the dust is
- * honest up to a knee -- cruise exactly, and the drive's first notches at
- * their true 1 and 2 km/s, five and ten times cruise's top -- and above it a
- * representation that says "faster still", by decades, and no more: the seen
- * speed climbs slowly from the knee to DustTop at the drive's top, on a log
- * scale, and each mote stretches along the velocity by the same fraction of
- * that scale. Which notch the ship is at is read from numbers, never from
- * the dust.
+ * within a decade or so; it cannot tell 0.01 c from 0.1 c at any honest
+ * scale, and past about 3.6 km/s a 400 m field's motes (some 120 m apart)
+ * step further than half their spacing in a 60 Hz frame and strobe. So the
+ * dust is honest up to a knee, 2 km/s -- cruise's first tenth of its top --
+ * and above it a representation that says "faster still", by decades, and
+ * no more: the seen speed climbs slowly from the knee to DustTop at the
+ * drive's top, 0.1 c, on a log scale, and each mote stretches along the
+ * velocity by the same fraction of that scale. Cruise's top, 20 km/s, is a
+ * quarter of the way up that scale (2.2 km/s seen, drawn 1.6 times long), so
+ * the upper decade of cruise already streams as the drive does, and the
+ * drive, which begins where cruise ends, never looks slower than it. Which
+ * notch the ship is at is read from numbers, never from the dust.
  */
 namespace ShipDust
 {

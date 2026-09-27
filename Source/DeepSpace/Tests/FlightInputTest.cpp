@@ -46,7 +46,8 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         };
 
         // The sweep rate is a tuning value; this pins the behaviour round it.
-        const double Rate = ShipDriveLever::DefaultCruiseSweep;
+        // As the CVar holds it: a float, and 0.2 is not one exactly.
+        const double Rate = static_cast<float>(ShipDriveLever::DefaultCruiseSweep);
 
         // Nobody is flying: input goes nowhere, and is not saved up.
         Player->TapLever(1);
@@ -95,7 +96,9 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         {
             Frame(1.0f);
         }
-        TestEqual(TEXT("which stops full astern"), Throttle(), -1.0);
+        TestEqual(TEXT("which stops at the astern end-stop, 200 m/s"), Throttle(), -Flight.CruiseAsternLimit());
+        TestTrue(TEXT("and asks for 200 m/s astern"),
+                 FMath::IsNearlyEqual(Flight.GetLeverSpeed(), -Flight.GetLimits().AsternSpeed, 1e-6));
         Player->HoldLever(0);
 
         // Attitude is held, not swept: it passes straight through.

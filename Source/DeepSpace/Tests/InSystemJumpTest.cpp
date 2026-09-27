@@ -372,7 +372,7 @@ bool FInSystemJumpTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("the target stays"), Ship->GetTarget() == TOptional<FBodyId>(World(HomeId, Orbit)));
     }
 
-    // The jump itself: spooled to 1 c on an open heading, then turned onto
+    // The jump itself: spooled to 0.1 c on an open heading, then turned onto
     // the world 5 degrees off its centre -- inside the cone, and off the line
     // the ship coasts along in the fold, so an arrival worked out from where
     // the fold ended rather than where it opened would miss the line.
@@ -413,7 +413,7 @@ bool FInSystemJumpTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("charged and misaligned, it holds"), Ship->IsInTransit());
     TestEqual(TEXT("ready"), Ship->GetJumpState(), EJumpState::Ready);
     TestTrue(FString::Printf(TEXT("at the drive's top (%.3f c)"), Ship->GetShipSpeed() / ShipDriveLever::LightCmPerSecond),
-             Ship->GetShipSpeed() > 0.99 * ShipDriveLever::LightCmPerSecond);
+             Ship->GetShipSpeed() > 0.99 * 0.1 * ShipDriveLever::LightCmPerSecond);
     const FQuat Nose = FQuat(FVector(0.0, 1.0, 0.0).GetSafeNormal(), FMath::DegreesToRadians(5.0))
         * FRotationMatrix::MakeFromX(ToWorld).ToQuat();
     TestTrue(TEXT("5 degrees off the world's centre is inside the cone"),
@@ -486,7 +486,7 @@ bool FInSystemJumpTest::RunTest(const FString& Parameters)
  * outermost world marked through the map's own seam, Jump here pressed, the
  * charge filled, the nose turned onto it, and the fold opening by itself; out
  * of it at rest two degrees from the world, still marked, and from there the
- * drive from STOP to 1 c brings the ship down to its floor inside 85 s -- the
+ * drive from STOP to 0.1 c brings the ship down to its floor inside 85 s -- the
  * approach is still the player's, and it is about a minute.
  */
 bool FLoopInSystemJumpTest::RunTest(const FString& Parameters)
@@ -558,7 +558,7 @@ bool FLoopInSystemJumpTest::RunTest(const FString& Parameters)
     Map->RefreshFromShip();
     TestTrue(TEXT("and the map naming it"), Map->GetTargetText().ToString().Contains(NavText::WorldName(Home->Planets[Orbit])));
 
-    // The approach: the drive from STOP to 1 c, and the soft cap does the rest.
+    // The approach: the drive from STOP to 0.1 c, and the soft cap does the rest.
     APawn* Pilot = Test.World->SpawnActor<APawn>();
     Ship->SetPilot(Pilot);
     Ship->SetDriveEngaged(Pilot, true);
@@ -571,9 +571,9 @@ bool FLoopInSystemJumpTest::RunTest(const FString& Parameters)
         Ship->Tick(Step);
         Seconds += Step;
     }
-    AddInfo(FString::Printf(TEXT("%s, %s: from the arrival to the floor at 1 c in %.1f s"), *NavText::WorldName(Home->Planets[Orbit]),
+    AddInfo(FString::Printf(TEXT("%s, %s: from the arrival to the floor at 0.1 c in %.1f s"), *NavText::WorldName(Home->Planets[Orbit]),
                             *NavText::WorldKind(Home->Planets[Orbit].Kind), Seconds));
-    TestTrue(FString::Printf(TEXT("the drive at 1 c brings it to the world's floor within 85 s (%.1f s, %.1f m of room)"),
+    TestTrue(FString::Printf(TEXT("the drive at 0.1 c brings it to the world's floor within 85 s (%.1f s, %.1f m of room)"),
                              Seconds, Room() / 100.0),
              Seconds < 85.0 && Room() <= 2.0 * FShipFlightState::AtFloorCm);
     TestTrue(FString::Printf(TEXT("and it took about a minute, not a moment (%.1f s)"), Seconds), Seconds > 40.0);

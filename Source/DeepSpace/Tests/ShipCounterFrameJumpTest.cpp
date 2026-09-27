@@ -164,7 +164,7 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
         }
 
         // Aimed, and running at the drive's top, so the fold opens with the
-        // ship still shedding 1 c: the all stop eases it down through the
+        // ship still shedding 0.1 c: the all stop eases it down through the
         // first seconds of the transit, and the dust must not stream with it.
         Ship->PlaceShip(Opening.Position, FRotationMatrix::MakeFromX(*Course).ToQuat());
         APawn* Pilot = World->SpawnActor<APawn>();
@@ -176,7 +176,7 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
             Ship->Tick(0.1f);
             Frame->SyncToShip();
         }
-        TestTrue(TEXT("at the drive's top when the jump is engaged"), Ship->GetShipSpeed() > 0.99 * 2.99792458e10);
+        TestTrue(TEXT("at the drive's top when the jump is engaged"), Ship->GetShipSpeed() > 0.99 * 0.1 * ShipDriveLever::LightCmPerSecond);
 
         // The last frame of flight: the drive's dust, eight times long.
         const TArray<FTransform> InFlight = Motes(Frame);

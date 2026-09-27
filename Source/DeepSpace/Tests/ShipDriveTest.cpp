@@ -62,6 +62,7 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
 {
     constexpr double Km = UniverseUnits::CmPerKm;
     constexpr double Light = ShipDriveLever::LightCmPerSecond;
+    constexpr double DriveTop = 0.1 * Light;
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("DriveTestWorld"));
     FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
     Context.SetCurrentWorld(World);
@@ -88,21 +89,21 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
                  && Flight.GetCommand().Throttle == 0.0);
 
         // -- Each lever keeps its place, across F and standing up -------------
-        TestTrue(TEXT("the pilot sets the drive lever"), Ship->SetDriveLever(Pilot, 12));
+        TestTrue(TEXT("the pilot sets the drive lever"), Ship->SetDriveLever(Pilot, 9));
         TestTrue(TEXT("and cruise's"), Ship->SetFlightCommand(Pilot, 0.5f, FVector::ZeroVector));
         TestTrue(TEXT("and engages the drive"), Ship->SetDriveEngaged(Pilot, true));
         TestTrue(TEXT("engaged"), Ship->IsDriveEngaged());
         Ship->SetFlightCommand(Pilot, 0.5f, FVector(0.0, 1.0, 0.0));
         Ship->SetHelmInput(Pilot, FHelmInput());
         TestTrue(TEXT("attitude input leaves the drive engaged, its lever where it was"),
-                 Ship->IsDriveEngaged() && Flight.GetCommand().DriveNotch == 12);
+                 Ship->IsDriveEngaged() && Flight.GetCommand().DriveNotch == 9);
         Ship->SetDriveEngaged(Pilot, false);
-        TestTrue(TEXT("F to cruise keeps the drive lever"), Flight.GetCommand().DriveNotch == 12 && Flight.GetCommand().Throttle == 0.5);
+        TestTrue(TEXT("F to cruise keeps the drive lever"), Flight.GetCommand().DriveNotch == 9 && Flight.GetCommand().Throttle == 0.5);
         Ship->SetDriveEngaged(Pilot, true);
-        TestTrue(TEXT("and F back keeps cruise's"), Flight.GetCommand().DriveNotch == 12 && Flight.GetCommand().Throttle == 0.5);
+        TestTrue(TEXT("and F back keeps cruise's"), Flight.GetCommand().DriveNotch == 9 && Flight.GetCommand().Throttle == 0.5);
         Ship->ClearPilot();
         TestTrue(TEXT("standing up keeps both, and the drive engaged"),
-                 Ship->IsDriveEngaged() && Flight.GetCommand().DriveNotch == 12 && Flight.GetCommand().Throttle == 0.5);
+                 Ship->IsDriveEngaged() && Flight.GetCommand().DriveNotch == 9 && Flight.GetCommand().Throttle == 0.5);
         Ship->SetPilot(Pilot);
 
         // -- X stops both --------------------------------------------------------
@@ -115,32 +116,33 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("fed boosters give the drive full thrust"), Flight.GetLimits().DriveThrust, 1.0);
         TestEqual(TEXT("ds.Drive.Response's default is 3 notches a second"), Flight.GetLimits().DriveResponse, 3.0);
         TestEqual(TEXT("ds.Drive.HoldSeconds' default is 4 s"), Flight.GetLimits().HoldSeconds, 4.0);
-        TestTrue(TEXT("ds.Drive.Top's default is 1 c"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, Light, 1e-6 * Light));
+        TestTrue(TEXT("ds.Drive.Top's default is 0.1 c"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, DriveTop, 1e-6 * DriveTop));
+        TestEqual(TEXT("which is STOP and eleven notches"), Top, 11);
         Ship->SetConsumerWeight(ShipPower::Boosters, 0.0f);
         Ship->Tick(0.01f);
         TestTrue(TEXT("starved boosters hand the ease a quarter thrust"), FMath::IsNearlyEqual(Flight.GetLimits().DriveThrust, 0.25, 1e-6));
         TestEqual(TEXT("and the response unscaled"), Flight.GetLimits().DriveResponse, 3.0);
-        TestTrue(TEXT("and the top untouched"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, Light, 1e-6 * Light));
+        TestTrue(TEXT("and the top untouched"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, DriveTop, 1e-6 * DriveTop));
         Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
         {
             FScopedCVar Response(TEXT("ds.Drive.Response"), 1.5f);
             FScopedCVar Hold(TEXT("ds.Drive.HoldSeconds"), 6.0f);
-            FScopedCVar Half(TEXT("ds.Drive.Top"), 0.5f);
+            FScopedCVar Shorter(TEXT("ds.Drive.Top"), 0.07f);
             Ship->Tick(0.01f);
             TestEqual(TEXT("ds.Drive.Response is read at use"), Flight.GetLimits().DriveResponse, 1.5);
             TestEqual(TEXT("ds.Drive.HoldSeconds is read at use"), Flight.GetLimits().HoldSeconds, 6.0);
-            TestEqual(TEXT("ds.Drive.Top 0.5 drops the top notch"), Flight.GetDriveNotchCount(), Top);
+            TestEqual(TEXT("ds.Drive.Top 0.07 drops the top notch"), Flight.GetDriveNotchCount(), Top);
         }
         {
             FScopedCVar Crawl(TEXT("ds.Drive.Top"), 1.0e-9f);
             Ship->Tick(0.01f);
-            TestEqual(TEXT("ds.Drive.Top below 1 km/s reads as 1 km/s"), Flight.GetLimits().DriveTop, ShipDriveLever::NotchSpeed(1));
+            TestEqual(TEXT("ds.Drive.Top below 20 km/s reads as 20 km/s"), Flight.GetLimits().DriveTop, ShipDriveLever::NotchSpeed(1));
             TestEqual(TEXT("and the lever keeps STOP and its first notch"), Flight.GetDriveNotchCount(), 2);
         }
         {
-            FScopedCVar Faster(TEXT("ds.Drive.Top"), 10.0f);
+            FScopedCVar Faster(TEXT("ds.Drive.Top"), 1.0f);
             Ship->Tick(0.01f);
-            TestTrue(TEXT("ds.Drive.Top above 1 c reads as 1 c"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, Light, 1e-6 * Light));
+            TestTrue(TEXT("ds.Drive.Top above 0.1 c, 1 c say, reads as 0.1 c"), FMath::IsNearlyEqual(Flight.GetLimits().DriveTop, DriveTop, 1e-6 * DriveTop));
             TestEqual(TEXT("and adds no notch"), Flight.GetDriveNotchCount(), Top + 1);
         }
         Ship->Tick(0.01f);
@@ -242,14 +244,14 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
             {
                 Ship->Tick(1.0f / 30.0f);
             }
-            TestEqual(TEXT("closing on the opening's world at 1 c, the cap holds it off"),
+            TestEqual(TEXT("closing on the opening's world at 0.1 c, the cap holds it off"),
                       static_cast<int32>(Flight.GetHold()), static_cast<int32>(EFlightHold::HoldingOff));
             const double Held = Flight.GetDrivePosition();
             FHelmInput Slower;
             Slower.DownPresses = 1;
             Ship->SetHelmInput(Pilot, Slower);
             Ship->Tick(1.0f / 30.0f);
-            TestTrue(FString::Printf(TEXT("one Ctrl lands the lever a notch below the ship, not below 1 c: notch %d at position %.3f"),
+            TestTrue(FString::Printf(TEXT("one Ctrl lands the lever a notch below the ship, not below 0.1 c: notch %d at position %.3f"),
                                      Flight.GetCommand().DriveNotch, Held),
                      Flight.GetCommand().DriveNotch == FMath::CeilToInt32(Held) - 1 && Flight.GetCommand().DriveNotch < Top - 1);
             for (int32 Frame = 0; Frame < 3 * 30; ++Frame)
@@ -260,10 +262,10 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
                      Flight.GetSpeed() <= ShipDriveLever::NotchSpeed(Flight.GetCommand().DriveNotch) * (1.0 + 1e-9));
 
             // -- Shift stops a fall where it is (decision 3) ---------------------
-            // At 1 c with the nose away from everything, X, and a moment into
+            // At 0.1 c with the nose away from everything, X, and a moment into
             // the ease down one Shift: the notch above the ship, not the notch
             // above STOP, so the ship stops slowing rather than falling on to
-            // 1 km/s. This is the subsystem's wiring of TapUp; the lever's
+            // 20 km/s. This is the subsystem's wiring of TapUp; the lever's
             // own test covers TapUp.
             Ship->PlaceShip(Opening.Position, Opening.Orientation * FQuat(FVector::UpVector, UE_DOUBLE_PI));
             Ship->SetDriveLever(Pilot, Top);
@@ -271,7 +273,7 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
             {
                 Ship->Tick(1.0f / 30.0f);
             }
-            TestTrue(FString::Printf(TEXT("away from everything the ship reaches 1 c (position %.3f)"), Flight.GetDrivePosition()),
+            TestTrue(FString::Printf(TEXT("away from everything the ship reaches 0.1 c (position %.3f)"), Flight.GetDrivePosition()),
                      Flight.GetDrivePosition() > Top - 1e-3);
             Ship->AllStop(Pilot);
             for (int32 Frame = 0; Frame < 30; ++Frame)

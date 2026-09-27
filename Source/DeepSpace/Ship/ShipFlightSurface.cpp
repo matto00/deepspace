@@ -97,7 +97,19 @@ double ShipFlight::MaySpeed(double D, double BrakingAccel, double HoldSeconds, d
     // No hold is the braking curve alone, not no cap: an unset hold must
     // never be the term that wins the max.
     const double Hold = HoldSeconds > 0.0 ? D / HoldSeconds : 0.0;
-    const double Brake = FMath::Sqrt(BrakingOf(BrakingAccel) * D);
+
+    // The braking curve, stepped: with Step seconds a substep, a ship that
+    // loses Margin x BrakingAccel x Step each substep from v covers v^2 / 2b
+    // + v Step / 2 before it stops, so it may have the v that makes that D.
+    // On this curve the speed falls by exactly b x Step a substep all the
+    // way to rest -- what the boosters can do, with a fifth to spare -- where
+    // the continuous sqrt(2 b D) asks for more than that in the last few
+    // substeps. At 2 km/s^2 that was the last 50 m/s shed at the hard stop
+    // in one frame. Written without the cancellation for a small D. Far out
+    // it is the continuous curve less b x Step / 2, 6.7 m/s at full thrust.
+    const double Braking = BrakingOf(BrakingAccel);
+    const double Half = 0.25 * Braking * FMath::Max(Step, 0.0);
+    const double Brake = Braking > 0.0 ? Braking * D / (FMath::Sqrt(Braking * D + Half * Half) + Half) : 0.0;
     const double May = FMath::Max(Hold, Brake);
     return Step > 0.0 ? FMath::Min(May, D / Step) : May;
 }

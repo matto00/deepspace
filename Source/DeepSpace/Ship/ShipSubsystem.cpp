@@ -82,7 +82,7 @@ namespace
 
     TAutoConsoleVariable<float> CVarDriveTop(
         TEXT("ds.Drive.Top"), static_cast<float>(ShipDriveLever::DefaultTopLight),
-        TEXT("The drive lever's top, in c: 1 at most (anything faster is a jump), 1 km/s at least. Shortens the lever; never lengthens it."),
+        TEXT("The drive lever's top, in c: 0.1 at most (anything faster is a jump), 20 km/s at least. Shortens the lever; never lengthens it."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarDriveResponse(
@@ -112,7 +112,7 @@ namespace
 
     TAutoConsoleVariable<float> CVarCruiseSweep(
         TEXT("ds.Cruise.Sweep"), static_cast<float>(ShipDriveLever::DefaultCruiseSweep),
-        TEXT("How fast a held lever key sweeps the cruise lever, fraction a second."),
+        TEXT("How fast a held lever key sweeps the cruise lever, fraction of its travel a second (the lever reads on a log scale, 1 m/s to cruise's top)."),
         ECVF_Default);
 
     /** The name the fold's draw goes on the reactor under. Not a module: a
@@ -500,11 +500,12 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     Limits.DriveResponse = FMath::Max(0.0f, CVarDriveResponse.GetValueOnGameThread());
     Limits.HoldSeconds = CVarHoldSeconds.GetValueOnGameThread();
 
-    // In c, and never above it: the ruled top (ruling 1). Never below the
-    // lever's first notch either, which the lever always keeps, so the CVar
-    // and the lever can never disagree about where it ends.
+    // In c, and never above 0.1 c: the ruled top (the 2026-09-27 ruling).
+    // Never below the lever's first notch either, 20 km/s, which the lever
+    // always keeps, so the CVar and the lever can never disagree about where
+    // it ends.
     const double TopLight = FMath::Clamp(static_cast<double>(CVarDriveTop.GetValueOnGameThread()),
-        ShipDriveLever::NotchSpeed(1) / ShipDriveLever::LightCmPerSecond, 1.0);
+        ShipDriveLever::NotchSpeed(1) / ShipDriveLever::LightCmPerSecond, ShipDriveLever::DefaultTopLight);
     Limits.DriveTop = TopLight * ShipDriveLever::LightCmPerSecond;
     FlightState.SetLimits(Limits);
 
@@ -651,7 +652,7 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
         UpRepeat.Update(false, 0.0, 0.0);
         DownRepeat.Update(false, 0.0, 0.0);
         Command.Throttle = ShipDriveLever::SweepCruise(Command.Throttle, bUpHeld, bDownHeld, UpPresses, DownPresses,
-            DeltaSeconds, FMath::Max(0.0f, CVarCruiseSweep.GetValueOnGameThread()));
+            DeltaSeconds, FMath::Max(0.0f, CVarCruiseSweep.GetValueOnGameThread()), FlightState.CruiseAsternLimit());
     }
     FlightState.SetCommand(Command);
 }

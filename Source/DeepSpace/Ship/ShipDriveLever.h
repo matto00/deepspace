@@ -12,11 +12,16 @@
  * the named constants here, so a test and a CVar can never disagree about
  * what "the default" is.
  *
- * Positions are in notch space. Position 0 is STOP and positions 1..18 are
- * the notches of the 1-2-5 series; a fractional position is the ship's eased
- * place between two notches (decision 4), and its speed is read from the
- * table there: linear from STOP to the first notch, geometric between
- * notches, so a step anywhere on the lever is the same felt step.
+ * Positions are in notch space. Position 0 is STOP and positions 1..11 are
+ * the notches of the 1-2-5 series, 20 km/s to 0.1 c (the 2026-09-27
+ * ruling); a fractional position is the ship's eased place between two
+ * notches (decision 4), and its speed is read from the table there: linear
+ * from STOP to the first notch, geometric between notches, so a step
+ * anywhere on the lever is the same felt step.
+ *
+ * The cruise lever is a position too, -1..1, and its speed is read on a log
+ * scale (CruiseSpeed): fine at the bottom, where a metre a second matters,
+ * and coarse at the top, where a kilometre a second does not.
  */
 namespace ShipDriveLever
 {
@@ -32,41 +37,82 @@ namespace ShipDriveLever
     inline constexpr double EaseSeconds = 0.4;
 
     /**
-     * A thousandth of a notch: where the ease stops approaching and arrives.
-     * 1 m/s off STOP and under a tenth of a percent of speed anywhere above
-     * it, so nothing on screen can tell; without it STOP would be approached
-     * forever and a ship "at rest" would still be creeping.
+     * Five hundred-thousandths of a notch: where the ease stops approaching
+     * and arrives. 1 m/s off STOP, the first notch being 20 km/s, and a
+     * hundredth of a percent of speed anywhere above it, so nothing on screen
+     * can tell; without it STOP would be approached forever and a ship "at
+     * rest" would still be creeping. It was a thousandth when the first notch
+     * was 1 km/s: the same metre a second, and a thousandth of 20 km/s would
+     * snap the last 20 m/s to rest in one substep, which the readout shows.
      */
-    inline constexpr double SettleNotches = 1.0e-3;
+    inline constexpr double SettleNotches = 5.0e-5;
 
     /** How long a held lever key waits before it repeats, seconds: a tap is
      *  over well inside it, so a tap is never read as a hold. */
     inline constexpr double RepeatDelaySeconds = 0.3;
 
-    /** ds.Drive.Top's default, in c. 1 c is the ruled top (ruling 1):
-     *  anything faster is a jump. */
-    inline constexpr double DefaultTopLight = 1.0;
+    /** ds.Drive.Top's default, in c. 0.1 c is the ruled top (the 2026-09-27
+     *  ruling, which replaced ruling 1's 1 c): anything faster is a jump. */
+    inline constexpr double DefaultTopLight = 0.1;
 
     /** ds.Drive.Response's default, notches a second at full thrust. Equal
      *  to the hold's repeat rate, so a held key and the ship move together. */
     inline constexpr double DefaultResponse = 3.0;
 
     /** ds.Drive.Sweep's default, notches a second while a key is held past
-     *  the repeat delay: STOP to 1 c is six seconds held. */
+     *  the repeat delay: STOP to 0.1 c is the press and ten repeats, 3.7
+     *  seconds held. */
     inline constexpr double DefaultSweep = 3.0;
 
-    /** ds.Cruise.Sweep's default, lever fraction a second: four seconds from
-     *  full astern to full ahead, cruise's rate since the first flight. */
-    inline constexpr double DefaultCruiseSweep = 0.5;
+    /** ds.Cruise.Sweep's default, lever fraction a second: five seconds from
+     *  rest to full ahead, which on the log scale is a decade of speed about
+     *  every 1.2 seconds (the 2026-09-27 ruling; it was 0.5 on the linear
+     *  lever). */
+    inline constexpr double DefaultCruiseSweep = 0.2;
 
-    /** The notches in the table, STOP not counted: 18. */
+    /**
+     * The slowest a cruise lever off zero asks for, cm/s: 1 m/s, the bottom
+     * of the log scale (CruiseSpeed). A lever a hair off zero asks for this,
+     * not for nothing, so the first frame of a fresh press moves the ship.
+     */
+    inline constexpr double CruiseFloorCmPerSecond = 100.0;
+
+    /**
+     * The cruise lever's speed, cm/s, signed, negative astern.
+     *
+     * Ahead, Throttle p in (0, 1] asks for Floor x (Top / Floor)^p: 1 m/s
+     * just off zero, Top at full, and each tenth of the lever the same
+     * factor of speed, so it is as fine at 3 m/s as it is coarse at 15
+     * km/s. Zero is rest, exactly: the detent is a place, not a speed.
+     *
+     * Astern is the same law mirrored, position for position, so a lever at
+     * -p asks for exactly what +p asks for ahead -- but the lever's astern
+     * travel ends where that reaches AsternTop (CruiseAsternLimit), so a
+     * position past it asks for AsternTop and no more. The pilot never
+     * sweeps through lever that does nothing.
+     *
+     * A Top at or under the floor is linear, p x Top, since there is no
+     * decade to spread; NaN reads as rest.
+     */
+    DEEPSPACE_API double CruiseSpeed(double Throttle, double TopCmPerSecond, double AsternTopCmPerSecond);
+
+    /**
+     * How far astern the cruise lever travels, 0..1: the position at which
+     * CruiseSpeed's mirrored law reaches AsternTop, ln(AsternTop / Floor) /
+     * ln(Top / Floor). 0.535 for 200 m/s under a 20 km/s top. 1 when astern
+     * is as fast as ahead; 0 when AsternTop is under the floor, where the
+     * lever has no astern at all.
+     */
+    DEEPSPACE_API double CruiseAsternLimit(double TopCmPerSecond, double AsternTopCmPerSecond);
+
+    /** The notches in the table, STOP not counted: 11. */
     DEEPSPACE_API int32 TableNotches();
 
     /**
      * Positions on a lever that tops out at TopCmPerSecond, STOP included:
-     * 19 at 1 c. Notches above the top are dropped; a top above 1 c adds
+     * 12 at 0.1 c. Notches above the top are dropped; a top above 0.1 c adds
      * nothing, because the table ends there. Never fewer than two positions,
-     * STOP and 1 km/s: a drive lever with only STOP on it is not a lever.
+     * STOP and 20 km/s: a drive lever with only STOP on it is not a lever.
      */
     DEEPSPACE_API int32 NotchCount(double TopCmPerSecond);
 
@@ -137,7 +183,7 @@ namespace ShipDriveLever
 
     /**
      * The cruise lever's sweep (decision 2): Shift and Ctrl held move it at
-     * Rate a second, -1..1, and it stays where it is left.
+     * Rate a second, -AsternLimit..1, and it stays where it is left.
      *
      * The detent: a sweep that reaches zero from either side stops there,
      * and a held key moves the lever off zero only in a frame with a fresh
@@ -148,7 +194,10 @@ namespace ShipDriveLever
      * Stateless: "fresh" is the press count the pawn hands in with the held
      * flags, so a press that lands while the lever is above zero cannot be
      * spent on crossing it. Both keys held cancel.
+     *
+     * AsternLimit is CruiseAsternLimit's, the lever's astern end-stop, 0..1.
      */
     DEEPSPACE_API double SweepCruise(double Throttle, bool bHeldUp, bool bHeldDown,
-                                     int32 PressesUp, int32 PressesDown, double Dt, double Rate);
+                                     int32 PressesUp, int32 PressesDown, double Dt, double Rate,
+                                     double AsternLimit);
 }

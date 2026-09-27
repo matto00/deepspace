@@ -307,14 +307,15 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     }
     Ship->SetConsumerWeight(ShipPower::Engine, 1.0f);
 
-    // Aimed, with the drive at 1 c and cruise's lever open, as a pilot who
+    // Aimed, with the drive at 0.1 c and cruise's lever open, as a pilot who
     // set both and walked away would leave them: the fold is an all stop,
     // and the arrival must keep everything but the position and the motion.
     //
     // Spooled up first on a heading that meets nothing but the edge, put
     // back where it was every frame, so the ship is at the lever's top when
     // it turns onto the course -- which is what makes the at-rest arrival
-    // a claim: from 1 c the ease alone takes longer than the fold.
+    // a claim: from 0.1 c the ease alone takes longer than the fold, 7.3 s
+    // against 6.
     APawn* Pilot = World->SpawnActor<APawn>();
     Ship->SetPilot(Pilot);
     Ship->SetFlightCommand(Pilot, 0.25f, FVector::ZeroVector);
@@ -347,7 +348,7 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("spooled up, still misaligned, still here"), Ship->IsInTransit());
     const double SpeedBefore = Ship->GetShipSpeed();
     TestTrue(FString::Printf(TEXT("at the drive's top before the fold (%.3f c)"), SpeedBefore / ShipDriveLever::LightCmPerSecond),
-             SpeedBefore > 0.99 * ShipDriveLever::LightCmPerSecond);
+             SpeedBefore > 0.99 * 0.1 * ShipDriveLever::LightCmPerSecond);
     Ship->PlaceShip(Parked, FacingRolled(*Ship->GetCourseDirection()));
 
     // The fold opens on the tick it is aligned, with nobody touching the
@@ -383,11 +384,11 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
              Ship->GetFlightState().GetCommand().DriveNotch == 0 && Ship->GetFlightState().GetCommand().Throttle == 0.0);
 
     // What arrival must not touch, and what it must: still easing down from
-    // 1 c inside the fold, as it would be for seconds yet.
+    // 0.1 c inside the fold, the last tens of metres a second of it.
     const FQuat Orientation = Ship->GetFlightState().GetUniverseOrientation();
     TickUntil(Ship, 30.0, 0.25, [Ship] { return Ship->GetTransitProgress() > 0.9 || Ship->GetJumpSerial() > 0; });
-    TestTrue(FString::Printf(TEXT("the ship is still under way near the fold's end (%.0f km/s)"), Ship->GetShipSpeed() / Km),
-             Ship->GetJumpSerial() == 0 && Ship->GetShipSpeed() > 1.0e5f);
+    TestTrue(FString::Printf(TEXT("the ship is still under way near the fold's end (%.1f m/s)"), Ship->GetShipSpeed() / 100.0),
+             Ship->GetJumpSerial() == 0 && Ship->GetShipSpeed() > 1.0e3f);
     TickUntil(Ship, 30.0, 0.25, [Ship] { return Ship->GetJumpSerial() > 0; });
     TestEqual(TEXT("it arrives, and the serial counts it"), Ship->GetJumpSerial(), 1);
     TestEqual(TEXT("LocalSystem's serial follows"), LocalSystem::Serial(World), 1);

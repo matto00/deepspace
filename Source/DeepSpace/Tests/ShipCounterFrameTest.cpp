@@ -187,7 +187,9 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         const double Knee = ShipDust::DefaultKnee;
         const double DustTop = ShipDust::DefaultDustTop;
         const double MaxStretch = ShipDust::DefaultStretch;
-        const double Top = ShipDriveLever::LightCmPerSecond;
+        const double Top = ShipDriveLever::DefaultTopLight * ShipDriveLever::LightCmPerSecond;
+        const double CruiseTop = FShipFlightLimits::Cruise().MaxSpeed;
+        TestEqual(TEXT("the drive's top is 0.1 c"), Top, 0.1 * ShipDriveLever::LightCmPerSecond);
 
         bool bHonest = true;
         for (const double Speed : { 0.0, 1.0, 2.0e4, 1.0e5, 1.999e5, Knee })
@@ -196,10 +198,34 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             bHonest &= ShipDust::Stretch(Speed, Knee, Top, MaxStretch) == 1.0;
         }
         TestTrue(TEXT("up to the knee the dust is streamed at the true speed, unstretched"), bHonest);
-        TestEqual(TEXT("the drive's first notch is seen at its true 1 km/s"),
-                  ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(1), Knee, DustTop, Top), ShipDriveLever::NotchSpeed(1));
-        TestEqual(TEXT("and its second at 2 km/s: ten times cruise's top"),
-                  ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(2), Knee, DustTop, Top), ShipDriveLever::NotchSpeed(2));
+        TestEqual(TEXT("cruise's first tenth of its top, 2 km/s, is seen at its true speed"),
+                  ShipDust::SeenSpeed(0.1 * CruiseTop, Knee, DustTop, Top), 0.1 * CruiseTop);
+
+        // Cruise's top decade, 2 to 20 km/s, now runs through the log part:
+        // 20 km/s is a quarter of the way from the knee to 0.1 c, seen at
+        // 2.2 km/s and drawn 1.6 times long.
+        const double SeenCruiseTop = ShipDust::SeenSpeed(CruiseTop, Knee, DustTop, Top);
+        TestTrue(FString::Printf(TEXT("cruise's top, 20 km/s, is past the knee: seen at %.1f m/s, drawn %.2f times long"),
+                                 SeenCruiseTop / 100.0, ShipDust::Stretch(CruiseTop, Knee, Top, MaxStretch)),
+                 SeenCruiseTop > Knee && SeenCruiseTop < DustTop
+                 && FMath::IsNearlyEqual(ShipDust::LogFraction(CruiseTop, Knee, Top), FMath::Loge(10.0) / FMath::Loge(Top / Knee), 1e-12));
+
+        // The invariant decision 8 keeps: the drive never looks slower than
+        // cruise. Its first notch is cruise's top, seen alike; every notch
+        // above it is seen faster; and nothing cruise can do is seen faster
+        // than the drive's bottom notch.
+        bool bDriveNeverSlower = true;
+        for (int32 Notch = 1; Notch <= ShipDriveLever::TableNotches(); ++Notch)
+        {
+            const double Seen = ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(Notch), Knee, DustTop, Top);
+            bDriveNeverSlower &= Notch == 1 ? Seen == SeenCruiseTop : Seen > SeenCruiseTop;
+        }
+        for (double Cruising = 1.0; Cruising <= CruiseTop; Cruising *= 1.1)
+        {
+            bDriveNeverSlower &= ShipDust::SeenSpeed(Cruising, Knee, DustTop, Top)
+                <= ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(1), Knee, DustTop, Top);
+        }
+        TestTrue(TEXT("the drive never looks slower than cruise: every notch seen at least as fast as cruise's top"), bDriveNeverSlower);
         TestTrue(TEXT("continuous at the knee"),
                  FMath::IsNearlyEqual(ShipDust::SeenSpeed(Knee * (1.0 + 1e-9), Knee, DustTop, Top), Knee, Knee * 1e-8));
 
@@ -222,7 +248,7 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("above the knee the seen speed and the stretch strictly rise, to the top"), bRising);
         TestTrue(TEXT("the seen speed never passes DustTop"), bUnderTop);
         TestTrue(TEXT("and the stretch never passes DustStretch"), bStretchBounded);
-        TestTrue(TEXT("at 1 c the dust is seen at DustTop"),
+        TestTrue(TEXT("at 0.1 c, the drive's top, the dust is seen at DustTop"),
                  FMath::IsNearlyEqual(ShipDust::SeenSpeed(Top, Knee, DustTop, Top), DustTop, DustTop * 1e-9));
         TestTrue(TEXT("stretched DustStretch times"),
                  FMath::IsNearlyEqual(ShipDust::Stretch(Top, Knee, Top, MaxStretch), MaxStretch, 1e-9));
@@ -354,10 +380,11 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             }
             const FShipFlightState& Flight = Ship->GetFlightState();
             const double Top = Flight.GetLimits().DriveTop;
-            TestTrue(FString::Printf(TEXT("the ship is at the drive's top, 1 c (%.6g cm/s)"), Flight.GetSpeed()),
-                     FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-6));
+            TestTrue(FString::Printf(TEXT("the ship is at the drive's top, 0.1 c (%.6g cm/s)"), Flight.GetSpeed()),
+                     FMath::IsNearlyEqual(Flight.GetSpeed(), 0.1 * ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-7)
+                     && Top == Flight.GetSpeed());
             TestEqual(TEXT("with nothing holding it"), Flight.GetHold(), EFlightHold::Free);
-            TestEqual(TEXT("at 1 c the motes are as bright as authored"), Brightness(), Authored);
+            TestEqual(TEXT("at 0.1 c the motes are as bright as authored"), Brightness(), Authored);
             TestTrue(TEXT("and shown: the drive never looks slower than cruise"), Motes->GetNearStars()->IsVisible());
 
             const FFrameMotion AtTop = OneFrame(1.0f / 60.0f);
@@ -368,18 +395,18 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             {
                 AtSeen += Delta.Equals(Expected, 1e-3 * Expected.Size()) ? 1 : 0;
             }
-            TestTrue(FString::Printf(TEXT("at 1 c the ship went %.4g cm in the frame"), AtTop.Moved.Size()), AtTop.Moved.Size() > 1.0e7);
+            TestTrue(FString::Printf(TEXT("at 0.1 c the ship went %.4g cm in the frame"), AtTop.Moved.Size()), AtTop.Moved.Size() > 1.0e7);
             TestTrue(FString::Printf(TEXT("and the dust streamed back along its path at the seen 3 km/s: %d of %d unwrapped motes"),
                                      AtSeen, AtTop.Deltas.Num()),
                      AtTop.Deltas.Num() > 32 && AtSeen == AtTop.Deltas.Num());
             TestTrue(FString::Printf(TEXT("%.1f cm, 50 m a 60 Hz frame and under the strobe limit"), Expected.Size()),
                      FMath::IsNearlyEqual(Expected.Size(), ShipDust::DefaultDustTop * AtTop.Moved.Size() / Flight.GetSpeed(), 1.0)
                      && Expected.Size() < 0.5 * 12000.0);
-            CheckDrawn(TEXT("at 1 c"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
+            CheckDrawn(TEXT("at 0.1 c"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
 
             // The law's three knobs are the developer's playtest dials
             // (flight-feel decision 8), so each is read at use: turned to
-            // values no default holds, the same frame at 1 c streams the dust
+            // values no default holds, the same frame at 0.1 c streams the dust
             // at the tuned top and stretches it the tuned length.
             {
                 const SkyTestWorld::FScopedCVar TunedKnee(TEXT("ds.Sky.DustKnee"), 1.0f);
@@ -392,16 +419,17 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
                 {
                     AtTuned += Delta.Equals(TunedExpected, 1e-3 * TunedExpected.Size()) ? 1 : 0;
                 }
-                TestTrue(FString::Printf(TEXT("with ds.Sky.DustTop at 2.5 km/s the dust streams at it at 1 c: %d of %d unwrapped motes"),
+                TestTrue(FString::Printf(TEXT("with ds.Sky.DustTop at 2.5 km/s the dust streams at it at 0.1 c: %d of %d unwrapped motes"),
                                          AtTuned, Tuned.Deltas.Num()),
                          Tuned.Deltas.Num() > 32 && AtTuned == Tuned.Deltas.Num());
-                CheckDrawn(TEXT("at 1 c, ds.Sky.DustStretch 4"), 4.0, Flight.GetVelocity().GetSafeNormal());
+                CheckDrawn(TEXT("at 0.1 c, ds.Sky.DustStretch 4"), 4.0, Flight.GetVelocity().GetSafeNormal());
             }
             Motes->SyncToShip();
-            CheckDrawn(TEXT("at 1 c, the dials put back"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
+            CheckDrawn(TEXT("at 0.1 c, the dials put back"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
 
-            // Off the drive the ship spools down to cruise's top, 200 m/s,
-            // where the dust is honest and round again.
+            // Off the drive the ship spools down to cruise's top, 20 km/s,
+            // which is past the knee: still a representation, streamed at
+            // the seen speed and drawn long, a little less so than the drive.
             Ship->SetDriveEngaged(Pilot, false);
             for (int32 Tick = 0; Tick < 300 && Ship->GetFlightState().GetMode() != EFlightMode::Cruise; ++Tick)
             {
@@ -415,21 +443,26 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             }
             TestTrue(FString::Printf(TEXT("back at cruise's top (%.1f cm/s)"), Flight.GetSpeed()),
                      FMath::IsNearlyEqual(Flight.GetSpeed(), Flight.GetLimits().MaxSpeed, 0.01 * Flight.GetLimits().MaxSpeed));
-            const FFrameMotion AtCruise = OneFrame(1.0f / 60.0f);
-            int32 Honest = 0;
-            for (const FVector& Delta : AtCruise.Deltas)
             {
-                Honest += Delta.Equals(-AtCruise.Moved, 1e-6) ? 1 : 0;
+                const FFrameMotion AtCruiseTop = OneFrame(1.0f / 60.0f);
+                const double CruiseSeen = ShipDust::SeenSpeed(Flight.GetSpeed(), Knee, ShipDust::DefaultDustTop, Top);
+                const FVector CruiseExpected = -AtCruiseTop.Moved * (CruiseSeen / Flight.GetSpeed());
+                int32 AtCruiseSeen = 0;
+                for (const FVector& Delta : AtCruiseTop.Deltas)
+                {
+                    AtCruiseSeen += Delta.Equals(CruiseExpected, 1e-3 * CruiseExpected.Size()) ? 1 : 0;
+                }
+                TestTrue(FString::Printf(TEXT("at cruise's top the dust streams at the seen %.1f m/s: %d of %d unwrapped motes"),
+                                         CruiseSeen / 100.0, AtCruiseSeen, AtCruiseTop.Deltas.Num()),
+                         AtCruiseTop.Deltas.Num() > 32 && AtCruiseSeen == AtCruiseTop.Deltas.Num()
+                         && CruiseSeen < Seen && CruiseSeen > Knee);
+                CheckDrawn(TEXT("at cruise's top"), ShipDust::Stretch(Flight.GetSpeed(), Knee, Top, ShipDust::DefaultStretch),
+                           Flight.GetVelocity().GetSafeNormal());
             }
-            TestTrue(FString::Printf(TEXT("at cruise the dust moves exactly as far as the ship, the other way: %d of %d"),
-                                     Honest, AtCruise.Deltas.Num()),
-                     AtCruise.Deltas.Num() > 32 && Honest == AtCruise.Deltas.Num());
-            TestEqual(TEXT("at cruise the motes are as bright as authored"), Brightness(), Authored);
-            CheckDrawn(TEXT("at cruise"), 1.0, FVector::ZeroVector);
 
             // A turn under cruise's inertia, about both of the body's axes
             // that swing the nose (Y and Z), so it swings at 0.36 rad/s: faster
-            // than the boosters' 40 m/s^2 can turn a 200 m/s velocity, 0.2
+            // than the boosters' 2 km/s^2 can turn a 20 km/s velocity, 0.1
             // rad/s. The ship slides on along its old path, and the dust
             // streams along the slide, which is where the ship is going, not
             // the nose.
@@ -444,16 +477,14 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
             const double Slide = FMath::Acos(FMath::Clamp(FVector::DotProduct(Nose, Heading), -1.0, 1.0));
             TestTrue(FString::Printf(TEXT("the ship slides %.3f rad off its nose"), Slide), Slide > 0.05);
 
-            // With the knee dialled under cruise's top, cruise is above it:
-            // the slide is streamed at the seen speed the tuned knee gives,
-            // and each mote drawn long along the velocity, not the nose. At
-            // the default knee a slide is round, and the two cannot be told
+            // Cruise's top is above the knee, so the slide is streamed at the
+            // seen speed, and each mote drawn long along the velocity, not the
+            // nose. Under the knee a slide is round, and the two cannot be told
             // apart.
-            const SkyTestWorld::FScopedCVar LowKnee(TEXT("ds.Sky.DustKnee"), 0.1f);
             const FFrameMotion Sliding = OneFrame(1.0f / 60.0f);
             const double SlideSpeed = Flight.GetSpeed();
-            const double SlideSeen = ShipDust::SeenSpeed(SlideSpeed, 1.0e4, ShipDust::DefaultDustTop, Flight.GetLimits().DriveTop);
-            TestTrue(FString::Printf(TEXT("under a 100 m/s knee cruise's %.1f m/s is seen at %.1f m/s"), SlideSpeed / 100.0, SlideSeen / 100.0),
+            const double SlideSeen = ShipDust::SeenSpeed(SlideSpeed, Knee, ShipDust::DefaultDustTop, Flight.GetLimits().DriveTop);
+            TestTrue(FString::Printf(TEXT("above the 2 km/s knee cruise's %.1f m/s is seen at %.1f m/s"), SlideSpeed / 100.0, SlideSeen / 100.0),
                      SlideSeen < 0.9 * SlideSpeed);
             bool bAlongSlide = Sliding.Deltas.Num() > 32;
             bool bSeenInSlide = Sliding.Deltas.Num() > 32;
@@ -466,10 +497,33 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
                                                      1e-3 * Delta.Size());
             }
             TestTrue(TEXT("in the slide the dust streams along the velocity, not the nose"), bAlongSlide);
-            TestTrue(TEXT("as far as the tuned knee's seen speed carries it"), bSeenInSlide);
-            const double SlideStretch = ShipDust::Stretch(SlideSpeed, 1.0e4, Flight.GetLimits().DriveTop, ShipDust::DefaultStretch);
+            TestTrue(TEXT("as far as the seen speed carries it"), bSeenInSlide);
+            const double SlideStretch = ShipDust::Stretch(SlideSpeed, Knee, Flight.GetLimits().DriveTop, ShipDust::DefaultStretch);
             TestTrue(FString::Printf(TEXT("and stretched above 1 (%.4f)"), SlideStretch), SlideStretch > 1.05);
-            CheckDrawn(TEXT("in the slide, knee 100 m/s"), SlideStretch, Flight.GetVelocity().GetSafeNormal());
+            CheckDrawn(TEXT("in the slide"), SlideStretch, Flight.GetVelocity().GetSafeNormal());
+
+            // Slowed under the knee, cruise's dust is honest and round again:
+            // the lever at 0.6 is 380 m/s.
+            Ship->SetFlightCommand(Pilot, 0.6f, FVector::ZeroVector);
+            for (int32 Tick = 0; Tick < 150; ++Tick)
+            {
+                Ship->Tick(0.1f);
+                Motes->SyncToShip();
+            }
+            TestTrue(FString::Printf(TEXT("cruising under the knee (%.1f m/s)"), Flight.GetSpeed() / 100.0),
+                     Flight.GetSpeed() > 0.0 && Flight.GetSpeed() < Knee
+                     && FMath::IsNearlyEqual(Flight.GetSpeed(), Flight.GetLeverSpeed(), 1e-6 * Flight.GetSpeed()));
+            const FFrameMotion AtCruise = OneFrame(1.0f / 60.0f);
+            int32 Honest = 0;
+            for (const FVector& Delta : AtCruise.Deltas)
+            {
+                Honest += Delta.Equals(-AtCruise.Moved, 1e-6) ? 1 : 0;
+            }
+            TestTrue(FString::Printf(TEXT("under the knee the dust moves exactly as far as the ship, the other way: %d of %d"),
+                                     Honest, AtCruise.Deltas.Num()),
+                     AtCruise.Deltas.Num() > 32 && Honest == AtCruise.Deltas.Num());
+            TestEqual(TEXT("under the knee the motes are as bright as authored"), Brightness(), Authored);
+            CheckDrawn(TEXT("under the knee"), 1.0, FVector::ZeroVector);
             Ship->ClearPilot();
         }
         Motes->Destroy();
