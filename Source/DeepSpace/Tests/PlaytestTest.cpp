@@ -520,6 +520,30 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("X from 1 km/s: at rest, exactly, in %.2f s"), Seconds), Flight.GetSpeed() == 0.0);
     TestTrue(TEXT("with both levers at STOP"), Notch() == 0 && Flight.GetCommand().Throttle == 0.0);
 
+    // Ctrl slows a ship still climbing, from the first tap (decision 3): the
+    // lever flung to the top, a second of climbing, then one Ctrl. Counted
+    // from the lever it would be one notch under light and the ship would go
+    // on climbing; counted from the ship it is the notch under where the
+    // ship is, and the ship slows from that frame.
+    Ship->SetDriveLever(Player, Top);
+    for (int32 Tick = 0; Tick < 30; ++Tick)
+    {
+        Frame(Player, Ship);
+    }
+    const double Climbing = Flight.GetDrivePosition();
+    Tap(Player, Ship, -1);
+    TestTrue(FString::Printf(TEXT("one Ctrl while climbing puts the lever under the ship: notch %d, the ship at %.2f"), Notch(), Climbing),
+             Notch() < Climbing);
+    bool bSlows = true;
+    Previous = Flight.GetSpeed();
+    for (int32 Tick = 0; Tick < 60; ++Tick)
+    {
+        Frame(Player, Ship);
+        bSlows &= Flight.GetSpeed() <= Previous * (1.0 + 1e-12);
+        Previous = Flight.GetSpeed();
+    }
+    TestTrue(TEXT("and the ship never climbs again after it"), bSlows);
+
     Ship->SetDriveLever(Player, Top);
     for (int32 Tick = 0; Tick < 300; ++Tick)
     {
@@ -995,6 +1019,9 @@ bool FPlaytestInterstellarJumpAtRestTest::RunTest(const FString& Parameters)
              Flight.GetCommand().DriveNotch == 0 && Flight.GetCommand().Throttle == 0.0);
     TestFalse(TEXT("and lets go of the world at home"), Ship->GetTarget().IsSet());
 
+    // Shift held through the fold, and past arrival: the fold is an all stop,
+    // and a key held through a stop moves nothing until it is let go.
+    Player->HoldLever(1);
     double InFold = 0.0;
     while (InFold < 60.0 && Ship->IsInTransit())
     {
@@ -1013,13 +1040,20 @@ bool FPlaytestInterstellarJumpAtRestTest::RunTest(const FString& Parameters)
     {
         Frame(Player, Ship);
     }
-    TestTrue(TEXT("and stays at rest under the drive"), Flight.GetSpeed() == 0.0);
+    TestTrue(FString::Printf(TEXT("and stays at rest under the drive, Shift held through the fold and after (notch %d)"),
+                             Flight.GetCommand().DriveNotch),
+             Flight.GetSpeed() == 0.0 && Flight.GetCommand().DriveNotch == 0);
+    Player->HoldLever(0);
+    Frame(Player, Ship);
     Player->PressDrive();
     for (int32 Tick = 0; Tick < 90; ++Tick)
     {
         Frame(Player, Ship);
     }
     TestTrue(FString::Printf(TEXT("and in cruise after F (%.3f cm/s)"), Flight.GetSpeed()), !Ship->IsDriveEngaged() && Flight.GetSpeed() < 1.0);
+    Player->PressDrive();
+    PlaytestTestLocal::Tap(Player, Ship, 1);
+    TestEqual(TEXT("once let go, a fresh Shift moves the drive's lever"), Flight.GetCommand().DriveNotch, 1);
     return true;
 }
 
@@ -1138,6 +1172,77 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
         Ship->Tick(Dt);
     }
     TestFalse(TEXT("at rest on the floor the ETA is gone"), UShipHUDWidget::TargetLineText(*Ship, Home).ToString().Contains(TEXT("ETA")));
+
+    // -- Cruise, on starved boosters ------------------------------------------
+    // Cruise brakes on the curve alone, with no hold, so its time is that
+    // law's. Starved is where the two differ: the drive's knee falls under
+    // cruise's top below about 78% thrust, and the in-system jump's wind-up is
+    // exactly when the boosters go short. At a quarter thrust from 8 km up,
+    // the hold's law named about 21 s for a 25 s flight.
+    Ship->AllStop(Pilot);
+    Ship->SetDriveEngaged(Pilot, false);
+    Ship->SetConsumerWeight(ShipPower::Boosters, 0.0f);
+    {
+        const FVector Out = (Flight.GetUniversePosition() - World.Centre).GetSafeNormal();
+        Ship->PlaceShip(World.Centre + Out * (World.Radius + World.Floor + 800000.0), Facing(-Out));
+    }
+    Ship->Tick(Dt);
+    TestTrue(TEXT("the boosters are starved"), Flight.GetLimits().LinearAcceleration < 0.3 * FShipFlightLimits::Cruise().LinearAcceleration);
+    TestTrue(TEXT("and the ship cruises"), Flight.GetMode() == EFlightMode::Cruise);
+    Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
+
+    TArray<FReading> Cruising;
+    Seconds = 0.0;
+    Arrived = -1.0;
+    Tick = 0;
+    while (Seconds < 200.0 && Arrived < 0.0)
+    {
+        Ship->Tick(Dt);
+        Seconds += Dt;
+        ++Tick;
+        // Once at cruise's top or on the cap: a speed still climbing makes
+        // any time at the present speed a moving target, by design.
+        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetSpeed() >= 0.999 * Flight.GetLimits().MaxSpeed;
+        if (Tick % 30 == 0 && bSettled)
+        {
+            const TOptional<FTargetView> View = Ship->GetTargetView(*Home);
+            if (View && View->EtaSeconds)
+            {
+                Cruising.Add({ Seconds, *View->EtaSeconds, UShipHUDWidget::TargetLineText(*Ship, Home).ToString(),
+                               Flight.GetHold() != EFlightHold::Free });
+            }
+        }
+        if (Room(*Ship, World) <= FShipFlightState::AtFloorCm && Flight.GetSpeed() < TargetMarker::MinSpeed)
+        {
+            Arrived = Seconds;
+        }
+    }
+    int32 Braking = 0;
+    for (const FReading& Reading : Cruising)
+    {
+        Braking += Reading.bCapped ? 1 : 0;
+    }
+    if (!TestTrue(FString::Printf(TEXT("the cruising ship reaches the floor (%.1f s) read at its top (%d) and braking (%d)"),
+                                  Arrived, Cruising.Num() - Braking, Braking),
+                  Arrived > 0.0 && Cruising.Num() - Braking >= 5 && Braking >= 5))
+    {
+        return false;
+    }
+    double CruiseStep = 0.0;
+    double CruiseArrival = 0.0;
+    for (int32 Index = 0; Index < Cruising.Num(); ++Index)
+    {
+        CruiseArrival = FMath::Max(CruiseArrival, FMath::Abs(Cruising[Index].At + Cruising[Index].Eta - Arrived));
+        if (Index > 0)
+        {
+            const double Fell = Cruising[Index - 1].Eta - Cruising[Index].Eta;
+            CruiseStep = FMath::Max(CruiseStep, FMath::Abs(Fell - (Cruising[Index].At - Cruising[Index - 1].At)));
+        }
+    }
+    AddInfo(FString::Printf(TEXT("cruise: first reading \"%s\" at %.0f s; arrived at %.1f s"), *Cruising[0].Line, Cruising[0].At, Arrived));
+    TestTrue(FString::Printf(TEXT("starved cruise counts a second less every second, to a tenth (worst %.3f s)"), CruiseStep), CruiseStep <= 0.1);
+    TestTrue(FString::Printf(TEXT("and names when it arrives, to a second (worst %.2f s)"), CruiseArrival), CruiseArrival <= 1.0);
+    Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
     return true;
 }
 

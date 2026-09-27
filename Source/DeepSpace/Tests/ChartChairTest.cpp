@@ -8,6 +8,10 @@
 #include "Components/WidgetInteractionComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "EnhancedInputComponent.h"
+#include "InputAction.h"
+#include "InputCoreTypes.h"
+#include "InputMappingContext.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
@@ -297,6 +301,44 @@ bool FChartChairTest::RunTest(const FString& Parameters)
                              Target() == Orbit(Press % Worlds));
     }
     TestTrue(TEXT("from none to the innermost, outward, and round from the outermost"), bInOrder);
+
+    // Tab as the keyboard has it, not the method: IMC_Default maps the key to
+    // IA_CycleTarget, and the pawn's own Started binding of that action is
+    // what cycles. What this cannot see is Slate: under the zoom's
+    // FInputModeGameAndUI the viewport keeps keyboard focus, so Tab should
+    // reach the game rather than Slate's focus navigation -- a playtest check.
+    {
+        const UInputMappingContext* Context = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
+        const UInputAction* Cycle = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_CycleTarget.IA_CycleTarget"));
+        bool bTabIsCycle = false;
+        if (Context && Cycle)
+        {
+            for (const FEnhancedActionKeyMapping& Mapping : Context->GetMappings())
+            {
+                bTabIsCycle |= Mapping.Key == EKeys::Tab && Mapping.Action == Cycle;
+            }
+        }
+        TestTrue(TEXT("IMC_Default maps Tab to IA_CycleTarget"), bTabIsCycle);
+        // A test controller has no local player, so possession never builds
+        // the pawn's input: built here the way PawnClientRestart would.
+        UEnhancedInputComponent* Input = NewObject<UEnhancedInputComponent>(Player);
+        Player->SetupPlayerInputComponent(Input);
+        if (Cycle)
+        {
+            const TOptional<FBodyId> Was = Target();
+            int32 Fired = 0;
+            for (const TUniquePtr<FEnhancedInputActionEventBinding>& Binding : Input->GetActionEventBindings())
+            {
+                if (Binding->GetAction() == Cycle && Binding->GetTriggerEvent() == ETriggerEvent::Started)
+                {
+                    Binding->Execute(FInputActionInstance(Cycle));
+                    ++Fired;
+                }
+            }
+            TestTrue(FString::Printf(TEXT("Tab's action, as the pawn binds it, cycles the zoomed map's target (%d binding)"), Fired),
+                     Fired == 1 && Target() != Was);
+        }
+    }
 
     Player->PressInteract();
     Player->Tick(0.016f);

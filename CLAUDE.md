@@ -318,7 +318,12 @@ the ship moves whichever lever is live in its own tick. Presses are counted
 still a tap. **Each lever keeps its setting across F** (set the drive to 1
 c, drop to cruise to look round, F, and it is 1 c again); the HUD shows both,
 the live one in ink. **X stops both**, and after it the lever starts again
-from STOP: the next speed after a stop is a new choice. A key still held
+from STOP: the next speed after a stop is a new choice. The lever is at
+STOP, but a tap still counts from the ship (below), so while the ship is
+still slowing after X one Shift catches it at the notch above where it is;
+only once at rest is one Shift 1 km/s. (Open with the developer: whether
+ruling 5's "restarts from STOP" means that, or the lever from STOP however
+fast the ship still is.) A key still held
 through a stop, or from before sitting down (Shift is sprint too), moves
 nothing until it is let go. In transit the helm is inert.
 

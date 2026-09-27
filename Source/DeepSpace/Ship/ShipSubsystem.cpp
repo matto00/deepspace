@@ -693,6 +693,12 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
         Stopped.DriveNotch = 0;
         FlightState.SetCommand(Stopped);
         Helm = FHelmInput();
+
+        // And, like every other stop, nothing held through it moves a lever
+        // until it is let go and pressed again. Marked for the first hands
+        // after arrival, not spent here: the helm is emptied every frame in
+        // transit, which would clear a spent flag before the key came back.
+        bAwaitingFirstHands = true;
         break;
     }
 
@@ -1107,12 +1113,17 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
     {
         return {};
     }
-    // The braking the boosters have now and the cap's hold as the flight
-    // state is running them, so the time is the flight's own law at this
-    // moment's power, not a copy of it at full thrust.
+    // The braking the boosters have now and the cap's law as the flight
+    // state is running it, so the time is the flight's own at this moment's
+    // power, not a copy of it at full thrust. Which law depends on the lever
+    // flying: the drive (and its spool-down) holds 4 s off a floor before it
+    // brakes, while cruise brakes on the curve alone (CruiseSubStep), so a
+    // cruising ship's hold is none. With both, a starved cruise's ETA ran
+    // about a sixth short, and counted down faster than the clock.
+    const double Hold = FlightState.GetMode() == EFlightMode::Cruise ? 0.0 : FlightState.GetLimits().HoldSeconds;
     return TargetMarker::View(Here, *Target, FlightState.GetUniversePosition(), FlightState.GetUniverseOrientation(),
                               FlightState.GetVelocity(), Fix->Floor, FlightState.GetLimits().LinearAcceleration,
-                              FlightState.GetLimits().HoldSeconds, NavState.IsInTransit());
+                              Hold, NavState.IsInTransit());
 }
 
 bool UShipSubsystem::IsNearEnoughToFly(const FStarSystem& Here, const FBodyId& World) const
