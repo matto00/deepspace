@@ -342,12 +342,31 @@ laptop and the engineering console say no.
 gates it instead. It runs a line trace from the eye along the view on the
 pointer's own channel (`Visibility`), out to `InteractionRange`, ignoring the
 pawn. If the first thing hit is the widget component of an `AShipScreen`
-whose `IsDrivableSeated()` is true, the pointer is active, with its usual
-`World` source and aim. Anything else deactivates it as today and releases
-the left button. The gate decides only *whether* the pointer is on. Its own
-trace uses the same channel, eye, direction, range and ignored pawn, so it
-finds the same widget. This is the code path that already works and is
-tested for a standing player.
+whose `IsDrivableSeated()` is true, the pointer is active, aimed along the
+view. Anything else deactivates it as today and releases the left button
+(released *before* it goes off: the release goes through the pointer's
+virtual Slate user, which deactivating unregisters).
+
+*Amended as built, 2026-09-27 -- for the developer's attention.* Seated, the
+pointer is **handed the gate's own hit**: `EWidgetInteractionSource::Custom`,
+with `SetCustomHitResult` each frame, where this decision as signed off gave
+it its usual `World` source and its own trace. The premise was that the two
+traces were the same, and they are not. The pointer's own trace ignores only
+its pawn, and the helm's seated eye is *inside* `APilotSeat`'s `ReachVolume`
+-- an 80 x 70 x 130 cm box about the seat, from the floor to 130 cm, blocking
+`Visibility` so that a standing player's E can find the chair. From the helm
+the pointer's own trace met the seat it was sat in and never reached the
+map. The gate's trace ignores the chair the body is in (`FindScreenInView`),
+and handing its hit over keeps the gate and the pointer one trace, so they
+cannot disagree about what is under the view. Nothing the player does
+changes: at the helm the map is still looked at and clicked, and standing, or
+zoomed, the pointer is the `World` or `Mouse` source it always was.
+`DeepSpace.Ship.MapFromHelm` goes red under a `World` source seated -- its
+assertion that the pointer's own trace lands on the map's glass, not only
+the check on the source. The other fix, letting the seat's reach box ignore
+the pointer, was not taken: the box is what E finds the chair by, on the
+same channel, and a channel of its own is a project setting and an edit to
+every screen's collision for one trace.
 
 This keeps the old comment's reason and drops only its overreach. The pointer
 is on the left mouse button, which nothing at the helm is bound to. E is
@@ -360,10 +379,14 @@ the helm, because it does not say yes.
 The HUD's dot already turns teal over a screen (`IsPointingAtScreen`), so the
 pilot sees they can click without anything new.
 
-**Rejected: a `Custom` interaction source, handed the gate's hit with
-`SetCustomHitResult`.** It was the first draft. The gate's trace and the
-pointer's own are the same trace, so handing one to the other adds an engine
-path this project has never used and buys nothing.
+**Rejected, then taken as built: a `Custom` interaction source, handed the
+gate's hit with `SetCustomHitResult`.** It was the first draft, rejected
+because "the gate's trace and the pointer's own are the same trace, so
+handing one to the other adds an engine path this project has never used and
+buys nothing". **Superseded (as built, above):** they are not the same trace
+-- the helm's seated eye is inside the helm seat's reach box, which only the
+gate's trace ignores -- and handing the hit over is what lets the map be
+clicked from the helm at all.
 
 **Rejected: a per-instance `bDrivableFromHelm` `UPROPERTY`.** It was the first
 draft too. An `EditAnywhere` flag can be changed on one placed instance, which
@@ -1595,9 +1618,13 @@ In a world:
   collision there); not usable; its draw size is 600 x 424; drivable seated
   and zoomable from the chart chair; the chart is zoomable but not drivable
   seated, and does not zoom on sit; the laptop zooms on sit and is neither;
-  the engineering console is none of them.
+  the engineering console is none of them -- which, being true of any class
+  outside `AShipScreen` by construction, is held as behaviour by
+  `DeepSpace.Ship.ChartChair`: from the chair, a console in reach and under
+  the view is neither driven nor zoomed, and E there stands up.
 - **`DeepSpace.Ship.MapFromHelm`**: a seated pilot looking at the map has an
-  active pointer whose own last hit is the map's widget component; looking at
+  active pointer, handed the view's own trace (the `Custom` source, decision
+  2 as built), whose last hit is the map's widget component; looking at
   the chart, the pointer is inactive; the left button is released on looking
   away. As with `ScreenPointer`, it checks up to the surface, since the Slate
   hit-test grid is empty under `-nullrhi`.
@@ -1869,6 +1896,10 @@ and 13.
 
 ## Review record
 
+**Amended as built, 2026-09-27:** decision 2's pointer is handed the gate's
+hit (the `Custom` source) rather than tracing for itself; the rejected
+alternative is marked superseded, with the reason. Flagged for the developer.
+
 **Amended in place with the developer's rulings, 2026-09-26** (the amendment
 at the top): decisions 1, 2, 4, 5, 6, 7, 9 and 10 revised; decisions 12 (the
 in-system jump) and 13 (the chart chair) and *Open questions* (the cooldown)
@@ -1915,7 +1946,11 @@ kept above as rejected alternatives.
   non-countdown option added to the sign-off (decision 6, item 3).
 - **Churn.** Dropped: no `ETarget` rename, and `AltitudeWords` stays where it
   is (decision 5, the changed-files table).
-- **The custom interaction source.** Dropped (decision 2).
+- **The custom interaction source.** Dropped (decision 2). **Reinstated as
+  built, 2026-09-27**, and amended into decision 2 for the developer's
+  attention: the helm's seated eye is inside the helm seat's reach box, so
+  the pointer's own trace never reached the map, and the gate's trace, which
+  ignores the chair, is handed to it.
 - **The cache key.** The ship's position is gone from it. **Partly not
   followed:** the key holds the system id, not the jump serial. The serial
   adds nothing once the id is asked every frame, and the id catches a

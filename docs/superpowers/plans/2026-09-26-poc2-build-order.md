@@ -346,6 +346,51 @@ back and their prompts, `CycleTarget()`'s body); tests
 routine after the header change. No component changes on placed actors, so
 no level rebuild.
 
+*As built (4a):* six things differ from the map spec as written.
+
+- **Seated, the pointer is handed the gate's hit** (`EWidgetInteractionSource::Custom`
+  and `SetCustomHitResult`), which decision 2 rejected on the premise that
+  the two traces were the same. They are not: the pointer's own trace
+  ignores only its pawn, and the helm's seated eye is *inside*
+  `APilotSeat`'s reach box (40 x 35 x 65 cm about the seat, 0 to 130 cm up),
+  so from the helm it met the seat and never the map. The gate's trace
+  ignores the chair the body is in, and handing it over keeps the gate and
+  the pointer one trace. `DeepSpace.Ship.MapFromHelm` fails without either.
+  Decision 2 of the map spec is amended to say so, and flagged for the
+  developer.
+- **The button is let go before the pointer goes off.** The release goes
+  through the pointer's virtual Slate user, which deactivating unregisters,
+  so the old order (off, then release) dropped it and left the key held
+  inside the component; its next press was swallowed as a repeat. With the
+  gate this happens whenever the view slides off the map mid-press.
+- **A screen's seat puts the capsule on the floor under it**, as the helm
+  does, not on the cushion (`GetUseFloorZ`, not the use transform's height).
+  The sitting idle lifts the hips itself; on the cushion the chart chair's
+  eye was 1.8 m up. Nobody saw it while sitting always framed the screen and
+  hid the body. `DeepSpace.Ship.ChartChair` holds the chair's seated eye to
+  the helm's height. **`SeatHeightCm` is retired** with it: once the body sat
+  on the floor under the seat it moved nothing, and a tunable that does
+  nothing is a trap. It is gone from `AShipScreen`, `build_hauler.py`,
+  `verify_level.py` and CLAUDE.md; the use transform is on the floor, and
+  the cushion heights the stand-up test climbs are the props', in that test.
+- **The chair's first view is aimed from the seated eye**, not the current
+  one. E runs from input, before the frame's animation, so the head is still
+  where the standing pose left it; aimed from there the view kept a standing
+  pitch while the eye sank 40 cm, ended under the chart, and the next E
+  stood the player up. `ADeepSpaceCharacter::SeatedEyeOffset` (19, -2, 125 cm
+  from the seat's floor anchor) is the measured eye, held by
+  `SeatedEyeIsPilotEye` and, as `SEATED_EYE`, by `test_placement.py`.
+  `DeepSpace.Ship.ChartChair` sits a standing body and lets it settle.
+- **The map's sightline is validated from the chart chair too**
+  (`CHART_EYE`, `check_map_sightline`), since the chair clicks and zooms it.
+- **`IsUsingScreen()` now means a screen is framed** (the laptop, or a zoom
+  at the chart chair), which is what the HUD hides its dot for, and
+  `IsInScreenChair()` says the body is in a screen's seat. So the HUD's dot
+  shows in the chart chair unzoomed, where it is what the player aims with,
+  with no edit to `ShipHUDWidget.cpp`. E's prompt reads `Chart`, `Map`,
+  `Back` or `Stand up` (`AShipScreen::GetZoomPrompt`, a fourth virtual), and
+  the HUD prints it as `(E)  Chart`.
+
 ### 4b. HUD target overlay and ETA (the map spec's track 5, with its `ShipSky` and `sky_probe` edits)
 
 **Owns:** `UI/ShipTargetOverlay.h/.cpp` (new), `UI/ShipHUDWidget.h/.cpp` (the
@@ -415,7 +460,21 @@ depends on.
 - **Verdicts the developer gives:** `Eyes.StarGlare` (the warmth law and
   `StarSurface`, then the test and its CVar deleted), the dust knee's three
   questions, and the first playtest of the whole: the lever to 1 c, the cap,
-  the ETA, the in-system jump, the chart chair's choice and Tab.
+  the ETA, the in-system jump, the chart chair's choice and Tab. Two checks
+  in that playtest no headless test can make, named so they are not missed:
+  - **Tab on the zoomed map, pressed on the keyboard.** It reaches the pawn
+    through `IMC_Default`'s Tab mapping (`IA_CycleTarget`, Started), and
+    only while the input mode is game-and-UI with a cursor -- where Slate's
+    Tab focus navigation could take the key first (the map spec's *Risks*).
+    `DeepSpace.Ship.ChartChair` calls `CycleTarget` directly. If Tab does
+    nothing on the zoomed map, the spec's fallback applies.
+  - **The dot in the chart chair.** Looking at the chart unzoomed the dot
+    stays idle (the chart is not drivable seated, so the pointer is off),
+    and only the prompt says `(E) Chart`; looking at the map the dot turns
+    teal. The chair's two choices look different and behave the same. Whether
+    that reads as "the chart is not a choice" is the playtest's call; the
+    change, if wanted, is for the HUD to emphasise the dot whenever E's
+    prompt names a zoom.
 - **CLAUDE.md**, after the merges: the flight-feel spec's *Documentation*
   list, and the map spec's *The system map* section (the screen, the seated
   pointer, the chart chair and Tab, the in-system jump, the live ETA, the two

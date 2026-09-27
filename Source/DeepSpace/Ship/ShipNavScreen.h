@@ -12,6 +12,10 @@ class UInteractableComponent;
  * beside the helm. Choosing and engaging happen here; aiming happens at the
  * helm, which carries everything aiming needs (nav decisions 3 and 7).
  *
+ * Its chair is a seat, not a lock (system map spec, decision 13): E at the
+ * chart sits the player down with the view still their own, and E looking at
+ * the chart, or at the map beside it, zooms that one.
+ *
  * Visited once per jump, to choose. Two chairs side by side look like two
  * stations and are not: nothing here needs, or benefits from, someone in the
  * other chair (docs/vision.md, shared presence, not division of labour).
@@ -30,6 +34,14 @@ public:
 
     UInteractableComponent* GetInteractable() const { return Interactable; }
     UBoxComponent* GetReach() const { return Reach; }
+
+    /** Sitting here no longer frames the chart (decision 13): the chair sits
+     *  beside the map too, and the seated player chooses. E, looking at
+     *  either, zooms it. Not drivable seated: it is read from its own chair,
+     *  zoomed, never from the helm. */
+    virtual bool ZoomsOnSit() const override { return false; }
+    virtual bool IsZoomableFromChartChair() const override { return true; }
+    virtual FText GetZoomPrompt() const override;
 
 protected:
     virtual void OnConstruction(const FTransform& Transform) override;

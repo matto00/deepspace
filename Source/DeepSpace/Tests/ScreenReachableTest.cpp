@@ -6,6 +6,8 @@
 #include "Misc/AutomationTest.h"
 #include "Ship/ShipConsole.h"
 #include "Ship/ShipLaptop.h"
+#include "Ship/ShipMapScreen.h"
+#include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -22,7 +24,8 @@ namespace
      * draws perfectly but sits a hair inside its own casing fails here,
      * which is the whole point: both screens have shipped that way once.
      */
-    void CheckReachable(FAutomationTestBase& Test, AActor* Owner, UWidgetComponent* Panel, const TCHAR* What)
+    void CheckReachable(FAutomationTestBase& Test, AActor* Owner, UWidgetComponent* Panel, const TCHAR* What,
+                        const TOptional<FVector>& FromEye = {})
     {
         if (!Test.TestNotNull(FString::Printf(TEXT("%s has a panel"), What), Panel))
         {
@@ -39,7 +42,8 @@ namespace
         // a lid leaning away only occludes the upper part of its own panel,
         // so the bug that shipped survives a single centre shot.
         const FVector Centre = Panel->GetComponentLocation();
-        const FVector Eye = Centre + Normal * 60.0 + FVector(0.0, 0.0, 40.0);
+        // Or, for a screen used from a seat, that seat's eye.
+        const FVector Eye = FromEye.Get(Centre + Normal * 60.0 + FVector(0.0, 0.0, 40.0));
 
         // Sample the corners as well as the middle, inset so the very edge
         // of the quad is not what decides the result.
@@ -76,7 +80,8 @@ namespace
             FirstBlocker.IsEmpty() ? TEXT("-") : *FirstBlocker));
 
         Test.TestEqual(
-            FString::Printf(TEXT("%s: every part of the screen is reachable from where a player stands"), What),
+            FString::Printf(TEXT("%s: every part of the screen is reachable from where a player %s"), What,
+                            FromEye.IsSet() ? TEXT("sits") : TEXT("stands")),
             Blocked, 0);
 
         // A non-uniform scale reaching the panel squashes the quad and its
@@ -108,9 +113,14 @@ bool FScreenReachableTest::RunTest(const FString& Parameters)
         return false;
     }
 
-    // Far apart, so neither can be what the other's trace hits.
+    // Far apart, so none can be what another's trace hits. The map where
+    // the layout puts it, the middle desk screen, so it can be traced from
+    // the helm's eye (system map spec, decision 2): the pilot drives it from
+    // the seat, so every part of it must be the first thing the pilot's
+    // pointer meets from there.
     AShipLaptop* Laptop = World->SpawnActor<AShipLaptop>(FVector(0.0, 0.0, 0.0), FRotator::ZeroRotator);
     AShipConsole* Console = World->SpawnActor<AShipConsole>(FVector(0.0, 5000.0, 0.0), FRotator::ZeroRotator);
+    AShipMapScreen* Map = World->SpawnActor<AShipMapScreen>(FVector(1711.0, 0.0, 105.0), FRotator::ZeroRotator);
 
     if (TestNotNull(TEXT("the laptop spawns"), Laptop))
     {
@@ -147,6 +157,11 @@ bool FScreenReachableTest::RunTest(const FString& Parameters)
         }
         Console->RerunConstructionScripts();
         CheckReachable(*this, Console, Console->GetScreen(), TEXT("console"));
+    }
+    if (TestNotNull(TEXT("the map spawns"), Map))
+    {
+        CheckReachable(*this, Map, Map->GetScreen(), TEXT("map, from the helm"), SkyTestWorld::PilotEye);
+        CheckReachable(*this, Map, Map->GetScreen(), TEXT("map"));
     }
 
     GEngine->DestroyWorldContext(World);

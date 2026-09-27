@@ -46,15 +46,18 @@ public:
     EPosture GetPosture() const;
 
     /**
-     * Sit down at a screen: the body takes a seat in front of it, the camera
-     * frames it, and the mouse becomes a cursor that drives it.
+     * Sit down at a screen: the body takes the seat in front of it. A screen
+     * that ZoomsOnSit -- the laptop -- is framed at once, the mouse becoming a
+     * cursor that drives it. One that does not -- the chart -- leaves the
+     * view the player's, within the seated limits, and E then zooms whichever
+     * zoomable screen the view is on (system map spec, decision 13).
      *
-     * This is the one place a screen stops being something you aim at. The
-     * spec's decision 1 kept every screen a surface in the room driven by the
-     * view, and in play the laptop's sliders were too fiddly to aim at; the
-     * answer was to sit the player down rather than to make it a menu. The
-     * galley stays visible around it and nothing pauses -- see the spec's
-     * second addendum.
+     * Zooming is the one place a screen stops being something you aim at.
+     * The spec's decision 1 kept every screen a surface in the room driven by
+     * the view, and in play the laptop's sliders were too fiddly to aim at;
+     * the answer was to sit the player down rather than to make it a menu.
+     * The galley stays visible around it and nothing pauses -- see the
+     * spec's second addendum.
      */
     void UseScreen(AShipScreen* Screen);
 
@@ -64,8 +67,22 @@ public:
      */
     void StopUsingScreen();
 
+    /**
+     * True while a screen is framed and the mouse is a cursor over it: sat
+     * at the laptop, or zoomed at the chart chair. What the HUD hides its dot
+     * for. Sat in the chart chair unzoomed is not using a screen -- the view
+     * is the player's and the dot is what they aim with; IsInScreenChair
+     * says where the body is.
+     */
     UFUNCTION(BlueprintPure, Category = "Interaction")
-    bool IsUsingScreen() const { return UsedScreen != nullptr; }
+    bool IsUsingScreen() const { return ZoomedScreen.IsValid(); }
+
+    /** True while the body is in a screen's seat -- the laptop's bench or the
+     *  chart chair -- zoomed or not. */
+    bool IsInScreenChair() const { return UsedScreen != nullptr; }
+
+    /** The screen framed now, or null. */
+    AShipScreen* GetZoomedScreen() const { return ZoomedScreen.Get(); }
 
     /** Sit at the helm: movement off, camera limited, the ship piloted. */
     void SitIn(APilotSeat* NewSeat);
@@ -91,6 +108,18 @@ public:
 
     /** Where the eyes are in the world. */
     FVector GetEyeLocation() const;
+
+    /**
+     * Where a seated body's eyes settle, cm, from its seat's anchor on the
+     * floor, in the seat's own frame: (forward, starboard, up). Measured,
+     * not chosen -- the sitting idle's head, through PlaceCamera -- and held
+     * to that by DeepSpace.Player.SeatedEyeIsPilotEye, and to the layout's
+     * SEATED_EYE by test_placement.py. Every seat places the body the same
+     * way, on the floor with the idle lifting the hips, so this is every
+     * seat's eye. UseScreen aims the chart chair's first view from here,
+     * because when it runs the head is still where the standing pose left it.
+     */
+    static const FVector SeatedEyeOffset;
 
     /** The window shape a screen is framed for, and the axis it keeps. */
     struct FFramingView
@@ -135,12 +164,18 @@ public:
     /** What the stop key does (X): all stop, both levers. */
     void PressStop();
 
+    /** What E does, exposed so a test can press it without an input stack:
+     *  at the chart chair it zooms, goes back and stands up by what the view
+     *  is on (decision 13). */
+    void PressInteract() { TryInteract(); }
+
     /**
      * What Tab does (IA_CycleTarget): the next world in the system as the
-     * target, while the map is zoomed at the chart chair (the system map
-     * spec's decision 13). Bound now, with the lever actions, so the
-     * character's Blueprint is recompiled once for all the new input; it does
-     * nothing until the zoomed map exists to give it meaning.
+     * target (UShipSubsystem::CycleTarget), and only while the map is zoomed
+     * at the chart chair, where it is the map in front of the player that
+     * picks (the system map spec's decision 13). At the helm, unzoomed, or
+     * zoomed on the chart, it does nothing: "pilot just has look and click
+     * control of map". Not pilot-gated, like every pick.
      */
     void CycleTarget();
 
@@ -349,11 +384,11 @@ private:
     void SetViewLimits(bool bSeated, float SeatYaw);
 
     /**
-     * Sets the camera's field of view to frame the screen sat at, whole, in
+     * Sets the camera's field of view to frame the zoomed screen, whole, in
      * the viewport as it is now. Asked of the screen every frame rather than
-     * fixed at sitting down, so a window resized mid-read still fits.
+     * fixed at zooming, so a window resized mid-read still fits.
      */
-    void FrameUsedScreen();
+    void FrameZoomedScreen();
 
     /**
      * Where to stand up from a screen: the capsule's centre, on the floor
@@ -371,8 +406,31 @@ private:
     void UpdateFocusedInteractable();
 
     /** Aims the pointer along the view and switches it off when it cannot be
-     *  used -- seated, or with no screen in reach. */
+     *  used: seated, unless the view is on a screen that IsDrivableSeated. */
     void UpdatePointer();
+
+    /**
+     * The screen the view is on, if it is the first thing a trace from the
+     * eyes along the view meets -- on the pointer's channel, out to its
+     * reach, ignoring this pawn and the chair it sits in -- with the hit
+     * itself in OutHit. Seated, this trace *is* the pointer's (UpdatePointer
+     * hands it over), and E at the chart chair zooms what it finds, so what
+     * E zooms is what the pointer is on.
+     */
+    AShipScreen* FindScreenInView(FHitResult* OutHit = nullptr) const;
+
+    /** Frames Screen from the seat the body is in: the camera to its view
+     *  transform, the mouse a cursor over it, the body hidden, a cut. */
+    void ZoomScreen(AShipScreen* Screen);
+
+    /** Back to the seat from a zoom: the view the player's again, where it
+     *  was before the zoom, and a cut. The body stays in the chair. */
+    void Unzoom();
+
+    /** Undoes everything ZoomScreen did to the controller, the pointer, the
+     *  camera and the body, without placing the view: shared by Unzoom and
+     *  by standing up, which places it itself. */
+    void ReleaseZoom();
 
     /**
      * Drives world screens. Traces along the view out to InteractionRange, so
@@ -394,9 +452,23 @@ private:
     UPROPERTY()
     TObjectPtr<UUserWidget> HUDWidget;
 
-    /** The screen we are sat at, or null. */
+    /** The screen whose seat the body is in, or null. */
     UPROPERTY()
     TObjectPtr<AShipScreen> UsedScreen;
+
+    /**
+     * The screen framed, or null: UsedScreen when it ZoomsOnSit, or whichever
+     * of the chart and the map E zoomed from the chart chair. Not reflected,
+     * so BP_DeepSpaceCharacter's saved layout does not change for it; weak,
+     * so a screen destroyed while framed leaves nothing dangling. Every
+     * framing function reads this, never UsedScreen.
+     */
+    TWeakObjectPtr<AShipScreen> ZoomedScreen;
+
+    /** Where the view was when the chart chair zoomed, so going back looks
+     *  where the player was looking. The pawn's own memory, like
+     *  StandingFeet. */
+    FRotator UnzoomedView = FRotator::ZeroRotator;
 
     /**
      * Where the feet were when the player sat down at a screen, so standing

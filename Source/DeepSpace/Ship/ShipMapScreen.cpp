@@ -21,3 +21,8 @@ AShipMapScreen::AShipMapScreen()
     Screen->SetWidgetClass(USystemMapWidget::StaticClass());
     SetPanelWidthCm(PanelWidthCm);
 }
+
+FText AShipMapScreen::GetZoomPrompt() const
+{
+    return NSLOCTEXT("DeepSpace", "ZoomMap", "Map");
+}

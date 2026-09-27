@@ -4,6 +4,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Components/WidgetInteractionComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -13,6 +14,7 @@
 #include "Player/MovementRules.h"
 #include "Ship/InteractableComponent.h"
 #include "Ship/PilotSeat.h"
+#include "Ship/ShipMapScreen.h"
 #include "Ship/ShipScreen.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/ShipHUDWidget.h"
@@ -162,6 +164,10 @@ void ADeepSpaceCharacter::ConfigureFirstPersonBody()
     }
 }
 
+// 19 cm forward of the anchor, 2 to port, 125 up: what the sitting idle does
+// with the head, measured (DeepSpace.Player.SeatedEyeIsPilotEye).
+const FVector ADeepSpaceCharacter::SeatedEyeOffset(19.0, -2.0, 125.0);
+
 void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRotation)
 {
     const USkeletalMeshComponent* Body = GetMesh();
@@ -170,13 +176,14 @@ void ADeepSpaceCharacter::PlaceCamera(float DeltaSeconds, const FRotator& ViewRo
         return;
     }
 
-    // Sat at a screen the camera leaves the head entirely and frames the
-    // panel. Rotation still comes from the controller, which UseScreen
-    // pointed at the screen and IgnoreLookInput now holds there.
-    if (UsedScreen)
+    // Zoomed on a screen the camera leaves the head entirely and frames the
+    // panel. Rotation still comes from the controller, which ZoomScreen
+    // pointed at the screen and IgnoreLookInput now holds there. In the chart
+    // chair unzoomed it rides the head, as at the helm.
+    if (const AShipScreen* Zoomed = ZoomedScreen.Get())
     {
-        FirstPersonCamera->SetWorldLocation(UsedScreen->GetViewTransform().GetLocation());
-        FrameUsedScreen();
+        FirstPersonCamera->SetWorldLocation(Zoomed->GetViewTransform().GetLocation());
+        FrameZoomedScreen();
         return;
     }
 
@@ -235,22 +242,53 @@ void ADeepSpaceCharacter::UpdatePointer()
         return;
     }
 
-    // Seated, the controls are the ship's and E means "stand up"; a pointer
-    // live at the helm would fight both.
-    const bool bAllowed = !IsSeated();
     if (IsUsingScreen())
     {
         // Mouse source ignores the component's transform, so there is
-        // nothing to aim; just leave it switched on.
+        // nothing to aim; ZoomScreen switched it on, and it stays on.
         return;
+    }
+
+    // Seated -- at the helm, or in the chart chair with nothing zoomed --
+    // the keys are the ship's and E means the seat's business, and a pointer
+    // live on any screen in reach would find the chart from the helm, two
+    // metres off and sized for its own chair. So seated it is live only on
+    // a screen that says it is drivable seated: the map (system map spec,
+    // decision 2). The left button is bound to nothing else at a seat, so a
+    // live pointer fights nothing.
+    //
+    // Seated, the pointer is handed the gate's own hit (the Custom source)
+    // rather than tracing for itself. Its own trace ignores only this pawn,
+    // and the helm's eye is inside the helm seat's reach box -- the box that
+    // lets a standing player's E find the chair -- so from the helm its own
+    // trace met the seat and never reached the map. The gate's trace ignores
+    // the chair too; handing it over means the gate and the pointer cannot
+    // disagree about what is under the view.
+    const bool bSeated = IsSeated() || IsInScreenChair();
+    bool bAllowed = true;
+    FHitResult Hit;
+    if (bSeated)
+    {
+        const AShipScreen* InView = FindScreenInView(&Hit);
+        bAllowed = InView && Hit.GetComponent() == InView->GetScreen() && InView->IsDrivableSeated();
     }
     if (Pointer->IsActive() != bAllowed)
     {
-        bAllowed ? Pointer->Activate() : Pointer->Deactivate();
-        if (!bAllowed)
+        if (bAllowed)
         {
-            // Never leave a button held down because the player sat down.
+            Pointer->Activate();
+        }
+        else
+        {
+            // Never leave a button held down because the view left the map
+            // or the player sat down -- and release it *before* switching
+            // off: the release goes through the pointer's virtual Slate
+            // user, which deactivating unregisters, so a release after it is
+            // dropped and the key stays down inside the component. Its next
+            // press is then swallowed as a repeat, and a click on the map is
+            // lost each time the view slid off it mid-press.
             Pointer->ReleasePointerKey(EKeys::LeftMouseButton);
+            Pointer->Deactivate();
         }
     }
     if (!bAllowed)
@@ -263,6 +301,44 @@ void ADeepSpaceCharacter::UpdatePointer()
     // across the room.
     Pointer->InteractionDistance = InteractionRange;
     Pointer->SetWorldLocationAndRotation(GetEyeLocation(), GetViewRotation());
+    Pointer->InteractionSource = bSeated ? EWidgetInteractionSource::Custom : EWidgetInteractionSource::World;
+    if (bSeated)
+    {
+        Pointer->SetCustomHitResult(Hit);
+    }
+}
+
+AShipScreen* ADeepSpaceCharacter::FindScreenInView(FHitResult* OutHit) const
+{
+    FHitResult Local;
+    FHitResult& Hit = OutHit ? *OutHit : Local;
+    Hit = FHitResult();
+    const UWorld* World = GetWorld();
+    if (!World)
+    {
+        return nullptr;
+    }
+
+    // The pointer's trace: from the eyes along the view, on its channel
+    // (Visibility), out to InteractionRange, ignoring this pawn -- and the
+    // chair it is sat in, whose reach box encloses a seated pilot's eyes and
+    // would otherwise be the first thing every look from the helm met.
+    const FVector Start = GetEyeLocation();
+    const FVector End = Start + GetViewRotation().Vector() * InteractionRange;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(ScreenInView), false, this);
+    if (Seat)
+    {
+        Params.AddIgnoredActor(Seat);
+    }
+    if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
+    {
+        // What a pointer handed this hit must see as a miss, still with the
+        // line it traced along.
+        Hit.TraceStart = Start;
+        Hit.TraceEnd = End;
+        return nullptr;
+    }
+    return Cast<AShipScreen>(Hit.GetActor());
 }
 
 bool ADeepSpaceCharacter::IsPointingAtScreen() const
@@ -389,9 +465,18 @@ void ADeepSpaceCharacter::PressStop()
 
 void ADeepSpaceCharacter::CycleTarget()
 {
-    // The zoomed map at the chart chair is what gives Tab a meaning (the
-    // system map spec's decision 13), and neither exists yet. Deliberately
-    // empty, and deliberately bound: the key reaches here already.
+    // Only on the zoomed map, which is where picking happens: the key then
+    // walks the rows the player is looking at. At the helm the map is look
+    // and click (decision 2), and Tab takes no key from a helm with little
+    // room left; zoomed on the chart it would change a thing not on screen.
+    if (!Cast<AShipMapScreen>(ZoomedScreen.Get()))
+    {
+        return;
+    }
+    if (UShipSubsystem* Ship = UShipSubsystem::Get(this))
+    {
+        Ship->CycleTarget();
+    }
 }
 
 void ADeepSpaceCharacter::SetFlightInput(const FVector& Attitude)
@@ -501,7 +586,7 @@ void ADeepSpaceCharacter::UpdateWalkSpeed()
 
 EPosture ADeepSpaceCharacter::GetPosture() const
 {
-    if (IsSeated() || IsUsingScreen())
+    if (IsSeated() || IsInScreenChair())
     {
         return EPosture::Seated;
     }
@@ -514,7 +599,7 @@ EPosture ADeepSpaceCharacter::GetPosture() const
 
 void ADeepSpaceCharacter::SitIn(APilotSeat* NewSeat)
 {
-    if (!NewSeat || IsSeated())
+    if (!NewSeat || IsSeated() || IsInScreenChair())
     {
         return;
     }
@@ -554,7 +639,7 @@ void ADeepSpaceCharacter::SitIn(APilotSeat* NewSeat)
 
 void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
 {
-    if (!Screen || !Screen->IsUsable() || IsSeated() || IsUsingScreen())
+    if (!Screen || !Screen->IsUsable() || IsSeated() || IsInScreenChair())
     {
         return;
     }
@@ -575,17 +660,70 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     GetCharacterMovement()->DisableMovement();
     SetActorEnableCollision(false);
 
+    // The capsule stands on the floor under the seat, not on its cushion:
+    // the sitting idle is posed against the helm, whose anchor is on the
+    // floor, and it lifts the hips onto the chair itself. On the cushion the
+    // body sat a cushion's height above the chair with its eyes at 1.8 m --
+    // unseen while sitting always framed the screen and hid the body, and
+    // plain once the chart chair left the view the player's own.
     const FTransform UsePose = Screen->GetUseTransform();
+    const float SeatYaw = UsePose.Rotator().Yaw;
+    const FVector Anchor(UsePose.GetLocation().X, UsePose.GetLocation().Y, Screen->GetUseFloorZ());
     SetActorLocationAndRotation(
-        UsePose.GetLocation() + FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
-        FRotator(0.0f, UsePose.Rotator().Yaw, 0.0f));
+        Anchor + FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
+        FRotator(0.0f, SeatYaw, 0.0f));
     bUseControllerRotationYaw = false;
+
+    // A seat's limits, as at the helm: the head turns, the body does not.
+    SetViewLimits(true, SeatYaw);
+
+    if (Screen->ZoomsOnSit())
+    {
+        ZoomScreen(Screen);
+        return;
+    }
+
+    // The chart chair: sat, and the view still the player's (decision 13).
+    // It starts on the screen sat at, so choosing that one is one press, as
+    // it was when sitting framed it, and choosing the map beside it is a
+    // glance and the same press.
+    //
+    // Aimed from where the eyes will settle, not from where they are. This
+    // runs from input, before the frame's animation, so the head is still
+    // where the standing pose put it: aimed from there, the view kept a
+    // standing eye's pitch while the body sat and the eye dropped 40 cm,
+    // ended under the chart, and E -- pressed again to read it -- stood the
+    // player straight back up. The eye then settles onto the head as it
+    // always does, damped, and the view -- held -- is on the glass once it
+    // has.
+    const FVector SeatedEye = Anchor + FRotator(0.0f, SeatYaw, 0.0f).RotateVector(SeatedEyeOffset);
+    const FVector Glass = Screen->GetScreen() ? Screen->GetScreen()->GetComponentLocation() : Screen->GetActorLocation();
+    const FRotator OnScreen = (Glass - SeatedEye).Rotation();
+    if (Controller)
+    {
+        Controller->SetControlRotation(OnScreen);
+    }
+    bEyeHeightSettled = false;
+    PlaceCamera(0.0f, OnScreen);
+    MarkCameraCut();
+}
+
+void ADeepSpaceCharacter::ZoomScreen(AShipScreen* Screen)
+{
+    if (!Screen || !IsInScreenChair() || IsUsingScreen())
+    {
+        return;
+    }
+
+    UnzoomedView = GetViewRotation();
+    ZoomedScreen = Screen;
+    const FRotator Framed = Screen->GetViewTransform().Rotator();
 
     if (APlayerController* PC = Cast<APlayerController>(Controller))
     {
         // The view is framed and stays framed: the mouse is a cursor now, so
         // letting it also turn the head would fight every attempt to click.
-        PC->SetControlRotation(Screen->GetViewTransform().Rotator());
+        PC->SetControlRotation(Framed);
         PC->SetIgnoreLookInput(true);
 
         PC->bShowMouseCursor = true;
@@ -599,14 +737,19 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     {
         // Mouse source deprojects the cursor instead of tracing along the
         // view, which is the whole point: the pointer goes where the cursor
-        // is rather than where the head is.
+        // is rather than where the head is. On, whatever the seated gate
+        // last said: the chart is zoomable and never drivable seated.
         Pointer->InteractionSource = EWidgetInteractionSource::Mouse;
+        if (!Pointer->IsActive())
+        {
+            Pointer->Activate();
+        }
     }
 
     // The camera goes to the screen now, in the same frame the cut is
     // marked, rather than on the next tick: a cut marked a frame early is
     // spent on a frame that did not jump, and the jump then smears.
-    PlaceCamera(0.0f, Screen->GetViewTransform().Rotator());
+    PlaceCamera(0.0f, Framed);
     MarkCameraCut();
 
     // The framed camera sits in front of the face, which is behind the body's
@@ -618,14 +761,65 @@ void ADeepSpaceCharacter::UseScreen(AShipScreen* Screen)
     }
 }
 
-void ADeepSpaceCharacter::StopUsingScreen()
+void ADeepSpaceCharacter::ReleaseZoom()
+{
+    // Explicitly null, not merely invalid: a framed screen destroyed while
+    // framed must still give the controller its look input back.
+    if (ZoomedScreen.IsExplicitlyNull())
+    {
+        return;
+    }
+    ZoomedScreen.Reset();
+
+    if (APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        PC->SetIgnoreLookInput(false);
+        PC->bShowMouseCursor = false;
+        PC->SetInputMode(FInputModeGameOnly());
+    }
+    if (Pointer)
+    {
+        Pointer->InteractionSource = EWidgetInteractionSource::World;
+    }
+    if (FirstPersonCamera)
+    {
+        FirstPersonCamera->SetFieldOfView(FieldOfView);
+    }
+    if (USkeletalMeshComponent* Body = GetMesh())
+    {
+        Body->SetVisibility(true, true);
+    }
+}
+
+void ADeepSpaceCharacter::Unzoom()
 {
     if (!IsUsingScreen())
     {
         return;
     }
+    ReleaseZoom();
+
+    // Looking where the player looked before the zoom, which was the screen
+    // they zoomed: back in the chair, one glance from either screen. The
+    // eyes go back to the head now, with a cut, as standing up does.
+    if (Controller)
+    {
+        Controller->SetControlRotation(UnzoomedView);
+    }
+    bEyeHeightSettled = false;
+    PlaceCamera(0.0f, UnzoomedView);
+    MarkCameraCut();
+}
+
+void ADeepSpaceCharacter::StopUsingScreen()
+{
+    if (!IsInScreenChair())
+    {
+        return;
+    }
 
     const FRotator Facing = GetActorRotation();
+    ReleaseZoom();
 
     // Found before collision comes back, though it would not matter: every
     // query here ignores this actor. What matters is that it is found at all
@@ -657,30 +851,15 @@ void ADeepSpaceCharacter::StopUsingScreen()
     SetActorEnableCollision(true);
     GetCharacterMovement()->SetMovementMode(MOVE_Walking);
     bUseControllerRotationYaw = true;
+    SetViewLimits(false, 0.0f);
 
-    if (APlayerController* PC = Cast<APlayerController>(Controller))
+    // Stand up looking where the body faces, not where the view was
+    // pointing, which was tilted down at a screen. ReleaseZoom has already
+    // given back the look input, the pointer, the angle and the body, if a
+    // screen was framed.
+    if (Controller)
     {
-        PC->SetIgnoreLookInput(false);
-        PC->bShowMouseCursor = false;
-        PC->SetInputMode(FInputModeGameOnly());
-        // Stand up looking where the body faces, not where the framed view
-        // was pointing, which was tilted down at a screen.
-        PC->SetControlRotation(FRotator(0.0f, Facing.Yaw, 0.0f));
-    }
-
-    if (Pointer)
-    {
-        Pointer->InteractionSource = EWidgetInteractionSource::World;
-    }
-
-    if (FirstPersonCamera)
-    {
-        FirstPersonCamera->SetFieldOfView(FieldOfView);
-    }
-
-    if (USkeletalMeshComponent* Body = GetMesh())
-    {
-        Body->SetVisibility(true, true);
+        Controller->SetControlRotation(FRotator(0.0f, Facing.Yaw, 0.0f));
     }
 
     // The camera is attached to the capsule and was framing the screen, so
@@ -730,9 +909,10 @@ ADeepSpaceCharacter::FFramingView ADeepSpaceCharacter::ResolveFramingView(
     return View;
 }
 
-void ADeepSpaceCharacter::FrameUsedScreen()
+void ADeepSpaceCharacter::FrameZoomedScreen()
 {
-    if (!UsedScreen || !FirstPersonCamera)
+    const AShipScreen* Zoomed = ZoomedScreen.Get();
+    if (!Zoomed || !FirstPersonCamera)
     {
         return;
     }
@@ -750,7 +930,7 @@ void ADeepSpaceCharacter::FrameUsedScreen()
 
     const FFramingView View = ResolveFramingView(ViewportSize, Constraint, *FirstPersonCamera);
     FirstPersonCamera->SetFieldOfView(
-        UsedScreen->GetUseFieldOfView(View.Aspect, View.Constraint, FirstPersonCamera->AspectRatio));
+        Zoomed->GetUseFieldOfView(View.Aspect, View.Constraint, FirstPersonCamera->AspectRatio));
 }
 
 TOptional<FVector> ADeepSpaceCharacter::FindStandingSpot() const
@@ -957,8 +1137,10 @@ void ADeepSpaceCharacter::UpdateFocusedInteractable()
 {
     FocusedInteractable = nullptr;
 
-    // Seated, E means "stand up" whatever the player is looking at.
-    if (!FirstPersonCamera || IsSeated())
+    // Seated, E means the seat's business whatever the player is looking
+    // at: stand up at the helm, and zoom, go back or stand up in a screen's
+    // chair (TryInteract).
+    if (!FirstPersonCamera || IsSeated() || IsInScreenChair())
     {
         return;
     }
@@ -989,9 +1171,34 @@ void ADeepSpaceCharacter::UpdateFocusedInteractable()
 
 void ADeepSpaceCharacter::TryInteract()
 {
-    if (IsUsingScreen())
+    // In a screen's chair (decision 13). Zoomed, E goes back to the seat --
+    // except at a screen that zooms on sit, the laptop, where the zoom is the
+    // sitting and E stands up as it always has. Unzoomed, E zooms the
+    // zoomable screen the view is on, and on neither it stands up. Choosing
+    // is one press, switching screens two and a glance, leaving two.
+    if (IsInScreenChair())
     {
-        StopUsingScreen();
+        if (IsUsingScreen())
+        {
+            if (UsedScreen->ZoomsOnSit())
+            {
+                StopUsingScreen();
+            }
+            else
+            {
+                Unzoom();
+            }
+            return;
+        }
+        AShipScreen* InView = FindScreenInView();
+        if (InView && InView->IsZoomableFromChartChair())
+        {
+            ZoomScreen(InView);
+        }
+        else
+        {
+            StopUsingScreen();
+        }
         return;
     }
 
@@ -1013,7 +1220,24 @@ UInteractableComponent* ADeepSpaceCharacter::GetFocusedInteractable() const
 
 FText ADeepSpaceCharacter::GetCurrentPrompt() const
 {
-    if (IsSeated() || IsUsingScreen())
+    // Says what E will do, which in a screen's chair TryInteract decides.
+    if (IsInScreenChair())
+    {
+        if (IsUsingScreen() && !UsedScreen->ZoomsOnSit())
+        {
+            return NSLOCTEXT("DeepSpace", "Unzoom", "Back");
+        }
+        if (!IsUsingScreen())
+        {
+            const AShipScreen* InView = FindScreenInView();
+            if (InView && InView->IsZoomableFromChartChair())
+            {
+                return InView->GetZoomPrompt();
+            }
+        }
+        return NSLOCTEXT("DeepSpace", "StandUp", "Stand up");
+    }
+    if (IsSeated())
     {
         return NSLOCTEXT("DeepSpace", "StandUp", "Stand up");
     }

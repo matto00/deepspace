@@ -10,6 +10,7 @@
 #include "Misc/OutputDeviceNull.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipFlightState.h"
+#include "Ship/ShipLaptop.h"
 #include "Ship/ShipMapScreen.h"
 #include "Ship/ShipNavScreen.h"
 #include "Sky/LocalSystem.h"
@@ -664,6 +665,23 @@ bool FShipMapScreenTest::RunTest(const FString& Parameters)
                                                            ECC_Visibility, Params);
     TestTrue(TEXT("a trace from the helm's eye lands on the map's glass"), bHit && Hit.GetComponent() == Panel);
     TestTrue(TEXT("its face looks aft, toward the chairs"), Panel->GetComponentTransform().GetUnitAxis(EAxis::X).X < -0.99);
+
+    // What a seat may do with each screen (decisions 2 and 13), a class
+    // decision each, asked of the classes the level places.
+    TestTrue(TEXT("the map is drivable seated: the helm looks and clicks"), Screen->IsDrivableSeated());
+    TestTrue(TEXT("and zoomable from the chart chair"), Screen->IsZoomableFromChartChair());
+    TestEqual(TEXT("where E calls it the map"), Screen->GetZoomPrompt().ToString(), FString(TEXT("Map")));
+    TestFalse(TEXT("the chart is not drivable seated: never from the helm"), Chart->IsDrivableSeated());
+    TestTrue(TEXT("it is zoomable from its chair"), Chart->IsZoomableFromChartChair());
+    TestFalse(TEXT("and sitting at it no longer zooms it"), Chart->ZoomsOnSit());
+    TestEqual(TEXT("where E calls it the chart"), Chart->GetZoomPrompt().ToString(), FString(TEXT("Chart")));
+    const AShipScreen* Laptop = GetDefault<AShipLaptop>();
+    TestTrue(TEXT("the laptop still zooms as you sit"), Laptop->ZoomsOnSit());
+    TestFalse(TEXT("and is neither drivable seated"), Laptop->IsDrivableSeated());
+    TestFalse(TEXT("nor zoomable from the chart chair"), Laptop->IsZoomableFromChartChair());
+    // That the engineering console, a world screen but no ship screen, is
+    // neither is behaviour, not a class fact: DeepSpace.Ship.ChartChair looks
+    // at one from the chair.
     return true;
 }
 

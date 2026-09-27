@@ -303,7 +303,7 @@ def check_nav_screen(ship, every, actors):
         failures.append("the chart is rotated (%.1f, %.1f, %.1f); the layout says yaw %s"
                         % (r.pitch, r.yaw, r.roll, ship.nav_screen_yaw))
     failures += check_proud(ship, actors, chart, ship.nav_screen_location, "chart")
-    for name, want in (("use_distance_cm", 126.0), ("seat_height_cm", 55.0),
+    for name, want in (("use_distance_cm", float(L.NAV_SCREEN_USE_DISTANCE)),
                        ("view_distance_cm", 60.0)):
         got = chart.get_editor_property(name)
         if abs(got - want) > 1e-3:
