@@ -779,17 +779,19 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
 void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
                     FOutputDevice& Out)
 {
-    // A trailing "night" asks for the far side from the star; it is taken
-    // off before the rest is read, so a body named "night" still needs its
-    // altitude after it.
+    // A trailing "night" asks for the far side from the star, and is always
+    // taken off before the rest is read: "1 night", its altitude forgotten,
+    // is then the usage, never night read as 0 km, onto the surface.
     TConstArrayView<FString> Rest = Args;
     ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
-    if (Rest.Num() >= 3 && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
+    if (Rest.Num() >= 1 && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
         Side = ShipSky::EGotoSide::Night;
         Rest = Rest.Slice(0, Rest.Num() - 1);
     }
-    if (Rest.Num() < 2)
+    // The altitude must be a number: a body's name has spaces in it, so a
+    // forgotten altitude would otherwise read the name's last word as 0 km.
+    if (Rest.Num() < 2 || !FCString::IsNumeric(*Rest.Last()))
     {
         Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night]: onto the body's day side, or its night side, ")
                 TEXT("facing it. Bodies:"));

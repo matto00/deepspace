@@ -731,6 +731,9 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         const FUniversePosition AtNight = Ship->GetFlightState().GetUniversePosition();
         AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("150"), TEXT("night") }, Quiet);
         TestTrue(TEXT("night with no body is only the usage, and goes nowhere"), Ship->GetFlightState().GetUniversePosition() == AtNight);
+        AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("Fixture"), TEXT("IIa"), TEXT("night") }, Quiet);
+        TestTrue(TEXT("night with its altitude forgotten is the usage too, never 0 km onto the surface"),
+            Ship->GetFlightState().GetUniversePosition() == AtNight);
     }
 
     return true;
