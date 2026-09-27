@@ -36,4 +36,14 @@ namespace UniverseUnits
 
     /** IAU 2015 nominal solar effective temperature. */
     inline constexpr double SolarTemperatureK = 5772.0;
+
+    /** IAU 2015 nominal solar mass parameter GM, cm^3/s^2 (1.3271244e20
+     *  m^3/s^2). A definition, like the radii above: the product is known far
+     *  better than G or the mass alone (landing decision 4). */
+    inline constexpr double GMSunCm3PerS2 = 1.3271244e26;
+
+    /** IAU 2015 nominal terrestrial mass parameter GM, cm^3/s^2 (3.986004e14
+     *  m^3/s^2). Its ratio to the Sun's agrees with EarthMassSolar to 2.5e-5.
+     *  Over CmPerEarthRadius squared it is 979.840 cm/s^2. */
+    inline constexpr double GMEarthCm3PerS2 = 3.986004e20;
 }

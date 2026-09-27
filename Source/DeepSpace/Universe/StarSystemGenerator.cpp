@@ -198,7 +198,7 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
     System.Planets.Reserve(PlanetCount);
     for (int32 Index = 0; Index < PlanetCount; ++Index)
     {
-        const uint64 PlanetSeed = GenSeed::Derive(Seed, GenSeed::Label("planet"), Index);
+        const uint64 PlanetSeed = FStarSystemGenerator::PlanetSeed(Seed, Index);
         FGenStream Spacing(GenSeed::Derive(Seed, GenSeed::Label("spacing"), Index));
 
         double SemiMajorAxisAU = 0.0;
@@ -290,4 +290,9 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
 double FStarSystemGenerator::GenerateGiantDay(uint64 PlanetSeed)
 {
     return DrawGiantDay(PlanetSeed);
+}
+
+uint64 FStarSystemGenerator::PlanetSeed(uint64 SystemSeed, int32 Index)
+{
+    return GenSeed::Derive(SystemSeed, GenSeed::Label("planet"), static_cast<uint64>(Index));
 }

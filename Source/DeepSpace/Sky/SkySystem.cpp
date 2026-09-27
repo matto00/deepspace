@@ -17,10 +17,6 @@ namespace
         double Cratering = 0.0;
     };
 
-    /** The face's purpose label: a child of the system's seed that no
-     *  generator stream reads, so choosing a look changes no world. */
-    constexpr uint64 SurfacePurpose = GenSeed::Label("sky.surface");
-
     FWorldLook LookOf(EPlanetKind Kind)
     {
         switch (Kind)
@@ -81,7 +77,7 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         Body.Cratering = Look.Cratering;
         // By orbit index, which never renumbers (FStarSystem::Planets): a
         // world keeps its face however many planets are added outside it.
-        Body.SurfaceSeed = GenSeed::Derive(System.Stub.Seed, SurfacePurpose, static_cast<uint64>(Index));
+        Body.SurfaceSeed = GenSeed::SurfaceSeed(System.Stub.Seed, static_cast<uint64>(Index));
         Body.BeltPairs = Look.Surface == ESkySurface::Banded ? SkyLook::BeltPairs(Planet.DayHours) : 0.0;
     }
 

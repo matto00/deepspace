@@ -37,6 +37,11 @@ struct DEEPSPACE_API FStarSystemGenerator
      *  can be tested on its own, over more giants than a corpus holds. */
     static double GenerateGiantDay(uint64 PlanetSeed);
 
+    /** The seed every quantity of orbit Index draws under, by label: mass,
+     *  kind, phase, day, relief. Public so a quantity can be drawn again, and
+     *  tested, without generating the system (landing decision 2). */
+    static uint64 PlanetSeed(uint64 SystemSeed, int32 Index);
+
     /** The whole system. Its star and name agree with the stub's because
      *  they come from the same streams. */
     static FStarSystem Generate(const FStarSystemStub& Stub, const FGenPriors& Priors);
