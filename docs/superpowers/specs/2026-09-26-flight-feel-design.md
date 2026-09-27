@@ -17,6 +17,63 @@ content*, *the anti-chore principle*, *the cruise is when you live in the
 ship*; CLAUDE.md: *Flying*, *The drive and the jump*, *The sky*
 **Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
 
+## Ruling, 2026-09-27: the speed bands
+
+After the third playtest the developer re-ranged both levers. Verbatim:
+"Let's limit Drive Speed from 20Km/s to 0.1C, and cruise from 0m/s to
+20Km/s. I think this will balance the pace around and between planets."
+This **supersedes ruling 1's "tops out at 1c"**: the drive now tops out at
+0.1 c, and anything faster is a jump. Everything below that disagrees is
+overridden by this note; the decisions it touches are as built on
+`feat/speed-bands`, and CLAUDE.md (*Flying*, *The drive and the jump*,
+*The sky*, the tunables table) is the current statement of them.
+
+- **Cruise: rest to 20 km/s**, at 2 km/s^2 (was 200 m/s at 40 m/s^2). Rest
+  to the top is 10 s with the lever thrown and 13 s with Shift held; from
+  the top the braking curve stops the ship in 125 km.
+- **The cruise lever reads on a log scale**, fine at the bottom: forward
+  position p in (0, 1] asks for 1 m/s x (20 km/s / 1 m/s)^p, and p = 0 is
+  rest. The detent at zero is exactly as before. `ds.Cruise.Sweep` is 0.2 of
+  the travel a second, five seconds from rest to full.
+- **Astern, decided here:** the same law mirrored, position for position
+  (-p asks for what +p asks ahead), and the lever's astern travel **ends**
+  where that reaches 200 m/s, at p = ln 200 / ln 20,000 = 0.535. The
+  rejected alternatives were a lever that ran on to -1 with the speed capped
+  at 200 m/s -- nearly half the astern travel doing nothing, which a held
+  Ctrl would sweep through and a Shift would have to sweep back -- and
+  stretching the whole astern travel over 1-200 m/s, under which the same
+  position meant a different speed either side of zero.
+- **The drive: STOP and eleven notches**, 20, 50, 100, 200, 500, 1,000,
+  2,000, 5,000, 10,000, 20,000 km/s and 0.1 c. `ds.Drive.Top` is clamped
+  to [20 km/s, 0.1 c]. The drive's bottom notch is cruise's top, so leaving
+  the drive spools down to 20 km/s and cruise holds it there: the handover
+  is seamless. Every other drive behaviour is kept; STOP to 0.1 c held is
+  3.7 s, X from 0.1 c is under cruise's top in 3.3 s and at rest in 7.3 s
+  (measured; X from 20 km/s is 4.0 s), and the spool-down from 0.1 c is
+  3.3 s. `ShipDriveLever::SettleNotches` is 5e-5 of a notch, still 1 m/s
+  off STOP, where a thousandth of the new 20 km/s notch would have snapped
+  the last 20 m/s to rest in one substep.
+- **The dust**: `ds.Sky.DustTop` is reached at the drive's top, 0.1 c; the
+  knee stays at 2 km/s, so cruise's upper decade runs through the log part
+  (its top seen at 2.2 km/s, drawn 1.6 times long, as the drive's bottom
+  notch is). The drive is never seen slower than cruise.
+- **The HUD's light seam moves to 0.1 c**, so every notch below the top
+  reads in kilometres ("5,000 KM/S", never "0.02 C"): 1 m/s, 150 m/s,
+  20 km/s, 500 km/s and 0.1 c read "1 M/S", "150 M/S", "20 KM/S",
+  "500 KM/S" and "0.1 C".
+- **Unchanged:** the soft cap's law, the ETA, the in-system jump and the 10
+  km floor. Landing is designed separately. Two consequences of the
+  boosters' new strength are worth knowing, neither a change of law: the
+  braking knee is 51.2 km at 12.8 km/s (was 1,024 m at 256 m/s), and 1 AU
+  at 0.1 c is 83 minutes.
+- **Two fixes the new scale forced.** The braking curve `MaySpeed` plans on
+  is now the *stepped* one, v^2 / 2b + v dt / 2 = D: on it the speed falls
+  exactly b dt a substep down to rest, where the continuous sqrt(2bD)
+  demanded more than the boosters had in its last substeps and cruise met
+  its floor at up to 50 m/s. And the cruise hard stop lands the ship on its
+  floor rather than leaving it where the substep began, which at 20 km/s
+  was up to 167 m above it.
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read revision 2 and the sibling map spec together and ruled on
@@ -25,7 +82,7 @@ disagrees. Every decision they change has been revised in place, and each
 superseded choice is kept beside it as a rejected alternative, as the
 revisions before this one were.
 
-1. **The drive tops out at 1 c.** Verbatim: "Top out at 1c, anything faster
+1. **The drive tops out at 1 c.** (Superseded 2026-09-27: 0.1 c, above.) Verbatim: "Top out at 1c, anything faster
    should be a jump (we should eventually limit the amount of jumps before a
    cooldown period. 1c already feels somewhat like quite the stretch from
    realism. there can be an option to 'jump to planet' within a system". The

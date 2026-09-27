@@ -315,31 +315,56 @@ attitude, whether a lever key is held, how many times each was pressed --
 and hands it over with `UShipSubsystem::SetHelmInput`, gated on the pilot;
 the ship moves whichever lever is live in its own tick. Presses are counted
 (`Started`), never read from a level, so a tap released inside one frame is
-still a tap. **Each lever keeps its setting across F** (set the drive to 1
-c, drop to cruise to look round, F, and it is 1 c again); the HUD shows both,
+still a tap. **Each lever keeps its setting across F** (set the drive to
+0.1 c, drop to cruise to look round, F, and it is 0.1 c again); the HUD shows both,
 the live one in ink. **X stops both**, and after it the lever starts again
 from STOP: the next speed after a stop is a new choice. The lever is at
 STOP, but a tap still counts from the ship (below), so while the ship is
 still slowing after X one Shift catches it at the notch above where it is;
-only once at rest is one Shift 1 km/s. That is the developer's ruling
+only once at rest is one Shift 20 km/s. That is the developer's ruling
 (2026-09-26): after X, a tap catches the ship where it is. A key still held
 through a stop, or from before sitting down (Shift is sprint too), moves
 nothing until it is let go. In transit the helm is inert.
 
-- **Cruise** is swept while a key is held (`ds.Cruise.Sweep`, 0.5 a second),
-  stays where it is left, and has a **detent at zero**: sweeping down stops
-  at rest, and going astern is a second, fresh press of Ctrl. Its 200 m/s
-  and its inertia are unchanged.
-- **The drive** is STOP and eighteen notches on a 1-2-5 series, 1 km/s to
-  **1 c, and anything faster is a jump** (ruling 1). A tap is one notch
+**The speed bands** (developer's ruling, 2026-09-27, after the third
+playtest): cruise from rest to **20 km/s**, the drive from **20 km/s to
+0.1 c** -- "this will balance the pace around and between planets". The
+drive's bottom notch is cruise's top, so leaving the drive hands the ship
+to cruise at a speed cruise can hold.
+
+- **Cruise** is swept while a key is held (`ds.Cruise.Sweep`, 0.2 of the
+  lever a second: five seconds from rest to full), stays where it is left,
+  and has a **detent at zero**: sweeping down stops at rest, and going
+  astern is a second, fresh press of Ctrl. **The lever reads on a log
+  scale** (`ShipDriveLever::CruiseSpeed`): a position p ahead asks for 1 m/s
+  x 20,000^p -- 1 m/s just off the detent, 141 m/s at half, 20 km/s at
+  full -- so every tenth of the lever is the same x2.7, fine at a metre a
+  second and coarse at kilometres. p = 0 is rest, exactly. **Astern is the
+  same law mirrored, position for position, and the lever's astern travel
+  ends where it reaches 200 m/s** (`FShipFlightLimits::AsternSpeed`,
+  `CruiseAsternLimit`: 0.535 of the travel), so no part of the lever does
+  nothing. It keeps its inertia, at **2 km/s^2**
+  (`FShipFlightLimits::LinearAcceleration`): rest to 20 km/s is 10 s with
+  the lever thrown and 13 s with Shift held, and it stops from 20 km/s in
+  125 km on the braking curve. The setpoint controller closes any error
+  smaller than a substep's 16.7 m/s in one substep, exactly, so a 1-10 m/s
+  setting is reached without overshoot or hunting
+  (`DeepSpace.Ship.FlightCruiseSettles`).
+- **The drive** is STOP and eleven notches on a 1-2-5 series, 20, 50, 100
+  ... 20,000 km/s and then 0.1 c: **0.1 c, and anything faster is a jump**
+  (the 2026-09-27 ruling, replacing ruling 1's 1 c). A tap is one notch
   **counted from what the ship is doing, not from where the lever was**
   (`ShipDriveLever::TapDown`/`TapUp`): Ctrl always slows the ship and Shift
   always speeds it, from the first tap, even under the soft cap or while
-  spooling. A hold repeats after 0.3 s at `ds.Drive.Sweep`, so STOP to 1 c is
-  six seconds held. No reverse. The ship follows the lever eased in notch
+  spooling. A hold repeats after 0.3 s at `ds.Drive.Sweep`, so STOP to 0.1 c
+  is 3.7 seconds held. No reverse. The ship follows the lever eased in notch
   space (`ShipDriveLever::Ease`: 0.4 s, at most `ds.Drive.Response` notches a
   second), never overshoots, and never jumps upward; thin boosters slow the
-  whole ease, never the top. X from 1 c is at rest in about 8.5 s.
+  whole ease, never the top. It arrives at a notch within
+  `ShipDriveLever::SettleNotches`, which is 1 m/s off STOP. X from 0.1 c
+  passes cruise's top in 3.3 s and is at rest in 7.3 s (from 20 km/s, 4.0
+  s); leaving the drive at 0.1 c spools down to cruise's top in the same
+  3.3 s.
 
 The actions and their `IMC_Default` bindings are built by
 `Tools/setup_flight_input.py`, not by hand, and it assigns them on
@@ -496,9 +521,13 @@ hotter stars differ only in colour.
 **The dust is honest where it can be, and never slower than cruise**
 (flight-feel decision 8): the counter-frame's motes stream past at the
 ship's own speed up to `ds.Sky.DustKnee` (2 km/s), and above it at a *seen*
-speed that rises on a log scale to `ds.Sky.DustTop` (3 km/s) at 1 c, drawn up
-to `ds.Sky.DustStretch` (8) times long (`ShipDust::SeenSpeed`, `Stretch`).
-They never fade, so the drive never looks slower than cruise. DustTop is 50 m
+speed that rises on a log scale to `ds.Sky.DustTop` (3 km/s) at the drive's
+top, 0.1 c, drawn up to `ds.Sky.DustStretch` (8) times long
+(`ShipDust::SeenSpeed`, `Stretch`). Cruise's upper decade, 2 to 20 km/s,
+runs through the log part: its top is seen at 2.2 km/s and drawn 1.6 times
+long, exactly as the drive's bottom notch is. They never fade, and every
+notch is seen at least as fast as cruise's top, so the drive never looks
+slower than cruise. DustTop is 50 m
 a frame at 60 Hz, under the spacing that strobes; at 30 Hz it is past it,
 which is the playtest's question.
 
@@ -568,12 +597,20 @@ speed, and **only when the nose's own ray meets a floor sphere** does
 anything hold it back. Then it takes the whole speed, along the nose, so the
 ship always goes where it points: when the floor is `ds.Drive.HoldSeconds`
 (4 s) off at the present speed it binds, the distance falls by e every 4 s,
-and below the braking knee the ship comes down the braking curve on 80% of
-its boosters (`ShipFlight::MaySpeed`) to rest on the floor. A path that
-misses is not touched: a ship at 1 c past a world holds 1 c. What the cap
+and below the braking knee -- 51.2 km at 12.8 km/s on full boosters, since
+2 km/s^2 -- the ship comes down the braking curve on 80% of its boosters
+(`ShipFlight::MaySpeed`) to rest on the floor. The curve is the *stepped*
+one, v^2 / 2b + v dt / 2 = D, on which the speed falls exactly 80% of a
+substep's thrust each substep all the way to rest, so a ship with inertia
+can follow it; the continuous sqrt(2bD) asked more than the boosters have
+in its last few substeps, and at 2 km/s^2 cruise met its floor at 50 m/s.
+A path that misses is not touched: a ship at 0.1 c past a world holds 0.1
+c. What the cap
 holds, the ease follows, so letting go never snaps the speed up. The corner
 says `HOLDING OFF` while it holds more than 5% off the lever and `AT THE
-FLOOR` there. Cruise uses the braking curve alone, since it has inertia.
+FLOOR` there. Cruise uses the braking curve alone, since it has inertia,
+and its hard stop, for a slide after a turn, lands the ship on the floor
+and slides it there.
 Every body is a floor sphere, tested along the ray (`ShipFlight::RayToFloor`),
 so nothing can be tunnelled through.
 
@@ -588,9 +625,11 @@ settles into it and never flies the ship out of its system, where
 `GetSystemAt` would go empty under a sky still drawing the old one. You
 leave a system by jumping. In transit there are no surfaces.
 
-From 30 light seconds out at 1 c the cap binds about 4 s off and the ship is
-on the floor about a minute later; 1 AU at 1 c is 8 min 19 s and 30 AU is
-4 h 9 min, which is why the in-system jump exists.
+At 0.1 c the cap binds 120,000 km off (4 s) and the ship is on the floor
+about 40 s later; from three light seconds out that is a little over a
+minute. 1 AU at 0.1 c is 83 min and 30 AU is 41.6 h, which is why the
+in-system jump exists; from an in-system jump's arrival an Earth's floor is
+about 47 s away, a Jupiter's 2 min 46 s.
 
 **The jump has three levers, each left where it is set**: the course (the
 chart for a star, the map's `Jump here` or `ds.Nav.Plot target` for the
@@ -621,7 +660,7 @@ map and the target*).
 decision 4): the fold opening puts both levers to STOP, and the arrival,
 `FShipFlightState::JumpTo` (the flight state's fourth write path, ADR 0005,
 amended), zeroes the velocity and the drive's eased position -- load-bearing,
-since from 1 c the spool-down is longer than the fold. The fold lasts
+since from 0.1 c the ease down, 7.3 s, is longer than the fold. The fold lasts
 `ds.Nav.TransitSeconds`, with streaks past the window. An interstellar
 arrival is a translation onto the line from the departure point to the star,
 at `max(ds.Nav.StandoffAU x sqrt(L), 1.5 x the outermost orbit)` (conflict
@@ -903,7 +942,7 @@ ds.Nav.Target               the worlds here, numbered by orbit (I is 1), the tar
 ds.Nav.Target 2             target world II (or a name, next, none)
 ds.Nav.Plot target          the target as the jump's course (the map's Jump here, without the engage)
 ds.Sky.Goto 3 4.5e6 night   the .03 AU question: 4,500,000 km beyond body 3, its star behind it
-ds.Drive.Top 0.1            shorten the drive lever to 0.1 c for a session (never above 1 c)
+ds.Drive.Top 0.01           shorten the drive lever to 0.01 c for a session (never above 0.1 c)
 ```
 
 `ds.Nav.Charge` fills the charge on the next tick, once. `ds.Nav.Clear` drops
@@ -931,10 +970,10 @@ tests that assert it.
 | `ds.Nav.RangeLy` | 12 ly | `ShipSubsystem.cpp` |
 | `ds.Nav.PlaceAtStart` | 1 | `ShipSubsystem.cpp` |
 | `ds.Nav.WorldStandoffDeg` | 2 deg (the world's width at an in-system arrival) | `ShipSubsystem.cpp`, from `NavStart::DefaultWorldStandoffDeg` (`NavStart.h`) |
-| `ds.Drive.Top` | 1 c; clamped to [1 km/s, 1 c], so it can only shorten the lever | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultTopLight` (`ShipDriveLever.h`) |
+| `ds.Drive.Top` | 0.1 c; clamped to [20 km/s, 0.1 c], so it can only shorten the lever | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultTopLight` (`ShipDriveLever.h`) |
 | `ds.Drive.Response` | 3 notches/s at full thrust | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultResponse` |
 | `ds.Drive.Sweep` | 3 notches/s, a held key after 0.3 s | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultSweep` |
-| `ds.Cruise.Sweep` | 0.5 a second | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultCruiseSweep` |
+| `ds.Cruise.Sweep` | 0.2 of the lever a second (the lever reads on a log scale) | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultCruiseSweep` |
 | `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
 | `ds.Flight.Floor` | 10 km (never under the sky's rendered floor) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultFloorCm` |
 | `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp`, from `ShipFlight::DefaultStarFloorRadii` |
@@ -959,8 +998,11 @@ number back into `ShipDressingRules.cpp`); room moods and practicals
 (`hauler_layout.py`, a level rebuild); the chart's seat (`place_nav_screen`, a
 level rebuild); the reactor rating and each consumer's want
 (`UShipSubsystem`'s `static constexpr`s, a header change). And, as named
-constants with tests on them: the drive's notch table, `EaseSeconds` 0.4 and
-`RepeatDelaySeconds` 0.3 (`ShipDriveLever.*`); the 80% braking margin
+constants with tests on them: the drive's notch table, `EaseSeconds` 0.4,
+`RepeatDelaySeconds` 0.3, `SettleNotches` and cruise's log floor
+`CruiseFloorCmPerSecond` 1 m/s (`ShipDriveLever.*`); cruise's top 20 km/s,
+its astern top 200 m/s and the boosters' 2 km/s^2 (`FShipFlightLimits`, a
+header change); the 80% braking margin
 (`ShipFlight::BrakingMargin`); the 5% `HOLDING OFF` threshold
 (`UShipHUDWidget::HoldingOffShown`); the map's `SystemMap::PickRadius` (14
 px) and its 600 x 424 draw size; `TargetMarker::AheadFloor`, `NightSideLit`
