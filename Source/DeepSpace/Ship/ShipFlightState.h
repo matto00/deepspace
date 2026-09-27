@@ -306,7 +306,7 @@ private:
     bool DriveSubStep(double FixedDelta);
 
     /** Cruise under inertia, its target along the commanded direction held
-     *  to the cap, and the hard stop at every floor. */
+     *  to the cap's braking curve, and the hard stop at every floor. */
     void CruiseSubStep(double FixedDelta);
 
     /** The nearest meeting of a ray from Position along Direction with any

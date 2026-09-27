@@ -275,7 +275,16 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     {
         if (const TOptional<double> D = NearestOnPath(Along))
         {
-            const double May = MaySpeedAt(*D);
+            // The braking curve alone, not the hold: cruise has inertia, and
+            // its boosters must deliver whatever slowing the target asks. The
+            // hold's d / N falls at v / N, which above the knee is more than
+            // the boosters have -- five times more at a quarter thrust from
+            // cruise's top -- and the ship would meet the hard stop at speed.
+            // The braking curve asks for 80% of them and no more: a full-
+            // thrust ship starts braking 625 m up, a starved one 2.5 km up
+            // (decision 5). At full thrust the two are the same thing under
+            // cruise's top, the knee being 256 m/s.
+            const double May = ShipFlight::MaySpeed(*D, Limits.LinearAcceleration, 0.0, FixedStep);
             if (May < TargetSpeed)
             {
                 TargetSpeed = May;

@@ -920,8 +920,23 @@ bool FShipFlightCruiseFloorTest::RunTest(const FString& Parameters)
         State.SetUniverseTransform(High, Facing(-FVector::ForwardVector));
         State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));
         State.SetSurfaces({Earth});
-        const FFlown Flown = Fly(State, 400.0, 1.0 / 60.0, &Earth);
+        FFlown Flown;
+        double Hardest = 0.0;
+        for (int32 Frame = 0; Frame < 400 * 60; ++Frame)
+        {
+            const double Before = State.GetSpeed();
+            const FFlown One = Fly(State, 1.0 / 60.0, 1.0 / 60.0, &Earth);
+            Flown.Least = FMath::Min(Flown.Least, One.Least);
+            if (Flown.AtFloorAfter < 0.0 && One.AtFloorAfter > 0.0)
+            {
+                Flown.AtFloorAfter = (Frame + 1) / 60.0;
+            }
+            Hardest = FMath::Max(Hardest, (Before - State.GetSpeed()) * 60.0);
+        }
         const FString Case = FString::Printf(TEXT("cruise at %.2f thrust, nose on a world 30 km above its floor"), Thrust);
+        TestTrue(FString::Printf(TEXT("%s: brakes within the boosters, never meeting the hard stop (%.1f against %.1f m/s^2)"),
+                                 *Case, Hardest / 100.0, Limits.LinearAcceleration / 100.0),
+                 Hardest <= Limits.LinearAcceleration * (1.0 + 1e-9));
         TestTrue(FString::Printf(TEXT("%s: never below the floor (least %.3f cm)"), *Case, Flown.Least), Flown.Least >= -1.0);
         TestTrue(FString::Printf(TEXT("%s: comes to rest on it (%.1f s, %.3f cm/s)"), *Case, Flown.AtFloorAfter, State.GetSpeed()),
                  Flown.AtFloorAfter > 0.0 && State.GetSpeed() < 1.0);
