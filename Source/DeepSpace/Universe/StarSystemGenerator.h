@@ -42,6 +42,11 @@ struct DEEPSPACE_API FStarSystemGenerator
      *  tested, without generating the system (landing decision 2). */
     static uint64 PlanetSeed(uint64 SystemSeed, int32 Index);
 
+    /** A world's relief, km, as Generate draws it for the planet whose seed
+     *  this is, from Planet's Kind, MassEarth and RadiusEarth. Public so the
+     *  law can be tested on made worlds (landing decision 3). */
+    static double GenerateRelief(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors);
+
     /** The whole system. Its star and name agree with the stub's because
      *  they come from the same streams. */
     static FStarSystem Generate(const FStarSystemStub& Stub, const FGenPriors& Priors);

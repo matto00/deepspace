@@ -431,7 +431,10 @@ No rebuild, no restart; it lists what changed, and the universe re-rolls
 around a ship that does not move. A value its sampler cannot take refuses the
 *whole* section, keeps the priors in use, and names the line. The guarantees
 (the Hill floor, the mass cap, the kind thresholds) are deliberately not in the
-ini, so no ini edit can break an invariant.
+ini, so no ini edit can break an invariant. A world's relief is one of the
+priors' draws (landing decision 3): `FPlanet::ReliefKm` is a Beta share
+(`ReliefBeta*`) of a 1/g ceiling (`ReliefStrength*Km`, `ReliefTerrestrialFactor`),
+and `GenGuarantees::MaxReliefKm` (10 km) is what no line can raise.
 
 The trap it works around: **Unreal reads every ini once, at start-up, into a
 config cache, and `ReloadConfig()` re-reads the cache, not the file.** It hands
