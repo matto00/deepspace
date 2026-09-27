@@ -295,7 +295,9 @@ bool FInSystemJumpTest::RunTest(const FString& Parameters)
     UShipSubsystem* Ship = Test.Ship;
     const UUniverseSubsystem* Universe = Test.Universe;
     TestTrue(TEXT("the stock loadout installs"), StockShip::Install(Ship) > 0);
-    FScopedCVar QuickTransit(TEXT("ds.Nav.TransitSeconds"), 6.0f);
+    // Four seconds, under the 5.9 s the ease takes down from 0.1 c: only
+    // then is the arrival's own rest the thing that stops the ship.
+    FScopedCVar QuickTransit(TEXT("ds.Nav.TransitSeconds"), 4.0f);
 
     const auto Where = [Ship]() { return Ship->GetFlightState().GetUniversePosition(); };
     const TOptional<FStarSystem> Home = Universe->GetSystemAt(Where());

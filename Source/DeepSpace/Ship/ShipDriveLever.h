@@ -37,15 +37,18 @@ namespace ShipDriveLever
     inline constexpr double EaseSeconds = 0.4;
 
     /**
-     * Five hundred-thousandths of a notch: where the ease stops approaching
-     * and arrives. 1 m/s off STOP, the first notch being 20 km/s, and a
-     * hundredth of a percent of speed anywhere above it, so nothing on screen
-     * can tell; without it STOP would be approached forever and a ship "at
-     * rest" would still be creeping. It was a thousandth when the first notch
-     * was 1 km/s: the same metre a second, and a thousandth of 20 km/s would
-     * snap the last 20 m/s to rest in one substep, which the readout shows.
+     * Five thousandths of a notch: where the ease stops approaching and
+     * finishes. Below it the error closes at the pace the exponential had
+     * there, ArriveNotches / EaseSeconds, held steady to the notch, so the
+     * ease arrives in a finite time and without a snap: a one-notch tap is
+     * on its notch 2.5 s after it (0.4 x ln 200 + 0.4), at rest from the
+     * first notch the last 100 m/s is a steady 250 m/s^2, and the ship's
+     * reading comes to its lever's round label as it arrives. An exponential
+     * alone approaches forever, and a snap at a threshold small enough to
+     * hide (it was 5e-5) left a reading a kilometre a second short of
+     * 20,000 KM/S for a second and on its way for four.
      */
-    inline constexpr double SettleNotches = 5.0e-5;
+    inline constexpr double ArriveNotches = 5.0e-3;
 
     /** How long a held lever key waits before it repeats, seconds: a tap is
      *  over well inside it, so a tap is never read as a hold. */
@@ -131,7 +134,8 @@ namespace ShipDriveLever
     /**
      * The eased position one Dt on, toward Target (decision 4): it moves at
      * Thrust x clamp((Target - Position) / EaseSeconds, -MaxRate, +MaxRate),
-     * never past Target, and arrives within SettleNotches.
+     * never past Target, until it is ArriveNotches off, and then at that
+     * pace held steady, so it arrives, exactly, in a finite time.
      *
      * Thrust is the boosters' thrust fraction, 0..1, and it scales the whole
      * law: the rate limit and the time constant alike, so a quarter thrust
@@ -142,7 +146,7 @@ namespace ShipDriveLever
      * only the rate-limited part, and a one-notch tap, which never reaches the
      * limit, not at all.
      *
-     * The linear part is solved exactly, not stepped, so a long Dt cannot
+     * Every part is solved exactly, not stepped, so a long Dt cannot
      * overshoot and the result does not depend on how time was chopped.
      */
     DEEPSPACE_API double Ease(double Position, double Target, double Dt, double MaxRate, double Thrust);

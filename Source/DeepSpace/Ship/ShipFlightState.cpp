@@ -58,10 +58,12 @@ void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
     else if (bWasDrive && !Command.bDrive)
     {
         // Leaving: never a clamp. Above cruise's top the ship spools down on
-        // the drive's own curve; at or under it, it is already a cruising
-        // ship, and cruise's inertia takes it from exactly here.
+        // the drive's own curve, and held off a floor faster than cruise
+        // could brake from, it goes on down the drive's cap until cruise
+        // can; otherwise it is already a cruising ship, and cruise's inertia
+        // takes it from exactly here.
         SpoolFromSpeed = ShipDriveLever::SpeedAt(DrivePosition);
-        bSpoolingDown = SpoolFromSpeed > Limits.MaxSpeed;
+        bSpoolingDown = !CruiseCanTakeOver();
         if (!bSpoolingDown)
         {
             DrivePosition = 0.0;
@@ -151,6 +153,22 @@ double FShipFlightState::MaySpeedAt(double D) const
     return ShipFlight::MaySpeed(D, Limits.LinearAcceleration, Limits.HoldSeconds, FixedStep);
 }
 
+bool FShipFlightState::CruiseCanTakeOver() const
+{
+    if (ShipDriveLever::SpeedAt(DrivePosition) > Limits.MaxSpeed * (1.0 + 1e-12))
+    {
+        return false;
+    }
+    // Cruise's own law, the braking curve alone (CruiseSubStep), with one
+    // substep of the boosters' whole push to spare: along the curve the
+    // allowed speed falls by 80% of that a substep, so a ship the drive has
+    // brought down the curve is taken on it, and cruise, braking at full,
+    // is back under it within a few substeps.
+    const TOptional<double> D = NearestOnPath(Orientation.GetForwardVector());
+    return !D || GetSpeed() <= ShipFlight::MaySpeed(*D, Limits.LinearAcceleration, 0.0, FixedStep)
+        + Limits.LinearAcceleration * FixedStep;
+}
+
 void FShipFlightState::ReleaseAttitude()
 {
     Command.AttitudeRate = FVector::ZeroVector;
@@ -209,9 +227,10 @@ void FShipFlightState::SubStep(double FixedDelta)
 
 bool FShipFlightState::DriveSubStep(double FixedDelta)
 {
-    // Leaving the drive: cruise's top reached, cruise takes it from here, at
-    // exactly the velocity the spool left it with.
-    if (bSpoolingDown && ShipDriveLever::SpeedAt(DrivePosition) <= Limits.MaxSpeed * (1.0 + 1e-12))
+    // Leaving the drive: cruise's top reached, and a speed cruise can brake
+    // from on the path, cruise takes it from here, at exactly the velocity
+    // the spool left it with.
+    if (bSpoolingDown && CruiseCanTakeOver())
     {
         bSpoolingDown = false;
         DrivePosition = 0.0;
@@ -219,12 +238,16 @@ bool FShipFlightState::DriveSubStep(double FixedDelta)
     }
 
     // The lever, eased in notch space (decision 4): a tap is felt at once and
-    // settles in a second, a hold climbs in step with the lever, and thrust
-    // slows the whole ease, never the top. A spool-down is the drive's own
-    // all stop, eased toward STOP exactly as X would ease it, and it ends the
-    // substep it passes under cruise's top, the drive's first notch: about
-    // 3.3 seconds from 0.1 c, the same as X's to there, so the two ways down
-    // from the drive feel alike.
+    // is on its notch in 2.5 s, a hold climbs in step with the lever, and
+    // thrust slows the whole ease, never the top. A spool-down is the
+    // drive's own all stop, eased toward STOP exactly as X would ease it
+    // until it reaches cruise's top, the drive's first notch: about 3.3
+    // seconds from 0.1 c, the same as X's to there, so the two ways down from
+    // the drive feel alike. It eases no lower than that top, or than the
+    // ship's own speed if it is under it already (a spool held on to the cap
+    // until cruise can brake): the substep that would pass under lands on
+    // it, so cruise takes the ship at the speed it holds, and a lever at
+    // full sees no dip and no rise. Only the cap takes it lower.
     const double Target = bSpoolingDown ? 0.0 : static_cast<double>(Command.DriveNotch);
     DrivePosition = ShipDriveLever::Ease(DrivePosition, Target, FixedDelta, Limits.DriveResponse, Limits.DriveThrust);
 
@@ -235,7 +258,16 @@ bool FShipFlightState::DriveSubStep(double FixedDelta)
     // the point the nose is on, whatever the aim. Nothing is taken sideways,
     // so the ship goes where it points.
     const FVector Nose = Orientation.GetForwardVector();
-    const double Eased = ShipDriveLever::SpeedAt(DrivePosition);
+    double Eased = ShipDriveLever::SpeedAt(DrivePosition);
+    if (bSpoolingDown)
+    {
+        const double Least = FMath::Min(Limits.MaxSpeed, GetSpeed());
+        if (Eased < Least)
+        {
+            Eased = Least;
+            DrivePosition = ShipDriveLever::PositionOf(Least);
+        }
+    }
     double Speed = Eased;
     LastHold = EFlightHold::Free;
     LastHeldFraction = 0.0;

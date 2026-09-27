@@ -316,9 +316,10 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
                                          EaseFor(Top, 0.0, 6.0, 1.0 / 144.0, DefaultResponse), 1e-9));
 
         // All stop from 0.1 c: at cruise's top, the bottom notch, in 3.3 s, at
-        // rest in 7.3 -- rate-limited down to 1.2 notches, then the 0.4 s
-        // exponential from 24 km/s -- and the last step onto rest is from a
-        // metre a second or less (SettleNotches), never a visible snap.
+        // rest in 5.9 -- rate-limited down to 1.2 notches, then the 0.4 s
+        // exponential down to ArriveNotches, 100 m/s, then that pace held,
+        // 250 m/s^2, onto rest -- and the last step onto rest is one step of
+        // that steady finish, never a snap.
         double P = static_cast<double>(Top);
         double AtCruiseTop = -1.0;
         double AtRest = -1.0;
@@ -339,12 +340,34 @@ bool FShipDriveLeverTest::RunTest(const FString& Parameters)
         }
         TestTrue(FString::Printf(TEXT("all stop from 0.1 c is at cruise's top in 3.3 s (%.2f s)"), AtCruiseTop),
                  AtCruiseTop > 3.2 && AtCruiseTop < 3.45);
-        TestTrue(FString::Printf(TEXT("and exactly at rest in about 7.3 (%.2f s)"), AtRest), AtRest > 7.0 && AtRest < 7.6);
+        TestTrue(FString::Printf(TEXT("and exactly at rest in about 5.9 (%.2f s)"), AtRest), AtRest > 5.8 && AtRest < 5.95);
         TestEqual(TEXT("rest is rest: SpeedAt is exactly 0"), SpeedAt(P), 0.0);
-        // The arriving substep would itself have eased to 1 m/s or less; the
-        // substep before it was one step of the 0.4 s exponential above that.
-        TestTrue(FString::Printf(TEXT("and it arrives from about 1 m/s, not a snap (%.3f m/s)"), LastMoving / 100.0),
-                 LastMoving > 0.0 && LastMoving <= 100.0 * FMath::Exp(Frame / EaseSeconds) * (1.0 + 1e-9));
+        const double FinishStep = NotchSpeed(1) * ArriveNotches / EaseSeconds * Frame;
+        TestTrue(FString::Printf(TEXT("and it arrives from one step of the steady finish, not a snap (%.3f m/s)"), LastMoving / 100.0),
+                 LastMoving > 0.0 && LastMoving <= FinishStep * (1.0 + 1e-9));
+
+        // A tap arrives, exactly, in a known time: 0.4 x ln(1 / ArriveNotches)
+        // down the exponential and 0.4 s of the steady finish, 2.52 s. The
+        // exponential alone approaches forever, and the snap that once ended
+        // it at 5e-5 of a notch came four seconds after the tap, the reading
+        // a kilometre a second short of its lever's label for the last one.
+        for (const TPair<double, double>& Tap : {TPair<double, double>(4.0, 5.0), TPair<double, double>(1.0, 0.0),
+                                                   TPair<double, double>(10.0, 11.0)})
+        {
+            double Q = Tap.Key;
+            double Arrived = -1.0;
+            for (int32 Index = 1; Index <= 10 * 120 && Arrived < 0.0; ++Index)
+            {
+                Q = Ease(Q, Tap.Value, Frame, DefaultResponse, 1.0);
+                if (Q == Tap.Value)
+                {
+                    Arrived = Index * Frame;
+                }
+            }
+            const double Expected = EaseSeconds * (FMath::Loge(1.0 / ArriveNotches) + 1.0);
+            TestTrue(FString::Printf(TEXT("a tap from %.0f to %.0f is on its notch in %.2f s (%.3f s)"), Tap.Key, Tap.Value, Expected, Arrived),
+                     Arrived > 0.0 && FMath::Abs(Arrived - Expected) <= Frame);
+        }
 
         // Starved boosters (decision 4): thrust scales the whole law, so a
         // quarter thrust makes every change in exactly four times the time.

@@ -162,13 +162,16 @@ double ShipDriveLever::Ease(double Position, double Target, double Dt, double Ma
         return Position == Target ? Target : Position;
     }
 
-    // Solved, not stepped: at the rate limit until the error is small enough
-    // that the exponential is slower than it, then the exponential for the
-    // rest of Dt. The error only ever shrinks toward zero, so the position
-    // cannot pass Target however long Dt is.
+    // Solved, not stepped, in three parts: at the rate limit until the
+    // error is small enough that the exponential is slower than it, then the
+    // exponential down to ArriveNotches, then the exponential's own pace
+    // there, held steady, to the notch. The error only ever shrinks toward
+    // zero and the last part ends on it, so the position cannot pass Target
+    // however long Dt is, and it arrives in a finite time with no snap.
     const double Start = FMath::Abs(Target - Position);
     const double Sign = Target > Position ? 1.0 : -1.0;
     const double Knee = Rate * EaseSeconds;
+    const double Tail = FMath::Min(ArriveNotches, Knee);
     double Error = Start;
     double Left = Dt;
     if (Error > Knee)
@@ -176,27 +179,23 @@ double ShipDriveLever::Ease(double Position, double Target, double Dt, double Ma
         const double ToKnee = (Error - Knee) / Rate;
         if (Left <= ToKnee)
         {
-            Error -= Rate * Left;
-            Left = 0.0;
+            return Target - Sign * (Error - Rate * Left);
         }
-        else
+        Error = Knee;
+        Left -= ToKnee;
+    }
+    if (Error > Tail)
+    {
+        const double ToTail = EaseSeconds * FMath::Loge(Error / Tail);
+        if (Left <= ToTail)
         {
-            Error = Knee;
-            Left -= ToKnee;
+            return Target - Sign * Error * FMath::Exp(-Left / EaseSeconds);
         }
+        Error = Tail;
+        Left -= ToTail;
     }
-    if (Left > 0.0)
-    {
-        Error *= FMath::Exp(-Left / EaseSeconds);
-    }
-
-    // Arrive rather than approach forever -- but only where the whole move,
-    // snap included, is still inside the rate limit.
-    if (Error <= SettleNotches && Start <= Rate * Dt)
-    {
-        return Target;
-    }
-    return Target - Sign * Error;
+    Error -= Tail / EaseSeconds * Left;
+    return Error <= 0.0 ? Target : Target - Sign * Error;
 }
 
 int32 ShipDriveLever::TapDown(int32 Notch, double Position)

@@ -455,13 +455,14 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     double Previous = Flight.GetSpeed();
     for (int32 Want = 1; Want <= Top; ++Want)
     {
-        // Five seconds a notch: the ease arrives on a notch -- SettleNotches,
-        // a metre a second off STOP -- four seconds after a one-notch tap,
-        // and until it does a reading in whole kilometres a second can
-        // still be one short of 20,000.
+        // 2.6 seconds a notch: the ease arrives on a notch, exactly, 2.52 s
+        // after a one-notch tap (ShipDriveLever::ArriveNotches), and the
+        // corner then reads its lever's own label -- the top's 0.1 C too,
+        // which is approached in kilometres a second and turns to light as
+        // it arrives.
         Tap(Player, Ship, 1);
         const double Speed = ShipDriveLever::NotchSpeed(Want);
-        for (int32 Tick = 0; Tick < 150; ++Tick)
+        for (int32 Tick = 0; Tick < 78; ++Tick)
         {
             Frame(Player, Ship);
             bFree &= Flight.GetHold() == EFlightHold::Free;
@@ -472,8 +473,8 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
         const FString Words = UShipHUDWidget::SpeedWords(Speed);
         const FString Ink = UShipHUDWidget::MotionLineOf(*Ship).Ink;
         TestEqual(FString::Printf(TEXT("Shift %d is notch %d"), Want, Want), Notch(), Want);
-        TestTrue(FString::Printf(TEXT("settled on %s in 5 s (%.6g cm/s)"), *Words, Flight.GetSpeed()),
-                 FMath::IsNearlyEqual(Flight.GetSpeed(), Speed, Speed * 1e-3));
+        TestTrue(FString::Printf(TEXT("on %s, exactly, in 2.6 s (%.9g cm/s)"), *Words, Flight.GetSpeed()),
+                 FMath::IsNearlyEqual(Flight.GetSpeed(), Speed, Speed * 1e-12));
         TestTrue(FString::Printf(TEXT("the corner reads the label for the ship and the lever: \"%s\""), *Ink),
                  Ink.StartsWith(Words + NavText::Separator) && Ink.Contains(FString(TEXT("DRIVE ")) + Words));
     }
@@ -523,7 +524,8 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
         Seconds += Dt;
     }
     AddInfo(FString::Printf(TEXT("X from 20 km/s comes to rest in %.2f s"), Seconds));
-    TestTrue(FString::Printf(TEXT("X from 20 km/s: at rest, exactly, in %.2f s"), Seconds), Flight.GetSpeed() == 0.0);
+    TestTrue(FString::Printf(TEXT("X from 20 km/s: at rest, exactly, in 2.5 s, as a tap arrives (%.2f s)"), Seconds),
+             Flight.GetSpeed() == 0.0 && Seconds > 2.45 && Seconds < 2.6);
     TestTrue(TEXT("with both levers at STOP"), Notch() == 0 && Flight.GetCommand().Throttle == 0.0);
 
     // Ctrl slows a ship still climbing, from the first tap (decision 3): the
@@ -564,8 +566,8 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
         Seconds += Dt;
     }
     AddInfo(FString::Printf(TEXT("X from 0.1 c comes to rest in %.2f s"), Seconds));
-    TestTrue(FString::Printf(TEXT("X from 0.1 c: at rest in a known few seconds, 7.3 by the ease (%.2f s)"), Seconds),
-             Flight.GetSpeed() == 0.0 && Seconds > 6.5 && Seconds < 8.0);
+    TestTrue(FString::Printf(TEXT("X from 0.1 c: at rest in a known few seconds, 5.9 by the ease (%.2f s)"), Seconds),
+             Flight.GetSpeed() == 0.0 && Seconds > 5.8 && Seconds < 6.0);
 
     Player->PressDrive();
     for (int32 Tick = 0; Tick < 60; ++Tick)
@@ -756,7 +758,7 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
         Seconds += Dt;
         bFree &= Flight.GetHold() == EFlightHold::Free;
         bNeverUnder &= Room(*Ship, World) >= 0.0;
-        if (Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches)
+        if (Flight.GetDrivePosition() == static_cast<double>(Top))
         {
             bAtLight &= FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::NotchSpeed(Top), ShipDriveLever::NotchSpeed(Top) * 1e-9);
         }
@@ -764,7 +766,7 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
         if (Now < Closest)
         {
             Closest = Now;
-            bLightBeforeClosest = Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches;
+            bLightBeforeClosest = Flight.GetDrivePosition() == static_cast<double>(Top);
             const FString Line = UShipHUDWidget::TargetLineText(*Ship, Home).ToString();
             bSaidPassing |= Line.Contains(TEXT("PASSING"));
             bSaidEta |= Line.Contains(TEXT("ETA"));
@@ -1120,7 +1122,7 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
         Ship->Tick(Dt);
         Seconds += Dt;
         ++Tick;
-        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches;
+        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetDrivePosition() == static_cast<double>(Top);
         if (Tick % 30 == 0 && bSettled)
         {
             const TOptional<FTargetView> View = Ship->GetTargetView(*Home);

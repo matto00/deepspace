@@ -814,8 +814,9 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("from 0.1 c the spool takes about 3.3 seconds (%.2f s)"), Spooled), Spooled > 3.2 && Spooled < 3.5);
         TestTrue(TEXT("never rising on the way"), bNeverRises);
         TestTrue(TEXT("along the nose while turning, to 1e-9"), bAlongNose);
-        TestTrue(FString::Printf(TEXT("and it hands cruise the ship at cruise's top (%.1f m/s)"), State.GetSpeed() / 100.0),
-                 State.GetSpeed() <= Cruise && State.GetSpeed() >= Cruise * 0.97);
+        TestTrue(FString::Printf(TEXT("and it hands cruise the ship at cruise's top: one substep of cruise's braking under it (%.3f m/s)"),
+                                 State.GetSpeed() / 100.0),
+                 FMath::IsNearlyEqual(State.GetSpeed(), Cruise - State.GetLimits().LinearAcceleration * Step, 1e-3));
         TestEqual(TEXT("an ordinary cruising ship"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::Cruise));
         Command = State.GetCommand();
         Command.AttitudeRate = FVector::ZeroVector;
@@ -825,6 +826,108 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
             State.Step(2.0);   // 20 km/s to 141 m/s at 2 km/s^2: ten seconds
         }
         TestTrue(TEXT("which chases its own lever from there"), FMath::IsNearlyEqual(State.GetSpeed(), HalfLever, 1e-6));
+    }
+
+    // Seamless (the 2026-09-27 ruling): cruise's lever at full, the spool
+    // comes down to 20 km/s and cruise holds it there. The substep that
+    // would ease under cruise's top lands on it, so the speed never dips
+    // under it and never rises back to it.
+    {
+        FShipFlightState State = AtLight();
+        Leave(State, 1.0);
+        double Previous = State.GetSpeed();
+        bool bNeverRises = true;
+        double Least = TNumericLimits<double>::Max();
+        double HandedAt = -1.0;
+        for (int32 Sub = 1; Sub <= 8 * 120; ++Sub)
+        {
+            State.Step(Step);
+            bNeverRises &= State.GetSpeed() <= Previous * (1.0 + 1e-12);
+            Previous = State.GetSpeed();
+            Least = FMath::Min(Least, State.GetSpeed());
+            if (HandedAt < 0.0 && State.GetMode() == EFlightMode::Cruise)
+            {
+                HandedAt = Sub * Step;
+            }
+        }
+        TestTrue(FString::Printf(TEXT("cruise's lever at full: handed over (%.2f s)"), HandedAt), HandedAt > 3.2 && HandedAt < 3.5);
+        TestTrue(TEXT("and the speed never rises, over the handover or after it"), bNeverRises);
+        TestTrue(FString::Printf(TEXT("and never dips under cruise's top (least %.3f m/s)"), Least / 100.0), Least >= Cruise * (1.0 - 1e-12));
+        TestTrue(TEXT("cruise holds it there"), FMath::IsNearlyEqual(State.GetSpeed(), Cruise, 1e-6));
+    }
+
+    // Leaving the drive while the cap holds it off a floor faster than
+    // cruise could brake from. The hold allows d / 4 s, which above the
+    // knee, 12.8 km/s 51.2 km up, beats the braking curve: 80 km up it is
+    // 20 km/s, cruise's own top, where cruise needs 100 km to stop. Cruise
+    // must not be handed that; the spool goes on down the drive's cap until
+    // the braking curve is the cap, and cruise takes it on the curve and
+    // brings it to rest on the floor, never meeting the hard stop at speed.
+    {
+        FShipFlightState State = AtLight();
+        const FFlightSurface Earth = World(State.GetUniversePosition() + FVector(5.0e10, 0.0, 0.0), EarthRadius);
+        State.SetSurfaces({Earth});
+        const FVector Nose = State.GetUniverseOrientation().GetForwardVector();
+        const auto ToFloor = [&State, &Earth, &Nose]()
+        {
+            return ShipFlight::RayToFloor(Earth, State.GetUniversePosition(), Nose);
+        };
+        for (int32 Sub = 0; Sub < 90 * 120 && ToFloor().Get(0.0) > 80.0 * Km; ++Sub)
+        {
+            State.Step(Step);
+        }
+        const double LeftAt = ToFloor().Get(0.0);
+        TestTrue(FString::Printf(TEXT("held off 80 km up (%.1f km, %.2f km/s)"), LeftAt / Km, State.GetSpeed() / Km),
+                 LeftAt > 79.0 * Km && LeftAt <= 80.0 * Km && State.GetHold() == EFlightHold::HoldingOff
+                 && State.GetSpeed() > ShipFlight::MaySpeed(LeftAt, State.GetLimits().LinearAcceleration, 0.0, Step) * 1.2);
+        Leave(State, 1.0);
+        TestEqual(TEXT("under cruise's top but too fast to brake from: it spools down"),
+                  static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
+
+        const double Slack = State.GetLimits().LinearAcceleration * Step;
+        bool bCruiseCanBrake = true;
+        bool bNeverRises = true;
+        double Previous = State.GetSpeed();
+        double Worst = 0.0;
+        double Handed = -1.0;
+        double AtFloorSpeed = -1.0;
+        double Least = TNumericLimits<double>::Max();
+        for (int32 Sub = 1; Sub <= 120 * 120 && AtFloorSpeed < 0.0; ++Sub)
+        {
+            const bool bCruising = State.GetMode() == EFlightMode::Cruise;
+            if (bCruising && Handed < 0.0)
+            {
+                Handed = Previous;
+            }
+            if (bCruising)
+            {
+                // What cruise is carrying against what its braking curve
+                // allows where it is: never more than a substep's braking.
+                const double D = ToFloor().Get(0.0);
+                const double Over = State.GetSpeed() - ShipFlight::MaySpeed(D, State.GetLimits().LinearAcceleration, 0.0, Step);
+                Worst = FMath::Max(Worst, Over);
+                bCruiseCanBrake &= Over <= Slack * (1.0 + 1e-9);
+            }
+            // The speed going into the substep that reaches the floor: the
+            // hard stop takes whatever is left in that substep, so the speed
+            // after it would read rest however hard the ship met it.
+            const double Before = State.GetSpeed();
+            State.Step(Step);
+            bNeverRises &= State.GetSpeed() <= Previous * (1.0 + 1e-12);
+            Previous = State.GetSpeed();
+            Least = FMath::Min(Least, LeastClearance(State));
+            if (LeastClearance(State) <= 100.0)
+            {
+                AtFloorSpeed = Before;
+            }
+        }
+        TestTrue(FString::Printf(TEXT("cruise takes it on the braking curve (at %.2f km/s)"), Handed / Km), Handed > 0.0);
+        TestTrue(FString::Printf(TEXT("and it never carries more than cruise can brake from (worst %.3f m/s over)"), Worst / 100.0),
+                 bCruiseCanBrake);
+        TestTrue(TEXT("the speed never rises on the way down"), bNeverRises);
+        TestTrue(FString::Printf(TEXT("it comes onto the floor at tens of metres a second, never km/s (%.3f m/s)"), AtFloorSpeed / 100.0),
+                 AtFloorSpeed >= 0.0 && AtFloorSpeed < 2.0e4);
+        TestTrue(TEXT("and never passes it"), Least >= -1.0);
     }
 
     // F again mid-spool: the drive resumes from where the spool had got to,

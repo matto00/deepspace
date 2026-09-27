@@ -314,8 +314,16 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     // Spooled up first on a heading that meets nothing but the edge, put
     // back where it was every frame, so the ship is at the lever's top when
     // it turns onto the course -- which is what makes the at-rest arrival
-    // a claim: from 0.1 c the ease alone takes longer than the fold, 7.3 s
-    // against 6.
+    // a claim: from 0.1 c the ease alone takes longer than the fold, 5.9 s
+    // against a fold held to 4 here for the purpose.
+    struct FTransitFor
+    {
+        IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.TransitSeconds"));
+        float Was = Var ? Var->GetFloat() : 6.0f;
+        explicit FTransitFor(float Seconds) { if (Var) { Var->Set(Seconds, ECVF_SetByCode); } }
+        ~FTransitFor() { if (Var) { Var->Set(Was, ECVF_SetByCode); } }
+    } ShortFold(4.0f);
+    TestNotNull(TEXT("ds.Nav.TransitSeconds exists"), ShortFold.Var);
     APawn* Pilot = World->SpawnActor<APawn>();
     Ship->SetPilot(Pilot);
     Ship->SetFlightCommand(Pilot, 0.25f, FVector::ZeroVector);

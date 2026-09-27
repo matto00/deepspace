@@ -79,7 +79,7 @@ LIGHT = 2.99792458e10
 NOTCHES = [v * CM_PER_KM for v in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000)] + [0.1 * LIGHT]
 TOP_SPEED = NOTCHES[-1]
 EASE_SECONDS = 0.4
-SETTLE_NOTCHES = 5.0e-5
+ARRIVE_NOTCHES = 5.0e-3
 RESPONSE = 3.0                  # ds.Drive.Response, notches/s
 HOLD_SECONDS = 4.0              # ds.Drive.HoldSeconds
 BRAKING_MARGIN = 0.8            # ShipFlight::BrakingMargin
@@ -217,22 +217,26 @@ def position_of(v):
 
 
 def ease(p, target, dt, rate=RESPONSE, thrust=1.0):
-    """ShipDriveLever::Ease: the rate limit, then the exponential, solved."""
+    """ShipDriveLever::Ease: the rate limit, the exponential down to
+    ARRIVE_NOTCHES, then that pace held onto the notch, solved."""
     dt *= thrust
-    start = abs(target - p)
+    if dt <= 0.0 or rate <= 0.0 or p == target:
+        return p
     sign = 1.0 if target > p else -1.0
-    error, left, knee = start, dt, rate * EASE_SECONDS
+    error, left, knee = abs(target - p), dt, rate * EASE_SECONDS
+    tail = min(ARRIVE_NOTCHES, knee)
     if error > knee:
         to_knee = (error - knee) / rate
         if left <= to_knee:
-            error, left = error - rate * left, 0.0
-        else:
-            error, left = knee, left - to_knee
-    if left > 0.0:
-        error *= math.exp(-left / EASE_SECONDS)
-    if error <= SETTLE_NOTCHES and start <= rate * dt:
-        return target
-    return target - sign * error
+            return target - sign * (error - rate * left)
+        error, left = knee, left - to_knee
+    if error > tail:
+        to_tail = EASE_SECONDS * math.log(error / tail)
+        if left <= to_tail:
+            return target - sign * error * math.exp(-left / EASE_SECONDS)
+        error, left = tail, left - to_tail
+    error -= tail / EASE_SECONDS * left
+    return target if error <= 0.0 else target - sign * error
 
 
 def may_speed(d, a=BOOSTERS):

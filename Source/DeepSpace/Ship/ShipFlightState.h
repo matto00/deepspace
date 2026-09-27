@@ -333,7 +333,8 @@ private:
 
     /** The drive and the spool-down: the eased position, along the nose,
      *  held to the cap. Returns false when a spool-down has just reached
-     *  cruise's top, and cruise takes this substep instead. */
+     *  where cruise can take the ship, and cruise takes this substep
+     *  instead. */
     bool DriveSubStep(double FixedDelta);
 
     /** Cruise under inertia, its target along the commanded direction held
@@ -346,6 +347,17 @@ private:
 
     /** MaySpeed of a distance to a floor, at the boosters' present thrust. */
     double MaySpeedAt(double D) const;
+
+    /**
+     * Whether cruise can take the ship from the drive here: the drive's
+     * eased position at or under cruise's top, and the speed along the nose
+     * within what cruise's braking curve allows on the nose's path, give or
+     * take the one substep of braking the boosters can shed at once. The
+     * drive's cap holds off at d / HoldSeconds, which above the knee is more
+     * than cruise can brake from -- 20 km/s 80 km up, where cruise needs 100
+     * km -- so a ship handed over there would meet the hard stop at km/s.
+     */
+    bool CruiseCanTakeOver() const;
 
     /** The cap bound this substep, D cm from a floor, at HeldSpeed, below
      *  what the ship was being asked for, LeverSpeed: record what it did for
@@ -364,7 +376,9 @@ private:
     /** The drive's eased position, notch space. */
     double DrivePosition = 0.0;
 
-    /** Leaving the drive above cruise's top, until the spool reaches it. */
+    /** Leaving the drive where cruise cannot take the ship -- above cruise's
+     *  top, or faster than cruise could brake from on the path -- until it
+     *  can (CruiseCanTakeOver). */
     bool bSpoolingDown = false;
 
     /** The speed the spool began from, cm/s: what a hold during the spool
