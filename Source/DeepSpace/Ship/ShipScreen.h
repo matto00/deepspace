@@ -110,14 +110,22 @@ public:
     // character's Blueprint layout does not depend on them.
 
     /**
-     * Whether the view-aimed pointer reaches this screen from a seat -- the
-     * helm, or the chart chair while nothing is zoomed. Only a screen meant
-     * to be glanced at and touched while flying says yes: the map. The chart
-     * is two metres from the helm's eye, inside the hands' reach, and sized
-     * to be read from 60 cm in its own chair; it says no, so nothing in the
-     * level can make it drivable from the helm.
+     * Whether the view-aimed pointer reaches this screen from the helm. Only
+     * a screen meant to be glanced at and touched while flying says yes: the
+     * map. The chart is two metres from the helm's eye, inside the hands'
+     * reach, and laid out to be read from its own chair; it says no, so
+     * nothing in the level can make it drivable from the helm.
      */
     virtual bool IsDrivableSeated() const { return false; }
+
+    /**
+     * Whether the view-aimed pointer reaches this screen from the chart
+     * chair while nothing is zoomed: every screen drivable from the helm, and
+     * the chart, whose chair it is. Zooming is for reading closer, never a
+     * step before the chart can be used (the second playtest: "can't be used
+     * without focusing").
+     */
+    virtual bool IsDrivableFromChartChair() const { return IsDrivableSeated(); }
 
     /**
      * Whether sitting at this screen frames it at once. True by default: the

@@ -231,8 +231,15 @@ bool FChartChairTest::RunTest(const FString& Parameters)
              FMath::Abs(ChairEye.Z - PilotEye.Z) <= PilotEyeBob);
 
     TestEqual(TEXT("the view starts on the chart, so E names it"), Prompt(), FString(TEXT("Chart")));
-    TestFalse(TEXT("the pointer is off on the chart: it is not drivable seated"), Pointer->IsActive());
-    TestFalse(TEXT("so nothing reports as pointed at"), Player->IsPointingAtScreen());
+    // Usable without zooming (the second playtest: "can't be used without
+    // focusing"): from its own chair the chart is looked at and clicked, as
+    // the map is from the helm, and handed the gate's own hit.
+    TestTrue(TEXT("the pointer is live on the chart from its chair, unzoomed"), Pointer->IsActive());
+    TestEqual(TEXT("handed the view's own trace"), Pointer->InteractionSource, EWidgetInteractionSource::Custom);
+    Pointer->TickComponent(0.016f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("and lands on the chart's glass"),
+             Pointer->GetLastHitResult().GetComponent() == static_cast<UPrimitiveComponent*>(Chart->GetScreen()));
+    TestEqual(TEXT("and E, looking at it, still zooms it"), Prompt(), FString(TEXT("Chart")));
 
     // Tab, unzoomed: nothing.
     Ship->SetTarget(*Orbit(1));
@@ -267,6 +274,7 @@ bool FChartChairTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the pointer no cursor again"), Pointer->InteractionSource != EWidgetInteractionSource::Mouse);
     TestTrue(TEXT("the body seen again"), Player->GetMesh()->IsVisible());
     TestTrue(TEXT("and the eyes back at the head"), FVector::Dist(Player->GetEyeLocation(), ChairEye) < 2.0);
+    TestTrue(TEXT("back in the seat, the pointer is live on the chart again"), Pointer->IsActive());
 
     // -- A glance to the map: drivable from here, and E zooms it ----------------
     LookAt(Player, Controller, MapGlass);
