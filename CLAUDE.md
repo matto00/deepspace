@@ -434,7 +434,11 @@ around a ship that does not move. A value its sampler cannot take refuses the
 ini, so no ini edit can break an invariant. A world's relief is one of the
 priors' draws (landing decision 3): `FPlanet::ReliefKm` is a Beta share
 (`ReliefBeta*`) of a 1/g ceiling (`ReliefStrength*Km`, `ReliefTerrestrialFactor`),
-and `GenGuarantees::MaxReliefKm` (10 km) is what no line can raise.
+and two caps are what no line can raise: `GenGuarantees::MaxReliefKm` (10 km)
+and `MaxReliefRadiusFraction` (0.5% of the radius). No generated world is
+small enough for the second to bind -- `RockyMassMin`'s world is ~2,750 km,
+a 13.8 km cap -- so it guards hand-made worlds and moons to come, and
+`DeepSpace.Universe.Relief` pins it on a made one.
 
 The trap it works around: **Unreal reads every ini once, at start-up, into a
 config cache, and `ReloadConfig()` re-reads the cache, not the file.** It hands

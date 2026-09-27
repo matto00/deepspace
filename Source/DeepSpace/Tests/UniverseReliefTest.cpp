@@ -105,6 +105,34 @@ bool FUniverseReliefTest::RunTest(const FString& Parameters)
     const double Land = FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Terrestrial, 1.0, 1.0), Alike);
     TestTrue(TEXT("under the same Beta, weather takes the terrestrial factor off the ceiling"),
         FMath::IsNearlyEqual(Land, Rock * Priors.ReliefTerrestrialFactor, 1.0e-12 * Rock));
+    const double Weathered1G = FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Terrestrial, 1.0, 1.0), Priors);
+    FGenStream WeatherStream(GenSeed::Derive(Seed, GenSeed::Label("relief")));
+    TestTrue(TEXT("a terrestrial world's share is the first draw of the terrestrial Beta, not the rock one"),
+        FMath::IsNearlyEqual(Weathered1G,
+            Priors.ReliefStrengthRockKm * Priors.ReliefTerrestrialFactor
+                * WeatherStream.Beta(Priors.ReliefTerrestrialBetaA, Priors.ReliefTerrestrialBetaB),
+            1.0e-12 * Weathered1G));
+
+    // Ice's strength is its own line: under priors where it differs from
+    // rock's, an ice world's ceiling is ice's (the ini sets both to 9 km, so
+    // only a retune can tell them apart).
+    FGenPriors IceApart = Priors;
+    IceApart.ReliefStrengthRockKm = 3.0;
+    IceApart.ReliefStrengthIceKm = 6.0;
+    const double IceRock = FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Barren, 1.0, 1.0), IceApart);
+    const double IceWorld = FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Ice, 1.0, 1.0), IceApart);
+    TestTrue(FString::Printf(TEXT("an ice world stands on ice's strength, not rock's (%.4f against %.4f km)"), IceWorld, IceRock),
+        FMath::IsNearlyEqual(IceWorld, IceRock * IceApart.ReliefStrengthIceKm / IceApart.ReliefStrengthRockKm, 1.0e-12 * IceWorld));
+
+    // The radius guarantee: no generated world is small enough for it to
+    // bind (RockyMassMin's world is ~2,750 km, 13.8 km at 0.5%), so a made
+    // one pins it. A tenth of the Earth's radius at a tenth of its gravity:
+    // 90 km from strength, 10 from the cap, 3.19 from the radius.
+    const double Pebble = FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Barren, 0.001, 0.1), Priors);
+    const double PebbleCap = GenGuarantees::MaxReliefRadiusFraction * 0.1 * UniverseUnits::CmPerEarthRadius / UniverseUnits::CmPerKm;
+    TestTrue(FString::Printf(TEXT("a small world's ceiling is 0.5%% of its radius, %.3f km, not 10 (%.4f km)"), PebbleCap, Pebble),
+        FMath::IsNearlyEqual(Pebble, AtOneG * PebbleCap / Priors.ReliefStrengthRockKm, 1.0e-12 * Pebble));
+
     TestEqual(TEXT("an ocean has no ground"), FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::Ocean, 1.0, 1.0), Priors), 0.0);
     TestEqual(TEXT("nor has a giant"), FStarSystemGenerator::GenerateRelief(Seed, Made(EPlanetKind::GasGiant, 300.0, 11.0), Priors), 0.0);
 
@@ -151,11 +179,11 @@ bool FUniverseReliefTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("old crust reaches %.3f of its ceiling on average, Beta's %.3f"), OldShare / Old, Mean),
             FMath::Abs(OldShare / Old - Mean) < 0.02);
     }
-    if (TestTrue(FString::Printf(TEXT("enough terrestrial worlds to read the draw (%d)"), Weathered), Weathered >= 50))
+    if (TestTrue(FString::Printf(TEXT("enough terrestrial worlds to read the draw (%d)"), Weathered), Weathered >= 1000))
     {
         const double Mean = Priors.ReliefTerrestrialBetaA / (Priors.ReliefTerrestrialBetaA + Priors.ReliefTerrestrialBetaB);
         TestTrue(FString::Printf(TEXT("weathered crust reaches %.3f of its ceiling on average, Beta's %.3f"), WeatheredShare / Weathered, Mean),
-            FMath::Abs(WeatheredShare / Weathered - Mean) < 0.1);
+            FMath::Abs(WeatheredShare / Weathered - Mean) < 0.02);
     }
 
     // -- The relief stream moves nothing else (landing decision 2) --------------

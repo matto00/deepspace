@@ -371,12 +371,13 @@ up, which goes as 1/g (Earth's 8.8 km at 1 g, Mars's 22 km at 0.38 g):
   erosion factor `ReliefTerrestrialFactor = 0.7`.
 - **Guarantee:** `GenGuarantees::MaxReliefKm = 10` -- no ini edit can put a
   peak higher (ruling 6's ceiling), and none above 0.5 % of the radius.
-- **Draw:** `ReliefKm = min(H_ceiling, MaxReliefKm) x Beta(A, B)` -- a
+- **Draw:** `ReliefKm = min(H_ceiling, MaxReliefKm, 0.005 x R) x Beta(A, B)` -- a
   bounded proportion of what the crust could hold, which is what Beta is for.
   Barren and Ice skew high (old, unrelaxed crust): Beta(5, 2), mean 0.71.
   Terrestrial skews lower (weather): Beta(3, 2), mean 0.6. So a 1 g
   terrestrial world peaks around 3.8 km, a 1 g barren one around 6.4 km, and
-  a light barren one at the 10 km cap.
+  a light barren one (under 0.9 g) around 7.1 km: its ceiling is the 10 km
+  cap, and it reaches Beta's share of that, never the cap itself.
 - Oceans and gas giants: 0, `Ground = None`.
 
 Every number but the guarantee is a line in `DefaultGame.ini`

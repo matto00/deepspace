@@ -87,9 +87,10 @@ TArray<FString> GenPriorDomain::Refusals(const FGenPriors& P)
     Within(Out, TEXT("ReliefStrengthIceKm"), P.ReliefStrengthIceKm, 0.0, true, Unbounded, Strength);
     Within(Out, TEXT("ReliefTerrestrialFactor"), P.ReliefTerrestrialFactor, 0.0, true, Unbounded,
         TEXT("what weather leaves of a crust's strength, so above zero"));
-    Within(Out, TEXT("ReliefBetaA"), P.ReliefBetaA, GenPriorDomain::MinBetaShape, false, Unbounded, Shape);
-    Within(Out, TEXT("ReliefBetaB"), P.ReliefBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Shape);
-    Within(Out, TEXT("ReliefTerrestrialBetaA"), P.ReliefTerrestrialBetaA, GenPriorDomain::MinBetaShape, false, Unbounded, Shape);
-    Within(Out, TEXT("ReliefTerrestrialBetaB"), P.ReliefTerrestrialBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Shape);
+    const TCHAR* const Share = TEXT("a Beta shape, which below a tenth piles every world's relief at bare plain or at its ceiling");
+    Within(Out, TEXT("ReliefBetaA"), P.ReliefBetaA, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
+    Within(Out, TEXT("ReliefBetaB"), P.ReliefBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
+    Within(Out, TEXT("ReliefTerrestrialBetaA"), P.ReliefTerrestrialBetaA, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
+    Within(Out, TEXT("ReliefTerrestrialBetaB"), P.ReliefTerrestrialBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
     return Out;
 }

@@ -34,7 +34,10 @@ namespace SkyGroundTestLocal
             Planet.MassEarth = 0.5 + Index;
             Planet.RadiusEarth = Kinds[Index] == EPlanetKind::GasGiant ? 11.0 : 0.8 + 0.1 * Index;
             Planet.SemiMajorAxisAU = 0.05 * (Index + 1);
-            Planet.ReliefKm = (Kinds[Index] == EPlanetKind::Ocean || Kinds[Index] == EPlanetKind::GasGiant) ? 0.0 : 2.0 + Index;
+            // Every world, oceans and giants too, carries a relief: the
+            // generator draws none for them, but FromSystem must zero the
+            // peak where there is no ground, and a 0 here would hide it.
+            Planet.ReliefKm = 2.0 + Index;
             Planet.DayHours = Kinds[Index] == EPlanetKind::GasGiant ? 10.0 : 0.0;
         }
         return System;
