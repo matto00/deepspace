@@ -735,7 +735,7 @@ int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
 }
 
 TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,
-                                                const FUniversePosition& From)
+                                                const FUniversePosition& From, EGotoSide Side)
 {
     if (!System.Bodies.IsValidIndex(Body))
     {
@@ -745,11 +745,13 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
     const FSkyBody* Star = System.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
 
     // Out from the body toward where the ship will hang: the star, for a
-    // world, so it is seen full and lit; for a star, back toward the ship.
+    // world's day side, so it is seen full and lit; away from it for the
+    // night side, so the world is dark with its star behind it; for a star,
+    // back toward the ship.
     FVector Out = FVector::ZeroVector;
     if (Target.Kind != ESkyBodyKind::Star && Star)
     {
-        Out = (Star->Position - Target.Position).GetSafeNormal();
+        Out = (Star->Position - Target.Position).GetSafeNormal() * (Side == EGotoSide::Night ? -1.0 : 1.0);
     }
     if (Out.IsNearlyZero())
     {
@@ -777,9 +779,20 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
 void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
                     FOutputDevice& Out)
 {
-    if (Args.Num() < 2)
+    // A trailing "night" asks for the far side from the star; it is taken
+    // off before the rest is read, so a body named "night" still needs its
+    // altitude after it.
+    TConstArrayView<FString> Rest = Args;
+    ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
+    if (Rest.Num() >= 3 && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
-        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km>: onto the body's day side, facing it. Bodies:"));
+        Side = ShipSky::EGotoSide::Night;
+        Rest = Rest.Slice(0, Rest.Num() - 1);
+    }
+    if (Rest.Num() < 2)
+    {
+        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night]: onto the body's day side, or its night side, ")
+                TEXT("facing it. Bodies:"));
         for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
         {
             Out.Logf(TEXT("  %d  %s"), Index, *System.Bodies[Index].Id.ToString());
@@ -794,18 +807,19 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
 
     // A body's Id can have spaces in it, so every argument but the last is
     // the body.
-    const FString Which = FString::Join(Args.Slice(0, Args.Num() - 1), TEXT(" "));
-    const double AltitudeKm = FCString::Atod(*Args.Last());
+    const FString Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
+    const double AltitudeKm = FCString::Atod(*Rest.Last());
     const int32 Body = ShipSky::FindBody(System, Which);
     const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
-        System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition());
+        System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition(), Side);
     if (!Placement)
     {
         Out.Logf(TEXT("ds.Sky.Goto: no body '%s' here (%d bodies)."), *Which, System.Bodies.Num());
         return;
     }
     Ship.PlaceShip(Placement->Position, Placement->Orientation);
-    Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s."), AltitudeKm, *System.Bodies[Body].Id.ToString());
+    Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s%s."), AltitudeKm, *System.Bodies[Body].Id.ToString(),
+             Side == ShipSky::EGotoSide::Night && System.Bodies[Body].Kind != ESkyBodyKind::Star ? TEXT(", night side") : TEXT(""));
 }
 
 namespace
@@ -823,7 +837,8 @@ namespace
 
     FAutoConsoleCommandWithWorldArgsAndOutputDevice GotoCommand(
         TEXT("ds.Sky.Goto"),
-        TEXT("'ds.Sky.Goto <body> <altitude_km>': place the ship above a body of this system, on its day side, ")
-        TEXT("facing it -- once; the orientation is never held. <body> is an index or a name."),
+        TEXT("'ds.Sky.Goto <body> <altitude_km> [night]': place the ship above a body of this system, on its day ")
+        TEXT("side -- or with 'night' its far side from the star, the world dark in the glare -- facing it, once; ")
+        TEXT("the orientation is never held. <body> is an index or a name. Then 'ds.Nav.Target <body>' brackets it."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Goto));
 }

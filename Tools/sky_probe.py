@@ -32,9 +32,23 @@ the flight-feel spec's decision 5: the leg at the lever's speed, then the
 cap's last minute, about 64 s from where it binds to the floor at 1 c.
 
     python3 Tools/sky_probe.py
+    python3 Tools/sky_probe.py --night
+
+--night adds the .03 AU question's numbers (the system map spec, decision
+8), for the geometry DeepSpace.Sky.NightSideIsDrawn draws: a Sun and an
+Earth at 1 AU, the ship 0.03 AU beyond the Earth on the sun-planet line and
+0.002 AU to one side, looking back at it with the Sun behind it, on a view
+103 degrees across at 3840 px -- the helm's on the developer's display. For
+that and a few distances either side it prints the Earth's pixels, the phase
+angle, the Lambert phase and what it leaves of full brightness, the lit
+fraction the target line's NIGHT SIDE is judged on, and how far the world
+is from the Sun's centre. Whether those pixels can be *seen* is a question
+for eyes: in play, ds.Sky.Goto <world> 4500000 night, then ds.Nav.Target
+<world>.
 """
 
 import math
+import sys
 
 CM_PER_KM = 1.0e5
 CM_PER_AU = 1.495978707e13
@@ -370,12 +384,60 @@ def opening(title, bodies, target_index):
         v["phase"], s["pixels"], budget))
 
 
-def main():
+# The helm's view on the developer's display (system map spec, Context):
+# 103 degrees across 3840 pixels, which at the view's centre, where a
+# perspective view's pixels are widest apart in angle, is 26.7 px a degree.
+HELM_PIXEL_ANGLE = 2.0 * math.tan(0.5 * math.radians(103.0)) / 3840.0
+
+# TargetMarker::NightSideLit: under this share of its disc lit, the target
+# line says NIGHT SIDE.
+NIGHT_SIDE_LIT = 0.15
+
+
+def night():
+    """The .03 AU geometry and its neighbours: the Earth between the ship
+    and the Sun, a little to one side, seen dark in the glare."""
+    bodies, _ = sunlike_system()
+    star = bodies[0]
+    earth = next(b for b in bodies if b["name"] == "Earth-like")
+    side_per_au = 0.002 / 0.03       # the fixture's sideways offset, as a slope
+    print("=" * 118)
+    print("NIGHT SIDE -- a Sun and an Earth at 1 AU, the ship beyond it on the sun-planet line, "
+          "%.1f deg to one side; the helm's %.1f px a degree" % (
+              math.degrees(math.atan(side_per_au)), 1.0 / math.degrees(HELM_PIXEL_ANGLE)))
+    print("-" * 118)
+    print("%10s %12s %8s %8s %8s %10s %8s %6s %10s" % (
+        "distance", "", "px", "phase", "Lambert", "of full", "lit", "night", "from sun"))
+    for au in (0.003, 0.01, 0.03, 0.1, 0.3):
+        ship = [earth["pos"][0] + au * CM_PER_AU, earth["pos"][1] + au * side_per_au * CM_PER_AU, earth["pos"][2]]
+        to_earth = sub(earth["pos"], ship)
+        to_sun = sub(star["pos"], ship)
+        d = norm(to_earth)
+        pixels = 2.0 * math.asin(earth["radius"] / d) / HELM_PIXEL_ANGLE
+        # The phase angle is at the world, between the star and the ship.
+        sunward = sub(star["pos"], earth["pos"])
+        shipward = sub(ship, earth["pos"])
+        cos_alpha = sum(sunward[i] * shipward[i] for i in range(3)) / (norm(sunward) * norm(shipward))
+        alpha = math.acos(min(max(cos_alpha, -1.0), 1.0))
+        phase = lambert_phase(alpha)
+        lit = 0.5 * (1.0 + math.cos(alpha))
+        cos_sep = sum(to_earth[i] * to_sun[i] for i in range(3)) / (d * norm(to_sun))
+        separation = math.degrees(math.acos(min(max(cos_sep, -1.0), 1.0)))
+        print("%7.3f AU %9.4g km %8.2f %7.1f° %8.2g %9.2g%% %8.3f %6s %9.2f°" % (
+            au, d / CM_PER_KM, pixels, math.degrees(alpha), phase, 100.0 * phase, lit,
+            "yes" if lit < NIGHT_SIDE_LIT else "no", separation))
+    print("-" * 118)
+    print("'of full' is the Lambert phase against full phase from the same distance: what the disc gives back.")
+
+
+def main(argv):
     for title, (bodies, target) in (("HOME, a red dwarf", home_system()), ("SUNLIKE", sunlike_system())):
         opening(title, bodies, target)
         approach(title, bodies, target)
         print()
+    if "--night" in argv[1:]:
+        night()
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)

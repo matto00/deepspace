@@ -69,26 +69,78 @@ bool FShipHUDNoseCaretTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("built hidden"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
 
+    // The system the HUD asks for once a frame and hands down.
+    const auto HereNow = [&]() { return Test.Universe->GetSystemAt(Ship->GetFlightState().GetUniversePosition()); };
+    const TOptional<FStarSystem> Home = HereNow();
+    if (!TestTrue(TEXT("the ship starts in a system with worlds"), Home.IsSet() && Home->Planets.Num() > 0))
+    {
+        return false;
+    }
+
     // When it shows: flying, with somewhere to aim.
     Ship->SetPilot(Pilot);
-    TestFalse(TEXT("with no course there is no caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+    TestFalse(TEXT("with no course and no target there is no caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
     Caret->SetVisibility(ESlateVisibility::HitTestInvisible);
-    HUD->PlaceNoseCaret(Ship);
+    HUD->PlaceNoseCaret(Ship, Home);
     TestEqual(TEXT("and the HUD hides the one it has"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
+
+    // A target is something to aim at (system map decision 7): in a system
+    // the ship has just arrived in there is no course, and without this
+    // nothing on the glass says where the nose points.
+    if (TestTrue(TEXT("a world of this system can be targeted"), Ship->SetTarget(FBodyId{ Home->Stub.Id, 0, -1 })))
+    {
+        TestTrue(TEXT("with a target and no course, the pilot has a caret"),
+                 UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
+        TestFalse(TEXT("anyone else aboard does not"), UShipHUDWidget::ShowsNoseCaret(*Ship, Crew, Home));
+        TestFalse(TEXT("nor does a HUD with no system in hand: a target is resolved, never assumed"),
+                  UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, {}));
+        Caret->SetVisibility(ESlateVisibility::HitTestInvisible);
+        HUD->PlaceNoseCaret(Ship, Home);
+        TestEqual(TEXT("with no camera to project through the HUD still shows none"), Caret->GetVisibility(),
+                  ESlateVisibility::Collapsed);
+
+        // A target held from another system names nothing here.
+        const FUniversePosition Start = Ship->GetFlightState().GetUniversePosition();
+        const FQuat Facing = Ship->GetFlightState().GetUniverseOrientation();
+        const TArray<FStarSystemStub> Away = Ship->GetChart();
+        if (TestTrue(TEXT("there is another system to be placed in"), Away.Num() > 0))
+        {
+            Ship->PlaceShip(Away[0].Position, Facing);
+            TestFalse(TEXT("placed in another system, the old target gives the nose nothing to meet"),
+                      UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, HereNow()));
+            Ship->PlaceShip(Start, Facing);
+        }
+
+        // A course to a world: the caret shows on the course alone, as for
+        // a star, whatever the HUD has in hand.
+        bool bPlotted = false;
+        for (int32 Orbit = Home->Planets.Num() - 1; Orbit >= 0 && !bPlotted; --Orbit)
+        {
+            bPlotted = Ship->SetTarget(FBodyId{ Home->Stub.Id, Orbit, -1 }) && Ship->PlotTarget();
+        }
+        if (TestTrue(TEXT("some world here is far enough to jump to"), bPlotted))
+        {
+            TestTrue(TEXT("with a world course the pilot has a caret, with or without a system in hand"),
+                     UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, {}));
+        }
+        Ship->ClearTarget();
+        TestFalse(TEXT("letting the target go lets its course go, and the caret with them"),
+                  UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
+    }
 
     const TArray<FStarSystemStub> Chart = Ship->GetChart();
     if (!TestTrue(TEXT("the chart has somewhere to go"), Chart.Num() > 0) || !TestTrue(TEXT("and it plots"), Ship->PlotCourse(Chart[0].Id)))
     {
         return false;
     }
-    TestTrue(TEXT("plotted, the pilot has a caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+    TestTrue(TEXT("plotted, the pilot has a caret"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
     Caret->SetVisibility(ESlateVisibility::HitTestInvisible);
-    HUD->PlaceNoseCaret(Ship);
+    HUD->PlaceNoseCaret(Ship, Home);
     TestEqual(TEXT("but a HUD with no camera to project through shows none"), Caret->GetVisibility(), ESlateVisibility::Collapsed);
-    TestFalse(TEXT("anyone else aboard does not: they are not aiming"), UShipHUDWidget::ShowsNoseCaret(*Ship, Crew));
-    TestFalse(TEXT("and nobody does from no pawn"), UShipHUDWidget::ShowsNoseCaret(*Ship, nullptr));
+    TestFalse(TEXT("anyone else aboard does not: they are not aiming"), UShipHUDWidget::ShowsNoseCaret(*Ship, Crew, Home));
+    TestFalse(TEXT("and nobody does from no pawn"), UShipHUDWidget::ShowsNoseCaret(*Ship, nullptr, Home));
     Ship->ClearPilot();
-    TestFalse(TEXT("out of the seat, the pilot's caret goes"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+    TestFalse(TEXT("out of the seat, the pilot's caret goes"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
     Ship->SetPilot(Pilot);
 
     // Where it points: the ship's nose, from wherever the eye is, and onto
@@ -139,7 +191,9 @@ bool FShipHUDNoseCaretTest::RunTest(const FString& Parameters)
         }
         if (TestTrue(TEXT("aligned, engaged and charged, the jump fires"), Ship->IsInTransit()))
         {
-            TestFalse(TEXT("between stars the caret goes"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot));
+            TestFalse(TEXT("between stars the caret goes"), UShipHUDWidget::ShowsNoseCaret(*Ship, Pilot, Home));
+            TestEqual(TEXT("and the place line says where the ship is: between stars"),
+                      UShipHUDWidget::PlaceLineText(*Ship, {}).ToString(), FString(TEXT("BETWEEN STARS")));
         }
     }
     return true;

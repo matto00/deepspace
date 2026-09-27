@@ -5,6 +5,12 @@
 #include "Ship/ShipSubsystem.h"
 #include "UI/EngineeringConsoleWidget.h"
 #include "UI/PowerAllocationWidget.h"
+#include "UI/ShipHUDWidget.h"
+#include "UI/SystemMapWidget.h"
+#include "UI/TargetMarker.h"
+#include "GameFramework/Pawn.h"
+#include "Tests/SkyTestWorld.h"
+#include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -99,6 +105,65 @@ bool FShipScreensAgreeTest::RunTest(const FString& Parameters)
 
     GEngine->DestroyWorldContext(World);
     World->DestroyWorld(false);
+
+    // The target line: the HUD's readout and the map's band print one
+    // string (system map decision 6), because both print the ship's own
+    // view of the target and neither composes its own. Checked at rest, at
+    // speed on a path that brings the ship down on the world (the live
+    // ETA), and with the target let go.
+    {
+        SkyTestWorld::FSkyWorld Test(TEXT("ScreensAgreeTargetWorld"));
+        UShipSubsystem* Aboard = Test.Ship;
+        if (TestNotNull(TEXT("the target world has a ship"), Aboard) && TestNotNull(TEXT("and a universe"), Test.Universe))
+        {
+            Test.BeginPlay();
+            APawn* Pilot = Test.World->SpawnActor<APawn>();
+            Aboard->SetPilot(Pilot);
+            USystemMapWidget* Map = MakeScreen<USystemMapWidget>(Test.World);
+            const auto HereNow = [&]() { return Test.Universe->GetSystemAt(Aboard->GetFlightState().GetUniversePosition()); };
+            const TOptional<FStarSystem> Home = HereNow();
+            const auto Agree = [&](const TCHAR* When)
+            {
+                Map->RefreshFromShip();
+                const FString Hud = UShipHUDWidget::TargetLineText(*Aboard, HereNow()).ToString();
+                TestEqual(FString::Printf(TEXT("%s: the HUD and the map print one target line"), When), Hud,
+                          Map->GetTargetText().ToString());
+                return Hud;
+            };
+
+            if (TestTrue(TEXT("the ship starts among worlds"), Home.IsSet() && Home->Planets.Num() > 0))
+            {
+                TestTrue(TEXT("with no target both lines are empty"), Agree(TEXT("no target")).IsEmpty());
+                const int32 Orbit = Home->Planets.Num() - 1;
+                TestTrue(TEXT("a world is targeted"), Aboard->SetTarget(FBodyId{ Home->Stub.Id, Orbit, -1 }));
+                const FString AtRest = Agree(TEXT("at rest"));
+                TestTrue(TEXT("and the line names it"), AtRest.Contains(Home->Planets[Orbit].Designation));
+                TestFalse(TEXT("at rest there is no time to arrival"), AtRest.Contains(TEXT("ETA")));
+
+                // At the drive's top, nose on the world: a live ETA.
+                const FUniversePosition Start = Aboard->GetFlightState().GetUniversePosition();
+                const FVector ToWorld = (Home->PlanetPosition(Orbit) - Start).GetSafeNormal();
+                Aboard->PlaceShip(Start, FRotationMatrix::MakeFromX(ToWorld).ToQuat());
+                Aboard->SetDriveEngaged(Pilot, true);
+                Aboard->SetDriveLever(Pilot, Aboard->GetFlightState().GetDriveNotchCount() - 1);
+                for (int32 Tick = 0; Tick < 20; ++Tick)
+                {
+                    Aboard->Tick(0.05f);
+                }
+                const FString Flying = Agree(TEXT("flying at it"));
+                TestTrue(FString::Printf(TEXT("under way onto it, the line has a live ETA (%s)"), *Flying), Flying.Contains(TEXT("ETA")));
+                const TOptional<FTargetView> Before = Aboard->GetTargetView(*HereNow());
+                Aboard->Tick(0.5f);
+                Agree(TEXT("half a second on"));
+                const TOptional<FTargetView> After = Aboard->GetTargetView(*HereNow());
+                TestTrue(TEXT("and it is live: half a second on, the time to arrival has fallen"),
+                         Before && After && Before->EtaSeconds && After->EtaSeconds && *After->EtaSeconds < *Before->EtaSeconds);
+
+                Aboard->ClearTarget();
+                TestTrue(TEXT("let go, both lines are empty"), Agree(TEXT("let go")).IsEmpty());
+            }
+        }
+    }
     return true;
 }
 

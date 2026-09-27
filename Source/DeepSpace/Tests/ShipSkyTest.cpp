@@ -186,6 +186,30 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 FVector::DotProduct((Far->Position - Star.Position).GetSafeNormal(), (SkyTestFixtures::Opening() - Star.Position).GetSafeNormal()) > 1.0 - 1e-9);
         }
         TestFalse(TEXT("goto refuses a body the system does not have"), ShipSky::GotoPlacement(Fixture, 7, 1.0, SkyTestFixtures::Opening()).IsSet());
+
+        // Goto night: the same height over the far side from the star,
+        // facing the world with the star behind it -- the world dark in the
+        // glare, the .03 AU question put where eyes can judge it (system map
+        // decision 8).
+        const TOptional<FNavPlacement> Night = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::HomeIndex, 1.5e7,
+                                                                      SkyTestFixtures::Opening(), ShipSky::EGotoSide::Night);
+        if (TestTrue(TEXT("goto night places over a body"), Night.IsSet()))
+        {
+            const FVector ToBody = Home.Position - Night->Position;
+            const FVector Nose = Night->Orientation.GetForwardVector();
+            TestTrue(TEXT("night: at its altitude above the surface"), FMath::IsNearlyEqual(ToBody.Size(), Home.Radius + 1.5e7, 1.0));
+            TestTrue(TEXT("night: facing it"), FVector::DotProduct(Nose, ToBody.GetSafeNormal()) > 1.0 - 1e-9);
+            TestTrue(TEXT("night: the star ahead, beyond the world"),
+                FVector::DotProduct(Nose, (Star.Position - Night->Position).GetSafeNormal()) > 0.99);
+            const double PhaseCos = FVector::DotProduct((Star.Position - Home.Position).GetSafeNormal(), (-ToBody).GetSafeNormal());
+            TestTrue(FString::Printf(TEXT("night: seen at a phase angle past 170 degrees (%.1f)"), FMath::RadiansToDegrees(FMath::Acos(PhaseCos))),
+                PhaseCos < FMath::Cos(FMath::DegreesToRadians(170.0)));
+            TestTrue(TEXT("night: with the system's up kept up"), Night->Orientation.GetUpVector().Z > 0.99);
+        }
+        const TOptional<FNavPlacement> StarNight = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::StarIndex, ThirtyAU,
+                                                                          SkyTestFixtures::Opening(), ShipSky::EGotoSide::Night);
+        TestTrue(TEXT("a star has no night side: night is the side the ship was on, as by day"),
+            StarNight.IsSet() && Far.IsSet() && StarNight->Position == Far->Position);
     }
 
     // -- The actor, as the level build places it ------------------------------
@@ -693,6 +717,20 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
         const FSkyBody& Moon = Fixture.Bodies[SkyTestFixtures::MoonIndex];
         TestTrue(TEXT("goto joins a name the console split at its space, and goes 150 km over it"),
             FMath::IsNearlyEqual(Moon.Position.DistanceTo(Ship->GetFlightState().GetUniversePosition()) - Moon.Radius, 150.0 * UniverseUnits::CmPerKm, 10.0));
+        const FSkyBody* Sun = Fixture.Bodies.FindByPredicate([](const FSkyBody& Body) { return Body.Kind == ESkyBodyKind::Star; });
+        const auto StarSide = [&]()
+        {
+            const FVector Out = (Ship->GetFlightState().GetUniversePosition() - Moon.Position).GetSafeNormal();
+            return Sun ? FVector::DotProduct(Out, (Sun->Position - Moon.Position).GetSafeNormal()) : 0.0;
+        };
+        TestTrue(TEXT("by day the ship hangs on the star's side of it"), StarSide() > 0.99);
+        AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("Fixture"), TEXT("IIa"), TEXT("150"), TEXT("NIGHT") }, Quiet);
+        TestTrue(TEXT("a trailing night, in any case, takes it round to the far side"), StarSide() < -0.99);
+        TestTrue(TEXT("still 150 km over it: night is not read as the altitude"),
+            FMath::IsNearlyEqual(Moon.Position.DistanceTo(Ship->GetFlightState().GetUniversePosition()) - Moon.Radius, 150.0 * UniverseUnits::CmPerKm, 10.0));
+        const FUniversePosition AtNight = Ship->GetFlightState().GetUniversePosition();
+        AShipSky::Goto(*Ship, Fixture, false, TArray<FString>{ TEXT("150"), TEXT("night") }, Quiet);
+        TestTrue(TEXT("night with no body is only the usage, and goes nowhere"), Ship->GetFlightState().GetUniversePosition() == AtNight);
     }
 
     return true;
@@ -785,6 +823,16 @@ bool FShipSkyLiveTest::RunTest(const FString& Parameters)
         {
             const double Altitude = System.Bodies[1].Position.DistanceTo(Flight.GetUniversePosition()) - System.Bodies[1].Radius;
             TestTrue(TEXT("150 km over planet 1"), FMath::IsNearlyEqual(Altitude, 150.0 * UniverseUnits::CmPerKm, 10.0));
+        }
+        IConsoleManager::Get().ProcessUserConsoleInput(TEXT("ds.Sky.Goto 1 150 night"), Quiet, Test.World);
+        const FSkySystem Dark = LocalSystem::Current(Test.World);
+        if (TestTrue(TEXT("goto night lands in the same system"), Dark.Bodies.Num() > 1 && Dark.Bodies[0].Kind == ESkyBodyKind::Star))
+        {
+            const FVector Out = (Flight.GetUniversePosition() - Dark.Bodies[1].Position).GetSafeNormal();
+            const FVector Sunward = (Dark.Bodies[0].Position - Dark.Bodies[1].Position).GetSafeNormal();
+            TestTrue(TEXT("through the console, night is the far side of planet 1 from its star"), FVector::DotProduct(Out, Sunward) < -0.99);
+            TestTrue(TEXT("and still 150 km over it"), FMath::IsNearlyEqual(
+                Dark.Bodies[1].Position.DistanceTo(Flight.GetUniversePosition()) - Dark.Bodies[1].Radius, 150.0 * UniverseUnits::CmPerKm, 10.0));
         }
     }
     return true;
