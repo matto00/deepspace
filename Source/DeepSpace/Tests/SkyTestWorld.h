@@ -24,10 +24,26 @@
  */
 namespace SkyTestWorld
 {
-    /** Where the pilot's eyes are, ship space: the port seat at the helm
-     *  (sky spec, DeepSpace.Sky.ShipSky). The ship is the world origin, so
-     *  this is also world space. */
-    inline const FVector PilotEye(1585.0, -70.0, 170.0);
+    /** Where the pilot's eyes are, ship space, seated at the helm (the port
+     *  seat; sky spec, DeepSpace.Sky.ShipSky). The ship is the world origin,
+     *  so this is also world space. Measured, not chosen:
+     *  DeepSpace.Player.SeatedEyeIsPilotEye holds it to where PlaceCamera
+     *  puts a seated character's eyes, 19 cm forward of the seat and 125 cm
+     *  up. It was once 170, a standing eye, which saw over a desk screen the
+     *  real pilot could not. */
+    inline const FVector PilotEye(1604.0, -72.0, 125.0);
+
+    /** The helm's seat anchor, on the floor: hauler_layout's PILOT_SEAT,
+     *  resolved. DeepSpace.Player.SeatedEyeIsPilotEye sits the character here
+     *  and measures where its eyes go, which is what PilotEye must be. */
+    inline const FVector HelmSeat(1585.0, -70.0, 0.0);
+
+    /** How far, cm, a seated pilot's eye may stray from PilotEye, either
+     *  way. The sitting idle moves it under a centimetre; the rest is margin,
+     *  and the layout's nose-line check looks from both ends of it
+     *  (validate_hauler.py's SEATED_EYE_BOB, which test_placement holds equal
+     *  to this), so an idle that strayed further must fail here first. */
+    inline constexpr double PilotEyeBob = 5.0;
 
     /** A game world with its subsystems -- the universe's and the ship's --
      *  a counter-frame and a sky, both spawned before play begins, as the

@@ -224,6 +224,42 @@ NAV_SCREEN_WIDTH = 68
 NAV_SCREEN_MARGIN = DRESS_MARGIN
 NAV_SCREEN_CHAIR = ("cockpit", (175, 270))    # the starboard pilot_seat
 
+# How far aft of the chart's glass its reader sits, cm: the chart's
+# use_distance_cm, which build_hauler.py sets and verify_level.py checks, and
+# AShipNavScreen's default, which test_placement.py holds equal. From the
+# glass at x 301 it lands the body on the starboard pilot_seat's centre at
+# x 175.
+NAV_SCREEN_USE_DISTANCE = 126
+
+# The system map: the middle desk screen, turned into the one the whole
+# cockpit shares (system map spec, decision 1). Shaped like NAV_SCREEN, and 1
+# cm proud of the prop's aft face (302) for the chart's reason: the prop
+# blocks Visibility, and a panel sunk into it hands every pointer trace to
+# the prop. y 200 is the middle screen's own centre line, which is the
+# ship's: it sits between the helm and the chart chair, so both can see it,
+# and two people in the cockpit share one map rather than each having their
+# own. Yaw 0 faces aft, as the chart does. It has no chair of its own and
+# needs no clutter exclude: cockpit_desk exports only its wings, and the
+# middle of the desk is not a surface.
+MAP_SCREEN = ("cockpit", (301, 200), 105, 0)
+
+# The map's panel width, cm: AShipMapScreen's PanelWidthCm, the prop's 70 cm
+# face less a centimetre of bezel each side. test_placement.py reads the C++
+# to hold the two equal.
+MAP_SCREEN_WIDTH = 68
+
+# The map's draw size, pixels: AShipMapScreen's DrawSizePixels (system map
+# spec, 600 x 424). With the width it fixes the panel's height, 48 cm, which
+# is what check_map_sightline samples the corners of. test_placement.py holds
+# it equal to the C++ too.
+MAP_DRAW_SIZE = (600, 424)
+MAP_SCREEN_HEIGHT = MAP_SCREEN_WIDTH * MAP_DRAW_SIZE[1] / float(MAP_DRAW_SIZE[0])
+
+# How far the eyes lean in, cm, when the chart chair zooms the map (decision
+# 13): the chart's 60, so choosing one screen or the other frames the same
+# way. build_hauler.py sets it on the placed map; verify_level.py checks it.
+MAP_VIEW_DISTANCE = 60
+
 # What each room lets the dressing put things on (lived-in decision 2): the
 # surfaces, as "<prop>.<surface>" kinds. A kind not listed here is never
 # exported, so nothing can be dressed onto it. The corridor keeps its slide
@@ -260,6 +296,39 @@ PLAYER_START = ("bunk", (200, 150), 100)
 # starboard seat stays decorative.
 PILOT_SEAT = ("cockpit", (175, 130), 0)
 
+# Where the pilot's eyes are, seated at the helm, from the helm seat's anchor
+# on the floor, cm: (forward, starboard, up) in the seat's own frame. It is
+# measured, not chosen: DeepSpace.Player.SeatedEyeIsPilotEye sits the real
+# character in a helm seat, plays the sitting idle and reads where
+# PlaceCamera puts the eyes -- 19 cm forward of the anchor, 2 cm to port and
+# 125 cm up, moving less than a centimetre through the idle. It was 170, a
+# standing eye; from there the nose line cleared the port desk screen, and
+# from the real one it did not.
+SEATED_EYE = (19, -2, 125)
+
+# Where the pilot's eyes are, seated at the helm: the helm seat's point plus
+# SEATED_EYE. (room, (x, y) from the room's corner, z), shaped like
+# PLAYER_START. It is the eye the C++ tests look from (SkyTestWorld::PilotEye),
+# and test_placement.py reads that header to hold the two equal, so the
+# layout's checks from the helm -- the map in clear view, the glass ahead and
+# a wall aft -- are about the same eye the sky and the target bracket are
+# tested from. The helm faces yaw 0, so the seat's frame is the room's.
+PILOT_EYE = (PILOT_SEAT[0],
+             (PILOT_SEAT[1][0] + SEATED_EYE[0], PILOT_SEAT[1][1] + SEATED_EYE[1]),
+             SEATED_EYE[2])
+
+# Where the eyes are, seated in the chart chair: the chart's use transform --
+# NAV_SCREEN_USE_DISTANCE aft of its glass, on the floor, facing it -- plus
+# SEATED_EYE, the same body in the same sitting idle as at the helm. The
+# chart faces aft (yaw 0), so its chair faces forward as the helm does and
+# SEATED_EYE adds in the room's frame. The chair's reader zooms and clicks
+# the map as well as the chart (system map spec, decision 13), so the map's
+# sightline is checked from here as well as from the helm.
+CHART_EYE = (NAV_SCREEN[0],
+             (NAV_SCREEN[1][0] - NAV_SCREEN_USE_DISTANCE + SEATED_EYE[0],
+              NAV_SCREEN[1][1] + SEATED_EYE[1]),
+             SEATED_EYE[2])
+
 SLIDE_ROOM = "corridor"
 
 
@@ -268,7 +337,8 @@ Ship = namedtuple("Ship", "plan boxes lights console_location console_yaw "
                           "pilot_seat_location pilot_seat_yaw "
                           "laptop_location laptop_yaw "
                           "nav_screen_location nav_screen_yaw nav_screen_exclude "
-                          "hum_sources laptop_exclude surfaces keep_outs")
+                          "hum_sources laptop_exclude surfaces keep_outs "
+                          "map_screen_location map_screen_yaw pilot_eye chart_eye")
 
 
 def generate():
@@ -324,6 +394,13 @@ def generate():
     nav_screen_location = resolve_point(plan, nav_room, nav_at, nav_z)
     nav_screen_exclude = chart_exclude(plan, nav_screen_location, nav_screen_yaw)
 
+    map_room, map_at, map_z, map_screen_yaw = MAP_SCREEN
+    map_screen_location = resolve_point(plan, map_room, map_at, map_z)
+
+    eye_room, eye_at, eye_z = PILOT_EYE
+    pilot_eye = resolve_point(plan, eye_room, eye_at, eye_z)
+    chart_eye = resolve_point(plan, *CHART_EYE)
+
     # (label, world location, kind). The reactor is hum_reactor; each room's
     # air is hum_<room>.
     hum_sources = [("hum_reactor" if s.kind == "reactor" else "hum_" + s.room,
@@ -339,7 +416,8 @@ def generate():
                 pilot_seat_location, seat_yaw,
                 laptop_location, laptop_yaw,
                 nav_screen_location, nav_screen_yaw, nav_screen_exclude,
-                hum_sources, laptop_exclude, surfaces, keep_outs(plan, keep_clear))
+                hum_sources, laptop_exclude, surfaces, keep_outs(plan, keep_clear),
+                map_screen_location, map_screen_yaw, pilot_eye, chart_eye)
 
 
 def laptop_exclude_rect(plan, location, yaw):

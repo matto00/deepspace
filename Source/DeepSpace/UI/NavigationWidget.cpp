@@ -24,6 +24,8 @@
 // geometric triangle is not, and a missing glyph is a box on the glass.
 const TCHAR* const UNavigationWidget::PlottedMark = TEXT("›");
 
+const TCHAR* const UNavigationWidget::InSystemWords = TEXT("in this system");
+
 namespace
 {
     // Point sizes against the real panel: 12 px/cm read from 60 cm, the
@@ -41,11 +43,12 @@ namespace
 
     /** The system the ship is in, asked of its position; empty between
      *  stars. Nothing records an arrival (plan conflict 1), so neither does
-     *  this screen. */
+     *  this screen. An in-system jump's fold is not between stars: the ship
+     *  is still here, and the chart says so. */
     TOptional<FStarSystem> SystemHere(const UShipSubsystem& Ship)
     {
         const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(&Ship);
-        if (!Universe || Ship.IsInTransit())
+        if (!Universe || (Ship.IsInTransit() && Ship.GetPlottedSystem().IsSet()))
         {
             return {};
         }
@@ -206,11 +209,15 @@ void UNavigationWidget::RefreshFromShip()
     }
 
     // The jump, as a word and never a number. Asked every frame: it winds.
-    JumpLine->SetText(FText::FromString(NavText::JumpWord(Subsystem->GetJumpState()) + TEXT(".")));
+    // An in-system fold is "In the fold", not between stars.
+    JumpLine->SetText(FText::FromString(
+        NavText::JumpWord(Subsystem->GetJumpState(), Now.PlottedWorld.IsSet()) + TEXT(".")));
 
     if (EngageButton && EngageLabel)
     {
-        const bool bCanPress = !Now.bInTransit && Now.Plotted.IsSet();
+        // Either course: the toggle is the one engage lever, and it engages
+        // or stands down the in-system jump as it would a star's.
+        const bool bCanPress = !Now.bInTransit && (Now.Plotted.IsSet() || Now.PlottedWorld.IsSet());
         EngageButton->SetIsEnabled(bCanPress);
         EngageLabel->SetText(Subsystem->IsJumpEngaged()
             ? NSLOCTEXT("DeepSpace", "ChartStandDown", "STAND DOWN")
@@ -225,6 +232,7 @@ UNavigationWidget::FAskedAt UNavigationWidget::FAskedAt::Now(const UShipSubsyste
     Asked.JumpSerial = Ship.GetJumpSerial();
     Asked.bInTransit = Ship.IsInTransit();
     Asked.Plotted = Ship.GetPlottedSystem();
+    Asked.PlottedWorld = Ship.GetPlottedWorld();
     Asked.Position = Ship.GetFlightState().GetUniversePosition();
     Asked.Orientation = Ship.GetFlightState().GetUniverseOrientation();
     Asked.RangeLy = UShipSubsystem::GetChartRangeLy();
@@ -251,7 +259,7 @@ bool UNavigationWidget::FAskedAt::SameSystems(const FAskedAt& Then) const
     // the ship far enough to be asked again as it goes.
     constexpr double MovedFarEnoughCm = 1.0e-3 * UniverseUnits::CmPerLightYear;
     return JumpSerial == Then.JumpSerial && bInTransit == Then.bInTransit && Plotted == Then.Plotted
-        && RangeLy == Then.RangeLy && Priors == Then.Priors
+        && PlottedWorld == Then.PlottedWorld && RangeLy == Then.RangeLy && Priors == Then.Priors
         && Position.DistanceTo(Then.Position) < MovedFarEnoughCm;
 }
 
@@ -318,11 +326,30 @@ void UNavigationWidget::RefreshCourse(const UShipSubsystem& Subsystem)
     // The course, in the same bearing words the helm reads, so the chair and
     // the helm can never describe one heading two ways.
     FString Course = NavText::NoCourse();
+    const TOptional<FVector> Bearing = Subsystem.IsInTransit()
+        ? TOptional<FVector>() : Subsystem.GetCourseDirectionShipLocal();
     if (const TOptional<FStarSystem> Star = PlottedSystem(Subsystem))
     {
-        const TOptional<FVector> Bearing = Subsystem.IsInTransit()
-            ? TOptional<FVector>() : Subsystem.GetCourseDirectionShipLocal();
         Course = NavText::Course(Star->Stub.Name, Bearing, Subsystem.GetJumpConeRadians());
+    }
+    else if (const TOptional<FBodyId> World = Subsystem.GetPlottedWorld())
+    {
+        // The in-system jump's course (map decision 12): the chart lists and
+        // plots only stars, and this is where the jump it engages is shown
+        // to go -- marked as the map marks its target, which it is, and said
+        // to be in this system, since no row is. The bearing is the jump's
+        // cone words, like a star's, because it is the jump's cone.
+        const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(&Subsystem);
+        const TOptional<FStarSystem> System = Universe ? Universe->GetSystem(World->System) : TOptional<FStarSystem>();
+        if (const FPlanet* Planet = System ? ShipNav::TargetPlanet(*System, *World) : nullptr)
+        {
+            Course = FString(PlottedMark) + TEXT(" ") + NavText::WorldName(*Planet) + NavText::Separator
+                + InSystemWords;
+            if (Bearing)
+            {
+                Course += NavText::Separator + NavText::Bearing(*Bearing, Subsystem.GetJumpConeRadians());
+            }
+        }
     }
     CourseLine->SetText(FText::FromString(Course + TEXT(".")));
 }

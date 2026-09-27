@@ -8,6 +8,10 @@ FShipFlightLimits FShipFlightLimits::Cruise()
 void FShipFlightState::SetLimits(const FShipFlightLimits& NewLimits)
 {
     Limits = NewLimits;
+
+    // A top lowered in play takes the notches above it away, the lever's
+    // with them; the ease then brings the ship down to the new top.
+    Command.DriveNotch = FMath::Clamp(Command.DriveNotch, 0, GetDriveNotchCount() - 1);
 }
 
 const FShipFlightLimits& FShipFlightState::GetLimits() const
@@ -17,16 +21,40 @@ const FShipFlightLimits& FShipFlightState::GetLimits() const
 
 void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
 {
-    if (Command.bDrive && !NewCommand.bDrive && Velocity.SizeSquared() > FMath::Square(Limits.MaxSpeed))
-    {
-        Velocity = Velocity.GetSafeNormal() * Limits.MaxSpeed;
-    }
-    Command.bDrive = NewCommand.bDrive;
+    const bool bWasDrive = Command.bDrive;
+
     Command.Throttle = FMath::Clamp(NewCommand.Throttle, -1.0, 1.0);
     Command.AttitudeRate = FVector(
         FMath::Clamp(NewCommand.AttitudeRate.X, -1.0, 1.0),
         FMath::Clamp(NewCommand.AttitudeRate.Y, -1.0, 1.0),
         FMath::Clamp(NewCommand.AttitudeRate.Z, -1.0, 1.0));
+    Command.DriveNotch = FMath::Clamp(NewCommand.DriveNotch, 0, GetDriveNotchCount() - 1);
+    Command.bDrive = NewCommand.bDrive;
+
+    if (!bWasDrive && Command.bDrive)
+    {
+        // Engaging: from the ship's present forward speed, so the drive
+        // takes over where cruise was and eases to its lever from there.
+        // Mid-spool, the spool had the position already: F again resumes
+        // the drive from wherever it had got to (decision 4's table).
+        if (!bSpoolingDown)
+        {
+            DrivePosition = ShipDriveLever::PositionOf(FMath::Max(0.0, Velocity | Orientation.GetForwardVector()));
+        }
+        bSpoolingDown = false;
+    }
+    else if (bWasDrive && !Command.bDrive)
+    {
+        // Leaving: never a clamp. Above cruise's top the ship spools down on
+        // the drive's own curve; at or under it, it is already a cruising
+        // ship, and cruise's inertia takes it from exactly here.
+        SpoolFromSpeed = ShipDriveLever::SpeedAt(DrivePosition);
+        bSpoolingDown = SpoolFromSpeed > Limits.MaxSpeed;
+        if (!bSpoolingDown)
+        {
+            DrivePosition = 0.0;
+        }
+    }
 }
 
 const FShipFlightCommand& FShipFlightState::GetCommand() const
@@ -64,17 +92,51 @@ void FShipFlightState::SpendJumpCharge()
 void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
 {
     Position = Arrival.Normalised();
+
+    // At rest, exactly: every jump's first moment is the pilot's to choose.
+    Velocity = FVector::ZeroVector;
+    LastLinearAcceleration = FVector::ZeroVector;
+    DrivePosition = 0.0;
+    bSpoolingDown = false;
+    LastHold = EFlightHold::Free;
+    LastHeldFraction = 0.0;
 }
 
-void FShipFlightState::SetDriveRoom(double NearestSurfaceDistanceCm, const FVector& AwayFromSurface)
+void FShipFlightState::SetSurfaces(TArray<FFlightSurface> NewSurfaces)
 {
-    DriveSurfaceDistance = FMath::Max(0.0, NearestSurfaceDistanceCm);
-    DriveAwayFromSurface = AwayFromSurface.GetSafeNormal();
+    Surfaces = MoveTemp(NewSurfaces);
 }
 
-double FShipFlightState::GetDriveRoom() const
+TConstArrayView<FFlightSurface> FShipFlightState::GetSurfaces() const
 {
-    return FMath::Max(0.0, DriveSurfaceDistance - Limits.DriveFloor);
+    return Surfaces;
+}
+
+double FShipFlightState::GetRoom() const
+{
+    return ShipFlight::Room(Surfaces, Position);
+}
+
+TOptional<double> FShipFlightState::NearestOnPath(const FVector& Direction) const
+{
+    TOptional<double> Nearest;
+    for (const FFlightSurface& Surface : Surfaces)
+    {
+        const TOptional<double> D = ShipFlight::RayToFloor(Surface, Position, Direction);
+        if (D && (!Nearest || *D < *Nearest))
+        {
+            Nearest = D;
+        }
+    }
+    return Nearest;
+}
+
+double FShipFlightState::MaySpeedAt(double D) const
+{
+    // The boosters' present acceleration, which the subsystem has already
+    // scaled by their allocation: a starved ship brakes softer, starts
+    // braking earlier, and arrives just the same.
+    return ShipFlight::MaySpeed(D, Limits.LinearAcceleration, Limits.HoldSeconds, FixedStep);
 }
 
 void FShipFlightState::ReleaseAttitude()
@@ -126,47 +188,116 @@ void FShipFlightState::SubStep(double FixedDelta)
         Orientation.Normalize();
     }
 
-    if (Command.bDrive)
+    if ((Command.bDrive || bSpoolingDown) && DriveSubStep(FixedDelta))
     {
-        // The drive. Speed is a fraction of the room per second, so distance
-        // to the nearest surface falls exponentially with no easing curve, and
-        // a world swells from a point to a disc with no moment of change.
-        //
-        // Closing on the surface is held to that rate and no more, even where
-        // cruise would be faster: the room then falls by e every tau all the
-        // way down, and the ship settles onto the floor rather than crossing
-        // it. A lever left on is somewhere to come back to, never a course
-        // that has gone wrong while you were in the galley. Any heading that
-        // does not close -- along the surface, away from it, or in transit
-        // with nothing to close on -- gets at least cruise, so the drive is
-        // never a trap at the floor.
-        //
-        // The cap scales the whole velocity rather than removing its closing
-        // part, so the ship still goes where the nose points, only slower.
-        //
-        // No inertia, deliberately: velocity is set, not chased. So it reports
-        // no acceleration -- a ship going from 200 m/s to 34 c in one substep
-        // would otherwise report an acceleration that would throw anything
-        // that ever reads it through a bulkhead.
-        const double Tau = FMath::Max(Limits.DriveTau, UE_DOUBLE_SMALL_NUMBER);
-        const double RoomRate = GetDriveRoom() / Tau;
-        Velocity = Orientation.GetForwardVector() * (Command.Throttle * FMath::Max(Limits.MaxSpeed, RoomRate));
-
-        const double Closing = -(Velocity | DriveAwayFromSurface);
-        const double MayClose = FMath::Abs(Command.Throttle) * RoomRate;
-        if (Closing > MayClose)
-        {
-            Velocity *= MayClose / Closing;
-        }
-        LastLinearAcceleration = FVector::ZeroVector;
-        Position += Velocity * FixedDelta;
         return;
     }
+    CruiseSubStep(FixedDelta);
+}
 
-    // Velocity, chasing the commanded cruise along the ship's nose. Limiting
-    // the change as a vector rather than per axis means a turn cannot cheat
-    // extra acceleration out of the model by changing direction.
-    const FVector TargetVelocity = Orientation.GetForwardVector() * (Command.Throttle * Limits.MaxSpeed);
+bool FShipFlightState::DriveSubStep(double FixedDelta)
+{
+    // Leaving the drive: cruise's top reached, cruise takes it from here, at
+    // exactly the velocity the spool left it with.
+    if (bSpoolingDown && ShipDriveLever::SpeedAt(DrivePosition) <= Limits.MaxSpeed * (1.0 + 1e-12))
+    {
+        bSpoolingDown = false;
+        DrivePosition = 0.0;
+        return false;
+    }
+
+    // The lever, eased in notch space (decision 4): a tap is felt at once and
+    // settles in a second, a hold climbs in step with the lever, and thrust
+    // slows the whole ease, never the top. A spool-down is the drive's own
+    // all stop, eased toward STOP exactly as X would ease it, and it ends the
+    // substep it passes under cruise's top: about six seconds from 1 c, the
+    // same as X's, so the two ways down from the drive feel alike.
+    const double Target = bSpoolingDown ? 0.0 : static_cast<double>(Command.DriveNotch);
+    DrivePosition = ShipDriveLever::Ease(DrivePosition, Target, FixedDelta, Limits.DriveResponse, Limits.DriveThrust);
+
+    // The soft cap (decision 5): only when the nose's own path meets a floor,
+    // and then on the whole speed, along the nose. The drive's velocity is
+    // along the nose, so the ray is where the ship is going: a path that
+    // misses is not touched, and one that meets a world flies straight to
+    // the point the nose is on, whatever the aim. Nothing is taken sideways,
+    // so the ship goes where it points.
+    const FVector Nose = Orientation.GetForwardVector();
+    const double Eased = ShipDriveLever::SpeedAt(DrivePosition);
+    double Speed = Eased;
+    LastHold = EFlightHold::Free;
+    LastHeldFraction = 0.0;
+    if (const TOptional<double> D = NearestOnPath(Nose))
+    {
+        const double May = MaySpeedAt(*D);
+        if (May < Eased)
+        {
+            Speed = May;
+
+            // What the cap holds, the ease follows: when it lets go -- the
+            // nose off the world, or a climb -- the speed rises from where
+            // the ship actually was, at the lever's own pace, never in one
+            // substep. The one fall faster than the ease is capture, the
+            // substep the nose first comes onto a world too fast to allow.
+            DrivePosition = ShipDriveLever::PositionOf(May);
+            RecordHold(*D, May, bSpoolingDown ? SpoolFromSpeed : FMath::Abs(GetLeverSpeed()));
+        }
+    }
+
+    // No inertia, deliberately: velocity is set, not chased. So it reports
+    // no acceleration -- a capture dropping many notches in one substep would
+    // otherwise report an acceleration that would throw anything that ever
+    // reads it through a bulkhead (sky decision 8's fake, kept).
+    Velocity = Nose * Speed;
+    LastLinearAcceleration = FVector::ZeroVector;
+    Position += Velocity * FixedDelta;
+    return true;
+}
+
+void FShipFlightState::RecordHold(double D, double HeldSpeed, double LeverSpeed)
+{
+    const double Lever = FMath::Abs(LeverSpeed);
+    LastHold = D <= AtFloorCm && Lever > 0.0 ? EFlightHold::AtFloor : EFlightHold::HoldingOff;
+    LastHeldFraction = Lever > 0.0 ? FMath::Clamp(1.0 - HeldSpeed / Lever, 0.0, 1.0) : 0.0;
+}
+
+void FShipFlightState::CruiseSubStep(double FixedDelta)
+{
+    // The cap sets the assist's target, not the velocity (decision 5): along
+    // the commanded direction -- the nose, or aft astern -- the target speed
+    // is held to what that direction's path may have, so a cruising ship
+    // brakes to rest on a floor under its own inertia. Far from anything
+    // this is exactly the cruise there always was.
+    const double Want = Command.Throttle * Limits.MaxSpeed;
+    const FVector Along = Orientation.GetForwardVector() * (Want < 0.0 ? -1.0 : 1.0);
+    double TargetSpeed = FMath::Abs(Want);
+    LastHold = EFlightHold::Free;
+    LastHeldFraction = 0.0;
+    if (TargetSpeed > 0.0)
+    {
+        if (const TOptional<double> D = NearestOnPath(Along))
+        {
+            // The braking curve alone, not the hold: cruise has inertia, and
+            // its boosters must deliver whatever slowing the target asks. The
+            // hold's d / N falls at v / N, which above the knee is more than
+            // the boosters have -- five times more at a quarter thrust from
+            // cruise's top -- and the ship would meet the hard stop at speed.
+            // The braking curve asks for 80% of them and no more: a full-
+            // thrust ship starts braking 625 m up, a starved one 2.5 km up
+            // (decision 5). At full thrust the two are the same thing under
+            // cruise's top, the knee being 256 m/s.
+            const double May = ShipFlight::MaySpeed(*D, Limits.LinearAcceleration, 0.0, FixedStep);
+            if (May < TargetSpeed)
+            {
+                TargetSpeed = May;
+                RecordHold(*D, May, FMath::Abs(GetLeverSpeed()));
+            }
+        }
+    }
+
+    // Velocity, chasing the target. Limiting the change as a vector rather
+    // than per axis means a turn cannot cheat extra acceleration out of the
+    // model by changing direction.
+    const FVector TargetVelocity = Along * TargetSpeed;
     const FVector VelocityError = TargetVelocity - Velocity;
     const double MaxVelocityChange = Limits.LinearAcceleration * FixedDelta;
     const FVector VelocityChange = VelocityError.SizeSquared() <= FMath::Square(MaxVelocityChange)
@@ -176,7 +307,38 @@ void FShipFlightState::SubStep(double FixedDelta)
     Velocity += VelocityChange;
     LastLinearAcceleration = VelocityChange / FixedDelta;
 
-    Position += Velocity * FixedDelta;
+    // The hard stop. Cruise can slide after a turn, so its velocity need not
+    // be along the path the cap read; no substep may end inside a floor all
+    // the same. A velocity that would carry the ship in loses its inward
+    // part at the sphere, and slides. Under a floor already -- the floor
+    // raised in play -- it may climb and may not descend, and is never
+    // lifted: a ship does not teleport because a number changed.
+    FUniversePosition Next = Position + Velocity * FixedDelta;
+    for (const FFlightSurface& Surface : Surfaces)
+    {
+        const double After = ShipFlight::FloorClearance(Surface, Next);
+        if (After >= 0.0)
+        {
+            continue;
+        }
+        const FVector FromCentre = Next - Surface.Centre;
+        const FVector Out = (Surface.bInsideOut ? -FromCentre : FromCentre).GetSafeNormal();
+        const double Inward = Velocity | Out;
+        if (Inward < 0.0)
+        {
+            Velocity -= Out * Inward;
+        }
+        Next = Position + Velocity * FixedDelta;
+        if (ShipFlight::FloorClearance(Surface, Position) >= 0.0)
+        {
+            const double Still = ShipFlight::FloorClearance(Surface, Next);
+            if (Still < 0.0)
+            {
+                Next = Next + Out * (-Still);
+            }
+        }
+    }
+    Position = Next;
 }
 
 FUniversePosition FShipFlightState::GetUniversePosition() const { return Position; }
@@ -186,6 +348,31 @@ FVector FShipFlightState::GetAngularVelocity() const { return AngularVelocity; }
 FVector FShipFlightState::GetAngularAcceleration() const { return LastAngularAcceleration; }
 FVector FShipFlightState::GetLinearAcceleration() const { return LastLinearAcceleration; }
 double FShipFlightState::GetSpeed() const { return Velocity.Size(); }
+
+EFlightMode FShipFlightState::GetMode() const
+{
+    return Command.bDrive ? EFlightMode::Drive : bSpoolingDown ? EFlightMode::SpoolingDown : EFlightMode::Cruise;
+}
+
+EFlightHold FShipFlightState::GetHold() const { return LastHold; }
+double FShipFlightState::GetHeldFraction() const { return LastHeldFraction; }
+
+double FShipFlightState::GetLeverSpeed() const
+{
+    return Command.bDrive ? ShipDriveLever::NotchSpeed(Command.DriveNotch) : Command.Throttle * Limits.MaxSpeed;
+}
+
+double FShipFlightState::GetOtherLeverSpeed() const
+{
+    return Command.bDrive ? Command.Throttle * Limits.MaxSpeed : ShipDriveLever::NotchSpeed(Command.DriveNotch);
+}
+
+double FShipFlightState::GetDrivePosition() const { return DrivePosition; }
+
+int32 FShipFlightState::GetDriveNotchCount() const
+{
+    return ShipDriveLever::NotchCount(Limits.DriveTop);
+}
 
 FTransform FShipFlightState::GetUniverseTransform() const
 {
@@ -220,17 +407,4 @@ void FShipFlightState::SetUniverseTransform(const FUniversePosition& NewPosition
 {
     Position = NewPosition.Normalised();
     Orientation = NewOrientation.GetNormalized();
-}
-
-FVector ShipDrive::AwayFromSurface(TFunctionRef<double(const FUniversePosition&)> SurfaceDistance,
-                                   const FUniversePosition& Where)
-{
-    FVector Gradient = FVector::ZeroVector;
-    for (int32 Axis = 0; Axis < 3; ++Axis)
-    {
-        FVector Probe = FVector::ZeroVector;
-        Probe[Axis] = SurfaceProbeCm;
-        Gradient[Axis] = SurfaceDistance(Where + Probe) - SurfaceDistance(Where + (-Probe));
-    }
-    return Gradient.GetSafeNormal();
 }

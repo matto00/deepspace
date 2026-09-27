@@ -77,9 +77,14 @@ bool FScreenUseTest::RunTest(const FString& Parameters)
                       Pointer->InteractionSource, EWidgetInteractionSource::Mouse);
         }
 
-        Player->StopUsingScreen();
+        // The laptop still frames as you sit (system map spec, decision 13):
+        // it has one screen and a bench, and E there stands up, as ever.
+        TestTrue(TEXT("sitting at it zooms it"), Player->GetZoomedScreen() == Laptop);
+        TestEqual(TEXT("E's prompt is to stand up"), Player->GetCurrentPrompt().ToString(), FString(TEXT("Stand up")));
 
-        TestFalse(TEXT("standing up releases the screen"), Player->IsUsingScreen());
+        Player->PressInteract();
+
+        TestFalse(TEXT("E stands up and releases the screen"), Player->IsUsingScreen() || Player->IsInScreenChair());
         TestEqual(TEXT("and movement comes back"),
                   Player->GetCharacterMovement()->MovementMode.GetValue(), MOVE_Walking);
         if (const UWidgetInteractionComponent* Pointer = Player->GetPointer())

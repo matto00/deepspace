@@ -8,10 +8,15 @@ A procedurally generated space exploration game built in Unreal Engine 5.8,
 emphasizing the scale of space: cruise, choose a destination, hyperjump, arrive.
 The player lives aboard a ship they walk around inside and progressively upgrade.
 
-Milestone 1 (walk the ship) is done. The current work is **the playable POC**
--- cruise, choose, jump, arrive -- in
-`docs/superpowers/plans/2026-09-25-poc-build-plan.md`, whose *Conflicts,
-resolved* table is binding on names and ownership.
+Milestone 1 (walk the ship) is done, and so is the playable POC -- cruise,
+choose, jump, arrive -- in `docs/superpowers/plans/2026-09-25-poc-build-plan.md`,
+whose *Conflicts, resolved* table is binding on names and ownership. POC 2,
+built after the second playtest, is the flight feel and the system map
+(`docs/superpowers/specs/2026-09-26-flight-feel-design.md` and
+`2026-09-26-system-map-design.md`, as amended by the developer's rulings at
+the top of each, built in the order of
+`docs/superpowers/plans/2026-09-26-poc2-build-order.md`).
+`DeepSpace.Playtest.*` flies what the next playtest will try.
 
 **Read `docs/vision.md` before proposing any design.** It records what the game
 is *for* — the register, the principle that scale is only felt in contrast, and
@@ -145,8 +150,14 @@ been abandoned. Say so.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
-  with the drive, and the jump's decisions. `UShipSubsystem` owns and steps
-  both (*The drive and the jump*).
+  with the drive, and the jump's decisions, including the target.
+  `Ship/ShipDriveLever.*` (the notches, the ease, cruise's sweep) and
+  `Ship/ShipFlightSurface.*` (the soft cap and the live ETA's law) are the
+  pure arithmetic under them. `UShipSubsystem` owns and steps both (*The
+  drive and the jump*).
+- `Ship/ShipMapScreen.*`, `UI/SystemMap*`, `UI/TargetMarker.*`,
+  `UI/ShipTargetOverlay.*` — the system map, the target's words and marks
+  (*The system map and the target*).
 - `Ship/ShipHum*`, `Ship/ShipLightingSubsystem.*`, `Ship/ShipNavScreen.*` —
   the hum, the lights and lamps, the chart chair.
 - `Ship/ShipDressing*` — the pure dressing core, its rules and ini, the
@@ -277,21 +288,73 @@ write to `Saved/hauler_build.txt` and `Saved/verify_level.txt`.
 
 The helm is keyboard-only on purpose: the mouse keeps looking, so the pilot's
 head turns independently of the ship and a turn reads as *the ship* turning.
-W/S pitch, A/D yaw, Q/Z roll, Shift/Ctrl throttle, F the in-system drive. The
-throttle is a lever, not a button — input sweeps it and it stays where it is
-left, which is what makes a cruise something you set and walk away from.
 
-`IA_Attitude`, `IA_Throttle`, `IA_Drive` and their `IMC_Default` bindings are
-built by `Tools/setup_flight_input.py`, not by hand, and it assigns them on
-`BP_DeepSpaceCharacter`'s defaults; re-running it replaces its own mappings
-and leaves the rest of the context alone. Two traps it works around:
-Python has no `InputActionFactory` (a new action is a duplicate of `IA_Look`),
-and UE 5.8 keeps the real mapping list in `default_key_mappings.mappings` —
-the context's own `mappings` is the older, empty one, and `map_key` writes to
+| Key | Does | Action |
+|---|---|---|
+| W / S | nose down / up | `IA_Attitude` |
+| A / D | yaw to port / starboard | `IA_Attitude` |
+| Q / Z | roll left / right | `IA_Attitude` |
+| Shift / Ctrl | the live lever up / down | `IA_LeverUp`, `IA_LeverDown` |
+| F | which lever is live: the drive's or cruise's | `IA_Drive` |
+| X | all stop: both levers to STOP | `IA_Stop` |
+| Tab | the next world as the target, only on the zoomed map | `IA_CycleTarget` |
+| E | sit, stand, and at the chart chair zoom the chart or the map | `IA_Interact` |
+
+**`FShipFlightCommand::AttitudeRate` is a rotation vector about the body
+axes: X roll, Y pitch, Z yaw** -- +Y puts the nose down, +Z swings it to
+starboard, -X rolls right. The comments once said "X pitch, Y yaw, Z roll",
+the key mapping followed them, and through two playtests W rolled the ship,
+D pitched it and Z yawed it. `DeepSpace.Playtest.KeysTurnTheShip` now reads
+`IMC_Default` and flies each key. `MaxAngularRate`'s 0.3 rad/s, meant for
+roll, has always been yaw's; it stays there, pending a playtest.
+
+**Two levers, both the ship's** (flight-feel decision 1), in
+`FShipFlightCommand`: cruise's `Throttle` (-1..1) and the drive's
+`DriveNotch`. The pawn keeps only what the keys did this frame -- held
+attitude, whether a lever key is held, how many times each was pressed --
+and hands it over with `UShipSubsystem::SetHelmInput`, gated on the pilot;
+the ship moves whichever lever is live in its own tick. Presses are counted
+(`Started`), never read from a level, so a tap released inside one frame is
+still a tap. **Each lever keeps its setting across F** (set the drive to 1
+c, drop to cruise to look round, F, and it is 1 c again); the HUD shows both,
+the live one in ink. **X stops both**, and after it the lever starts again
+from STOP: the next speed after a stop is a new choice. The lever is at
+STOP, but a tap still counts from the ship (below), so while the ship is
+still slowing after X one Shift catches it at the notch above where it is;
+only once at rest is one Shift 1 km/s. (Open with the developer: whether
+ruling 5's "restarts from STOP" means that, or the lever from STOP however
+fast the ship still is.) A key still held
+through a stop, or from before sitting down (Shift is sprint too), moves
+nothing until it is let go. In transit the helm is inert.
+
+- **Cruise** is swept while a key is held (`ds.Cruise.Sweep`, 0.5 a second),
+  stays where it is left, and has a **detent at zero**: sweeping down stops
+  at rest, and going astern is a second, fresh press of Ctrl. Its 200 m/s
+  and its inertia are unchanged.
+- **The drive** is STOP and eighteen notches on a 1-2-5 series, 1 km/s to
+  **1 c, and anything faster is a jump** (ruling 1). A tap is one notch
+  **counted from what the ship is doing, not from where the lever was**
+  (`ShipDriveLever::TapDown`/`TapUp`): Ctrl always slows the ship and Shift
+  always speeds it, from the first tap, even under the soft cap or while
+  spooling. A hold repeats after 0.3 s at `ds.Drive.Sweep`, so STOP to 1 c is
+  six seconds held. No reverse. The ship follows the lever eased in notch
+  space (`ShipDriveLever::Ease`: 0.4 s, at most `ds.Drive.Response` notches a
+  second), never overshoots, and never jumps upward; thin boosters slow the
+  whole ease, never the top. X from 1 c is at rest in about 8.5 s.
+
+The actions and their `IMC_Default` bindings are built by
+`Tools/setup_flight_input.py`, not by hand, and it assigns them on
+`BP_DeepSpaceCharacter`'s defaults; re-running it replaces its own mappings,
+fails rather than bind a key something else uses, and leaves the rest of the
+context alone. `IA_Point` (the pointer's click) is
+`Tools/setup_pointer_input.py`'s. Two traps it works around: Python has no
+`InputActionFactory` (a new action is a duplicate of `IA_Look`), and UE 5.8
+keeps the real mapping list in `default_key_mappings.mappings` -- the
+context's own `mappings` is the older, empty one, and `map_key` writes to
 *that*.
 
 ```bash
-~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
+. Tools/ue_lock.sh && ue_locked ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
     -run=pythonscript -script="$PWD/Tools/setup_flight_input.py" -unattended -nopause -nosplash -NoLiveCoding
 ```
 
@@ -426,6 +489,20 @@ on any other, and on any `SkyLight`, `SkyAtmosphere`, cloud or fog. When a
 planet crosses the sun, the deck darkens by the fraction covered
 (`SunVisibleFraction`; the eclipse).
 
+**A star's surface is honest to a ceiling**: `ds.Sky.StarSurface` x
+min((T / T_sun)^4, 8) (`SkyProjection::StarWarmth`, flight-feel decision 9).
+The 8x ceiling, a star of about 9,700 K, is also the half-float guard:
+hotter stars differ only in colour.
+
+**The dust is honest where it can be, and never slower than cruise**
+(flight-feel decision 8): the counter-frame's motes stream past at the
+ship's own speed up to `ds.Sky.DustKnee` (2 km/s), and above it at a *seen*
+speed that rises on a log scale to `ds.Sky.DustTop` (3 km/s) at 1 c, drawn up
+to `ds.Sky.DustStretch` (8) times long (`ShipDust::SeenSpeed`, `Stretch`).
+They never fade, so the drive never looks slower than cruise. DustTop is 50 m
+a frame at 60 Hz, under the spacing that strobes; at 30 Hz it is past it,
+which is the playtest's question.
+
 **The bodies are drawn with `SM_SkyBody`, never the engine Sphere.** The
 Sphere is 32 segments round, and its polygon showed on the limb from
 10,000 km down -- where the limb's curvature is how near the world is.
@@ -476,54 +553,91 @@ against a galley that no longer exists.
 
 **Two levers, and two words that never swap** (conflict 7):
 
-- **The drive** is in-system: **F** at the helm (`IA_Drive`), which calls
-  `UShipSubsystem::SetDriveEngaged(Commander, bool)`, gated on the pilot like
-  `SetFlightCommand`. Engaged, the ship flies along the nose as the throttle
-  asks, but may *close* on the nearest surface no faster than the room left
-  over `ds.Drive.Tau` (15 s, stretched by thin boosters): at full throttle, a
-  tenth of the remaining room every 1.5 s. So an approach is exponential, a
-  planet grows from a point to a disc with no moment of change, and the ship
-  settles `ds.Drive.Floor` (100 km) up. Leaving is unlimited, and
-  disengaging clamps the speed back to cruise. It is a lever: it stays engaged
-  when the pilot stands up, and survives a jump.
-- **The jump** folds between stars: `SetJumpEngaged`, `IsJumpEngaged`,
-  `EJumpState {Idle, Winding, Ready, Transit}`, `NavText::Jump`, and the HUD's
-  `JUMP WINDING` / `JUMP READY` / `BETWEEN STARS`. The decisions are the pure
-  `FShipNavState`; `UShipSubsystem` acts on them. Its tunables are
-  `ds.Nav.*`.
+- **The drive** is in-system: F at the helm (`SetDriveEngaged(Commander,
+  bool)`, gated on the pilot) and its own lever (*Flying*). It is a lever: it
+  stays set when the pilot stands up. Leaving it spools down to cruise's top
+  at the lever's own pace (`SPOOLING DOWN`), never in one substep. It has no
+  inertia and reports no acceleration.
+- **The jump** folds between stars, or to a world of this system:
+  `SetJumpEngaged`, `IsJumpEngaged`, `EJumpState {Idle, Winding, Ready,
+  Transit}`, `NavText::Jump`, and the HUD's `JUMP WINDING` / `JUMP READY` /
+  `BETWEEN STARS` / `IN THE FOLD`. The decisions are the pure
+  `FShipNavState`; `UShipSubsystem` acts on them. Its tunables are `ds.Nav.*`.
 
-**The system's edge is a surface** (conflict 10).
-`LocalSystem::NearestSurfaceDistance` counts the distance to the edge
-(`InSystemRadiusLy`) as well as to every body. So the drive slows into the
-edge as it does into a planet, and never flies the ship out of its system, where
-`GetSystemAt` would go empty under a sky still drawing the old one. You leave a
-system by jumping. In transit the drive's room is 0, so it gives only cruise
-speed.
+**The soft cap** (flight-feel decision 5, ruling 2): the lever sets the
+speed, and **only when the nose's own ray meets a floor sphere** does
+anything hold it back. Then it takes the whole speed, along the nose, so the
+ship always goes where it points: when the floor is `ds.Drive.HoldSeconds`
+(4 s) off at the present speed it binds, the distance falls by e every 4 s,
+and below the braking knee the ship comes down the braking curve on 80% of
+its boosters (`ShipFlight::MaySpeed`) to rest on the floor. A path that
+misses is not touched: a ship at 1 c past a world holds 1 c. What the cap
+holds, the ease follows, so letting go never snaps the speed up. The corner
+says `HOLDING OFF` while it holds more than 5% off the lever and `AT THE
+FLOOR` there. Cruise uses the braking curve alone, since it has inertia.
+Every body is a floor sphere, tested along the ray (`ShipFlight::RayToFloor`),
+so nothing can be tunnelled through.
+
+**The floor is where the sky stops being honest** (decision 6):
+`UShipSubsystem::FloorFor`, the one function that answers it -- over a world
+the larger of `ds.Flight.Floor` (10 km) and `SkyProjection::RenderedFloor`,
+10.2 km over an Earth and 112 km over a Jupiter; over a star
+`ds.Flight.StarFloorRadii` of its radius. Landing, when it comes, takes over
+there. **The system's edge is a surface** too (conflict 10): an inside-out
+floor sphere `ds.Flight.Floor` inside `InSystemRadiusLy`, so the drive
+settles into it and never flies the ship out of its system, where
+`GetSystemAt` would go empty under a sky still drawing the old one. You
+leave a system by jumping. In transit there are no surfaces.
+
+From 30 light seconds out at 1 c the cap binds about 4 s off and the ship is
+on the floor about a minute later; 1 AU at 1 c is 8 min 19 s and 30 AU is
+4 h 9 min, which is why the in-system jump exists.
 
 **The jump has three levers, each left where it is set**: the course (the
-chart, or `ds.Nav.Plot`), the heading (the helm; the HUD's bearing words, and
-the nose caret on the teal course marker), and engage (the chart, or
-`ds.Nav.Engage`). Engaged, the engine asks for `ds.Nav.WindingWant` (380 W) and
-the charge winds at a rate the watts it actually gets scale. Starved, it still
-winds at `ds.Nav.StarvedRate` of full; it never stops. It asks for nothing
-otherwise, so staying put is never taxed. Once plotted, engaged, charged, and
-within `ds.Nav.ConeDeg` of the nose, **the fold opens by itself.** There is no
-confirm, and there must not be one. A final button would make the player come
-back on the jump's schedule to service it, and a game that makes you do that
-is telling you that you are behind: the anti-chore principle's definition of a
-chore (developer's ruling). If it feels like the game acting without you, the
-answer is a softer cue before the fold -- the hum already rises as the jump
-winds -- never a confirm. For the same reason no screen shows a percentage, a
-bar or a countdown: a number that fills is a clock to watch.
+chart for a star, the map's `Jump here` or `ds.Nav.Plot target` for the
+target, `ds.Nav.Plot` for either), the heading (the helm; the HUD's bearing
+words, and the nose caret on the teal course marker), and engage (the chart,
+the map's `Jump here`, or `ds.Nav.Engage`). One course: a new one of either
+kind replaces the old, and an engaged jump stays engaged across it (the map
+spec's open question). Engaged, the engine asks for `ds.Nav.WindingWant`
+(380 W) and the charge winds at a rate the watts it actually gets scale.
+Starved, it still winds at `ds.Nav.StarvedRate` of full; it never stops. It
+asks for nothing otherwise, so staying put is never taxed. Once plotted,
+engaged, charged, and within `ds.Nav.ConeDeg` of the nose, **the fold opens
+by itself.** There is no confirm, and there must not be one. A final button
+would make the player come back on the jump's schedule to service it, and a
+game that makes you do that is telling you that you are behind: the
+anti-chore principle's definition of a chore (developer's ruling). If it
+feels like the game acting without you, the answer is a softer cue before
+the fold -- the hum already rises as the jump winds -- never a confirm. For
+the same reason **no screen shows the jump's charge** as a percentage, a bar
+or a countdown: a charge that fills is a clock to watch, and waiting it out
+is the jump's schedule, not the player's. That rule is about the charge. It
+was read for a while as "no time on any screen", and the developer ruled it
+back on 2026-09-26: a live time to arrival for an approach the player chose
+is allowed, and the target line and the system map carry one (*The system
+map and the target*).
 
-The fold lasts `ds.Nav.TransitSeconds`, with streaks past the window, and the
-helm does nothing between stars. Arrival is `FShipFlightState::JumpTo`, the
-flight state's fourth write path (ADR 0005, amended): a translation and nothing
-else, onto the line from the departure point to the star, at
-`max(ds.Nav.StandoffAU x sqrt(L), 1.5 x the outermost orbit)` (conflict 9).
-Orientation is untouched, so the new sun is where the nose was and the distant
-stars do not move. The course is the only universe data the ship keeps, as an
-id (ADR 0003, amended).
+**Every fold is an all stop, and every jump arrives at rest** (flight-feel
+decision 4): the fold opening puts both levers to STOP, and the arrival,
+`FShipFlightState::JumpTo` (the flight state's fourth write path, ADR 0005,
+amended), zeroes the velocity and the drive's eased position -- load-bearing,
+since from 1 c the spool-down is longer than the fold. The fold lasts
+`ds.Nav.TransitSeconds`, with streaks past the window. An interstellar
+arrival is a translation onto the line from the departure point to the star,
+at `max(ds.Nav.StandoffAU x sqrt(L), 1.5 x the outermost orbit)` (conflict
+9), and lets go of the target. **An in-system jump** (map decision 12) is
+the same fold to the target: plotted only while the ship is farther than
+`NavStart::WorldReachFactor` (2) standoffs from it (`IsNearEnoughToFly`), it
+arrives on the line from where the fold *opened* (`FoldDeparture`) at the
+standoff that shows the world `ds.Nav.WorldStandoffDeg` (2 degrees) across,
+outside every floor, with the target kept. Orientation is untouched either
+way, so what you aimed at is where the nose is and the distant stars do not
+move. The course is the only universe data the ship keeps, as an id (ADR
+0003, amended). **No cooldown or limit on jumps is built**: the developer
+wants one eventually, and the map spec's *Open questions* records why any
+design must start from its tension with the anti-chore principle -- it is a
+wait imposed on the player.
 
 ## The hum and the lamps
 
@@ -557,10 +671,26 @@ from the dynamic instance, which holds whatever was last written.
 ## The chart chair
 
 `AShipNavScreen`, an `AShipScreen` over the starboard desk screen in the
-cockpit, with `UNavigationWidget` built in C++. E sits you down at it; it shows
-where you are, the six nearest systems, the jump as a word and the course as a
-bearing. Clicking a row plots it (again clears it), and one toggle engages or
-stands down. That is all it does: aiming is the helm's. It keeps nothing it
+cockpit, with `UNavigationWidget` built in C++. It shows where you are, the
+six nearest systems, the jump as a word and the course as a bearing, and an
+in-system course as `in this system`. Clicking a row plots it (again clears
+it), and one toggle engages or stands down. That is all it does: aiming is
+the helm's.
+
+**The chair is a seat, not a lock** (map decision 13, ruling 4). E sits you
+down facing the desk, and nothing is framed. Then E on the chart zooms the
+chart, E on the map zooms the map (the same fitted framing either way), E
+zoomed goes back to the seat, and E on neither stands up; the prompt says
+which (`(E)  Chart`, `Map`, `Back`, `Stand up`, from
+`AShipScreen::GetZoomPrompt`). A screen says what it allows by class, never
+per instance: `IsZoomableFromChartChair`, `ZoomsOnSit` (the laptop, which
+frames as it always did) and `IsDrivableSeated`. Unzoomed, the pointer drives
+only the map, as at the helm. **Tab on the zoomed map** cycles the target
+outward (`CycleTarget`); anywhere else it does nothing. The chair's first
+view is aimed from the *seated* eye (`ADeepSpaceCharacter::SeatedEyeOffset`,
+held by `DeepSpace.Player.SeatedEyeIsPilotEye`), because E runs before the
+frame's animation. `IsUsingScreen()` means a screen is framed and
+`IsInScreenChair()` that the body is in a screen's seat. It keeps nothing it
 could ask for, so a course plotted from the console shows here untold. The
 jump's word is asked every frame; where the ship is, the rows and the course
 cost a sector scan or a generated system, so they are asked again only when
@@ -572,10 +702,12 @@ beside the helm is not a second station (vision: shared presence, never
 division of labour).
 
 It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
-from `NAV_SCREEN` in `hauler_layout.py`. **Its three seat tunables,
-`UseDistanceCm`, `SeatHeightCm` and `ViewDistanceCm`, are per-instance
-`UPROPERTY`s that `place_nav_screen` sets**, so a nudge is an edit there and a
-level rebuild, not C++. Its `Reach` box sits *behind* the panel's face. A volume
+from `NAV_SCREEN` in `hauler_layout.py`. **Its two seat tunables,
+`UseDistanceCm` and `ViewDistanceCm`, are per-instance `UPROPERTY`s that
+`place_nav_screen` sets**, so a nudge is an edit there and a level rebuild, not
+C++. There is no seat height: every screen seats the body on the floor under
+its chair, as the helm does, and the sitting idle lifts the hips onto the
+chair. A `SeatHeightCm` survived that change for a while, moving nothing. Its `Reach` box sits *behind* the panel's face. A volume
 enclosing the panel blocks the channel the pointer traces on, and the screen
 draws perfectly and cannot be clicked. `DeepSpace.Ship.NavScreen` and
 `DeepSpace.UI.NavigationScreen` spawn it before `World->BeginPlay()`, as every
@@ -606,6 +738,74 @@ the body goes back where it stood and a warning is logged. Sitting and
 standing each mark a camera cut (`SetGameCameraCutThisFrame`), so temporal AA
 and motion blur do not smear the frame the view jumps
 (`DeepSpace.Ship.ScreenStandUp`).
+
+
+## The system map and the target
+
+`AShipMapScreen` is the middle cockpit desk screen, on the centre line
+between the helm and the chart chair (`MAP_SCREEN` in `hauler_layout.py`,
+`place_map_screen`, 68 cm wide), drawing `USystemMapWidget` at 600 x 424 --
+the size it is seen at from the helm, so every size in it is a helm pixel.
+It is a warped-log orrery fixed to the universe's axes (`SystemMap::Fit`,
+pure in `UI/SystemMapLayout.*`): the star, each world's ring and dot, the
+ship, and a row per world with its surface distance; the rim is the arrival
+standoff with a margin. It stores nothing it can ask for, and caches only
+its drawing, keyed on what the drawing depends on.
+
+**The helm looks and clicks** (decision 2, ruling 4): E at the map sits
+nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the
+view: live only while the first thing hit is a screen whose class says
+`IsDrivableSeated` -- the map alone -- and then **handed the gate's own hit**
+(`EWidgetInteractionSource::Custom`, `SetCustomHitResult`). The pointer's own
+trace ignores only its pawn, and the helm's seated eye is *inside* the helm
+seat's reach box, so it met the seat and never the map; the gate's trace
+ignores the chair the body is in. The button is let go *before* the pointer
+goes off, or the release is dropped and the next click is swallowed as a
+repeat. A click on a dot, or a row, targets that world; on the target again
+clears it (`SelectWorld`, the one seam both end at).
+
+**The target is an `FBodyId` the ship holds** (`SetTarget`, `ClearTarget`,
+`GetTarget`, `CycleTarget`), never a copy: its position, radius and name are
+procgen's, asked every time. Nothing in the flight reads it -- no autopilot.
+`GetTargetView(Here)` builds `TargetMarker::View` from the ship's own
+position, attitude, velocity, the world's `FloorFor`, the braking and
+`ds.Drive.HoldSeconds`, and **the HUD's target line and the map's band print
+the same view** (`TargetMarker::Line`): `› Kessa II · 0.1° to starboard ·
+1,496 THOUSAND KM · ETA 65 S · NIGHT SIDE`. The bearing's `dead ahead` is
+the world's own disc, never under `TargetMarker::AheadFloor` (0.25 degrees),
+not the jump's 8-degree cone -- so with an in-system jump plotted the jump
+line and the target line can disagree by design (the map spec's *Two
+bearings*).
+
+**The ETA is live** (ruling 3): at 1 m/s or more, when the velocity's ray
+meets the world's floor sphere, `ShipFlight::SecondsToFloor` of that
+distance at the present speed under the cap's own law -- so it counts down a
+second a second and names the moment the ship arrives
+(`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). On a path that
+misses it says `PASSING <altitude> UP`; at rest, nothing. While the lever is
+still spooling up it overstates. The bottom-left corner shows no time: it has
+no destination.
+
+**The marks** (decision 7) are `UShipTargetOverlay`, a child of the HUD's
+canvas, drawn from geometry and never from brightness: teal corner ticks
+round the target for anyone who can see it *through the glass*
+(`TargetMarker::SeenThroughGlass`, a trace that must first meet an actor
+tagged `ShipTags::Glass`, `Sky.Glass`; volumes the eye starts inside are
+stepped past), at least `ds.HUD.TargetMinPixels` across, so a sub-pixel world
+or four black pixels on the night side are still found; an edge chevron, for
+the pilot only, when it is off the view; and, for the pilot with a target
+and at 1 m/s or more, the prograde mark along the velocity. The pilot's nose caret
+shows with a target or any course. At the .03 AU geometry the world is black
+on black and only the bracket finds it (`DeepSpace.Sky.NightSideIsDrawn`;
+look with `ds.Sky.Goto <world> 4.5e6 night`).
+
+**The band's button** is the in-system jump's: `Jump here` plots the target
+and engages in one press (the chart that engages is out of the helm's
+reach), `Stand down` while the course is the target, and `Near enough to
+fly`, disabled, inside the target's reach.
+
+**Landing works from the nearest surface** and uses the target only to name
+it (decision 9). The map has room for moons; procgen makes none.
 
 ## The dressing
 
@@ -696,6 +896,16 @@ ds.Nav.ChargeSeconds 5      wind from cold in 5 s, not 45, for every jump after
 ds.Nav.Engage               engage (ds.Nav.Engage 0 stands down); aim, and it fires by itself
 ```
 
+The system and the drive, from the console:
+
+```text
+ds.Nav.Target               the worlds here, numbered by orbit (I is 1), the target marked
+ds.Nav.Target 2             target world II (or a name, next, none)
+ds.Nav.Plot target          the target as the jump's course (the map's Jump here, without the engage)
+ds.Sky.Goto 3 4.5e6 night   the .03 AU question: 4,500,000 km beyond body 3, its star behind it
+ds.Drive.Top 0.1            shorten the drive lever to 0.1 c for a session (never above 1 c)
+```
+
 `ds.Nav.Charge` fills the charge on the next tick, once. `ds.Nav.Clear` drops
 the course. `ds.HUD 0` hides the HUD for an unadorned look. `ds.Dress.LivedIn`
 and `ds.Dress.Seed` redress the ship where you stand (*The dressing*).
@@ -720,16 +930,23 @@ tests that assert it.
 | `ds.Nav.StandoffAU` | 2.4 AU | `ShipSubsystem.cpp`, from `NavStart::DefaultStandoffAU` (`NavStart.h`) |
 | `ds.Nav.RangeLy` | 12 ly | `ShipSubsystem.cpp` |
 | `ds.Nav.PlaceAtStart` | 1 | `ShipSubsystem.cpp` |
-| `ds.Drive.Tau` | 15 s | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveTau` (`ShipFlightState.h`) |
-| `ds.Drive.Floor` | 100 km | `ShipSubsystem.cpp`, from `FShipFlightLimits::DriveFloor` (`ShipFlightState.h`) |
+| `ds.Nav.WorldStandoffDeg` | 2 deg (the world's width at an in-system arrival) | `ShipSubsystem.cpp`, from `NavStart::DefaultWorldStandoffDeg` (`NavStart.h`) |
+| `ds.Drive.Top` | 1 c; clamped to [1 km/s, 1 c], so it can only shorten the lever | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultTopLight` (`ShipDriveLever.h`) |
+| `ds.Drive.Response` | 3 notches/s at full thrust | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultResponse` |
+| `ds.Drive.Sweep` | 3 notches/s, a held key after 0.3 s | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultSweep` |
+| `ds.Cruise.Sweep` | 0.5 a second | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultCruiseSweep` |
+| `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
+| `ds.Flight.Floor` | 10 km (never under the sky's rendered floor) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultFloorCm` |
+| `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp`, from `ShipFlight::DefaultStarFloorRadii` |
+| `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
-| `ds.Sky.MoteFadeSpeed` | 2000 m/s | `ShipCounterFrame.cpp` |
+| `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |
+| `ds.Sky.StarWarmthGamma` | 1 (honest T^4) | `ShipSky.cpp` -- TEMPORARY: 0.5 is the old compressed T^2; deleted with its test case once the glare is judged |
 | `ds.Sky.Exposure`, `.ExposureMode`, `.ExposureRange` | 0.7 (estimate), 1, 1.5 | `ShipSky.cpp` |
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Sky.SurfaceDetail`, `.Relief`, `.Craters` | 0.3, 0.2, 1 | `ShipSky.cpp` |
-| `ds.HUD.FloorBand` | 0.05 of the floor | `ShipHUDWidget.cpp` -- DRIVE FLOOR shows only while the drive holds the ship there |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
@@ -741,7 +958,14 @@ dressing's rules (`Config/DefaultGame.ini`, above, reloaded with
 number back into `ShipDressingRules.cpp`); room moods and practicals
 (`hauler_layout.py`, a level rebuild); the chart's seat (`place_nav_screen`, a
 level rebuild); the reactor rating and each consumer's want
-(`UShipSubsystem`'s `static constexpr`s, a header change).
+(`UShipSubsystem`'s `static constexpr`s, a header change). And, as named
+constants with tests on them: the drive's notch table, `EaseSeconds` 0.4 and
+`RepeatDelaySeconds` 0.3 (`ShipDriveLever.*`); the 80% braking margin
+(`ShipFlight::BrakingMargin`); the 5% `HOLDING OFF` threshold
+(`UShipHUDWidget::HoldingOffShown`); the map's `SystemMap::PickRadius` (14
+px) and its 600 x 424 draw size; `TargetMarker::AheadFloor`, `NightSideLit`
+and `MinSpeed`; `NavStart::WorldReachFactor` (2); the turn rates
+(`FShipFlightLimits`, a header change).
 
 ## The player's body
 

@@ -320,12 +320,33 @@ namespace ShipSky
      *  none: a number is an index, anything else is a body's Id. */
     DEEPSPACE_API int32 FindBody(const FSkySystem& System, const FString& Which);
 
+    /** Which side of a world ds.Sky.Goto hangs the ship on. */
+    enum class EGotoSide : uint8
+    {
+        /** Between the world and its star: the world seen full and lit. */
+        Day,
+
+        /** Beyond the world from its star, the star behind it and a little
+         *  aside (NightSideSlope): the world seen dark, in the star's glare
+         *  and off its disc -- the .03 AU question's leading hypothesis in
+         *  the geometry DeepSpace.Sky.NightSideIsDrawn and sky_probe --night
+         *  measure, put where eyes can judge it (system map decision 8). */
+        Night,
+    };
+
+    /** How far aside of the anti-star line the night side hangs, as a slope:
+     *  NightSideIsDrawn's 0.002 AU to one side at 0.03 AU out, 3.8 degrees
+     *  at the world. On the line itself the world would sit dead centre on
+     *  the star's disc, a transit, which is not the case in question. */
+    inline constexpr double NightSideSlope = 0.002 / 0.03;
+
     /**
-     * ds.Sky.Goto's placement: AltitudeCm above Body's surface on its day
-     * side, facing it, the system's up kept up. A star has no day side, so
-     * the ship stays on the side of it it is already on. Empty for an index
-     * the system does not have.
+     * ds.Sky.Goto's placement: AltitudeCm above Body's surface on the Side
+     * asked for, facing it, the system's up kept up. A star has no day or
+     * night side, so the ship stays on the side of it it is already on,
+     * whichever is asked. Empty for an index the system does not have.
      */
     DEEPSPACE_API TOptional<FNavPlacement> GotoPlacement(const FSkySystem& System, int32 Body,
-                                                         double AltitudeCm, const FUniversePosition& From);
+                                                         double AltitudeCm, const FUniversePosition& From,
+                                                         EGotoSide Side = EGotoSide::Day);
 }

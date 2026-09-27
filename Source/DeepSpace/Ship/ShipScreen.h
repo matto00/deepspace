@@ -49,15 +49,20 @@ public:
 
     /**
      * Where a player sits to use this screen, and which way they face:
-     * square on, at seat height, in front of the panel. Derived from the
-     * panel's own transform so a screen that moves takes its seat with it.
+     * square on, in front of the panel, on the floor under the seat. The
+     * floor, not the cushion: the sitting idle is posed against a seat
+     * anchored on the floor, as the helm's is, and lifts the hips onto the
+     * chair itself -- so no screen has a seat height to tune. Derived from
+     * the panel's own transform so a screen that moves takes its seat with
+     * it.
      */
     FTransform GetUseTransform() const;
 
     /**
-     * World Z of the floor under the seat, cm: SeatHeightCm below it. What
-     * getting up from this screen stands on -- not the height the feet were
-     * at when the player sat, which is the top of whatever they had climbed.
+     * World Z of the floor under the seat, cm: the use transform's. What
+     * the body sits on and what getting up from this screen stands on --
+     * not the height the feet were at when the player sat, which is the top
+     * of whatever they had climbed.
      */
     double GetUseFloorZ() const;
 
@@ -99,6 +104,37 @@ public:
     UFUNCTION(BlueprintPure, Category = "Screen")
     bool IsUsable() const { return bUsable; }
 
+    // What a seat may do with a screen (system map spec, decisions 2 and 13).
+    // Each is a class decision, never a per-instance one: none is reflected,
+    // so no edit to a placed actor in the level can change it, and the
+    // character's Blueprint layout does not depend on them.
+
+    /**
+     * Whether the view-aimed pointer reaches this screen from a seat -- the
+     * helm, or the chart chair while nothing is zoomed. Only a screen meant
+     * to be glanced at and touched while flying says yes: the map. The chart
+     * is two metres from the helm's eye, inside the hands' reach, and sized
+     * to be read from 60 cm in its own chair; it says no, so nothing in the
+     * level can make it drivable from the helm.
+     */
+    virtual bool IsDrivableSeated() const { return false; }
+
+    /**
+     * Whether sitting at this screen frames it at once. True by default: the
+     * laptop has one screen and a bench in front of it, and nothing else to
+     * look at from there. The chart says no -- its chair is a seat beside two
+     * screens, and the seated player chooses which to zoom.
+     */
+    virtual bool ZoomsOnSit() const { return true; }
+
+    /** Whether E, from the chart chair with this screen in view, frames it:
+     *  the chart and the map. */
+    virtual bool IsZoomableFromChartChair() const { return false; }
+
+    /** What E's prompt names when it would zoom this screen from the chart
+     *  chair: "Chart", "Map". Empty for a screen that is not zoomable. */
+    virtual FText GetZoomPrompt() const { return FText::GetEmpty(); }
+
 protected:
     virtual void OnConstruction(const FTransform& Transform) override;
 
@@ -139,10 +175,6 @@ protected:
     /** How far in front of the panel the player sits, cm. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
     float UseDistanceCm = 62.0f;
-
-    /** Height of the seat off the floor, cm: the galley bench. */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Screen")
-    float SeatHeightCm = 45.0f;
 
     /** How far the eyes sit from the panel while using it, cm. Close: this
      *  is leaning in to read something, not looking across a room. */

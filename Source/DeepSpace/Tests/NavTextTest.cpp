@@ -95,6 +95,37 @@ bool FNavTextTest::RunTest(const FString& Parameters)
                   FString(TEXT("BETWEEN STARS · Kessa")));
     }
 
+    // A jump to a world in this system is the same jump, with one word of
+    // its own: its fold is not between stars (decision 12).
+    {
+        for (const EJumpState State : AllStates)
+        {
+            TestFalse(TEXT("an in-system jump's word has no number either"), HasNumber(NavText::Jump(State, true)));
+            TestFalse(TEXT("nor its chart word"), HasNumber(NavText::JumpWord(State, true)));
+            TestEqual(TEXT("a star jump's line is the one it always was"), NavText::Jump(State, false), NavText::Jump(State));
+            TestEqual(TEXT("and its chart word"), NavText::JumpWord(State, false), NavText::JumpWord(State));
+            if (State != EJumpState::Transit)
+            {
+                TestEqual(TEXT("before the fold, in-system reads as any jump"), NavText::Jump(State, true), NavText::Jump(State));
+                TestEqual(TEXT("on the chart too"), NavText::JumpWord(State, true), NavText::JumpWord(State));
+            }
+        }
+        TestEqual(TEXT("in an in-system fold"), NavText::Jump(EJumpState::Transit, true), FString(TEXT("IN THE FOLD")));
+        TestEqual(TEXT("the chart's word for it"), NavText::JumpWord(EJumpState::Transit, true), FString(TEXT("In the fold")));
+        TestEqual(TEXT("winding toward a world, in the jump's cone words"),
+                  NavText::Jump(EJumpState::Winding, true, TEXT("Kessa II"), FromAngles(-12.0, 0.0), Cone),
+                  TEXT("JUMP WINDING · Kessa II · 12") + Degree + TEXT(" to port"));
+        TestEqual(TEXT("ready, inside the jump's cone"),
+                  NavText::Jump(EJumpState::Ready, true, TEXT("Kessa II"), FromAngles(-5.0, 0.0), Cone),
+                  FString(TEXT("JUMP READY · Kessa II · dead ahead")));
+        TestEqual(TEXT("in its fold, the world and no bearing"),
+                  NavText::Jump(EJumpState::Transit, true, TEXT("Kessa II"), FromAngles(40.0, 0.0), Cone),
+                  FString(TEXT("IN THE FOLD · Kessa II")));
+        TestEqual(TEXT("a star course's line is unchanged by the new overload"),
+                  NavText::Jump(EJumpState::Transit, false, TEXT("Kessa"), FromAngles(40.0, 0.0), Cone),
+                  NavText::Jump(EJumpState::Transit, TEXT("Kessa"), FromAngles(40.0, 0.0), Cone));
+    }
+
     // Every class has its own colour word, and none is a letter or a number.
     {
         TSet<FString> Words;
@@ -107,6 +138,23 @@ bool FNavTextTest::RunTest(const FString& Parameters)
         }
         TestEqual(TEXT("each class is worded differently"), Words.Num(), NumStarClasses);
         TestEqual(TEXT("an M star is a red dwarf"), NavText::StarClass(EStarClass::M), FString(TEXT("red dwarf")));
+    }
+
+    // The map's words for a world: procgen's taxonomy in lower case, and a
+    // name that is the designation unless somebody lives there.
+    {
+        TestEqual(TEXT("barren"), NavText::WorldKind(EPlanetKind::Barren), FString(TEXT("barren")));
+        TestEqual(TEXT("terrestrial"), NavText::WorldKind(EPlanetKind::Terrestrial), FString(TEXT("terrestrial")));
+        TestEqual(TEXT("ocean"), NavText::WorldKind(EPlanetKind::Ocean), FString(TEXT("ocean")));
+        TestEqual(TEXT("ice"), NavText::WorldKind(EPlanetKind::Ice), FString(TEXT("ice")));
+        TestEqual(TEXT("gas giant"), NavText::WorldKind(EPlanetKind::GasGiant), FString(TEXT("gas giant")));
+
+        FPlanet World;
+        World.Designation = TEXT("Kessa II");
+        TestEqual(TEXT("an empty world is its designation"), NavText::WorldName(World), FString(TEXT("Kessa II")));
+        World.GivenName = TEXT("Halden");
+        TestEqual(TEXT("an inhabited one is its given name, then its designation"),
+                  NavText::WorldName(World), FString(TEXT("Halden · Kessa II")));
     }
 
     // The chart's words, pinned here so that the chart, the HUD and

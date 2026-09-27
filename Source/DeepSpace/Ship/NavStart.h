@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Universe/StarSystem.h"
 #include "Universe/UniversePosition.h"
 #include "Universe/UniverseUnits.h"
@@ -93,4 +94,58 @@ namespace NavStart
     DEEPSPACE_API FUniversePosition ArrivalPoint(const FUniversePosition& From,
                                                  const FStarSystem& Destination,
                                                  double StandoffAU = DefaultStandoffAU);
+
+    // -- the in-system jump (system map spec, decision 12) -------------------
+
+    /**
+     * ds.Nav.WorldStandoffDeg's default: an in-system jump meets its world
+     * as a disc 2 degrees across, 53 px on 4K, inside the cone of the nose
+     * and lit as its phase is. Arrived, not landed: an Earth's floor is
+     * 64 s away at 1 c and a Jupiter's 79 s, so the approach, which the
+     * vision says is the content, is still the player's to fly. The opening
+     * shot's 18 degrees would skip most of it; half a degree would look like
+     * not having arrived.
+     */
+    inline constexpr double DefaultWorldStandoffDeg = 2.0;
+
+    /**
+     * However small a world, its standoff is at least this many of its
+     * floors above its surface: a 100 km rock is met 2 degrees across only
+     * 5,700 km out, and its floor is the drive's 10 km -- so the term keeps
+     * the arrival a flight above the floor for a body of any size.
+     */
+    inline constexpr double WorldStandoffFloors = 10.0;
+
+    /**
+     * Within this many of a world's standoffs of its centre, the world is
+     * near enough to fly: an in-system course to it is refused, and one the
+     * ship flies inside is let go. Inside the standoff itself the fold would
+     * carry the ship backward, and from twice it the drive at 1 c is there
+     * in a little over a minute -- about 730,000 km for an Earth.
+     */
+    inline constexpr double WorldReachFactor = 2.0;
+
+    /**
+     * How far from a world's centre an in-system jump lets go, cm:
+     * max(Radius / sin(StandoffDeg / 2), Radius + WorldStandoffFloors x
+     * Floor). An angle rather than a distance, as the star's arrival is
+     * irradiance rather than a distance, so a giant is not met filling the
+     * view and a small world as a point.
+     */
+    DEEPSPACE_API double WorldStandoffCm(double RadiusCm, double FloorCm,
+                                         double StandoffDeg = DefaultWorldStandoffDeg);
+
+    /**
+     * Where an in-system jump from From to a world arrives: on the line from
+     * From to Centre, WorldStandoffCm short of it -- the interstellar
+     * arrival's rule applied to a world, so the world is where the nose was
+     * and nothing turns. Were that point inside any of Others' floor spheres
+     * (another world on the line, a moon once procgen makes them), it moves
+     * out along the line until it is not, so an arrival is never under a
+     * floor the drive itself will not go below.
+     */
+    DEEPSPACE_API FUniversePosition WorldArrivalPoint(const FUniversePosition& From, const FUniversePosition& Centre,
+                                                      double RadiusCm, double FloorCm,
+                                                      double StandoffDeg = DefaultWorldStandoffDeg,
+                                                      TConstArrayView<FFlightSurface> Others = {});
 }

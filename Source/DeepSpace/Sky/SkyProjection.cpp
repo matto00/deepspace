@@ -72,6 +72,17 @@ double SkyProjection::DiscOverlapFraction(double Separation, double RadiusA, dou
     return FMath::Clamp(Lens / (UE_DOUBLE_PI * A * A), 0.0, 1.0);
 }
 
+double SkyProjection::RenderedFloor(double RadiusCm, const FSkyViewParams& Params)
+{
+    return FMath::Max(Params.MinRenderedAltitude, Params.MinRenderedAltitudeOfRadius * FMath::Max(RadiusCm, 0.0));
+}
+
+double SkyProjection::StarWarmth(double TemperatureK, double Gamma)
+{
+    const double Warmth = TemperatureK / UniverseUnits::SolarTemperatureK;
+    return FMath::Min(Compress(Warmth * Warmth * Warmth * Warmth, Gamma), MaxStarWarmth);
+}
+
 double SkyProjection::Compress(double Ratio, double Gamma)
 {
     return Ratio > 0.0 ? FMath::Pow(Ratio, Gamma) : 0.0;
@@ -113,8 +124,7 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
 
         // Below the floor the body stops growing rather than engulfing the
         // view; the direction is still the true one.
-        const double Floor = FMath::Max(Params.MinRenderedAltitude, Params.MinRenderedAltitudeOfRadius * Body.Radius);
-        Shape.RenderDistance = FMath::Max(Distance, Body.Radius + Floor);
+        Shape.RenderDistance = FMath::Max(Distance, Body.Radius + RenderedFloor(Body.Radius, Params));
         const double RenderSin = Body.Radius / Shape.RenderDistance;
         const double RenderRadius = FMath::Asin(RenderSin);
         Shape.Power = Shape.RenderDistance * Shape.RenderDistance - Body.Radius * Body.Radius;
@@ -138,8 +148,11 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
         // and its star, never on the ship.
         if (Body.Kind == ESkyBodyKind::Star)
         {
-            const double Warmth = Body.TemperatureK / UniverseUnits::SolarTemperatureK;
-            View.SurfaceBrightness = Params.StarSurface * Compress(Warmth * Warmth * Warmth * Warmth, Params.FluxGamma);
+            // Honest to the ceiling, not compressed like irradiance (flight-
+            // feel decision 9, amending sky decision 2): the arrival standoff
+            // equalises irradiance, so honest surfaces make every sun's
+            // arrival glare alike.
+            View.SurfaceBrightness = Params.StarSurface * StarWarmth(Body.TemperatureK, Params.StarWarmthGamma);
             View.Phase = 1.0;
         }
         else if (Star)

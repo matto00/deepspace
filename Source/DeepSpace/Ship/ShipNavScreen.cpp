@@ -39,13 +39,11 @@ AShipNavScreen::AShipNavScreen()
     // rebuild and never a C++ one. From the mount at cockpit x 301 (nav spec
     // B1), 126 cm back is the starboard pilot_seat's centre at x 175: the
     // body on the chair, as the laptop's puts it on the bench, rather than
-    // on the cushion's front edge where the spec's 100 cm lands. 55 cm is
-    // the cushion's top. The eyes then lean well in, to read at 60 cm; the
-    // chair sits that far back because the desk is solid to the floor and
-    // knees need the room.
+    // on the cushion's front edge where the spec's 100 cm lands. The eyes
+    // then lean well in, to read at 60 cm; the chair sits that far back
+    // because the desk is solid to the floor and knees need the room.
     bUsable = true;
     UseDistanceCm = 126.0f;
-    SeatHeightCm = 55.0f;
     ViewDistanceCm = 60.0f;
 
     Screen->SetWidgetClass(UNavigationWidget::StaticClass());
@@ -97,6 +95,11 @@ void AShipNavScreen::BeginPlay()
     {
         Interactable->OnInteracted.AddDynamic(this, &AShipNavScreen::HandleInteracted);
     }
+}
+
+FText AShipNavScreen::GetZoomPrompt() const
+{
+    return NSLOCTEXT("DeepSpace", "ZoomChart", "Chart");
 }
 
 void AShipNavScreen::HandleInteracted(AActor* InteractInstigator)

@@ -93,3 +93,65 @@ FUniversePosition NavStart::ArrivalPoint(const FUniversePosition& From, const FS
     const double StandoffCm = ArrivalStandoffAU(Destination, StandoffAU) * UniverseUnits::CmPerAU;
     return Destination.Stub.Position + (-Dir * StandoffCm);
 }
+
+double NavStart::WorldStandoffCm(double RadiusCm, double FloorCm, double StandoffDeg)
+{
+    const double Radius = FMath::Max(0.0, RadiusCm);
+    // Half the angle subtended, and never a whole hemisphere: a standoff
+    // CVar set silly still gives a point outside the world.
+    const double HalfAngle = FMath::Clamp(FMath::DegreesToRadians(StandoffDeg) * 0.5, 1.0e-6, 0.5 * UE_DOUBLE_PI);
+    return FMath::Max(Radius / FMath::Sin(HalfAngle), Radius + WorldStandoffFloors * FMath::Max(0.0, FloorCm));
+}
+
+FUniversePosition NavStart::WorldArrivalPoint(const FUniversePosition& From, const FUniversePosition& Centre,
+                                              double RadiusCm, double FloorCm, double StandoffDeg,
+                                              TConstArrayView<FFlightSurface> Others)
+{
+    // Outward from the world toward where the fold opened, through the
+    // chunk index (ADR 0007).
+    FVector Back = (From - Centre).GetSafeNormal();
+    if (Back.IsZero())
+    {
+        Back = -FVector::ForwardVector;
+    }
+    double Out = WorldStandoffCm(RadiusCm, FloorCm, StandoffDeg);
+
+    // Each floor sphere the point is inside pushes it to that sphere's far
+    // side along the line. A push can land it in another, so go round until
+    // a pass moves nothing; the spheres do not overlap in any system procgen
+    // makes, so a pass or two settles it, and the bound only guards a
+    // pathological list.
+    for (int32 Pass = 0; Pass < 16; ++Pass)
+    {
+        bool bMoved = false;
+        for (const FFlightSurface& Other : Others)
+        {
+            if (Other.bInsideOut)
+            {
+                continue;
+            }
+            const double Shell = FMath::Max(0.0, Other.Radius) + FMath::Max(0.0, Other.Floor);
+            // The line is Centre + Back x s; the sphere, |Centre + Back x s - C| = Shell.
+            const FVector ToOther = Other.Centre - Centre;
+            const double Along = FVector::DotProduct(ToOther, Back);
+            const double Miss2 = ToOther.SizeSquared() - Along * Along;
+            if (Miss2 >= Shell * Shell)
+            {
+                continue;
+            }
+            const double Half = FMath::Sqrt(Shell * Shell - Miss2);
+            if (Out > Along - Half && Out < Along + Half)
+            {
+                // A metre past its far side, so the arrival is outside it
+                // and not on it.
+                Out = Along + Half + 100.0;
+                bMoved = true;
+            }
+        }
+        if (!bMoved)
+        {
+            break;
+        }
+    }
+    return Centre + Back * Out;
+}

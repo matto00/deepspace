@@ -4,6 +4,7 @@
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Player/DeepSpaceCharacter.h"
@@ -165,9 +166,11 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
                                                Configured, FIntPoint(1920, 1080));
     TestTrue(TEXT("the chart did not fit at the old fixed angle"), FMath::Max(OldChart.X, OldChart.Y) > 1.0);
 
-    // What the game does: sitting at the chart sets the camera to the fitted
-    // angle, not the laptop's and not a constant. Headless there is no
-    // viewport, and the character falls back to 16:9.
+    // What the game does: zooming the chart from its chair sets the camera
+    // to the fitted angle, not the laptop's and not a constant. Headless
+    // there is no viewport, and the character falls back to 16:9. The player
+    // has a controller, because the chair's view is the player's own and E
+    // zooms what that view is on (system map spec, decision 13).
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("ScreenFramingTestWorld"));
     FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
     Context.SetCurrentWorld(World);
@@ -238,10 +241,30 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
             // BeginPlay's setup, which is what gives the walking view its angle.
             Player->ConfigureFirstPersonBody();
             const float Walking = Camera->FieldOfView;
+            APlayerController* Controller = World->SpawnActor<APlayerController>();
+            if (Controller)
+            {
+                Controller->Possess(Player);
+            }
             Player->UseScreen(Screen);
             Player->PlaceCamera(0.016f, Player->GetViewRotation());
+            TestTrue(FString::Printf(TEXT("sat in the chart's chair, unzoomed, the view keeps the walking angle (%.1f)"),
+                                     Camera->FieldOfView),
+                     FMath::IsNearlyEqual(Camera->FieldOfView, Walking, 0.01f));
+            // UseScreen aims the first view from where a real body's eyes
+            // settle in the chair; this body has no mesh, so its eyes are at
+            // its feet and that aim passes over the glass. Framing is the
+            // question here, so look at the glass from where these eyes are.
+            if (Controller)
+            {
+                Controller->SetControlRotation((Screen->GetScreen()->GetComponentLocation() - Player->GetEyeLocation()).Rotation());
+                Player->PlaceCamera(0.016f, Player->GetViewRotation());
+            }
+            Player->PressInteract();
+            TestTrue(TEXT("E, looking at the chart, zooms it"), Player->GetZoomedScreen() == Screen);
+            Player->PlaceCamera(0.016f, Player->GetViewRotation());
             const float Wanted = Screen->GetUseFieldOfView(16.0f / 9.0f, Configured, Camera->AspectRatio);
-            TestTrue(FString::Printf(TEXT("sat at the chart the view is fitted to it (%.1f, want %.1f)"),
+            TestTrue(FString::Printf(TEXT("zoomed on the chart the view is fitted to it (%.1f, want %.1f)"),
                                      Camera->FieldOfView, Wanted),
                      FMath::IsNearlyEqual(Camera->FieldOfView, Wanted, 0.01f));
             const FVector2D Seen = ProjectedExtent(Screen->GetFramedSizeCm(), Screen->GetViewDistanceCm(),
@@ -253,6 +276,11 @@ bool FScreenFramingTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("standing up restores the walking view (%.1f, want %.1f)"),
                                      Camera->FieldOfView, Walking),
                      FMath::IsNearlyEqual(Camera->FieldOfView, Walking, 0.01f));
+            if (Controller)
+            {
+                Controller->UnPossess();
+                Controller->Destroy();
+            }
         }
     }
     GEngine->DestroyWorldContext(World);

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
+from placement import (GLASS_TAG, KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
                        SURFACE_TAG, WEAR_TAG, Mood, Mount, Place, Practical, kelvin_to_rgb,
                        lamp_emissive, lamp_role, piece_of, resolve_lights, resolve_mount,
                        resolve_point, resolve_practicals, resolve_props, resolve_surfaces,
@@ -465,6 +465,41 @@ def test_the_chart_width_is_the_one_the_cpp_draws():
     assert "PanelWidthCm = %d.0f;" % L.NAV_SCREEN_WIDTH in cpp, L.NAV_SCREEN_WIDTH
 
 
+def test_the_chart_chair_distance_is_the_one_the_cpp_seats_at():
+    # The chart chair's eye (CHART_EYE) is placed from it, and the chart's
+    # own default is what a chart spawned without build_hauler sits at.
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipNavScreen.cpp")) as f:
+        cpp = f.read()
+    assert "UseDistanceCm = %d.0f;" % L.NAV_SCREEN_USE_DISTANCE in cpp, L.NAV_SCREEN_USE_DISTANCE
+
+
+def test_the_seated_eye_is_the_one_the_character_aims_from():
+    # ADeepSpaceCharacter::SeatedEyeOffset is where UseScreen aims the chart
+    # chair's first view from, and DeepSpace.Player.SeatedEyeIsPilotEye holds
+    # it to the measured eye; the layout's SEATED_EYE must be the same one.
+    import re
+    with open(os.path.join(ROOT, "Source/DeepSpace/Player/DeepSpaceCharacter.cpp")) as f:
+        cpp = f.read()
+    found = re.search(r"SeatedEyeOffset\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", cpp)
+    assert found, "no SeatedEyeOffset in DeepSpaceCharacter.cpp"
+    assert tuple(float(v) for v in found.groups()) == tuple(float(v) for v in L.SEATED_EYE), \
+        (found.groups(), L.SEATED_EYE)
+
+
+def test_the_chart_eye_is_a_seated_eye_over_the_chart_chair():
+    # The body sits on the starboard pilot_seat, facing the chart, with the
+    # helm's seated eye: over the chair's 60 x 60 cm footprint, at the helm's
+    # height, on the chart's centre line less the idle's 2 cm to port.
+    ship = L.generate()
+    chair = L.resolve_point(ship.plan, *L.NAV_SCREEN_CHAIR)
+    ex, ey, ez = ship.chart_eye
+    assert L.CHART_EYE[0] == L.NAV_SCREEN_CHAIR[0] == "cockpit"
+    assert ship.nav_screen_yaw == 0, "SEATED_EYE is added in the room's frame; turn it with the chart"
+    assert abs(ex - chair[0]) < 30 and abs(ey - chair[1]) < 30, (ship.chart_eye, chair)
+    assert ez == ship.pilot_eye[2], (ez, ship.pilot_eye)
+    assert ship.nav_screen_location[0] - ex == L.NAV_SCREEN_USE_DISTANCE - L.SEATED_EYE[0]
+
+
 def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
     # Plan conflict 16: the footprint plus the laptop's margin, and the strip
     # to the chair. Slice 3's clutter reads it; nothing may sit on the chart.
@@ -480,6 +515,151 @@ def test_the_chart_exclude_covers_the_chart_and_reaches_its_chair():
     # It is on the desk's starboard half, never over the helm's side.
     helm_y = resolve_point(ship.plan, L.PILOT_SEAT[0], L.PILOT_SEAT[1])[1]
     assert y0 > helm_y
+
+
+# -- the system map ------------------------------------------------------------
+
+def _map_prop(ship):
+    """The desk screen prop the map covers."""
+    _, y, _ = ship.map_screen_location
+    screens = [b for b in ship.boxes if b.role == "screen"
+               and abs(b.centre[1] - y) <= b.size[1] / 2.0]
+    assert len(screens) == 1, [b.label for b in screens]
+    return screens[0]
+
+
+def test_the_map_is_in_the_cockpit_facing_aft_on_the_centre_line():
+    # On the ship's centre line, between the helm and the chart chair, so
+    # both can see it (system map spec, decision 1).
+    ship = L.generate()
+    x, y, z = ship.map_screen_location
+    r = ship.plan.room("cockpit")
+    assert L.MAP_SCREEN[0] == "cockpit"
+    assert r.x < x < r.x + r.w and r.y < y < r.y + r.d and 0 < z < r.height
+    assert ship.map_screen_yaw == 0
+    assert y == r.y + r.d / 2.0 == 0, (y, r)
+    helm_y = resolve_point(ship.plan, L.PILOT_SEAT[0], L.PILOT_SEAT[1])[1]
+    chair_y = resolve_point(ship.plan, *L.NAV_SCREEN_CHAIR)[1]
+    assert helm_y < y < chair_y
+
+
+def test_the_map_covers_the_middle_desk_screen_one_cm_proud_and_level():
+    # The middle one of the desk's three: not the chart's, not the port
+    # screen ahead of the helm. 1 cm proud, for the chart's reason: the prop
+    # blocks Visibility. Level with it, so the map covers the screen it
+    # replaces, and no wider than its face.
+    ship = L.generate()
+    prop = _map_prop(ship)
+    desk_screens = sorted((b for b in ship.boxes if b.role == "screen"
+                           and b.label.startswith("prop_cockpit_desk_")),
+                          key=lambda b: b.centre[1])
+    assert len(desk_screens) == 3 and prop is desk_screens[1], [b.label for b in desk_screens]
+    assert prop is not _chart_prop(ship)
+    aft_face = prop.centre[0] - prop.size[0] / 2.0
+    assert abs(aft_face - ship.map_screen_location[0] - 1.0) < 1e-6, (aft_face, ship.map_screen_location)
+    assert ship.map_screen_location[1] == prop.centre[1]
+    assert ship.map_screen_location[2] == prop.centre[2], (ship.map_screen_location, prop.centre)
+    assert L.MAP_SCREEN_WIDTH <= prop.size[1] - 2, (L.MAP_SCREEN_WIDTH, prop.size)
+
+
+def _map_screen_source():
+    """Every source file that mentions AShipMapScreen, header and body, and
+    their text joined, so the width is found wherever the class sets it. No
+    file naming the class fails, as does a class with no PanelWidthCm."""
+    import glob
+    found = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "Source/DeepSpace/**/*.[hc]*"), recursive=True)):
+        with open(path) as f:
+            text = f.read()
+        if "AShipMapScreen" in text and "/Tests/" not in path:
+            found.append((path, text))
+    assert found, "no source outside Tests/ names AShipMapScreen"
+    return "\n".join(text for _, text in found)
+
+
+def test_the_map_width_is_the_one_the_cpp_draws():
+    import re
+    cpp = _map_screen_source()
+    widths = re.findall(r"PanelWidthCm\s*=\s*([\d.]+)f?\s*;", cpp)
+    assert widths, "AShipMapScreen's source sets no PanelWidthCm"
+    assert {float(w) for w in widths} == {float(L.MAP_SCREEN_WIDTH)}, (widths, L.MAP_SCREEN_WIDTH)
+
+
+def test_the_map_draw_size_is_the_one_the_cpp_draws():
+    # The panel's height is its width scaled by the draw size, and
+    # check_map_sightline samples the corners at that height.
+    import re
+    cpp = _map_screen_source()
+    sizes = re.findall(r"DrawSizePixels\s*=\s*FVector2D\(\s*([\d.]+)f?\s*,\s*([\d.]+)f?\s*\)", cpp)
+    assert sizes, "AShipMapScreen's source sets no DrawSizePixels"
+    assert {(float(a), float(b)) for a, b in sizes} == {tuple(float(v) for v in L.MAP_DRAW_SIZE)}, \
+        (sizes, L.MAP_DRAW_SIZE)
+
+
+def _sky_test_world():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Tests/SkyTestWorld.h")) as f:
+        return f.read()
+
+
+def _header_vector(header, name):
+    import re
+    found = re.search(name + r"\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", header)
+    assert found, "no %s in SkyTestWorld.h" % name
+    return tuple(float(v) for v in found.groups())
+
+
+def test_the_pilot_eye_is_the_one_the_cpp_tests_look_from():
+    # SkyTestWorld::PilotEye is where DeepSpace.Sky and the target bracket's
+    # glass trace are tested from, and DeepSpace.Player.SeatedEyeIsPilotEye
+    # holds it to where the seated character's eyes really are; the layout's
+    # helm checks must be about the same eye, from the same seat.
+    header = _sky_test_world()
+    ship = L.generate()
+    assert _header_vector(header, "PilotEye") == tuple(float(v) for v in ship.pilot_eye), \
+        (_header_vector(header, "PilotEye"), ship.pilot_eye)
+    assert _header_vector(header, "HelmSeat") == tuple(float(v) for v in ship.pilot_seat_location), \
+        (_header_vector(header, "HelmSeat"), ship.pilot_seat_location)
+
+
+def test_the_eye_tolerance_is_the_one_the_cpp_measures_against():
+    import re
+    import validate_hauler as V
+    found = re.search(r"PilotEyeBob\s*=\s*([\d.]+)\s*;", _sky_test_world())
+    assert found, "no PilotEyeBob in SkyTestWorld.h"
+    assert float(found.group(1)) == V.SEATED_EYE_BOB, (found.group(1), V.SEATED_EYE_BOB)
+
+
+def test_the_pilot_eye_is_a_seated_eye_over_the_helm_seat():
+    # A seated eye, not a standing one: a standing eye (MM_Idle's camera
+    # peaks at 166 cm) is how a seated-helm check came to look from 170 cm,
+    # over a desk screen the real pilot sees the nose through. On a 55 cm
+    # seat an adult's eye is some 70 cm up; the measured one is 125.
+    ship = L.generate()
+    seat = ship.pilot_seat_location
+    ex, ey, ez = ship.pilot_eye
+    assert L.PILOT_EYE[0] == L.PILOT_SEAT[0] == "cockpit"
+    assert ship.pilot_seat_yaw == 0, "SEATED_EYE is added in the room's frame; turn it with the seat"
+    assert (ex - seat[0], ey - seat[1], ez - seat[2]) == tuple(float(v) for v in L.SEATED_EYE), \
+        (ship.pilot_eye, seat, L.SEATED_EYE)
+    # Over the seat: within its 60 x 60 cm footprint, forward of its back.
+    assert abs(ex - seat[0]) < 30 and abs(ey - seat[1]) < 30, (ship.pilot_eye, seat)
+    # Seated height: well under a standing eye, well over the cushion.
+    assert 110 <= ez - seat[2] <= 140, ez
+
+
+def test_the_glass_tag_is_the_one_the_cpp_traces_for():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipTags.cpp")) as f:
+        cpp = f.read()
+    assert 'Glass(TEXT("%s"))' % GLASS_TAG in cpp, GLASS_TAG
+
+
+def test_the_ship_has_glass_for_the_tag_to_mark():
+    # Every pane in every window is a glass box, which build_hauler tags; a
+    # window whose pane were some other role would hide the target behind it.
+    ship = L.generate()
+    glass = [b for b in ship.boxes if b.role == "glass"]
+    windows = [o for o in ship.plan.openings if o[0] == "window"]
+    assert len(glass) == len(windows) == len(L.WINDOWS), (len(glass), len(windows))
 
 
 # -- dressing surfaces ---------------------------------------------------------

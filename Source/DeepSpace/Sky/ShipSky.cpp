@@ -94,14 +94,30 @@ namespace
      * pi over the Sun's solid angle at 1 AU, about 46,000 -- and at the
      * galley's exposure that is a pixel value past 65,504, the ceiling of the
      * half-float scene colour, where it becomes infinity and the bloom goes
-     * with it. 1,000 is blinding under bloom and more than a decade under
-     * the ceiling. The projection's own default of 1 would draw the Sun three
-     * times as bright as a planet, which is not the brightest thing in the
-     * game.
+     * with it. 1,000 is blinding under bloom and puts a Sun more than a
+     * decade under the ceiling, and the hottest star, held at
+     * SkyProjection::MaxStarWarmth, under half of it. The projection's own
+     * default of 1 would draw the Sun three times as bright as a planet,
+     * which is not the brightest thing in the game. Stays 1,000 until the
+     * developer's verdict on the glare (flight-feel decision 9).
      */
     TAutoConsoleVariable<float> CVarStarSurface(
         TEXT("ds.Sky.StarSurface"), 1000.0f,
-        TEXT("A resolved Sun's surface brightness, in units of a white surface at 1 AU. Honest is ~46,000."));
+        TEXT("A resolved Sun's surface brightness, in units of a white surface at 1 AU. Honest is ~46,000. ")
+        TEXT("Candidates for the glare verdict: 1000, 700, 450."));
+
+    /**
+     * TEMPORARY, until the developer's verdict on the star's glare
+     * (flight-feel decision 9): the exponent on a star's (T / T_sun)^4. 1 is
+     * the ruled law, honest to SkyProjection::MaxStarWarmth; 0.5 is the
+     * compressed T^2 the sky shipped with. Both live, so the two can be put
+     * side by side in play. Once judged, the chosen law is written without
+     * this and it is deleted.
+     */
+    TAutoConsoleVariable<float> CVarStarWarmthGamma(
+        TEXT("ds.Sky.StarWarmthGamma"), 1.0f,
+        TEXT("TEMPORARY. A star's surface goes as ((T / T_sun)^4)^this, capped at 8x a Sun's: 1 honest (the ruled law), ")
+        TEXT("0.5 the old compressed T^2."));
 
     /** The faintest background star, so that it is just there against black
      *  at the galley's exposure and the brightest -- 400 times its flux, 20
@@ -175,6 +191,7 @@ namespace
         Params.FluxGamma = CVarFluxGamma.GetValueOnGameThread();
         Params.MinPointPixels = AShipSky::PointPixels();
         Params.StarSurface = CVarStarSurface.GetValueOnGameThread();
+        Params.StarWarmthGamma = FMath::Max(0.0f, CVarStarWarmthGamma.GetValueOnGameThread());
         return Params;
     }
 }
@@ -718,7 +735,7 @@ int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
 }
 
 TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,
-                                                const FUniversePosition& From)
+                                                const FUniversePosition& From, EGotoSide Side)
 {
     if (!System.Bodies.IsValidIndex(Body))
     {
@@ -728,11 +745,31 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
     const FSkyBody* Star = System.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
 
     // Out from the body toward where the ship will hang: the star, for a
-    // world, so it is seen full and lit; for a star, back toward the ship.
+    // world's day side, so it is seen full and lit; away from it for the
+    // night side, so the world is dark with its star behind it; for a star,
+    // back toward the ship.
+    //
+    // The night side is not the anti-sun line itself: that would hang the
+    // world dead centre on the star's disc, a transit silhouette, which is
+    // the easiest case to see and also the one most drowned in glare. It is
+    // the .03 AU question's geometry, NightSideIsDrawn's and sky_probe
+    // --night's: off the line by NightSideSlope, in the system's plane, to
+    // +Y of a star at -X -- 3.8 degrees at the world, a 176-degree phase,
+    // and the world about 3.7 degrees off the star's centre from the ship.
     FVector Out = FVector::ZeroVector;
     if (Target.Kind != ESkyBodyKind::Star && Star)
     {
-        Out = (Star->Position - Target.Position).GetSafeNormal();
+        const FVector Sunward = (Star->Position - Target.Position).GetSafeNormal();
+        Out = Sunward;
+        if (Side == EGotoSide::Night)
+        {
+            FVector Aside = FVector::CrossProduct(FVector::UpVector, -Sunward).GetSafeNormal();
+            if (Aside.IsNearlyZero())
+            {
+                Aside = FVector::CrossProduct(FVector::ForwardVector, -Sunward).GetSafeNormal();
+            }
+            Out = (-Sunward + Aside * NightSideSlope).GetSafeNormal();
+        }
     }
     if (Out.IsNearlyZero())
     {
@@ -760,9 +797,25 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
 void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
                     FOutputDevice& Out)
 {
-    if (Args.Num() < 2)
+    // A trailing "night" asks for the far side from the star, and is always
+    // taken off before the rest is read: "1 night", its altitude forgotten,
+    // is then the usage, never night read as 0 km, onto the surface.
+    TConstArrayView<FString> Rest = Args;
+    ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
+    if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
-        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km>: onto the body's day side, facing it. Bodies:"));
+        Side = ShipSky::EGotoSide::Night;
+        Rest = Rest.Slice(0, Rest.Num() - 1);
+    }
+    // The altitude must be a number: a body's name has spaces in it, so a
+    // forgotten altitude would otherwise read the name's last word as 0 km.
+    // Any number, exponent form included: the .03 AU case is 4500000 km,
+    // and 4.5e6 is how a person writes it.
+    double AltitudeKm = 0.0;
+    if (Rest.Num() < 2 || !LexTryParseString(AltitudeKm, *Rest.Last()) || !FMath::IsFinite(AltitudeKm))
+    {
+        Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night]: onto the body's day side, or its night side, ")
+                TEXT("facing it. Bodies:"));
         for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
         {
             Out.Logf(TEXT("  %d  %s"), Index, *System.Bodies[Index].Id.ToString());
@@ -777,18 +830,18 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
 
     // A body's Id can have spaces in it, so every argument but the last is
     // the body.
-    const FString Which = FString::Join(Args.Slice(0, Args.Num() - 1), TEXT(" "));
-    const double AltitudeKm = FCString::Atod(*Args.Last());
+    const FString Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
     const int32 Body = ShipSky::FindBody(System, Which);
     const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
-        System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition());
+        System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition(), Side);
     if (!Placement)
     {
         Out.Logf(TEXT("ds.Sky.Goto: no body '%s' here (%d bodies)."), *Which, System.Bodies.Num());
         return;
     }
     Ship.PlaceShip(Placement->Position, Placement->Orientation);
-    Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s."), AltitudeKm, *System.Bodies[Body].Id.ToString());
+    Out.Logf(TEXT("ds.Sky.Goto: %.0f km above %s%s."), AltitudeKm, *System.Bodies[Body].Id.ToString(),
+             Side == ShipSky::EGotoSide::Night && System.Bodies[Body].Kind != ESkyBodyKind::Star ? TEXT(", night side") : TEXT(""));
 }
 
 namespace
@@ -806,7 +859,9 @@ namespace
 
     FAutoConsoleCommandWithWorldArgsAndOutputDevice GotoCommand(
         TEXT("ds.Sky.Goto"),
-        TEXT("'ds.Sky.Goto <body> <altitude_km>': place the ship above a body of this system, on its day side, ")
-        TEXT("facing it -- once; the orientation is never held. <body> is an index or a name."),
+        TEXT("'ds.Sky.Goto <body> <altitude_km> [night]': place the ship above a body of this system, on its day ")
+        TEXT("side -- or with 'night' its far side from the star, 3.8 degrees off the star's line as the .03 AU ")
+        TEXT("case is, the world dark in the glare and not in transit -- facing it, once; ")
+        TEXT("the orientation is never held. <body> is an index or a name. Then 'ds.Nav.Target <body>' brackets it."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Goto));
 }

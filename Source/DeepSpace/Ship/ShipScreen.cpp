@@ -96,20 +96,23 @@ FTransform AShipScreen::GetUseTransform() const
     const FVector Flat = FVector(Normal.X, Normal.Y, 0.0).GetSafeNormal();
     const FVector Panel = Screen ? Screen->GetComponentLocation() : GetActorLocation();
 
-    // Seat height is measured from the floor, which is Z = 0 throughout the
-    // ship (Tools/hauler_layout.py).
+    // On the floor, which is Z = 0 throughout the ship
+    // (Tools/hauler_layout.py). There was a seat height here, the cushion's
+    // top, until the body came to be placed on the floor under the seat
+    // (the sitting idle lifts the hips itself); after that it moved nothing
+    // and only looked like a tunable.
     const FVector Seat(Panel.X + Flat.X * UseDistanceCm,
                        Panel.Y + Flat.Y * UseDistanceCm,
-                       SeatHeightCm);
+                       0.0);
 
     return FTransform((-Flat).Rotation(), Seat);
 }
 
 double AShipScreen::GetUseFloorZ() const
 {
-    // Derived from the seat rather than assumed to be 0, so that if the seat
-    // ever learns to find its floor, the floor stood up onto follows it.
-    return GetUseTransform().GetLocation().Z - SeatHeightCm;
+    // Asked of the seat rather than assumed to be 0, so that if the seat
+    // ever learns to find its floor, the floor sat and stood on follows it.
+    return GetUseTransform().GetLocation().Z;
 }
 
 FTransform AShipScreen::GetViewTransform() const

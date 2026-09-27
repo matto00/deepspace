@@ -1,6 +1,8 @@
 #include "Misc/AutomationTest.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipFlightState.h"
+#include "Ship/ShipSubsystem.h"
+#include "Sky/SkySystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -108,13 +110,16 @@ bool FNavStartTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("it is not the outermost planet it frames"), ToSmaller.Size() > 1.0 * AU);
     }
 
-    // Whatever the world, the ship opens outside it and above the drive's
-    // floor, and it fills the glass the same: a giant, an Earth and a Mars
-    // are all an 18 degree disc.
+    // Whatever the world, the ship opens outside it and above the floor the
+    // flight law gives it, and it fills the glass the same: a giant, an Earth
+    // and a Mars are all an 18 degree disc.
     {
-        const double Floor = FShipFlightLimits::Cruise().DriveFloor;
         for (const double Radius : {11.0, 1.0, 0.53})
         {
+            FSkyBody Opened;
+            Opened.Kind = ESkyBodyKind::Planet;
+            Opened.Radius = Radius * UniverseUnits::CmPerEarthRadius;
+            const double Floor = UShipSubsystem::FloorFor(Opened);
             FStarSystem System = SunLike();
             System.Planets.Reset();
             System.Planets.Add(MakePlanet(0, 1.0, 1.9, Radius));

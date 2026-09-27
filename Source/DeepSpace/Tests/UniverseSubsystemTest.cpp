@@ -131,6 +131,39 @@ bool FUniverseSubsystemTest::RunTest(const FString& Parameters)
         }
     }
 
+    // GetSystemIdAt is GetSystemAt without the generation: the same answer
+    // about which system, everywhere, including between stars.
+    {
+        const TArray<FStarSystemStub> Near = Universe->GetSystemsNear(Home->Stub.Position, 20.0 * UniverseUnits::CmPerLightYear);
+        TArray<FUniversePosition> Probes = {
+            Home->Stub.Position,
+            Home->PlanetPosition(Home->Planets.Num() - 1),
+            Home->Stub.Position + FVector(0.0, 0.0, 0.9 * FStarSystem::InSystemRadiusCm),
+            Home->Stub.Position + FVector(0.0, 0.0, 1.1 * FStarSystem::InSystemRadiusCm),
+        };
+        for (const FStarSystemStub& Stub : Near)
+        {
+            Probes.Add(Stub.Position + FVector(0.5 * FStarSystem::InSystemRadiusCm, 0.0, 0.0));
+            Probes.Add(Stub.Position + (Home->Stub.Position - Stub.Position) * 0.5);
+        }
+        int32 Between = 0;
+        for (int32 Index = 0; Index < Probes.Num(); ++Index)
+        {
+            const TOptional<FStarSystem> System = Universe->GetSystemAt(Probes[Index]);
+            const TOptional<FSystemId> Id = Universe->GetSystemIdAt(Probes[Index]);
+            Between += System ? 0 : 1;
+            TestEqual(FString::Printf(TEXT("probe %d: GetSystemIdAt finds a system exactly when GetSystemAt does"), Index),
+                      Id.IsSet(), System.IsSet());
+            if (Id && System)
+            {
+                TestTrue(FString::Printf(TEXT("probe %d: and the same one"), Index), *Id == System->Stub.Id);
+            }
+        }
+        TestTrue(TEXT("some probe is between stars, or the empty answer went untested"), Between > 0);
+        const TOptional<FSystemId> AtHome = Universe->GetSystemIdAt(Home->Stub.Position);
+        TestTrue(TEXT("the start star's position is the start system's id"), AtHome.IsSet() && *AtHome == Start);
+    }
+
     TestFalse(TEXT("a slot the sector lacks is no system"),
         Universe->GetSystem(FSystemId{Start.Sector, Reference.SystemCount(Start.Sector)}).IsSet());
 

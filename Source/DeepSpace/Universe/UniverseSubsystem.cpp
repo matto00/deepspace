@@ -251,6 +251,17 @@ TOptional<FStarSystem> UUniverseSubsystem::GetSystemAt(const FUniversePosition& 
     return {};
 }
 
+TOptional<FSystemId> UUniverseSubsystem::GetSystemIdAt(const FUniversePosition& Where) const
+{
+    // The first half of GetSystemAt, and exactly that half: the two must
+    // never disagree about which system a position is in.
+    if (const TOptional<FStarSystemStub> Stub = MakeGalaxy().FindSystemAt(Where, FStarSystem::InSystemRadiusCm))
+    {
+        return Stub->Id;
+    }
+    return {};
+}
+
 TOptional<FStarSystem> UUniverseSubsystem::GetSystem(const FSystemId& Id) const
 {
     const FGalaxyGenerator Galaxy = MakeGalaxy();

@@ -7,6 +7,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/NavStart.h"
+#include "Ship/ShipDriveLever.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
@@ -15,6 +16,7 @@
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkyStarfield.h"
+#include "Tests/SkyTestWorld.h"
 #include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -178,8 +180,67 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         Dome->Destroy();
     }
 
-    // The motes fade with speed: full at cruise less a tenth, gone under the
-    // drive, where wrapping every frame would strobe.
+    // The dust's law (flight-feel decision 8), pure: honest to the knee,
+    // then a slow log climb to DustTop at the drive's top, each mote
+    // stretched by the same fraction of that scale.
+    {
+        const double Knee = ShipDust::DefaultKnee;
+        const double DustTop = ShipDust::DefaultDustTop;
+        const double MaxStretch = ShipDust::DefaultStretch;
+        const double Top = ShipDriveLever::LightCmPerSecond;
+
+        bool bHonest = true;
+        for (const double Speed : { 0.0, 1.0, 2.0e4, 1.0e5, 1.999e5, Knee })
+        {
+            bHonest &= ShipDust::SeenSpeed(Speed, Knee, DustTop, Top) == Speed;
+            bHonest &= ShipDust::Stretch(Speed, Knee, Top, MaxStretch) == 1.0;
+        }
+        TestTrue(TEXT("up to the knee the dust is streamed at the true speed, unstretched"), bHonest);
+        TestEqual(TEXT("the drive's first notch is seen at its true 1 km/s"),
+                  ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(1), Knee, DustTop, Top), ShipDriveLever::NotchSpeed(1));
+        TestEqual(TEXT("and its second at 2 km/s: ten times cruise's top"),
+                  ShipDust::SeenSpeed(ShipDriveLever::NotchSpeed(2), Knee, DustTop, Top), ShipDriveLever::NotchSpeed(2));
+        TestTrue(TEXT("continuous at the knee"),
+                 FMath::IsNearlyEqual(ShipDust::SeenSpeed(Knee * (1.0 + 1e-9), Knee, DustTop, Top), Knee, Knee * 1e-8));
+
+        bool bRising = true;
+        bool bUnderTop = true;
+        bool bStretchBounded = true;
+        double Previous = ShipDust::SeenSpeed(Knee, Knee, DustTop, Top);
+        double PreviousStretch = 1.0;
+        for (int32 Step = 1; Step <= 400; ++Step)
+        {
+            const double Speed = Knee * FMath::Pow(Top / Knee, Step / 400.0);
+            const double Seen = ShipDust::SeenSpeed(Speed, Knee, DustTop, Top);
+            const double Stretch = ShipDust::Stretch(Speed, Knee, Top, MaxStretch);
+            bRising &= Seen > Previous && Stretch > PreviousStretch;
+            bUnderTop &= Seen <= DustTop * (1.0 + 1e-12);
+            bStretchBounded &= Stretch <= MaxStretch * (1.0 + 1e-12);
+            Previous = Seen;
+            PreviousStretch = Stretch;
+        }
+        TestTrue(TEXT("above the knee the seen speed and the stretch strictly rise, to the top"), bRising);
+        TestTrue(TEXT("the seen speed never passes DustTop"), bUnderTop);
+        TestTrue(TEXT("and the stretch never passes DustStretch"), bStretchBounded);
+        TestTrue(TEXT("at 1 c the dust is seen at DustTop"),
+                 FMath::IsNearlyEqual(ShipDust::SeenSpeed(Top, Knee, DustTop, Top), DustTop, DustTop * 1e-9));
+        TestTrue(TEXT("stretched DustStretch times"),
+                 FMath::IsNearlyEqual(ShipDust::Stretch(Top, Knee, Top, MaxStretch), MaxStretch, 1e-9));
+        TestEqual(TEXT("and past the top, no faster"), ShipDust::SeenSpeed(10.0 * Top, Knee, DustTop, Top), DustTop);
+        TestTrue(TEXT("the middle of the scale is the geometric middle"),
+                 FMath::IsNearlyEqual(ShipDust::SeenSpeed(FMath::Sqrt(Knee * Top), Knee, DustTop, Top),
+                                      FMath::Sqrt(Knee * DustTop), 1e-3));
+
+        // A top at or under the knee: the whole lever is honest, and above
+        // the knee nothing climbs.
+        TestEqual(TEXT("a lever that ends under the knee leaves the dust flat past it"),
+                  ShipDust::SeenSpeed(3.0e5, Knee, DustTop, 1.0e5), Knee);
+        TestEqual(TEXT("and unstretched"), ShipDust::Stretch(3.0e5, Knee, 1.0e5, MaxStretch), 1.0);
+    }
+
+    // The dust through the frame: shown at every speed, streamed at the seen
+    // speed along the true velocity, stretched along it, and never drawn
+    // outside its field.
     UMaterialInterface* StarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarPath);
     const UUniverseSubsystem* Universe = World->GetSubsystem<UUniverseSubsystem>();
     if (Ship && TestNotNull(TEXT("M_SkyStar exists"), StarMaterial) && TestNotNull(TEXT("and a universe"), Universe))
@@ -189,49 +250,226 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         Motes->GetNearStars()->SetStaticMesh(Sphere);
         Motes->GetNearStars()->SetMaterial(0, StarMaterial);
         Motes->DistantStarCount = 16;
+        Motes->NearStarCount = 64;
+        const double Radius = Motes->NearFieldRadius;
+        const double Knee = ShipDust::DefaultKnee;
 
         float Authored = 0.0f;
         StarMaterial->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), Authored);
 
-        const TOptional<FStarSystem> Home = Universe->GetSystem(Universe->GetStartSystem());
-        if (TestTrue(TEXT("there is a start system to drive at"), Home.IsSet()))
+        const auto Brightness = [Motes]()
         {
+            float Value = -1.0f;
+            if (const UMaterialInterface* Material = Motes->GetNearStars()->GetMaterial(0))
+            {
+                Material->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), Value);
+            }
+            return Value;
+        };
+
+        // Every mote drawn where the dust is, through the ship's rotation, and
+        // inside the field in the field's own axes.
+        const auto CheckDrawn = [this, Motes, Ship, Radius](const TCHAR* Case, double ExpectedStretch, const FVector& Along)
+        {
+            const FShipFlightState& Flight = Ship->GetFlightState();
+            const TConstArrayView<FVector> Field = Motes->GetDustField();
+            bool bWhere = true;
+            bool bInField = true;
+            bool bStretched = true;
+            bool bAlong = true;
+            for (int32 Index = 0; Index < Field.Num(); ++Index)
+            {
+                FTransform Instance;
+                Motes->GetNearStars()->GetInstanceTransform(Index, Instance, true);
+                bWhere &= Instance.GetLocation().Equals(Flight.UniverseDirectionToWorld(Field[Index]), 0.05);
+                const FVector InFieldAxes = Flight.GetUniverseOrientation().RotateVector(Instance.GetLocation());
+                bInField &= InFieldAxes.GetAbsMax() <= Radius + 1.0 && Field[Index].GetAbsMax() <= Radius;
+                const FVector Scale = Instance.GetScale3D();
+                bStretched &= FMath::IsNearlyEqual(Scale.X, Motes->NearStarScale * ExpectedStretch, 1e-4 * Scale.X)
+                    && FMath::IsNearlyEqual(Scale.Y, Motes->NearStarScale, 1e-6) && FMath::IsNearlyEqual(Scale.Z, Motes->NearStarScale, 1e-6);
+                if (!Along.IsZero())
+                {
+                    bAlong &= Instance.GetRotation().GetForwardVector().Equals(Flight.UniverseDirectionToWorld(Along), 1e-4);
+                }
+            }
+            TestTrue(FString::Printf(TEXT("%s: every mote is drawn where the dust is, through the ship's rotation"), Case), bWhere);
+            TestTrue(FString::Printf(TEXT("%s: and none outside the field"), Case), bInField);
+            TestTrue(FString::Printf(TEXT("%s: stretched %.3f times"), Case, ExpectedStretch), bStretched);
+            TestTrue(FString::Printf(TEXT("%s: along the velocity"), Case), bAlong);
+        };
+
+        // One frame's motion: how far and which way the dust moved against
+        // how far the ship went. Only motes that did not wrap are compared.
+        struct FFrameMotion
+        {
+            FVector Moved = FVector::ZeroVector;    // the ship, universe axes
+            TArray<FVector> Deltas;                 // the dust, unwrapped only
+        };
+        const auto OneFrame = [Motes, Ship, Radius](float DeltaSeconds)
+        {
+            FFrameMotion Motion;
+            const TArray<FVector> Before(Motes->GetDustField());
+            const FUniversePosition From = Ship->GetFlightState().GetUniversePosition();
+            Ship->Tick(DeltaSeconds);
+            Motes->SyncToShip();
+            Motion.Moved = Ship->GetFlightState().GetUniversePosition() - From;
+            const TConstArrayView<FVector> After = Motes->GetDustField();
+            for (int32 Index = 0; Index < Before.Num(); ++Index)
+            {
+                const FVector Delta = After[Index] - Before[Index];
+                if (Delta.GetAbsMax() < Radius)
+                {
+                    Motion.Deltas.Add(Delta);
+                }
+            }
+            return Motion;
+        };
+
+        const TOptional<FStarSystem> Home = Universe->GetSystem(Universe->GetStartSystem());
+        if (TestTrue(TEXT("there is a start system to fly from"), Home.IsSet()))
+        {
+            // Nose straight out from the star, so nothing is on its path and
+            // the lever alone sets the speed.
             const FNavPlacement Opening = NavStart::OpeningPlacement(*Home);
-            Ship->PlaceShip(Opening.Position, Opening.Orientation);
+            const FVector Outward = (Opening.Position - Home->Stub.Position).GetSafeNormal();
+            Ship->PlaceShip(Opening.Position, FRotationMatrix::MakeFromX(Outward).ToQuat());
             Motes->RebuildStarfield();
             Motes->SyncToShip();
 
-            const auto Brightness = [Motes]()
-            {
-                float Value = -1.0f;
-                if (const UMaterialInterface* Material = Motes->GetNearStars()->GetMaterial(0))
-                {
-                    Material->GetScalarParameterValue(FHashedMaterialParameterInfo(SkyMaterial::Brightness), Value);
-                }
-                return Value;
-            };
-            TestTrue(TEXT("the motes drive a runtime copy of their material"),
+            TestTrue(TEXT("the motes draw a runtime copy of their material"),
                      Cast<UMaterialInstanceDynamic>(Motes->GetNearStars()->GetMaterial(0)) != nullptr);
             TestEqual(TEXT("parked, the motes are as bright as authored"), Brightness(), Authored);
             TestTrue(TEXT("and shown"), Motes->GetNearStars()->IsVisible());
+            CheckDrawn(TEXT("parked"), 1.0, FVector::ZeroVector);
 
             APawn* Pilot = World->SpawnActor<APawn>();
             Ship->SetPilot(Pilot);
             Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
             Ship->SetDriveEngaged(Pilot, true);
-            Ship->Tick(0.1f);
-            Motes->SyncToShip();
-            TestTrue(TEXT("under the drive the ship is past the fade"), Ship->GetShipSpeed() > 2.0e5f);
-            TestEqual(TEXT("and the motes are dark"), Brightness(), 0.0f);
-            TestFalse(TEXT("and hidden"), Motes->GetNearStars()->IsVisible());
+            Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+            for (int32 Tick = 0; Tick < 150; ++Tick)
+            {
+                Ship->Tick(0.1f);
+                Motes->SyncToShip();
+            }
+            const FShipFlightState& Flight = Ship->GetFlightState();
+            const double Top = Flight.GetLimits().DriveTop;
+            TestTrue(FString::Printf(TEXT("the ship is at the drive's top, 1 c (%.6g cm/s)"), Flight.GetSpeed()),
+                     FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-6));
+            TestEqual(TEXT("with nothing holding it"), Flight.GetHold(), EFlightHold::Free);
+            TestEqual(TEXT("at 1 c the motes are as bright as authored"), Brightness(), Authored);
+            TestTrue(TEXT("and shown: the drive never looks slower than cruise"), Motes->GetNearStars()->IsVisible());
 
-            // Off the drive the speed is clamped to cruise, 200 m/s, a tenth
-            // of the way to the fade.
-            Ship->SetDriveEngaged(Pilot, false);
+            const FFrameMotion AtTop = OneFrame(1.0f / 60.0f);
+            const double Seen = ShipDust::SeenSpeed(Flight.GetSpeed(), Knee, ShipDust::DefaultDustTop, Top);
+            const FVector Expected = -AtTop.Moved * (Seen / Flight.GetSpeed());
+            int32 AtSeen = 0;
+            for (const FVector& Delta : AtTop.Deltas)
+            {
+                AtSeen += Delta.Equals(Expected, 1e-3 * Expected.Size()) ? 1 : 0;
+            }
+            TestTrue(FString::Printf(TEXT("at 1 c the ship went %.4g cm in the frame"), AtTop.Moved.Size()), AtTop.Moved.Size() > 1.0e7);
+            TestTrue(FString::Printf(TEXT("and the dust streamed back along its path at the seen 3 km/s: %d of %d unwrapped motes"),
+                                     AtSeen, AtTop.Deltas.Num()),
+                     AtTop.Deltas.Num() > 32 && AtSeen == AtTop.Deltas.Num());
+            TestTrue(FString::Printf(TEXT("%.1f cm, 50 m a 60 Hz frame and under the strobe limit"), Expected.Size()),
+                     FMath::IsNearlyEqual(Expected.Size(), ShipDust::DefaultDustTop * AtTop.Moved.Size() / Flight.GetSpeed(), 1.0)
+                     && Expected.Size() < 0.5 * 12000.0);
+            CheckDrawn(TEXT("at 1 c"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
+
+            // The law's three knobs are the developer's playtest dials
+            // (flight-feel decision 8), so each is read at use: turned to
+            // values no default holds, the same frame at 1 c streams the dust
+            // at the tuned top and stretches it the tuned length.
+            {
+                const SkyTestWorld::FScopedCVar TunedKnee(TEXT("ds.Sky.DustKnee"), 1.0f);
+                const SkyTestWorld::FScopedCVar TunedTop(TEXT("ds.Sky.DustTop"), 2.5f);
+                const SkyTestWorld::FScopedCVar TunedStretch(TEXT("ds.Sky.DustStretch"), 4.0f);
+                const FFrameMotion Tuned = OneFrame(1.0f / 60.0f);
+                const FVector TunedExpected = -Tuned.Moved * (2.5e5 / Flight.GetSpeed());
+                int32 AtTuned = 0;
+                for (const FVector& Delta : Tuned.Deltas)
+                {
+                    AtTuned += Delta.Equals(TunedExpected, 1e-3 * TunedExpected.Size()) ? 1 : 0;
+                }
+                TestTrue(FString::Printf(TEXT("with ds.Sky.DustTop at 2.5 km/s the dust streams at it at 1 c: %d of %d unwrapped motes"),
+                                         AtTuned, Tuned.Deltas.Num()),
+                         Tuned.Deltas.Num() > 32 && AtTuned == Tuned.Deltas.Num());
+                CheckDrawn(TEXT("at 1 c, ds.Sky.DustStretch 4"), 4.0, Flight.GetVelocity().GetSafeNormal());
+            }
             Motes->SyncToShip();
-            TestTrue(TEXT("at cruise the motes are nine tenths as bright"),
-                     FMath::IsNearlyEqual(Brightness(), 0.9f * Authored, 1e-4f));
-            TestTrue(TEXT("and shown again"), Motes->GetNearStars()->IsVisible());
+            CheckDrawn(TEXT("at 1 c, the dials put back"), ShipDust::DefaultStretch, Flight.GetVelocity().GetSafeNormal());
+
+            // Off the drive the ship spools down to cruise's top, 200 m/s,
+            // where the dust is honest and round again.
+            Ship->SetDriveEngaged(Pilot, false);
+            for (int32 Tick = 0; Tick < 300 && Ship->GetFlightState().GetMode() != EFlightMode::Cruise; ++Tick)
+            {
+                Ship->Tick(0.1f);
+                Motes->SyncToShip();
+            }
+            for (int32 Tick = 0; Tick < 50; ++Tick)
+            {
+                Ship->Tick(0.1f);
+                Motes->SyncToShip();
+            }
+            TestTrue(FString::Printf(TEXT("back at cruise's top (%.1f cm/s)"), Flight.GetSpeed()),
+                     FMath::IsNearlyEqual(Flight.GetSpeed(), Flight.GetLimits().MaxSpeed, 0.01 * Flight.GetLimits().MaxSpeed));
+            const FFrameMotion AtCruise = OneFrame(1.0f / 60.0f);
+            int32 Honest = 0;
+            for (const FVector& Delta : AtCruise.Deltas)
+            {
+                Honest += Delta.Equals(-AtCruise.Moved, 1e-6) ? 1 : 0;
+            }
+            TestTrue(FString::Printf(TEXT("at cruise the dust moves exactly as far as the ship, the other way: %d of %d"),
+                                     Honest, AtCruise.Deltas.Num()),
+                     AtCruise.Deltas.Num() > 32 && Honest == AtCruise.Deltas.Num());
+            TestEqual(TEXT("at cruise the motes are as bright as authored"), Brightness(), Authored);
+            CheckDrawn(TEXT("at cruise"), 1.0, FVector::ZeroVector);
+
+            // A turn under cruise's inertia, about both of the body's axes
+            // that swing the nose (Y and Z), so it swings at 0.36 rad/s: faster
+            // than the boosters' 40 m/s^2 can turn a 200 m/s velocity, 0.2
+            // rad/s. The ship slides on along its old path, and the dust
+            // streams along the slide, which is where the ship is going, not
+            // the nose.
+            TestTrue(TEXT("the pilot turns"), Ship->SetFlightCommand(Pilot, 1.0f, FVector(0.0, 1.0, 1.0)));
+            for (int32 Tick = 0; Tick < 30; ++Tick)
+            {
+                Ship->Tick(0.05f);
+                Motes->SyncToShip();
+            }
+            const FVector Nose = Flight.GetUniverseOrientation().GetForwardVector();
+            const FVector Heading = Flight.GetVelocity().GetSafeNormal();
+            const double Slide = FMath::Acos(FMath::Clamp(FVector::DotProduct(Nose, Heading), -1.0, 1.0));
+            TestTrue(FString::Printf(TEXT("the ship slides %.3f rad off its nose"), Slide), Slide > 0.05);
+
+            // With the knee dialled under cruise's top, cruise is above it:
+            // the slide is streamed at the seen speed the tuned knee gives,
+            // and each mote drawn long along the velocity, not the nose. At
+            // the default knee a slide is round, and the two cannot be told
+            // apart.
+            const SkyTestWorld::FScopedCVar LowKnee(TEXT("ds.Sky.DustKnee"), 0.1f);
+            const FFrameMotion Sliding = OneFrame(1.0f / 60.0f);
+            const double SlideSpeed = Flight.GetSpeed();
+            const double SlideSeen = ShipDust::SeenSpeed(SlideSpeed, 1.0e4, ShipDust::DefaultDustTop, Flight.GetLimits().DriveTop);
+            TestTrue(FString::Printf(TEXT("under a 100 m/s knee cruise's %.1f m/s is seen at %.1f m/s"), SlideSpeed / 100.0, SlideSeen / 100.0),
+                     SlideSeen < 0.9 * SlideSpeed);
+            bool bAlongSlide = Sliding.Deltas.Num() > 32;
+            bool bSeenInSlide = Sliding.Deltas.Num() > 32;
+            for (const FVector& Delta : Sliding.Deltas)
+            {
+                const FVector Way = -Delta.GetSafeNormal();
+                bAlongSlide &= FVector::DotProduct(Way, Heading) > FMath::Cos(0.01)
+                    && FVector::DotProduct(Way, Nose) < FMath::Cos(0.5 * Slide);
+                bSeenInSlide &= FMath::IsNearlyEqual(Delta.Size(), Sliding.Moved.Size() * SlideSeen / SlideSpeed,
+                                                     1e-3 * Delta.Size());
+            }
+            TestTrue(TEXT("in the slide the dust streams along the velocity, not the nose"), bAlongSlide);
+            TestTrue(TEXT("as far as the tuned knee's seen speed carries it"), bSeenInSlide);
+            const double SlideStretch = ShipDust::Stretch(SlideSpeed, 1.0e4, Flight.GetLimits().DriveTop, ShipDust::DefaultStretch);
+            TestTrue(FString::Printf(TEXT("and stretched above 1 (%.4f)"), SlideStretch), SlideStretch > 1.05);
+            CheckDrawn(TEXT("in the slide, knee 100 m/s"), SlideStretch, Flight.GetVelocity().GetSafeNormal());
             Ship->ClearPilot();
         }
         Motes->Destroy();
@@ -239,7 +477,7 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
 
     // Which materials it is drawn with, which is the level's to assign and
     // invisible under -nullrhi: milestone 1's M_Star reads no custom data and
-    // has no Brightness, so on it every star draws alike and the motes pop.
+    // has no Colour, so on it every star draws alike and the marker is white.
     UMaterialInterface* StarfieldMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarfieldPath);
     UMaterialInterface* OldStar = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/M_Star.M_Star"));
     if (Ship && TestNotNull(TEXT("M_SkyStarfield exists"), StarfieldMaterial)
@@ -267,7 +505,7 @@ bool FShipCounterFrameTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("M_SkyStarfield on the dome and M_SkyStar on the motes is none"),
                   Checked->FindMaterialProblems().Num(), 0);
 
-        // The fade swaps the motes onto a runtime copy; that is still M_SkyStar.
+        // The sync swaps the motes onto a runtime copy; that is still M_SkyStar.
         Checked->RebuildStarfield();
         Checked->SyncToShip();
         TestTrue(TEXT("the motes now draw a runtime copy"),

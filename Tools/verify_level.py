@@ -57,7 +57,8 @@ def main():
                         ("player_start", ship.player_start),
                         ("pilot_seat", ship.pilot_seat_location),
                         ("laptop", ship.laptop_location),
-                        ("nav_screen", ship.nav_screen_location)):
+                        ("nav_screen", ship.nav_screen_location),
+                        ("map_screen", ship.map_screen_location)):
         actor = actors.get(TAG + label)
         if actor is None:
             failures.append("MISSING " + label)
@@ -153,15 +154,17 @@ def main():
 
     failures += check_counter_frame(every)
     failures += check_sky(every)
-    failures += check_glass(ship, actors)
+    failures += check_glass(ship, every, actors)
     failures += check_nav_screen(ship, every, actors)
+    failures += check_map_screen(ship, every, actors)
     failures += check_hum(ship, every, actors)
     failures += check_surfaces(ship, every, actors)
     failures += check_keep_outs(ship, every, actors)
     failures += check_wear_tags(ship, every, actors)
 
     lines = ["Checked %d boxes and %d lights (%d practical) against the layout, "
-             "the counter-frame, the sky, the glass, the chart, %d hum sources, "
+             "the counter-frame, the sky, the glass and its tag, the chart, the map, "
+             "%d hum sources, "
              "%d dressing surfaces, %d keep-outs and the wear tags."
              % (len(ship.boxes), len(ship.lights),
                 sum(1 for light in ship.lights if light.shadows),
@@ -250,9 +253,10 @@ def check_sky(every):
     return failures
 
 
-def check_glass(ship, actors):
+def check_glass(ship, every, actors):
     """Every pane on M_SkyGlass, casting no shadow: the sunlight on the deck
-    is the shape of the windows only if the glass lets it through."""
+    is the shape of the windows only if the glass lets it through. And every
+    pane tagged GLASS_TAG, and nothing else."""
     failures = []
     want = PL.sky_asset("M_SkyGlass")
     for box in ship.boxes:
@@ -267,6 +271,15 @@ def check_glass(ship, actors):
             failures.append("%s wears %s, not %s" % (box.label, got, want))
         if component.get_editor_property("cast_shadow"):
             failures.append("%s casts a shadow, so no sunlight comes through it" % box.label)
+        # The target bracket's trace knows the glass by this tag alone: an
+        # untagged pane is a wall to it, and hides the target behind glass.
+        if PL.GLASS_TAG not in tags_of(actor):
+            failures.append("%s is not tagged %s" % (box.label, PL.GLASS_TAG))
+    # And only glass carries it, or the bracket is drawn through a wall.
+    glass_labels = {TAG + b.label for b in ship.boxes if b.role == "glass"}
+    for actor in every:
+        if PL.GLASS_TAG in tags_of(actor) and actor.get_actor_label() not in glass_labels:
+            failures.append("%s is tagged %s but is not glass" % (actor.get_actor_label(), PL.GLASS_TAG))
     return failures
 
 
@@ -289,24 +302,72 @@ def check_nav_screen(ship, every, actors):
     if abs(((r.yaw - ship.nav_screen_yaw) + 180) % 360 - 180) > 1.0 or max(abs(r.pitch), abs(r.roll)) > 1.0:
         failures.append("the chart is rotated (%.1f, %.1f, %.1f); the layout says yaw %s"
                         % (r.pitch, r.yaw, r.roll, ship.nav_screen_yaw))
-    _, y, _ = ship.nav_screen_location
-    behind = [b for b in ship.boxes if b.role == "screen" and abs(b.centre[1] - y) <= b.size[1] / 2.0]
-    if len(behind) != 1:
-        failures.append("%d desk screens behind the chart, want one" % len(behind))
-    else:
-        prop = actors.get(TAG + behind[0].label)
-        if prop is not None:            # a missing one is reported already
-            origin, extent = prop.get_actor_bounds(False)
-            aft_face = origin.x - extent.x
-            x = chart.get_actor_location().x
-            if aft_face - x < 1.0:
-                failures.append("the chart's glass is at x %.2f, %.2f cm proud of the desk screen "
-                                "at %.2f; it must be at least 1" % (x, aft_face - x, aft_face))
-    for name, want in (("use_distance_cm", 126.0), ("seat_height_cm", 55.0),
+    failures += check_proud(ship, actors, chart, ship.nav_screen_location, "chart")
+    for name, want in (("use_distance_cm", float(L.NAV_SCREEN_USE_DISTANCE)),
                        ("view_distance_cm", 60.0)):
         got = chart.get_editor_property(name)
         if abs(got - want) > 1e-3:
             failures.append("the chart's %s is %.1f, build_hauler sets %.1f" % (name, got, want))
+    return failures
+
+
+# How far a desk screen's glass stands proud of its prop, cm, at the least,
+# and the float noise the check forgives on that boundary.
+PROUD_CM = 1.0
+PROUD_EPSILON_CM = 1e-3
+
+
+def check_proud(ship, actors, screen, location, name):
+    """A desk screen's glass stands at least 1 cm proud of the built desk
+    screen prop behind it. Its reach and its pointer traces start at the
+    glass and the prop blocks Visibility: a mount that crept back past the
+    prop's face would hand every trace to the prop. Checked against the
+    built prop's bounds, not the layout's, because the layout agreeing with
+    itself is what hid milestone 1's pivot bug."""
+    _, y, _ = location
+    behind = [b for b in ship.boxes if b.role == "screen" and abs(b.centre[1] - y) <= b.size[1] / 2.0]
+    if len(behind) != 1:
+        return ["%d desk screens behind the %s, want one" % (len(behind), name)]
+    prop = actors.get(TAG + behind[0].label)
+    if prop is None:                    # a missing one is reported already
+        return []
+    origin, extent = prop.get_actor_bounds(False)
+    aft_face = origin.x - extent.x
+    x = screen.get_actor_location().x
+    # The layout puts both panels exactly 1 cm proud, so the built value sits
+    # on the boundary, and get_actor_bounds on a scaled SM_Cube carries
+    # float noise: a strict 1.0 would go red with nothing changed. A
+    # thousandth of a centimetre is noise; a panel sunk back is not.
+    if aft_face - x < PROUD_CM - PROUD_EPSILON_CM:
+        return ["the %s's glass is at x %.2f, %.2f cm proud of the desk screen at %.2f; it "
+                "must be at least 1" % (name, x, aft_face - x, aft_face)]
+    return []
+
+
+def check_map_screen(ship, every, actors):
+    """One system map, labelled as build_hauler labels it, facing aft over
+    the middle desk screen and 1 cm proud of it, leaning in to the chart's
+    60 cm when the chart chair zooms it. Found by class: a second map, or a
+    map that is not an AShipMapScreen, is a screen nobody meant."""
+    cls = getattr(unreal, "ShipMapScreen", None)
+    if cls is None:
+        return ["AShipMapScreen is not compiled into this editor, so the level can hold no map"]
+    maps = of_class(every, cls)
+    if len(maps) != 1:
+        return ["%d map screens, want exactly one" % len(maps)]
+    screen = maps[0]
+    failures = []
+    if screen.get_actor_label() != TAG + "map_screen":
+        failures.append("the map is labelled %s, not %smap_screen" % (screen.get_actor_label(), TAG))
+    r = screen.get_actor_rotation()
+    if abs(((r.yaw - ship.map_screen_yaw) + 180) % 360 - 180) > 1.0 or max(abs(r.pitch), abs(r.roll)) > 1.0:
+        failures.append("the map is rotated (%.1f, %.1f, %.1f); the layout says yaw %s"
+                        % (r.pitch, r.yaw, r.roll, ship.map_screen_yaw))
+    failures += check_proud(ship, actors, screen, ship.map_screen_location, "map")
+    got = screen.get_editor_property("view_distance_cm")
+    if abs(got - L.MAP_VIEW_DISTANCE) > 1e-3:
+        failures.append("the map's view_distance_cm is %.1f, build_hauler sets %.1f"
+                        % (got, L.MAP_VIEW_DISTANCE))
     return failures
 
 
