@@ -683,8 +683,13 @@ zoomed goes back to the seat, and E on neither stands up; the prompt says
 which (`(E)  Chart`, `Map`, `Back`, `Stand up`, from
 `AShipScreen::GetZoomPrompt`). A screen says what it allows by class, never
 per instance: `IsZoomableFromChartChair`, `ZoomsOnSit` (the laptop, which
-frames as it always did) and `IsDrivableSeated`. Unzoomed, the pointer drives
-only the map, as at the helm. **Tab on the zoomed map** cycles the target
+frames as it always did), `IsDrivableSeated` (from the helm: the map alone)
+and `IsDrivableFromChartChair` (from the chair unzoomed: the map and the
+chart). **The chart is used without zooming** (second playtest: "can't be
+used without focusing"): seated in its chair, look at a row or the toggle and
+click, as the pilot does the map; zooming only brings it closer. It is still
+never driven from the helm, two metres off and inside the hands' reach
+(`DeepSpace.Ship.MapFromHelm`). **Tab on the zoomed map** cycles the target
 outward (`CycleTarget`); anywhere else it does nothing -- at the helm too,
 where the pilot clicks (developer's ruling, 2026-09-26). The chair's first
 view is aimed from the *seated* eye (`ADeepSpaceCharacter::SeatedEyeOffset`,
@@ -700,6 +705,23 @@ serial, transit, the plotted system, the ship's position past
 in view from the helm and would otherwise pay for that every frame. The chair
 beside the helm is not a second station (vision: shared presence, never
 division of labour).
+
+**It is laid out as the map is**: a canvas with every size a constant in
+`NavigationWidget.cpp`, the map's sizes times 816 / 600, so text on the two
+desk screens is one physical size. Its 816 x 576 is what the panel spans
+from its chair's eye (about 970 x 660 screen pixels on the 4K display):
+never minified where it is read, as the map is not at the helm. The title
+names where the ship is at its right; the plotted mark has a column of its
+own; the band at the bottom is the jump's word with the toggle level at its
+right, then the course, wrapped at a set width to at most two lines.
+**A `UButton` centres its content**: a row of columns inside one is laid out
+at its own desired width, squeezed and centred, and no two rows line up --
+the first chart's spacing fault, and the map's before it. Set the button
+slot to `HAlign_Fill`. `DeepSpace.UI.ChartLayout` lays the tree out as Slate
+does with no renderer (`SlatePrepass`, then `ArrangeChildren` down the tree,
+which works under `-nullrhi`) and holds every word to the panel, to the room
+it asks for and clear of every other, the columns to one x, and all of it
+again at the widest the chart can print.
 
 It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
 from `NAV_SCREEN` in `hauler_layout.py`. **Its two seat tunables,
@@ -755,7 +777,9 @@ its drawing, keyed on what the drawing depends on.
 **The helm looks and clicks** (decision 2, ruling 4): E at the map sits
 nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the
 view: live only while the first thing hit is a screen whose class says
-`IsDrivableSeated` -- the map alone -- and then **handed the gate's own hit**
+that seat may drive it -- from the helm `IsDrivableSeated`, the map alone;
+from the chart chair unzoomed `IsDrivableFromChartChair`, the map and the
+chart -- and then **handed the gate's own hit**
 (`EWidgetInteractionSource::Custom`, `SetCustomHitResult`). The pointer's own
 trace ignores only its pawn, and the helm's seated eye is *inside* the helm
 seat's reach box, so it met the seat and never the map; the gate's trace
@@ -963,7 +987,8 @@ constants with tests on them: the drive's notch table, `EaseSeconds` 0.4 and
 `RepeatDelaySeconds` 0.3 (`ShipDriveLever.*`); the 80% braking margin
 (`ShipFlight::BrakingMargin`); the 5% `HOLDING OFF` threshold
 (`UShipHUDWidget::HoldingOffShown`); the map's `SystemMap::PickRadius` (14
-px) and its 600 x 424 draw size; `TargetMarker::AheadFloor`, `NightSideLit`
+px) and its 600 x 424 draw size; the chart's layout and 816 x 576
+(`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`); `TargetMarker::AheadFloor`, `NightSideLit`
 and `MinSpeed`; `NavStart::WorldReachFactor` (2); the turn rates
 (`FShipFlightLimits`, a header change).
 
