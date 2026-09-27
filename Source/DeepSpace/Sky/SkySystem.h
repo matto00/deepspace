@@ -4,6 +4,7 @@
 #include "Containers/ArrayView.h"
 #include "Universe/StarSystem.h"
 #include "Universe/UniversePosition.h"
+#include "Surface/WorldReliefParams.h"
 
 /**
  * What the sky draws: a flat list of bodies and a list of neighbouring stars.
@@ -57,9 +58,10 @@ struct DEEPSPACE_API FSkyBody
     /** Planets and moons: which kind of face M_SkyBody draws. */
     ESkySurface Surface = ESkySurface::Rocky;
 
-    /** Planets and moons: where on the noise this world's face is taken
-     *  from, so that no two worlds wear the same one. Derived, never drawn:
-     *  a look, not a fact about the world, so it moves no procgen stream. */
+    /** Planets and moons: where on the noise this world's face -- and, since
+     *  landing, its ground -- is taken from, so no two worlds wear the same
+     *  one (GenSeed::SurfaceSeed; landing decision 2). Derived, never drawn,
+     *  so it moves no procgen stream. */
     uint64 SurfaceSeed = 0;
 
     /** Planets and moons, 0..1: how much of the craters that every world
@@ -70,6 +72,18 @@ struct DEEPSPACE_API FSkyBody
     /** Giants: how many light-and-dark belt pairs it wears pole to pole,
      *  from its day (SkyLook::BeltPairs). 0 for ground. */
     double BeltPairs = 0.0;
+
+    /** GM, cm^3/s^2: the pull of this body (landing decision 4). The
+     *  Sun's or the Earth's mass parameter times procgen's mass. */
+    double GravParam = 0.0;
+
+    /** Whether there is ground to set down on (landing decision 13). */
+    EGround Ground = EGround::None;
+
+    /** What the ground is made from, for FWorldRelief: the face's seed
+     *  offset, the radius, the drawn peak (0 where Ground is None) and the
+     *  look's craters. Filled only here, in FromSystem. */
+    FWorldReliefParams Relief;
 };
 
 /** What a world's facts look like from space, where the look is more than a
@@ -90,6 +104,12 @@ namespace SkyLook
      * JupiterBeltPairs * sqrt(JupiterDayHours / DayHours). 0 for no day.
      */
     DEEPSPACE_API double BeltPairs(double DayHours);
+
+    /** Where on the noise a world's face and ground are taken from: 16 bits
+     *  of its surface seed per axis, as a multiple of 1/256 in [0, 256) --
+     *  exactly the xyz ShipSky::SurfaceSeed hands M_SkyBody, so the GPU's
+     *  float and this double are one number. */
+    DEEPSPACE_API FVector3d SurfaceOffset(uint64 SurfaceSeed);
 }
 
 /** A neighbouring star: only ever a point, so a direction and a distance are

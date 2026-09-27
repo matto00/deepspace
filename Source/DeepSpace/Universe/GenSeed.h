@@ -77,6 +77,16 @@ namespace GenSeed
         return Mix(Parent ^ Mix(Purpose ^ Mix(Index)));
     }
 
+    /** A world's surface seed: its face in M_SkyBody and, since landing, its
+     *  ground (landing decision 2). By orbit index, which never renumbers, so
+     *  a world keeps its face however many planets are added outside it. The
+     *  derivation is the sky's since the face was first drawn; changing it
+     *  moves every place anybody has been. */
+    constexpr uint64 SurfaceSeed(uint64 SystemSeed, uint64 Index)
+    {
+        return Derive(SystemSeed, Label("sky.surface"), Index);
+    }
+
     /** Signed coordinates folded one axis at a time, exactly:
      *    H = Mix(uint64(X)); H = Mix(H ^ uint64(Y)); H = Mix(H ^ uint64(Z));
      *  int64 -> uint64 is two's complement by definition in C++20, so

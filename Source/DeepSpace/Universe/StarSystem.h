@@ -103,6 +103,19 @@ struct FPlanet
      *  -- 0 for rock, whose spin tides and impacts decide and nothing yet
      *  reads. A giant's day sets how many belts it wears. */
     double DayHours = 0.0;
+
+    /** The highest this world's relief rises, km (landing decision 3): a
+     *  Beta proportion of what its crust can hold up, 1/g. 0 for oceans and
+     *  giants, which have no ground. Slice (a) draws it; nothing draws the
+     *  look from it yet. */
+    double ReliefKm = 0.0;
+
+    /** Surface gravity in Earth g: mass over radius squared, both in Earth
+     *  units. Derived, never drawn; 0 for a radius of 0. */
+    double SurfaceGravityEarth() const
+    {
+        return RadiusEarth > 0.0 ? MassEarth / (RadiusEarth * RadiusEarth) : 0.0;
+    }
 };
 
 /** What a star chart and a sky need, and nothing more: a dozen draws. The

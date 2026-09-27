@@ -159,6 +159,23 @@ def test_report_answers_places_or_rolls_on_the_sample():
     assert lines["a sun that is not a red dwarf"] == ["Beta", "5.50", "ly"], lines
 
 
+def test_report_gives_relief_by_kind():
+    text = C.report(rows())
+    assert "Relief, km, of solid worlds (median, highest, count by kind)" in text, text
+    # Barren: Alpha I 7.5, Alpha II 6.0, Delta I 4.2 -> median 6.00, highest 7.50.
+    assert "  barren       median   6.00  highest   7.50  n=3" in text, text
+    assert "  ice          none" in text, text
+    assert "  terrestrial  median   3.80  highest   3.80  n=1" in text, text
+
+
+def test_gravity_and_relief_are_typed():
+    alpha1 = [r for r in rows() if r["designation"] == "Alpha I"][0]
+    assert near(alpha1["surface_gravity_g"], 0.78125)
+    assert near(alpha1["relief_km"], 7.5)
+    beta = [r for r in rows() if r["system"] == "Beta"][0]
+    assert beta["relief_km"] is None and beta["surface_gravity_g"] is None
+
+
 def main():
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

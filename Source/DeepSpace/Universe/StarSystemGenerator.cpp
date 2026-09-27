@@ -101,6 +101,33 @@ namespace
         return Stream.LogNormalBounded(GiantDayMedianHours, GiantDaySigma, GiantDayMinHours, GiantDayMaxHours);
     }
 
+    /**
+     * A solid world's highest relief, km, from its own `relief` stream
+     * (landing decision 3). What a crust holds up goes as 1/g, so the ceiling
+     * is derived -- a strength over the surface gravity in Earth g, weathered
+     * lower on a terrestrial world -- and capped by the guarantees. Only how
+     * much of it a world reaches is drawn, and a bounded proportion is Beta's
+     * whole job. Oceans and giants have no ground: 0, and nothing drawn.
+     */
+    double DrawRelief(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors)
+    {
+        if (Planet.Kind == EPlanetKind::Ocean || Planet.Kind == EPlanetKind::GasGiant)
+        {
+            return 0.0;
+        }
+        const bool bWeathered = Planet.Kind == EPlanetKind::Terrestrial;
+        const double Strength = Planet.Kind == EPlanetKind::Ice ? Priors.ReliefStrengthIceKm
+            : bWeathered ? Priors.ReliefStrengthRockKm * Priors.ReliefTerrestrialFactor
+            : Priors.ReliefStrengthRockKm;
+        const double RadiusKm = Planet.RadiusEarth * UniverseUnits::CmPerEarthRadius / UniverseUnits::CmPerKm;
+        const double Ceiling = FMath::Min3(Strength / Planet.SurfaceGravityEarth(), GenGuarantees::MaxReliefKm,
+            GenGuarantees::MaxReliefRadiusFraction * RadiusKm);
+        FGenStream Stream(GenSeed::Derive(PlanetSeed, GenSeed::Label("relief")));
+        const double Share = bWeathered ? Stream.Beta(Priors.ReliefTerrestrialBetaA, Priors.ReliefTerrestrialBetaB)
+                                        : Stream.Beta(Priors.ReliefBetaA, Priors.ReliefBetaB);
+        return Ceiling * Share;
+    }
+
     /** Kind is decided by mass and temperature, and drawn only where both
      *  allow either of two answers (procgen decision 5). */
     bool IsTemperate(double MassEarth, double EquilibriumK)
@@ -198,7 +225,7 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
     System.Planets.Reserve(PlanetCount);
     for (int32 Index = 0; Index < PlanetCount; ++Index)
     {
-        const uint64 PlanetSeed = GenSeed::Derive(Seed, GenSeed::Label("planet"), Index);
+        const uint64 PlanetSeed = FStarSystemGenerator::PlanetSeed(Seed, Index);
         FGenStream Spacing(GenSeed::Derive(Seed, GenSeed::Label("spacing"), Index));
 
         double SemiMajorAxisAU = 0.0;
@@ -253,6 +280,9 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
         // Crude: one power law for rock, and giants all roughly Jupiter-sized.
         Planet.RadiusEarth = MassEarth < GenGuarantees::GasGiantMinEarthMasses ? std::pow(MassEarth, 0.28) : 11.0;
 
+        // Its own stream too: a world's relief moves nothing else about it.
+        Planet.ReliefKm = DrawRelief(PlanetSeed, Planet, Priors);
+
         // An orbit seen at an unknown epoch has no preferred phase: one of the
         // two places uniform is the distribution that describes the thing.
         FGenStream Phase(GenSeed::Derive(PlanetSeed, GenSeed::Label("phase")));
@@ -290,4 +320,14 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
 double FStarSystemGenerator::GenerateGiantDay(uint64 PlanetSeed)
 {
     return DrawGiantDay(PlanetSeed);
+}
+
+uint64 FStarSystemGenerator::PlanetSeed(uint64 SystemSeed, int32 Index)
+{
+    return GenSeed::Derive(SystemSeed, GenSeed::Label("planet"), static_cast<uint64>(Index));
+}
+
+double FStarSystemGenerator::GenerateRelief(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors)
+{
+    return DrawRelief(PlanetSeed, Planet, Priors);
 }
