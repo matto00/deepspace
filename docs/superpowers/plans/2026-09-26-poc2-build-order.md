@@ -346,6 +346,35 @@ back and their prompts, `CycleTarget()`'s body); tests
 routine after the header change. No component changes on placed actors, so
 no level rebuild.
 
+*As built (4a):* four things differ from the map spec as written.
+
+- **Seated, the pointer is handed the gate's hit** (`EWidgetInteractionSource::Custom`
+  and `SetCustomHitResult`), which decision 2 rejected on the premise that
+  the two traces were the same. They are not: the pointer's own trace
+  ignores only its pawn, and the helm's seated eye is *inside*
+  `APilotSeat`'s reach box (40 x 35 x 65 cm about the seat, 0 to 130 cm up),
+  so from the helm it met the seat and never the map. The gate's trace
+  ignores the chair the body is in, and handing it over keeps the gate and
+  the pointer one trace. `DeepSpace.Ship.MapFromHelm` fails without either.
+- **The button is let go before the pointer goes off.** The release goes
+  through the pointer's virtual Slate user, which deactivating unregisters,
+  so the old order (off, then release) dropped it and left the key held
+  inside the component; its next press was swallowed as a repeat. With the
+  gate this happens whenever the view slides off the map mid-press.
+- **A screen's seat puts the capsule on the floor under it**, as the helm
+  does, not on the cushion (`GetUseFloorZ`, not the use transform's height).
+  The sitting idle lifts the hips itself; on the cushion the chart chair's
+  eye was 1.8 m up. Nobody saw it while sitting always framed the screen and
+  hid the body. `DeepSpace.Ship.ChartChair` holds the chair's seated eye to
+  the helm's height.
+- **`IsUsingScreen()` now means a screen is framed** (the laptop, or a zoom
+  at the chart chair), which is what the HUD hides its dot for, and
+  `IsInScreenChair()` says the body is in a screen's seat. So the HUD's dot
+  shows in the chart chair unzoomed, where it is what the player aims with,
+  with no edit to `ShipHUDWidget.cpp`. E's prompt reads `Chart`, `Map`,
+  `Back` or `Stand up` (`AShipScreen::GetZoomPrompt`, a fourth virtual), and
+  the HUD prints it as `(E)  Chart`.
+
 ### 4b. HUD target overlay and ETA (the map spec's track 5, with its `ShipSky` and `sky_probe` edits)
 
 **Owns:** `UI/ShipTargetOverlay.h/.cpp` (new), `UI/ShipHUDWidget.h/.cpp` (the
