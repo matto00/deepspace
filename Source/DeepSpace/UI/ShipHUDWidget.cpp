@@ -4,6 +4,8 @@
 #include "Blueprint/WidgetTree.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/Border.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
@@ -43,37 +45,8 @@ namespace
      *  transform. */
     constexpr double CaretDistance = 1.0e7;
 
-    /**
-     * How little room the drive may have left, as a fraction of its floor,
-     * to be said to be at it. The drive closes a tenth of its room every
-     * 1.5 s and never reaches the floor exactly, so without a band the words
-     * would arrive at the heat death of the universe; with 5% they arrive at
-     * "105 KM" over a 100 km floor, a minute and a half after 1,000 km.
-     */
     /** A dash reads as "no reading", where a zero would read as a measurement. */
     const FText Blank = NSLOCTEXT("DeepSpace", "HUDBlank", "-----");
-
-    /**
-     * A speed in the unit a person would say it in: metres a second at
-     * cruise, kilometres a second as the drive opens, and fractions of light
-     * once it is past a hundredth of it -- "34 C" at 1 AU says what the drive
-     * is doing, where eleven digits of metres say nothing.
-     */
-    FString SpeedWords(double CmPerSecond)
-    {
-        const double MetresPerSecond = CmPerSecond * 0.01;
-        const double Light = UniverseUnits::CmPerLightYear / (365.25 * 86400.0) * 0.01;
-        if (MetresPerSecond < 1.0e4)
-        {
-            return FString::Printf(TEXT("%.0f M/S"), MetresPerSecond);
-        }
-        if (MetresPerSecond < 0.01 * Light)
-        {
-            return FString::Printf(TEXT("%.0f KM/S"), MetresPerSecond * 0.001);
-        }
-        const double Fraction = MetresPerSecond / Light;
-        return Fraction < 1.0 ? FString::Printf(TEXT("%.2f C"), Fraction) : FString::Printf(TEXT("%.0f C"), Fraction);
-    }
 }
 
 const FName UShipHUDWidget::NoseCaretName(TEXT("NoseCaret"));
@@ -173,12 +146,21 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     ShipLine  = MakeReadout(NSLOCTEXT("DeepSpace", "HUDShip", "HAULER"), UShipScreenWidget::Ink, 12.0f);
     PlaceLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
     PowerLine = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
-    DriveLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
-    MotionLine = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
+    JumpLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
     AltitudeReadout = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
 
+    // The motion line is two blocks side by side, the live lever in ink and
+    // the other one dim, so the speed F would go to is on screen and plainly
+    // not the one the ship is answering (decision 7). Same size, so they read
+    // as one line.
+    UHorizontalBox* Motion = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    MotionInk = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
+    MotionDim = MakeReadout(FText::GetEmpty(), UShipScreenWidget::Dim, 12.0f);
+    Motion->AddChildToHorizontalBox(MotionInk)->SetVerticalAlignment(VAlign_Bottom);
+    Motion->AddChildToHorizontalBox(MotionDim)->SetVerticalAlignment(VAlign_Bottom);
+
     const TArray<UWidget*> Corners = {ShipLine, PlaceLine, PowerLine,
-                                      DriveLine, MotionLine, AltitudeReadout};
+                                      JumpLine, Motion, AltitudeReadout};
     for (UWidget* Widget : Corners)
     {
         Canvas->AddChild(Widget);
@@ -187,8 +169,8 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     PlaceCorner(ShipLine,   FVector2D(0.0f, 0.0f), FVector2D(Margin, Margin));
     PlaceCorner(PlaceLine,  FVector2D(0.0f, 0.0f), FVector2D(Margin, Margin + 20.0f));
     PlaceCorner(PowerLine,  FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin));
-    PlaceCorner(DriveLine,  FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin + 20.0f));
-    PlaceCorner(MotionLine, FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin));
+    PlaceCorner(JumpLine,   FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin + 20.0f));
+    PlaceCorner(Motion,     FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin));
     // Over the speed: how fast and how far from anything read together.
     PlaceCorner(AltitudeReadout, FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin - 20.0f));
 
@@ -278,18 +260,14 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
             ShipState->GetReactorOutput(), FMath::Max(0.0f, ShipState->GetPowerHeadroom()))));
     }
 
-    if (MotionLine)
+    if (MotionInk && MotionDim)
     {
-        // The drive is a lever the pilot can leave on and walk away from, so
-        // whether it is on is said here, beside the speed it makes.
-        const double Speed = ShipState->GetFlightState().GetSpeed();
-        FString Motion = Speed > 1.0 ? SpeedWords(Speed) : FString(TEXT("STATIONARY"));
-        if (ShipState->IsDriveEngaged())
-        {
-            Motion += NavText::Separator;
-            Motion += TEXT("DRIVE");
-        }
-        MotionLine->SetText(FText::FromString(Motion));
+        // Both levers are persistent and invisible, so both are said here,
+        // beside the speed they make: a lever set an hour ago is never a
+        // surprise one F away.
+        const FMotionWords Motion = MotionLineOf(*ShipState);
+        MotionInk->SetText(FText::FromString(Motion.Ink));
+        MotionDim->SetText(FText::FromString(Motion.Dim));
     }
 
     // Where the ship is: the system asked of its position, never remembered,
@@ -315,9 +293,9 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     // The jump, in words and never a number, with the bearing to the course
     // relative to the ship rather than to a free-looking head: everything
     // aiming needs, from the pilot's seat alone (nav decision 3).
-    if (DriveLine)
+    if (JumpLine)
     {
-        DriveLine->SetText(DriveLineText(*ShipState, Universe));
+        JumpLine->SetText(JumpLineText(*ShipState, Universe));
     }
 }
 
@@ -367,7 +345,7 @@ FVector UShipHUDWidget::NoseCaretWorldPoint(const FVector& CameraLocation)
     return CameraLocation + FVector::ForwardVector * CaretDistance;
 }
 
-FText UShipHUDWidget::DriveLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)
+FText UShipHUDWidget::JumpLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)
 {
     const TOptional<FSystemId> Course = ShipState.GetPlottedSystem();
     const TOptional<FStarSystem> Star = (Universe && Course) ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
@@ -431,15 +409,31 @@ FString UShipHUDWidget::AltitudeWords(double Cm)
     return Grouped(FMath::RoundToInt64(AU)) + TEXT(" AU");
 }
 
-FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, bool bAtDriveFloor)
+FString UShipHUDWidget::AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, EFlightHold Hold)
 {
     FString Line = AltitudeWords(AltitudeCm) + (bEdge ? FString(TEXT(" TO THE EDGE")) : TEXT(" ABOVE ") + Surface);
-    if (bAtDriveFloor)
+    switch (Hold)
     {
+    case EFlightHold::HoldingOff:
+        // The cap's word refers to whatever surface the nose is on, which
+        // near a moon may not be the one named: it says what the ship is
+        // doing, not which world is doing it.
         Line += NavText::Separator;
-        Line += TEXT("DRIVE FLOOR");
+        Line += TEXT("HOLDING OFF");
+        break;
+    case EFlightHold::AtFloor:
+        Line += NavText::Separator;
+        Line += bEdge ? TEXT("AT THE EDGE") : TEXT("AT THE FLOOR");
+        break;
+    case EFlightHold::Free:
+        break;
     }
     return Line;
+}
+
+EFlightHold UShipHUDWidget::ShownHold(EFlightHold Hold, double HeldFraction)
+{
+    return Hold == EFlightHold::HoldingOff && HeldFraction <= HoldingOffShown ? EFlightHold::Free : Hold;
 }
 
 FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState)
@@ -461,9 +455,157 @@ FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState, const FS
         return Blank;
     }
     // Asked of the flight state, the one thing that knows what the cap did
-    // this step: the ship is on a floor, its nose into it, its lever above
-    // STOP. Nothing here works it out again from the heading and the lever.
-    const bool bAtFloor = Flight.GetHold() == EFlightHold::AtFloor;
+    // this step. Nothing here works it out again from the heading and the
+    // lever.
+    const EFlightHold Hold = ShownHold(Flight.GetHold(), Flight.GetHeldFraction());
     const FString Surface = Nearest.bEdge ? FString() : Here.Bodies[Nearest.Body].Id.ToString();
-    return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, bAtFloor));
+    return FText::FromString(AltitudeLine(Nearest.Distance, Surface, Nearest.bEdge, Hold));
+}
+
+namespace
+{
+    /**
+     * A reading counted in tenths or hundredths, as "12.4" or "0.37", and
+     * with bDropZeros, decimals that are all zero dropped: "50", "0.1". The
+     * drive's notches are round numbers, and dropping them is what lets a
+     * settled ship read exactly the label its lever was set to.
+     */
+    FString Decimal(int64 Counted, int32 Places, bool bDropZeros)
+    {
+        int64 Scale = 1;
+        for (int32 Place = 0; Place < Places; ++Place)
+        {
+            Scale *= 10;
+        }
+        const int64 Whole = Counted / Scale;
+        FString Fraction = FString::Printf(TEXT("%lld"), static_cast<long long>(Counted % Scale));
+        while (Fraction.Len() < Places)
+        {
+            Fraction.InsertAt(0, TEXT('0'));
+        }
+        while (bDropZeros && Fraction.EndsWith(TEXT("0")))
+        {
+            Fraction.LeftChopInline(1);
+        }
+        const FString Front = Grouped(Whole);
+        return Fraction.IsEmpty() ? Front : Front + TEXT(".") + Fraction;
+    }
+
+    /**
+     * How close under a hundredth of light still counts as one: the table's
+     * 0.01 c is 0.01 x c in floating point, and read back as a fraction it
+     * can come out a rounding error short. A billionth is far below anything
+     * the readout can show and far above that error.
+     */
+    constexpr double OnLightThreshold = 1.0e-9;
+
+    /** Nothing, as SpeedWords prints it. */
+    const TCHAR* const NoSpeed = TEXT("0 M/S");
+
+    /**
+     * A lever named by the speed it asks for: STOP at rest, ASTERN behind.
+     * STOP whenever what it asks for prints as nothing, not only at exactly
+     * zero: cruise's lever is swept, and a hair of Shift in one short frame
+     * can leave it a fraction of a metre a second above the detent, which
+     * "CRUISE 0 M/S" would name as a setting when it is none.
+     */
+    FString LeverWords(const TCHAR* Name, double CmPerSecond)
+    {
+        const FString Asks = UShipHUDWidget::SpeedWords(FMath::Abs(CmPerSecond));
+        if (Asks == NoSpeed)
+        {
+            return FString::Printf(TEXT("%s STOP"), Name);
+        }
+        return FString::Printf(TEXT("%s%s %s"), Name, CmPerSecond < 0.0 ? TEXT(" ASTERN") : TEXT(""), *Asks);
+    }
+}
+
+FString UShipHUDWidget::SpeedWords(double CmPerSecond)
+{
+    return SpeedWordsKept(CmPerSecond, true);
+}
+
+FString UShipHUDWidget::SpeedReading(double CmPerSecond, double LeverCmPerSecond)
+{
+    // A moving reading keeps its decimals, so it does not change length as
+    // it passes a round number -- "12.9", "13.0", "13.1" -- and nothing
+    // drawn after it slides under the eye while the pilot aims by it. It
+    // drops them only when it reads what its lever asks for: settled, the
+    // ship and the lever say the same words (decision 3).
+    const FString Label = SpeedWords(CmPerSecond);
+    return Label == SpeedWords(FMath::Abs(LeverCmPerSecond)) ? Label : SpeedWordsKept(CmPerSecond, false);
+}
+
+FString UShipHUDWidget::SpeedWordsKept(double CmPerSecond, bool bDropZeros)
+{
+    // As AltitudeWords: every unit chosen on the rounded value it would
+    // print, so a reading never shows its own unit's ceiling first.
+    const double Metres = FMath::Max(CmPerSecond, 0.0) * 0.01;
+    const int64 WholeMetres = FMath::RoundToInt64(Metres);
+    if (WholeMetres < 1000)
+    {
+        return FString::Printf(TEXT("%lld M/S"), static_cast<long long>(WholeMetres));
+    }
+    const double Km = Metres * 0.001;
+    const int64 TenthsKm = FMath::RoundToInt64(Km * 10.0);
+    if (TenthsKm < 1000)
+    {
+        return Decimal(TenthsKm, 1, bDropZeros) + TEXT(" KM/S");
+    }
+    // Light takes over at a hundredth of itself, the lever's own seam
+    // between its two halves: 2,000 KM/S is the last notch in kilometres
+    // and 0.01 C the first in light. Eleven digits of metres say nothing
+    // about what the drive is doing; a fraction of light does.
+    const double Light = FMath::Max(CmPerSecond, 0.0) / ShipDriveLever::LightCmPerSecond;
+    if (Light < 0.01 * (1.0 - OnLightThreshold))
+    {
+        return Grouped(FMath::RoundToInt64(Km)) + TEXT(" KM/S");
+    }
+    const int64 HundredthsLight = FMath::RoundToInt64(Light * 100.0);
+    if (HundredthsLight < 100)
+    {
+        return Decimal(HundredthsLight, 2, bDropZeros) + TEXT(" C");
+    }
+    // 1 C is as fast as the drive goes (ruling 1); whole multiples above it
+    // only so nothing past it can print as a fraction.
+    return Grouped(FMath::RoundToInt64(Light)) + TEXT(" C");
+}
+
+UShipHUDWidget::FMotionWords UShipHUDWidget::MotionLineOf(const UShipSubsystem& ShipState)
+{
+    // Between stars the ship is folded, not flown: the flight state goes on
+    // stepping with both levers at STOP, and would ease down to STATIONARY
+    // while the ship crosses light years. The dash, as the altitude has.
+    if (ShipState.IsInTransit())
+    {
+        FMotionWords Folded;
+        Folded.Ink = Blank.ToString();
+        return Folded;
+    }
+    return MotionLine(ShipState.GetFlightState());
+}
+
+UShipHUDWidget::FMotionWords UShipHUDWidget::MotionLine(const FShipFlightState& Flight)
+{
+    // "0 M/S" would claim a measurement of nothing; STATIONARY says what is so.
+    const FString Moving = SpeedReading(Flight.GetSpeed(), Flight.GetLeverSpeed());
+    const FString Now = Moving == NoSpeed ? FString(TEXT("STATIONARY")) : Moving;
+
+    // Both levers asked of the ship, which holds them: the live one is the
+    // one it is answering, the other is what F would go to. Cruise's is live
+    // from the press of F, so while spooling down it is cruise's that is in
+    // ink, and the words say why the speed is not yet what it asks.
+    const EFlightMode Mode = Flight.GetMode();
+    const TCHAR* Live = Mode == EFlightMode::Drive ? TEXT("DRIVE") : TEXT("CRUISE");
+    const TCHAR* Other = Mode == EFlightMode::Drive ? TEXT("CRUISE") : TEXT("DRIVE");
+
+    FMotionWords Words;
+    Words.Ink = Now + NavText::Separator + LeverWords(Live, Flight.GetLeverSpeed());
+    if (Mode == EFlightMode::SpoolingDown)
+    {
+        Words.Ink += NavText::Separator;
+        Words.Ink += TEXT("SPOOLING DOWN");
+    }
+    Words.Dim = NavText::Separator + LeverWords(Other, Flight.GetOtherLeverSpeed());
+    return Words;
 }

@@ -2,12 +2,12 @@
 
 #include "Blueprint/UserWidget.h"
 #include "CoreMinimal.h"
+#include "Ship/ShipFlightState.h"
 #include "Sky/SkySystem.h"
 #include "ShipHUDWidget.generated.h"
 
 class ADeepSpaceCharacter;
 class APawn;
-struct FShipFlightState;
 class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
@@ -40,12 +40,68 @@ public:
     virtual void NativeTick(const FGeometry& Geometry, float DeltaSeconds) override;
 
     /**
-     * The drive corner's line: the jump in words, the course, and its bearing
+     * The jump corner's line: the jump in words, the course, and its bearing
      * from the ship's nose -- not from a free-looking head, and not in the
      * universe's axes -- or a dash with no course. Static and asked of its
      * owners, so a headless test reads exactly what the corner draws.
+     *
+     * Named for the jump, not the drive (flight-feel decision 7): the
+     * bottom-left corner now speaks for the drive, and a top-right member
+     * called DriveLine showing the jump would be a swap waiting to happen.
      */
-    static FText DriveLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
+    static FText JumpLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
+
+    /**
+     * A speed in the unit a person would say it in (flight-feel decision 7):
+     * whole metres a second under a kilometre a second; kilometres a second
+     * to a tenth under a hundred, then whole and grouped up to a hundredth of
+     * light; then fractions of light to a hundredth under one; and "1 C",
+     * which is as fast as the drive goes (ruling 1). Each unit takes over
+     * exactly where the last would round up to its own threshold, as
+     * AltitudeWords does, so "1000 M/S" and "100.0 KM/S" are never shown.
+     *
+     * This is a label's form: decimals that are all zero are dropped, "50
+     * KM/S", "0.1 C", which is what makes every notch of the drive lever
+     * read exactly as its label (decision 3). Levers are named in it. Pure.
+     */
+    static FString SpeedWords(double CmPerSecond);
+
+    /**
+     * The ship's own speed as the corner reads it: SpeedWords, but keeping
+     * its decimals -- "13.0 KM/S", "0.10 C" -- so the reading does not
+     * change length each time it passes a round number, and what is drawn
+     * after it does not slide while the pilot aims by it. Only when it reads
+     * what the lever asks for, LeverCmPerSecond, does it drop them: settled,
+     * the ship and the lever say the same words, and a speed the player
+     * sets is one they can come back to. Pure.
+     */
+    static FString SpeedReading(double CmPerSecond, double LeverCmPerSecond);
+
+    /**
+     * The motion line (decision 7), as the two parts the corner draws: in
+     * ink, the ship's speed, the live lever and what it asks for, and
+     * SPOOLING DOWN while the ship eases out of the drive; dim, after a
+     * separator, the other lever -- what F would go to, on screen before F
+     * is pressed. A lever is always named by the speed it asks for, never as
+     * a notch or a fraction of its travel: a gauge is a thing to fill.
+     *
+     *   Ink: "142 M/S · CRUISE 200 M/S"            Dim: " · DRIVE 1 C"
+     *   Ink: "0.42 C · CRUISE 100 M/S · SPOOLING DOWN"   Dim: " · DRIVE 1 C"
+     *
+     * Holds no time at all: the corner has no destination to count down
+     * to, and the live ETA is the target's (ruling 3). Pure.
+     */
+    struct FMotionWords
+    {
+        FString Ink;
+        FString Dim;
+    };
+    static FMotionWords MotionLine(const FShipFlightState& Flight);
+
+    /** The motion line asked of the ship, which is what the corner draws: a
+     *  dash in ink between stars, where the ship is folded, not flown, and
+     *  otherwise MotionLine. Stores nothing. */
+    static FMotionWords MotionLineOf(const UShipSubsystem& Ship);
 
     /**
      * A distance in the unit a person would say it in: metres under a
@@ -60,16 +116,33 @@ public:
     /**
      * The altitude line: how far the nearest surface is, and whose it is --
      * "212 KM ABOVE Kessa IV", or "3,400 AU TO THE EDGE" when the system's
-     * edge is nearer than any world -- and "DRIVE FLOOR" after it while
-     * bAtDriveFloor: the flight state's GetHold() is AtFloor. Pure.
+     * edge is nearer than any world -- and one word for what the soft cap
+     * is doing (decision 7): HOLDING OFF while it takes speed away, AT THE
+     * FLOOR (AT THE EDGE, at the edge) while the ship is as low as it goes.
+     * Hold is the one to show, ShownHold's answer. No colour, nothing that
+     * blinks: a fact about the ship, stated like the others. Pure.
      */
-    static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, bool bAtDriveFloor);
+    static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, EFlightHold Hold);
+
+    /**
+     * Which of the cap's words to show, from what the flight state says it
+     * did: HOLDING OFF only while the cap holds the ship more than
+     * HoldingOffShown below the live lever's speed. Measured against the
+     * lever, not the eased position -- which follows the cap and so sits a
+     * hair under it every substep -- so the word does not flicker at the
+     * threshold. Pure.
+     */
+    static EFlightHold ShownHold(EFlightHold Hold, double HeldFraction);
+
+    /** How far below the lever the cap must hold the ship for the corner to
+     *  say so: 5%, less than anyone can see as a difference in the speed. */
+    static constexpr double HoldingOffShown = 0.05;
 
     /**
      * The altitude corner's line, asked of its owners: the nearest surface
      * in Here -- the system the ship is in, from LocalSystem::Here, the
-     * measure the room is -- and whether the ship is held at its floor, or a
-     * dash between stars and where there is nothing near.
+     * measure the room is -- and what the cap is doing, or a dash between
+     * stars and where there is nothing near.
      * Stores nothing, so a headless test reads exactly what the corner draws.
      */
     static FText AltitudeLineText(const UShipSubsystem& Ship, const FSkySystem& Here);
@@ -111,6 +184,9 @@ protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+    /** SpeedWords, with decimals that are all zero dropped or kept. */
+    static FString SpeedWordsKept(double CmPerSecond, bool bDropZeros);
+
     /** What the dot is currently over; it is the only thing that animates. */
     enum class ETarget : uint8
     {
@@ -132,8 +208,9 @@ private:
     UPROPERTY() TObjectPtr<UTextBlock> ShipLine;
     UPROPERTY() TObjectPtr<UTextBlock> PlaceLine;
     UPROPERTY() TObjectPtr<UTextBlock> PowerLine;
-    UPROPERTY() TObjectPtr<UTextBlock> DriveLine;
-    UPROPERTY() TObjectPtr<UTextBlock> MotionLine;
+    UPROPERTY() TObjectPtr<UTextBlock> JumpLine;
+    UPROPERTY() TObjectPtr<UTextBlock> MotionInk;
+    UPROPERTY() TObjectPtr<UTextBlock> MotionDim;
     UPROPERTY() TObjectPtr<UTextBlock> AltitudeReadout;
 
     ETarget Target = ETarget::Nothing;
