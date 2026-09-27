@@ -1,5 +1,6 @@
 #include "Sky/SkySystem.h"
 #include "Sky/SkyColour.h"
+#include "Sky/SkyMaterialContract.h"
 #include "Universe/GenSeed.h"
 #include "Universe/UniverseUnits.h"
 
@@ -43,6 +44,14 @@ namespace
         }
         return { 0.30, FLinearColor::White, FLinearColor::Black };
     }
+
+    /** What can be landed on (landing decision 13): rock, ice and the land of
+     *  terrestrial worlds, which are all land in slice 1. */
+    EGround GroundOf(EPlanetKind Kind)
+    {
+        return Kind == EPlanetKind::Barren || Kind == EPlanetKind::Ice || Kind == EPlanetKind::Terrestrial
+            ? EGround::Solid : EGround::None;
+    }
 }
 
 FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FStarSystemStub> Neighbours)
@@ -59,6 +68,7 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
     Star.Colour = SkyColour::Blackbody(System.Star.TemperatureK);
     Star.Luminosity = System.Star.LuminositySolar;
     Star.TemperatureK = System.Star.TemperatureK;
+    Star.GravParam = UniverseUnits::GMSunCm3PerS2 * System.Star.MassSolar;
 
     for (int32 Index = 0; Index < System.Planets.Num(); ++Index)
     {
@@ -79,6 +89,13 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
         // world keeps its face however many planets are added outside it.
         Body.SurfaceSeed = GenSeed::SurfaceSeed(System.Stub.Seed, static_cast<uint64>(Index));
         Body.BeltPairs = Look.Surface == ESkySurface::Banded ? SkyLook::BeltPairs(Planet.DayHours) : 0.0;
+        Body.GravParam = UniverseUnits::GMEarthCm3PerS2 * Planet.MassEarth;
+        Body.Ground = GroundOf(Planet.Kind);
+        Body.Relief.SeedOffset = SkyLook::SurfaceOffset(Body.SurfaceSeed);
+        Body.Relief.RadiusCm = Body.Radius;
+        Body.Relief.PeakCm = Body.Ground == EGround::Solid ? Planet.ReliefKm * UniverseUnits::CmPerKm : 0.0;
+        Body.Relief.Cratering = Look.Cratering;
+        Body.Relief.Ground = Body.Ground;
     }
 
     for (const FStarSystemStub& Stub : Neighbours)
@@ -103,4 +120,13 @@ FSkySystem FSkySystem::FromSystem(const FStarSystem& System, TConstArrayView<FSt
 double SkyLook::BeltPairs(double DayHours)
 {
     return DayHours > 0.0 ? JupiterBeltPairs * FMath::Sqrt(JupiterDayHours / DayHours) : 0.0;
+}
+
+FVector3d SkyLook::SurfaceOffset(uint64 SurfaceSeed)
+{
+    const auto Part = [SurfaceSeed](int32 Shift)
+    {
+        return static_cast<double>((SurfaceSeed >> Shift) & 0xFFFFull) / 65536.0 * SkyMaterial::SurfaceOffsetSpan;
+    };
+    return FVector3d(Part(0), Part(16), Part(32));
 }
