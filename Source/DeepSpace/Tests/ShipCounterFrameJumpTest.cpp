@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Ship/NavStart.h"
@@ -162,8 +163,22 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("and shown"), Marker->IsVisible());
         }
 
-        // Aimed and engaged, with an instant charge: the fold opens.
+        // Aimed, and running at the drive's top, so the fold opens with the
+        // ship still shedding 1 c: the all stop eases it down through the
+        // first seconds of the transit, and the dust must not stream with it.
         Ship->PlaceShip(Opening.Position, FRotationMatrix::MakeFromX(*Course).ToQuat());
+        APawn* Pilot = World->SpawnActor<APawn>();
+        Ship->SetPilot(Pilot);
+        Ship->SetDriveEngaged(Pilot, true);
+        Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+        for (int32 Step = 0; Step < 100; ++Step)
+        {
+            Ship->Tick(0.1f);
+            Frame->SyncToShip();
+        }
+        TestTrue(TEXT("at the drive's top when the jump is engaged"), Ship->GetShipSpeed() > 0.99 * 2.99792458e10);
+
+        // Engaged, with an instant charge: the fold opens.
         Ship->SetJumpEngaged(true);
         Ship->Tick(0.05f);
         Ship->Tick(0.05f);
@@ -185,6 +200,11 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
                 }
                 Frame->SyncToShip();
                 const double Progress = Ship->GetTransitProgress();
+                if (Mark < 0.5)
+                {
+                    TestTrue(FString::Printf(TEXT("at %.3f the ship is still easing down from the drive (%.4g cm/s)"), Progress, Ship->GetShipSpeed()),
+                             Ship->GetShipSpeed() > 1.0e5);
+                }
                 TestFalse(TEXT("between stars the dome is hidden"), Frame->GetDistantStars()->IsVisible());
                 TestFalse(TEXT("and so is the marker"), Marker && Marker->IsVisible());
 
