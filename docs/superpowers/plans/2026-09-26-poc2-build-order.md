@@ -483,3 +483,18 @@ depends on.
   scoped to the jump's charge already, with the specs' amendment.
 - **Open, and not built:** the jump cooldown (the map spec's *Open
   questions*).
+
+*As integrated, 2026-09-27:* every level and asset script was run on the
+merge (`setup_flight_input`, `setup_pointer_input`, `setup_sky_materials`,
+`validate_hauler`, `build_hauler`, `verify_level` -- PASS within 1.0 cm --
+and `check_blueprints`, 5 of 5). `DeepSpace.Playtest.*`
+(`Tests/PlaytestTest.cpp`) flies the playtest's steps end to end, each proved
+able to fail with `Tools/mutate.sh`. One of them, `KeysTurnTheShip`, found
+the attitude keys scrambled since the first flight: `AttitudeRate` turns
+about X roll, Y pitch, Z yaw, the comments said X pitch, Y yaw, Z roll, and
+the mapping followed the comments, so W rolled, D pitched and Z yawed. The
+mapping and the comments are fixed; the 0.3 rad/s meant for roll stays on
+yaw, for the playtest to judge. A temporary render check (not committed)
+framed the in-system arrival from the helm's eye with the bracket and the
+map, the .03 AU night side, and the glare at a red dwarf's and a Sun-like
+star's arrival; the frames went to the developer with the playtest script.
