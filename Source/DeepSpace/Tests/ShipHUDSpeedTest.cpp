@@ -108,6 +108,8 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("just under a hundredth of light, still kilometres"),
               Words(0.00999 * Light), FString(TEXT("2,995 KM/S")));
     TestEqual(TEXT("a hundredth of light, in light"), Words(0.01 * Light), FString(TEXT("0.01 C")));
+    TestEqual(TEXT("a rounding error short of a hundredth of light is still the notch, not 2,998 KM/S"),
+              Words(0.01 * Light * (1.0 - 1.0e-12)), FString(TEXT("0.01 C")));
     TestEqual(TEXT("hundredths under one"), Words(0.37 * Light), FString(TEXT("0.37 C")));
     TestEqual(TEXT("just under one"), Words(0.994 * Light), FString(TEXT("0.99 C")));
     TestEqual(TEXT("one, never 1.00 C"), Words(0.996 * Light), FString(TEXT("1 C")));
