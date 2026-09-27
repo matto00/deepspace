@@ -73,6 +73,9 @@ below goes past them, it says so and is on the sign-off list.
 
 **Ruled later the same day, on the plan:** the height is normalised by the *measured* maximum of the detail sum (at least 200,000 samples), under a smooth hard cap at `PeakCm`, not by the proven worst case, which is about three times loose and would have drawn peaks at a third of the Earth-like heights of ruling 6. `MaxHeightCm` is still exactly `PeakCm`.
 
+**Ruled after the spike (R1), same day:** parity is judged per footprint and per term. Values, and every term at the coarser footprints (1/12, 1/96, 1/768), are held to 1e-3; at the two finest footprints (1/3072, 1/12288) slopes are held to the measured float floor, 5e-3, since there every float evaluation -- the engine's own nodes included -- differs from double by 1e-3 to 5e-3 at those noise coordinates (spike: shared vs engine 3.11e-3, C++ double vs engine 3.51e-3; the coarse band bit-exact). The step mask counts only held crater sites, and bisectors only where a held site lies within 1.5 radii (0.467% left out, under the 1% cap).
+
+
 ## Context
 
 ### What exists, and what does not
@@ -371,12 +374,13 @@ up, which goes as 1/g (Earth's 8.8 km at 1 g, Mars's 22 km at 0.38 g):
   erosion factor `ReliefTerrestrialFactor = 0.7`.
 - **Guarantee:** `GenGuarantees::MaxReliefKm = 10` -- no ini edit can put a
   peak higher (ruling 6's ceiling), and none above 0.5 % of the radius.
-- **Draw:** `ReliefKm = min(H_ceiling, MaxReliefKm) x Beta(A, B)` -- a
+- **Draw:** `ReliefKm = min(H_ceiling, MaxReliefKm, 0.005 x R) x Beta(A, B)` -- a
   bounded proportion of what the crust could hold, which is what Beta is for.
   Barren and Ice skew high (old, unrelaxed crust): Beta(5, 2), mean 0.71.
   Terrestrial skews lower (weather): Beta(3, 2), mean 0.6. So a 1 g
   terrestrial world peaks around 3.8 km, a 1 g barren one around 6.4 km, and
-  a light barren one at the 10 km cap.
+  a light barren one (under 0.9 g) around 7.1 km: its ceiling is the 10 km
+  cap, and it reaches Beta's share of that, never the cap itself.
 - Oceans and gas giants: 0, `Ground = None`.
 
 Every number but the guarantee is a line in `DefaultGame.ini`

@@ -89,6 +89,23 @@ struct FGenPriors
     double PopulationMin = 200.0;
     double PopulationMax = 5.0e8;
 
+    // -- the ground (landing decision 3) -----------------------------------------
+
+    /** What a crust can hold up goes as 1/g: Earth's 8.8 km at 1 g, Mars's
+     *  22 km at 0.38 g. The ceiling of a world's relief is Strength / g, km,
+     *  g in Earth g; weather takes a factor off a terrestrial world's. */
+    double ReliefStrengthRockKm = 9.0;
+    double ReliefStrengthIceKm = 9.0;
+    double ReliefTerrestrialFactor = 0.7;
+
+    /** How much of its ceiling a world reaches, a bounded proportion, which
+     *  is Beta's whole job. Barren and ice skew high -- old, unrelaxed crust,
+     *  Beta(5, 2), mean 0.71 -- and terrestrial lower, Beta(3, 2), mean 0.6. */
+    double ReliefBetaA = 5.0;
+    double ReliefBetaB = 2.0;
+    double ReliefTerrestrialBetaA = 3.0;
+    double ReliefTerrestrialBetaB = 2.0;
+
     // -- the galaxy -------------------------------------------------------------
 
     /** Poisson mean of systems per 2^62 cm sector: the solar neighbourhood,
@@ -114,6 +131,8 @@ struct FGenPriors
     X(OceanFraction) \
     X(InhabitedChance) \
     X(PopulationMedian) X(PopulationSigma) X(PopulationMin) X(PopulationMax) \
+    X(ReliefStrengthRockKm) X(ReliefStrengthIceKm) X(ReliefTerrestrialFactor) \
+    X(ReliefBetaA) X(ReliefBetaB) X(ReliefTerrestrialBetaA) X(ReliefTerrestrialBetaB) \
     X(SystemsPerSector)
 
 #define DS_GEN_PRIORS_COUNT_ONE(Name) + 1
@@ -168,6 +187,13 @@ namespace GenGuarantees
     inline constexpr double BarrenBelowEarthMasses = 0.3;
     inline constexpr double BarrenAboveK = 320.0;
     inline constexpr double IceBelowK = 180.0;
+
+    /** No world's relief rises higher than this, km, whatever the ini says
+     *  (landing ruling 6), nor above this fraction of its radius. The drive's
+     *  floor stands 10 km above the highest peak (landing decision 10), so
+     *  this is what that floor's height rests on. */
+    inline constexpr double MaxReliefKm = 10.0;
+    inline constexpr double MaxReliefRadiusFraction = 0.005;
 }
 
 /**

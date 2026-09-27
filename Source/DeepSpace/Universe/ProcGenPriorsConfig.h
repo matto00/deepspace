@@ -94,6 +94,14 @@ public:
     UPROPERTY(Config) double PopulationMin;
     UPROPERTY(Config) double PopulationMax;
 
+    UPROPERTY(Config) double ReliefStrengthRockKm;
+    UPROPERTY(Config) double ReliefStrengthIceKm;
+    UPROPERTY(Config) double ReliefTerrestrialFactor;
+    UPROPERTY(Config) double ReliefBetaA;
+    UPROPERTY(Config) double ReliefBetaB;
+    UPROPERTY(Config) double ReliefTerrestrialBetaA;
+    UPROPERTY(Config) double ReliefTerrestrialBetaB;
+
     UPROPERTY(Config) double SystemsPerSector;
 
 private:
