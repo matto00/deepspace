@@ -15,7 +15,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 /**
- * The HUD's drive corner gives the course's bearing from the ship's nose
+ * The HUD's jump corner gives the course's bearing from the ship's nose
  * (nav decision 3): the words the pilot aims by at the helm, where the mouse
  * looks freely and the universe's own axes mean nothing. The spec checks the
  * corner by eye; this checks the words it would draw, with the ship turned
@@ -34,8 +34,8 @@ bool FShipHUDBearingTest::RunTest(const FString& Parameters)
     const UUniverseSubsystem* Universe = World->GetSubsystem<UUniverseSubsystem>();
     if (TestNotNull(TEXT("the world has a ship"), Ship) && TestNotNull(TEXT("and a universe"), Universe))
     {
-        const FString Dash = UShipHUDWidget::DriveLineText(*Ship, Universe).ToString();
-        TestFalse(TEXT("with no course the drive corner has no bearing"), Dash.Contains(TEXT("ahead")));
+        const FString Dash = UShipHUDWidget::JumpLineText(*Ship, Universe).ToString();
+        TestFalse(TEXT("with no course the jump corner has no bearing"), Dash.Contains(TEXT("ahead")));
 
         const TArray<FStarSystemStub> Chart = Ship->GetChart();
         if (TestTrue(TEXT("the chart has somewhere to go"), Chart.Num() > 0)
@@ -52,7 +52,7 @@ bool FShipHUDBearingTest::RunTest(const FString& Parameters)
             const auto LineFacing = [&](const FQuat& Orientation)
             {
                 Ship->PlaceShip(Here, Orientation);
-                return UShipHUDWidget::DriveLineText(*Ship, Universe).ToString();
+                return UShipHUDWidget::JumpLineText(*Ship, Universe).ToString();
             };
 
             TestEqual(TEXT("facing the course it is dead ahead"), LineFacing(OnCourse), Prefix + TEXT("dead ahead"));

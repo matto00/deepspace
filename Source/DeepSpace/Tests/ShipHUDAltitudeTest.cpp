@@ -40,7 +40,8 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("tenths of a kilometre close in"), Words(42.26 * Km), FString(TEXT("42.3 KM")));
     TestEqual(TEXT("just under a hundred"), Words(99.94 * Km), FString(TEXT("99.9 KM")));
     TestEqual(TEXT("a hundred, never 100.0 KM"), Words(99.96 * Km), FString(TEXT("100 KM")));
-    TestEqual(TEXT("the drive floor"), Words(100.0 * Km), FString(TEXT("100 KM")));
+    TestEqual(TEXT("a hundred kilometres"), Words(100.0 * Km), FString(TEXT("100 KM")));
+    TestEqual(TEXT("an Earth's floor"), Words(10.2 * Km), FString(TEXT("10.2 KM")));
     TestEqual(TEXT("thousands grouped"), Words(4213.0 * Km), FString(TEXT("4,213 KM")));
     TestEqual(TEXT("just under ten thousand"), Words(9999.4 * Km), FString(TEXT("9,999 KM")));
     TestEqual(TEXT("ten thousand, in thousands"), Words(9999.6 * Km), FString(TEXT("10 THOUSAND KM")));
@@ -56,15 +57,37 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("far out, grouped"), Words(7912.3 * AU), FString(TEXT("7,912 AU")));
 
     // -- The line ------------------------------------------------------------
-    const FString Tag = FString(NavText::Separator) + TEXT("DRIVE FLOOR");
-    const auto Line = [&](double Cm, bool bEdge, bool bFloor)
+    // One word for what the cap is doing, from the flight state's own hold,
+    // and nothing at all when it is doing nothing.
+    const FString HoldingOff = FString(NavText::Separator) + TEXT("HOLDING OFF");
+    const FString AtFloor = FString(NavText::Separator) + TEXT("AT THE FLOOR");
+    const FString AtEdge = FString(NavText::Separator) + TEXT("AT THE EDGE");
+    const auto Line = [&](double Cm, bool bEdge, EFlightHold Hold)
     {
-        return UShipHUDWidget::AltitudeLine(Cm, TEXT("Kessa IV"), bEdge, bFloor);
+        return UShipHUDWidget::AltitudeLine(Cm, TEXT("Kessa IV"), bEdge, Hold);
     };
-    TestEqual(TEXT("above a world, by name"), Line(212.0 * Km, false, false), FString(TEXT("212 KM ABOVE Kessa IV")));
-    TestEqual(TEXT("the edge is not a world"), Line(3400.0 * AU, true, false), FString(TEXT("3,400 AU TO THE EDGE")));
-    TestEqual(TEXT("held at the floor, it says so"), Line(104.0 * Km, false, true), FString(TEXT("104 KM ABOVE Kessa IV")) + Tag);
-    TestEqual(TEXT("the edge has a floor too"), Line(100.0 * Km, true, true), FString(TEXT("100 KM TO THE EDGE")) + Tag);
+    TestEqual(TEXT("above a world, by name"), Line(212.0 * Km, false, EFlightHold::Free), FString(TEXT("212 KM ABOVE Kessa IV")));
+    TestEqual(TEXT("the edge is not a world"), Line(3400.0 * AU, true, EFlightHold::Free), FString(TEXT("3,400 AU TO THE EDGE")));
+    TestEqual(TEXT("the cap taking speed away says so"),
+        Line(2310.0 * Km, false, EFlightHold::HoldingOff), FString(TEXT("2,310 KM ABOVE Kessa IV")) + HoldingOff);
+    TestEqual(TEXT("held at the floor, it says so"),
+        Line(10.2 * Km, false, EFlightHold::AtFloor), FString(TEXT("10.2 KM ABOVE Kessa IV")) + AtFloor);
+    TestEqual(TEXT("the edge holds off like a world"),
+        Line(3400.0 * AU, true, EFlightHold::HoldingOff), FString(TEXT("3,400 AU TO THE EDGE")) + HoldingOff);
+    TestEqual(TEXT("and at its floor it is the edge, not a floor"),
+        Line(10.0 * Km, true, EFlightHold::AtFloor), FString(TEXT("10.0 KM TO THE EDGE")) + AtEdge);
+    TestFalse(TEXT("the old words are gone"), Line(10.2 * Km, false, EFlightHold::AtFloor).Contains(TEXT("DRIVE FLOOR")));
+
+    // -- Which hold is shown -------------------------------------------------
+    // HOLDING OFF only past 5% under the lever: less is nothing anyone could
+    // see in the speed, and a word that came and went with it would nag.
+    const auto Shown = [](EFlightHold Hold, double Fraction) { return static_cast<int32>(UShipHUDWidget::ShownHold(Hold, Fraction)); };
+    TestEqual(TEXT("free is free"), Shown(EFlightHold::Free, 0.0), static_cast<int32>(EFlightHold::Free));
+    TestEqual(TEXT("held 4% under the lever, not said"), Shown(EFlightHold::HoldingOff, 0.04), static_cast<int32>(EFlightHold::Free));
+    TestEqual(TEXT("held exactly 5% under, not said"), Shown(EFlightHold::HoldingOff, 0.05), static_cast<int32>(EFlightHold::Free));
+    TestEqual(TEXT("held 6% under, said"), Shown(EFlightHold::HoldingOff, 0.06), static_cast<int32>(EFlightHold::HoldingOff));
+    TestEqual(TEXT("held to a crawl, said"), Shown(EFlightHold::HoldingOff, 0.999), static_cast<int32>(EFlightHold::HoldingOff));
+    TestEqual(TEXT("at the floor is always said"), Shown(EFlightHold::AtFloor, 1.0), static_cast<int32>(EFlightHold::AtFloor));
 
     // -- Asked of the ship, in a real system ---------------------------------
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("HUDAltitudeTestWorld"));
@@ -113,14 +136,33 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
                 return UShipHUDWidget::AltitudeLineText(*Ship).ToString();
             };
             PlaceAt(ShipFloor + 1.0 * Km);
-            TestFalse(TEXT("at the floor's height with the lever at STOP, no floor words"), Settle(1).EndsWith(Tag));
+            const FString AtRest = Settle(1);
+            TestFalse(TEXT("at the floor's height with the lever at STOP, no floor words"), AtRest.EndsWith(AtFloor));
+            TestFalse(TEXT("nor any hold"), AtRest.EndsWith(HoldingOff));
+
+            // Cruise with its lever at STOP is not held either: the drive off
+            // at the floor's height says neither word.
+            Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
+            const FString Cruising = Settle(30);
+            TestFalse(TEXT("with the drive off at the floor's height, no floor words"),
+                Cruising.EndsWith(AtFloor) || Cruising.EndsWith(HoldingOff));
 
             Ship->SetDriveEngaged(Pilot, true);
             Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
             TestTrue(TEXT("with the drive's lever up and the nose on the world, settled onto the floor, the corner says so"),
-                Settle(20 * 30).EndsWith(Tag));
+                Settle(20 * 30).EndsWith(AtFloor));
+
+            // From 250 km, with the lever at 1 c: the ship is still coming
+            // down, and the cap is what is holding it to tens of km/s.
             PlaceAt(250.0 * Km);
-            TestFalse(TEXT("but not from 250 km, where the ship is still coming down"), Settle(1).EndsWith(Tag));
+            const FString Coming = Settle(1);
+            TestFalse(TEXT("not at the floor from 250 km, where the ship is still coming down"), Coming.EndsWith(AtFloor));
+            const FString Held = Settle(4 * 30);
+            TestTrue(FString::Printf(TEXT("coming down under the lever at 1 c, the cap holds it off, and says so ('%s')"), *Held),
+                Held.EndsWith(HoldingOff));
+            TestTrue(TEXT("while the flight state says it holds more than 5% under the lever"),
+                Ship->GetFlightState().GetHold() == EFlightHold::HoldingOff
+                && Ship->GetFlightState().GetHeldFraction() > UShipHUDWidget::HoldingOffShown);
 
             // Turned away from it at the floor, the ship is leaving.
             const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
@@ -128,7 +170,9 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             if (TestTrue(TEXT("a placement at the floor"), Placement.IsSet()))
             {
                 Ship->PlaceShip(Placement->Position, Placement->Orientation * FQuat(FVector::UpVector, UE_DOUBLE_PI));
-                TestFalse(TEXT("nose away from the world at the floor, it is leaving, not held"), Settle(1).EndsWith(Tag));
+                const FString Leaving = Settle(1);
+                TestFalse(TEXT("nose away from the world at the floor, it is leaving, not held"),
+                    Leaving.EndsWith(AtFloor) || Leaving.EndsWith(HoldingOff));
             }
             Ship->AllStop(Pilot);
 

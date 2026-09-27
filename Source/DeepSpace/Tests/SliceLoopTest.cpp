@@ -258,7 +258,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
     double Steering = 0.0;
     while (Steering < 120.0 && !Ship->IsInTransit())
     {
-        LastLine = UShipHUDWidget::DriveLineText(*Ship, Test.Universe).ToString();
+        LastLine = UShipHUDWidget::JumpLineText(*Ship, Test.Universe).ToString();
         Ship->SetFlightCommand(Pilot, 0.0f, SteerByWords(LastLine));
         Test.Step(1.0f / 30.0f);
         Steering += 1.0 / 30.0;
