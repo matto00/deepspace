@@ -360,11 +360,15 @@ to cruise at a speed cruise can hold.
   is 3.7 seconds held. No reverse. The ship follows the lever eased in notch
   space (`ShipDriveLever::Ease`: 0.4 s, at most `ds.Drive.Response` notches a
   second), never overshoots, and never jumps upward; thin boosters slow the
-  whole ease, never the top. It arrives at a notch within
-  `ShipDriveLever::SettleNotches`, which is 1 m/s off STOP. X from 0.1 c
-  passes cruise's top in 3.3 s and is at rest in 7.3 s (from 20 km/s, 4.0
-  s); leaving the drive at 0.1 c spools down to cruise's top in the same
-  3.3 s.
+  whole ease, never the top. It **arrives**: below
+  `ShipDriveLever::ArriveNotches` (5e-3 of a notch, 100 m/s off STOP) it
+  closes at the exponential's pace there, held steady, so a tap is on its
+  notch, exactly, 2.5 s after it, and the reading then says its lever's
+  label (on the way it is a moving reading, so the climb to the top reads in
+  KM/S beside `DRIVE 0.1 C` and turns to `0.1 C` as it arrives). X from 0.1
+  c passes cruise's top in 3.3 s and is at rest in 5.9 s, from 20 km/s in
+  2.5 s; leaving the drive at 0.1 c spools down to cruise's top in the same
+  3.3 s and lands on it, so a cruise lever at full sees no dip.
 
 The actions and their `IMC_Default` bindings are built by
 `Tools/setup_flight_input.py`, not by hand, and it assigns them on
@@ -584,7 +588,12 @@ against a galley that no longer exists.
 - **The drive** is in-system: F at the helm (`SetDriveEngaged(Commander,
   bool)`, gated on the pilot) and its own lever (*Flying*). It is a lever: it
   stays set when the pilot stands up. Leaving it spools down to cruise's top
-  at the lever's own pace (`SPOOLING DOWN`), never in one substep. It has no
+  at the lever's own pace (`SPOOLING DOWN`), never in one substep, and goes
+  on down the soft cap while the cap holds the ship faster than cruise could
+  brake from (the hold beats the braking curve above 12.8 km/s, 51.2 km up):
+  cruise is handed a ship only on its own braking curve
+  (`FShipFlightState::CruiseCanTakeOver`), never one that would meet the
+  hard stop at speed. It has no
   inertia and reports no acceleration.
 - **The jump** folds between stars, or to a world of this system:
   `SetJumpEngaged`, `IsJumpEngaged`, `EJumpState {Idle, Winding, Ready,
@@ -659,8 +668,9 @@ map and the target*).
 **Every fold is an all stop, and every jump arrives at rest** (flight-feel
 decision 4): the fold opening puts both levers to STOP, and the arrival,
 `FShipFlightState::JumpTo` (the flight state's fourth write path, ADR 0005,
-amended), zeroes the velocity and the drive's eased position -- load-bearing,
-since from 0.1 c the ease down, 7.3 s, is longer than the fold. The fold lasts
+amended), zeroes the velocity and the drive's eased position -- load-bearing
+whenever the fold is shorter than the 5.9 s the ease takes down from 0.1 c
+(the default fold is 6 s; the jump tests hold it to 4 s so that it is). The fold lasts
 `ds.Nav.TransitSeconds`, with streaks past the window. An interstellar
 arrival is a translation onto the line from the departure point to the star,
 at `max(ds.Nav.StandoffAU x sqrt(L), 1.5 x the outermost orbit)` (conflict
@@ -818,7 +828,9 @@ bearings*).
 
 **The ETA is live** (ruling 3): at 1 m/s or more, when the velocity's ray
 meets the world's floor sphere, `ShipFlight::SecondsToFloor` of that
-distance at the present speed under the cap's own law -- so it counts down a
+distance at the present speed under the cap's own law (its braking part on
+the continuous curve, which the cap's stepped one undercuts by under 7 m/s,
+about half a substep) -- so it counts down a
 second a second and names the moment the ship arrives
 (`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). On a path that
 misses it says `PASSING <altitude> UP`; at rest, nothing. While the lever is
@@ -999,7 +1011,7 @@ number back into `ShipDressingRules.cpp`); room moods and practicals
 level rebuild); the reactor rating and each consumer's want
 (`UShipSubsystem`'s `static constexpr`s, a header change). And, as named
 constants with tests on them: the drive's notch table, `EaseSeconds` 0.4,
-`RepeatDelaySeconds` 0.3, `SettleNotches` and cruise's log floor
+`RepeatDelaySeconds` 0.3, `ArriveNotches` and cruise's log floor
 `CruiseFloorCmPerSecond` 1 m/s (`ShipDriveLever.*`); cruise's top 20 km/s,
 its astern top 200 m/s and the boosters' 2 km/s^2 (`FShipFlightLimits`, a
 header change); the 80% braking margin

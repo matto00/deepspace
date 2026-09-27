@@ -120,14 +120,18 @@ namespace ShipFlight
 
     /**
      * Seconds to the floor D cm ahead, for a ship at Speed cm/s under the cap
-     * (ruling 3's live ETA): it holds Speed until MaySpeed falls to it, then
+     * (ruling 3's live ETA), on the cap's law with its braking part the
+     * continuous curve, sqrt(2 b d) -- MaySpeed with a Step of zero. The cap
+     * flies the stepped curve, b x Step / 2 slower (under 7 m/s at full
+     * boosters), so this is short by about half a substep; not worth the
+     * stepped curve's integral. It holds Speed until MaySpeed falls to it, then
      * the distance falls by e every HoldSeconds down to the braking knee
      * (2 x BrakingMargin x BrakingAccel x HoldSeconds^2, 51.2 km at full
      * boosters), then it brakes, 2 x HoldSeconds from the knee. Above the
      * knee: (D - Speed N) / Speed + N ln(Speed N / knee) + 2N.
      *
-     * With a HoldSeconds of zero or less, the braking curve alone, as
-     * MaySpeed: it holds Speed until d1 = Speed^2 / (2 x BrakingMargin x
+     * With a HoldSeconds of zero or less, the continuous braking curve
+     * alone, as MaySpeed with no hold and no Step: it holds Speed until d1 = Speed^2 / (2 x BrakingMargin x
      * BrakingAccel), then brakes, 2 d1 / Speed.
      *
      * At the present speed, which is what "live" means: while the lever is
