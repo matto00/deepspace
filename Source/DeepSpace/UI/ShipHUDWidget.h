@@ -99,9 +99,10 @@ public:
     /**
      * A speed in the unit a person would say it in (flight-feel decision 7):
      * whole metres a second under a kilometre a second; kilometres a second
-     * to a tenth under a hundred, then whole and grouped up to a hundredth of
-     * light; then fractions of light to a hundredth under one; and "1 C",
-     * which is as fast as the drive goes (ruling 1). Each unit takes over
+     * to a tenth under a hundred, then whole and grouped up to a tenth of
+     * light, so every drive notch to 20,000 km/s reads in kilometres; then
+     * fractions of light to a hundredth, "0.1 C" being as fast as the drive
+     * goes (the 2026-09-27 ruling). Each unit takes over
      * exactly where the last would round up to its own threshold, as
      * AltitudeWords does, so "1000 M/S" and "100.0 KM/S" are never shown.
      *
@@ -130,8 +131,8 @@ public:
      * is pressed. A lever is always named by the speed it asks for, never as
      * a notch or a fraction of its travel: a gauge is a thing to fill.
      *
-     *   Ink: "142 M/S · CRUISE 200 M/S"            Dim: " · DRIVE 1 C"
-     *   Ink: "0.42 C · CRUISE 100 M/S · SPOOLING DOWN"   Dim: " · DRIVE 1 C"
+     *   Ink: "7.1 KM/S · CRUISE 20 KM/S"           Dim: " · DRIVE 0.1 C"
+     *   Ink: "14,142 KM/S · CRUISE 141 M/S · SPOOLING DOWN"   Dim: " · DRIVE 0.1 C"
      *
      * Holds no time at all: the corner has no destination to count down
      * to, and the live ETA is the target's (ruling 3). Pure.

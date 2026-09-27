@@ -15,8 +15,8 @@ namespace
     constexpr double AU = UniverseUnits::CmPerAU;
     constexpr double C = ShipDriveLever::LightCmPerSecond;
 
-    /** The boosters' full acceleration, cm/s^2: FShipFlightLimits' 40 m/s^2. */
-    constexpr double Boost = 4000.0;
+    /** The boosters' full acceleration, cm/s^2: FShipFlightLimits' 2 km/s^2. */
+    constexpr double Boost = 2.0e5;
     constexpr double Hold = ShipFlight::DefaultHoldSeconds;
     constexpr double Step = 1.0 / 120.0;
 
@@ -256,12 +256,53 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
     // MaySpeed: D / N far out, the braking curve near in, never more than
     // D / step, and continuous and monotonic in between.
     {
+        // The braking curve at 80% of the boosters, stepped: v^2 / 2b + v
+        // Step / 2 = D, so v = sqrt(2 b D + h^2) - h with h = b Step / 2.
+        const double Braking = 2.0 * 0.8 * Boost;
+        const double H = 0.25 * Braking * Step;
+        const auto Stepped = [&](double D) { return FMath::Sqrt(Braking * D + H * H) - H; };
         TestTrue(TEXT("far out, D / N"), FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, Hold, Step), 1.0e11 / Hold, 1e-3));
-        TestTrue(TEXT("near in, the braking curve at 80% of the boosters"),
-                 FMath::IsNearlyEqual(MaySpeed(1.0e4, Boost, Hold, Step), FMath::Sqrt(2.0 * 0.8 * Boost * 1.0e4), 1e-9));
-        TestTrue(TEXT("they meet 1,024 m out at 256 m/s"),
-                 FMath::IsNearlyEqual(1.024e5 / Hold, FMath::Sqrt(2.0 * BrakingMargin * Boost * 1.024e5), 1e-6)
-                 && FMath::IsNearlyEqual(MaySpeed(1.024e5, Boost, Hold, Step), 2.56e4, 1e-6));
+        TestTrue(TEXT("near in, the stepped braking curve at 80% of the boosters"),
+                 FMath::IsNearlyEqual(MaySpeed(1.0e6, Boost, Hold, Step), Stepped(1.0e6), 1e-6));
+        TestTrue(TEXT("with no substep, the continuous one"),
+                 FMath::IsNearlyEqual(MaySpeed(1.0e6, Boost, Hold, 0.0), FMath::Sqrt(Braking * 1.0e6), 1e-6));
+        TestTrue(TEXT("they meet 51.2 km out at 12.8 km/s, where the hold's D / N wins over the stepped curve"),
+                 FMath::IsNearlyEqual(5.12e6 / Hold, FMath::Sqrt(2.0 * BrakingMargin * Boost * 5.12e6), 1e-6)
+                 && FMath::IsNearlyEqual(MaySpeed(5.12e6, Boost, Hold, Step), 1.28e6, 1e-6));
+
+        // Stepped, the curve is one the boosters can follow to rest: a ship
+        // on it that flies one substep at that speed finds the curve exactly
+        // b Step lower, at every speed down to the landing substep, which
+        // the D / Step bound shortens and which still asks for less than the
+        // boosters' whole a Step. The continuous curve falls faster than the
+        // boosters can brake in its last few substeps -- under about 50 m/s
+        // at full thrust -- and a ship with inertia met its floor at speed.
+        {
+            const double Loss = 0.5 * Braking * Step;
+            double WorstRatio = 0.0;
+            int32 OffCurve = 0;
+            int32 Substeps = 0;
+            double D = 1.25e7;   // 125 km: cruise's stopping distance from 20 km/s
+            double V = MaySpeed(D, Boost, 0.0, Step);
+            while (D > 0.0 && V > 0.0 && Substeps < 100000)
+            {
+                D -= V * Step;
+                const double Next = MaySpeed(D, Boost, 0.0, Step);
+                const double Ratio = (V - Next) / Loss;
+                WorstRatio = FMath::Max(WorstRatio, Ratio);
+                OffCurve += FMath::Abs(Ratio - 1.0) > 1e-6 ? 1 : 0;
+                V = Next;
+                ++Substeps;
+            }
+            TestTrue(FString::Printf(TEXT("braking from 125 km to the floor, the curve falls b Step a substep but for the landing (%d substeps of %d off it)"),
+                                     OffCurve, Substeps),
+                     OffCurve <= 2 && Substeps > 1000);
+            TestTrue(FString::Printf(TEXT("and never faster than the boosters' whole a Step (worst %.4f of b Step, against 1.25)"),
+                                     WorstRatio),
+                     WorstRatio <= 1.0 / BrakingMargin + 1e-9);
+            TestTrue(FString::Printf(TEXT("and it reaches the floor (%.6f cm to go, %d substeps)"), D, Substeps),
+                     FMath::Abs(D) < 1e-3 && V < 1e-3);
+        }
         TestTrue(TEXT("a millimetre out, one substep may not carry it past"),
                  FMath::IsNearlyEqual(MaySpeed(0.1, Boost, Hold, Step), 0.1 / Step, 1e-12));
         TestEqual(TEXT("at the floor, nothing"), MaySpeed(0.0, Boost, Hold, Step), 0.0);
@@ -273,7 +314,7 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
         for (const double NoHold : { 0.0, -1.0 })
         {
             TestTrue(FString::Printf(TEXT("a hold of %.0f s: far out, the braking curve, not D / step"), NoHold),
-                     FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, NoHold, Step), FMath::Sqrt(2.0 * BrakingMargin * Boost * 1.0e11), 1e-6));
+                     FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, NoHold, Step), Stepped(1.0e11), 1e-6));
             TestTrue(TEXT("and with no substep bound either, still the braking curve"),
                      FMath::IsNearlyEqual(MaySpeed(1.0e11, Boost, NoHold, 0.0), FMath::Sqrt(2.0 * BrakingMargin * Boost * 1.0e11), 1e-6));
             TestTrue(TEXT("near in, the same braking curve as with a hold"),
@@ -322,22 +363,24 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
 
         const double D = 0.2 * AU;
         const double Knee = 2.0 * BrakingMargin * Boost * Hold * Hold;
-        TestTrue(TEXT("the knee is 1,024 m at full boosters"), FMath::IsNearlyEqual(Knee, 1.024e5, 1e-6));
+        TestTrue(TEXT("the knee is 51.2 km at full boosters"), FMath::IsNearlyEqual(Knee, 5.12e6, 1e-6));
         TestTrue(TEXT("above the knee: (D - vN) / v + N ln(vN / knee) + 2N"),
                  FMath::IsNearlyEqual(SecondsToFloor(D, C, Boost, Hold),
                                       (D - C * Hold) / C + Hold * FMath::Loge(C * Hold / Knee) + 2.0 * Hold, 1e-9));
         TestTrue(TEXT("already under the cap, the cap's time alone"),
                  FMath::IsNearlyEqual(SecondsToFloor(2.5e10, C, Boost, Hold), Hold * FMath::Loge(2.5e10 / Knee) + 2.0 * Hold, 1e-9));
+        const double Braking = 2.0 * BrakingMargin * Boost;
         TestTrue(TEXT("below the knee's speed: held to the braking curve, then braking"),
                  FMath::IsNearlyEqual(SecondsToFloor(1.0e6, 1.0e4, Boost, Hold),
-                                      (1.0e6 - 1.0e8 / 6400.0) / 1.0e4 + 2.0 * FMath::Sqrt((1.0e8 / 6400.0) / 6400.0), 1e-9));
+                                      (1.0e6 - 1.0e8 / Braking) / 1.0e4 + 2.0 * FMath::Sqrt((1.0e8 / Braking) / Braking), 1e-9));
 
         // Agrees with the flown approach, from every second of it.
         struct FCase { const TCHAR* Name; double From; double Lever; };
-        for (const FCase& Case : { FCase{ TEXT("0.2 AU at 1 c"), 0.2 * AU, C },
-                                   FCase{ TEXT("250,000 km at 1 c"), 2.5e10, C },
-                                   FCase{ TEXT("10 km at cruise's 200 m/s"), 1.0e6, 2.0e4 },
-                                   FCase{ TEXT("0.2 AU at 0.1 c"), 0.2 * AU, 0.1 * C } })
+        for (const FCase& Case : { FCase{ TEXT("0.2 AU at 0.1 c"), 0.2 * AU, 0.1 * C },
+                                   FCase{ TEXT("250,000 km at 0.1 c"), 2.5e10, 0.1 * C },
+                                   FCase{ TEXT("1,000 km at cruise's 20 km/s"), 1.0e8, 2.0e6 },
+                                   FCase{ TEXT("10 km at 200 m/s"), 1.0e6, 2.0e4 },
+                                   FCase{ TEXT("0.2 AU at 1 c, past the drive's top"), 0.2 * AU, C } })
         {
             TArray<TPair<double, double>> EverySecond;
             const double Total = Fly(Case.From, Case.Lever, EverySecond);
@@ -361,10 +404,11 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("a hold of %.0f s: held to the braking curve, then braking"), NoHold),
                      FMath::IsNearlyEqual(SecondsToFloor(1.0e6, V, Boost, NoHold), (1.0e6 - D1) / V + 2.0 * D1 / V, 1e-9));
             TestTrue(TEXT("and under the braking curve already, braking alone"),
-                     FMath::IsNearlyEqual(SecondsToFloor(1.0e4, V, Boost, NoHold), 2.0 * FMath::Sqrt(1.0e4 / (2.0 * BrakingMargin * Boost)), 1e-9));
+                     FMath::IsNearlyEqual(SecondsToFloor(1.0e3, V, Boost, NoHold), 2.0 * FMath::Sqrt(1.0e3 / (2.0 * BrakingMargin * Boost)), 1e-9));
         }
-        for (const FCase& Case : { FCase{ TEXT("no hold, 10 km at cruise's 200 m/s"), 1.0e6, 2.0e4 },
-                                   FCase{ TEXT("no hold, 250,000 km at 1 c"), 2.5e10, C } })
+        for (const FCase& Case : { FCase{ TEXT("no hold, 10 km at 200 m/s"), 1.0e6, 2.0e4 },
+                                   FCase{ TEXT("no hold, 1,000 km at cruise's 20 km/s"), 1.0e8, 2.0e6 },
+                                   FCase{ TEXT("no hold, 250,000 km at 0.1 c"), 2.5e10, 0.1 * C } })
         {
             TArray<TPair<double, double>> EverySecond;
             const double Total = Fly(Case.From, Case.Lever, EverySecond, 0.0);
@@ -381,7 +425,7 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
 
         bool bRisesWithD = true;
         bool bFallsWithSpeed = true;
-        for (const double V : { 1.0e3, 2.0e4, 2.56e4, 1.0e7, C })
+        for (const double V : { 1.0e3, 2.0e4, 1.28e6, 2.0e6, 1.0e7, 0.1 * C, C })
         {
             double Previous = 0.0;
             for (double Dist = 1.0; Dist < 1.0e16; Dist *= 1.1)
@@ -391,7 +435,7 @@ bool FShipFlightSurfaceTest::RunTest(const FString& Parameters)
                 Previous = T;
             }
         }
-        for (const double Dist : { 1.0e3, 1.024e5, 1.0e7, 2.5e10, 0.2 * AU, 30.0 * AU })
+        for (const double Dist : { 1.0e3, 5.12e6, 1.0e7, 2.5e10, 0.2 * AU, 30.0 * AU })
         {
             double Previous = SecondsToFloor(Dist, 1.0, Boost, Hold);
             for (double V = 1.1; V < C; V *= 1.1)

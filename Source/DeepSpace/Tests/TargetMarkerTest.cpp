@@ -601,7 +601,8 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
     }
 
     // Stepped through the flight state itself (build order 3c): the only
-    // check that the ETA and the soft cap agree. At 1 c from 0.2 AU, once
+    // check that the ETA and the soft cap agree. At the drive's top, 0.1 c,
+    // from 0.02 AU, once
     // the lever has settled, the time to the floor falls one second a second
     // -- the moment it predicts is the moment the flown approach arrives, to
     // within 0.5 s, all the way down. From the -Y side, clear of the star and
@@ -613,8 +614,8 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
         FShipFlightState Flight;
         Flight.SetLimits(Limits);
         Flight.SetSurfaces({ FFlightSurface{ Centre, R, Floor, false } });
-        // From 0.25 AU, so the spool-up to 1 c is over well before 0.2 AU.
-        Flight.SetUniverseTransform(Centre + Side * (0.25 * AU), FRotationMatrix::MakeFromX(-Side).ToQuat());
+        // From 0.025 AU, so the spool-up to 0.1 c is over well before 0.02 AU.
+        Flight.SetUniverseTransform(Centre + Side * (0.025 * AU), FRotationMatrix::MakeFromX(-Side).ToQuat());
         FShipFlightCommand Command;
         Command.bDrive = true;
         Command.DriveNotch = Flight.GetDriveNotchCount() - 1;
@@ -622,12 +623,12 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
 
         constexpr double Step = 0.25;
         double Clock = 0.0;
-        while (Clock < 60.0 && Flight.GetUniversePosition().DistanceTo(Centre) > 0.2 * AU)
+        while (Clock < 60.0 && Flight.GetUniversePosition().DistanceTo(Centre) > 0.02 * AU)
         {
             Flight.Step(Step);
             Clock += Step;
         }
-        TestTrue(FString::Printf(TEXT("stepped: at 1 c by 0.2 AU (%.4f c)"), Flight.GetSpeed() / C), Flight.GetSpeed() > 0.999 * C);
+        TestTrue(FString::Printf(TEXT("stepped: at 0.1 c by 0.02 AU (%.4f c)"), Flight.GetSpeed() / C), Flight.GetSpeed() > 0.999 * 0.1 * C);
 
         TArray<TPair<double, double>> Predicted;   // (when, when it says it will arrive)
         TOptional<double> Arrived;
@@ -655,7 +656,7 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
             {
                 Worst = FMath::Max(Worst, FMath::Abs(Sample.Value - *Arrived));
             }
-            AddInfo(FString::Printf(TEXT("stepped from 0.2 AU at 1 c: arrived after %.2f s, the ETA at most %.3f s off"),
+            AddInfo(FString::Printf(TEXT("stepped from 0.02 AU at 0.1 c: arrived after %.2f s, the ETA at most %.3f s off"),
                                     *Arrived - Predicted[0].Key, Worst));
             TestTrue(FString::Printf(TEXT("stepped: the ETA falls a second a second, to within 0.5 s of the flown arrival (%.3f s)"), Worst),
                      Worst <= 0.5);
@@ -729,12 +730,16 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("47.9 H"), NavText::Duration(47.94 * 3600.0), FString(TEXT("47.9 H")));
     TestEqual(TEXT("47.96 h is not 48.0 H but 2 D"), NavText::Duration(47.96 * 3600.0), FString(TEXT("2 D")));
     TestEqual(TEXT("3 D"), NavText::Duration(3.0 * 86400.0), FString(TEXT("3 D")));
-    // The long end has no ceiling and no grouping: cruise's 200 m/s across
-    // 0.2 AU is 1.5e8 s. Pinned as it is, not as it should be: whether a
-    // four-digit day count reads as information or as being behind is the
-    // developer's call (the spec's open question, "The ETA's long end").
-    TestEqual(TEXT("cruise across 0.2 AU: 1731 D"),
-              NavText::Duration(0.2 * UniverseUnits::CmPerAU / FShipFlightLimits().MaxSpeed), FString(TEXT("1731 D")));
+    // The long end has no ceiling and no grouping: 200 m/s, cruise astern's
+    // top, across 0.2 AU is 1.5e8 s. Pinned as it is, not as it should be:
+    // whether a four-digit day count reads as information or as being behind
+    // is the developer's call (the spec's open question, "The ETA's long
+    // end"). Cruise's own top, 20 km/s since the 2026-09-27 ruling, makes it
+    // a hundredth of that.
+    TestEqual(TEXT("200 m/s across 0.2 AU: 1731 D"),
+              NavText::Duration(0.2 * UniverseUnits::CmPerAU / FShipFlightLimits().AsternSpeed), FString(TEXT("1731 D")));
+    TestEqual(TEXT("cruise's top across 0.2 AU: 17 D"),
+              NavText::Duration(0.2 * UniverseUnits::CmPerAU / FShipFlightLimits().MaxSpeed), FString(TEXT("17 D")));
     TestEqual(TEXT("arrived: 0 S"), NavText::Duration(0.0), FString(TEXT("0 S")));
     TestEqual(TEXT("never negative"), NavText::Duration(-5.0), FString(TEXT("0 S")));
     TestTrue(TEXT("a time that never comes has no words"), NavText::Duration(std::numeric_limits<double>::infinity()).IsEmpty());

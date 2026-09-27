@@ -90,10 +90,16 @@ namespace ShipFlight
 
     /**
      * The fastest the ship may go with D cm to go to a floor on its path:
-     * min(max(D / HoldSeconds, sqrt(2 x BrakingMargin x BrakingAccel x D)),
-     * D / Step). Far out, D falls by e every HoldSeconds; near in, the
-     * braking curve, on which the ship comes to rest at the floor; and never
-     * so fast that one substep of Step seconds would carry it past.
+     * min(max(D / HoldSeconds, the braking curve), D / Step). Far out, D
+     * falls by e every HoldSeconds; near in, the braking curve, on which the
+     * ship comes to rest at the floor; and never so fast that one substep of
+     * Step seconds would carry it past.
+     *
+     * The braking curve is the stepped one, v^2 / 2b + v Step / 2 = D with b
+     * = BrakingMargin x BrakingAccel: on it the speed falls by exactly b x
+     * Step a substep down to rest, so a ship with inertia can follow it to
+     * the floor. With a Step of zero or less it is the continuous sqrt(2 b
+     * D), which SecondsToFloor integrates; the two differ by b x Step / 2.
      *
      * BrakingAccel is the boosters' present acceleration, cm/s^2, of which
      * BrakingMargin is planned on. A HoldSeconds of zero or less drops the
@@ -114,14 +120,18 @@ namespace ShipFlight
 
     /**
      * Seconds to the floor D cm ahead, for a ship at Speed cm/s under the cap
-     * (ruling 3's live ETA): it holds Speed until MaySpeed falls to it, then
+     * (ruling 3's live ETA), on the cap's law with its braking part the
+     * continuous curve, sqrt(2 b d) -- MaySpeed with a Step of zero. The cap
+     * flies the stepped curve, b x Step / 2 slower (under 7 m/s at full
+     * boosters), so this is short by about half a substep; not worth the
+     * stepped curve's integral. It holds Speed until MaySpeed falls to it, then
      * the distance falls by e every HoldSeconds down to the braking knee
-     * (2 x BrakingMargin x BrakingAccel x HoldSeconds^2, 1,024 m at full
+     * (2 x BrakingMargin x BrakingAccel x HoldSeconds^2, 51.2 km at full
      * boosters), then it brakes, 2 x HoldSeconds from the knee. Above the
      * knee: (D - Speed N) / Speed + N ln(Speed N / knee) + 2N.
      *
-     * With a HoldSeconds of zero or less, the braking curve alone, as
-     * MaySpeed: it holds Speed until d1 = Speed^2 / (2 x BrakingMargin x
+     * With a HoldSeconds of zero or less, the continuous braking curve
+     * alone, as MaySpeed with no hold and no Step: it holds Speed until d1 = Speed^2 / (2 x BrakingMargin x
      * BrakingAccel), then brakes, 2 d1 / Speed.
      *
      * At the present speed, which is what "live" means: while the lever is

@@ -6,20 +6,20 @@ namespace
     constexpr double Light = ShipDriveLever::LightCmPerSecond;
 
     /**
-     * The lever's notches, cm/s, STOP not included (decision 3). A 1-2-5
-     * series in km/s up to 2,000 and in fractions of light from 0.01 up to
-     * light itself, so every step is x2 or x2.5 -- the same felt step
-     * anywhere on the lever -- but the one between the two halves, 2,000
-     * km/s to 0.01 c, which is x1.499. Round numbers in the unit the readout
-     * uses, so a speed the player sets is one they can come back to.
+     * The lever's notches, cm/s, STOP not included (decision 3, as the
+     * 2026-09-27 ruling re-ranged it). A 1-2-5 series in km/s from 20, which
+     * is cruise's top, so the drive begins where cruise ends, up to 20,000,
+     * and then 0.1 c, the drive's top: every step x2 or x2.5 -- the same felt
+     * step anywhere on the lever -- but the last, 20,000 km/s to 0.1 c, which
+     * is x1.499. Round numbers in the unit the readout uses, so a speed the
+     * player sets is one they can come back to.
      */
     constexpr double Table[] = {
-        1.0 * KmPerSecond, 2.0 * KmPerSecond, 5.0 * KmPerSecond,
-        10.0 * KmPerSecond, 20.0 * KmPerSecond, 50.0 * KmPerSecond,
+        20.0 * KmPerSecond, 50.0 * KmPerSecond,
         100.0 * KmPerSecond, 200.0 * KmPerSecond, 500.0 * KmPerSecond,
-        1000.0 * KmPerSecond, 2000.0 * KmPerSecond,
-        0.01 * Light, 0.02 * Light, 0.05 * Light,
-        0.1 * Light, 0.2 * Light, 0.5 * Light, 1.0 * Light,
+        1000.0 * KmPerSecond, 2000.0 * KmPerSecond, 5000.0 * KmPerSecond,
+        10000.0 * KmPerSecond, 20000.0 * KmPerSecond,
+        0.1 * Light,
     };
 
     constexpr int32 Notches = UE_ARRAY_COUNT(Table);
@@ -39,6 +39,47 @@ namespace
     {
         return Table[Notch - 1];
     }
+}
+
+double ShipDriveLever::CruiseSpeed(double Throttle, double TopCmPerSecond, double AsternTopCmPerSecond)
+{
+    // Zero, either zero, is the detent; NaN is read as it, not as astern.
+    if (!(FMath::Abs(Throttle) > 0.0) || !(TopCmPerSecond > 0.0))
+    {
+        return 0.0;
+    }
+    const double P = FMath::Min(FMath::Abs(Throttle), 1.0);
+    const double Speed = TopCmPerSecond > CruiseFloorCmPerSecond
+        ? CruiseFloorCmPerSecond * FMath::Pow(TopCmPerSecond / CruiseFloorCmPerSecond, P)
+        : P * TopCmPerSecond;
+    if (Throttle > 0.0)
+    {
+        return Speed;
+    }
+    return -FMath::Min(Speed, FMath::Max(AsternTopCmPerSecond, 0.0));
+}
+
+double ShipDriveLever::CruiseAsternLimit(double TopCmPerSecond, double AsternTopCmPerSecond)
+{
+    if (!(AsternTopCmPerSecond > 0.0) || !(TopCmPerSecond > 0.0))
+    {
+        return 0.0;
+    }
+    if (AsternTopCmPerSecond >= TopCmPerSecond)
+    {
+        return 1.0;
+    }
+    if (TopCmPerSecond <= CruiseFloorCmPerSecond)
+    {
+        // The linear lever of a top under the floor.
+        return AsternTopCmPerSecond / TopCmPerSecond;
+    }
+    if (AsternTopCmPerSecond < CruiseFloorCmPerSecond)
+    {
+        return 0.0;
+    }
+    return FMath::Loge(AsternTopCmPerSecond / CruiseFloorCmPerSecond)
+         / FMath::Loge(TopCmPerSecond / CruiseFloorCmPerSecond);
 }
 
 int32 ShipDriveLever::TableNotches()
@@ -121,13 +162,16 @@ double ShipDriveLever::Ease(double Position, double Target, double Dt, double Ma
         return Position == Target ? Target : Position;
     }
 
-    // Solved, not stepped: at the rate limit until the error is small enough
-    // that the exponential is slower than it, then the exponential for the
-    // rest of Dt. The error only ever shrinks toward zero, so the position
-    // cannot pass Target however long Dt is.
+    // Solved, not stepped, in three parts: at the rate limit until the
+    // error is small enough that the exponential is slower than it, then the
+    // exponential down to ArriveNotches, then the exponential's own pace
+    // there, held steady, to the notch. The error only ever shrinks toward
+    // zero and the last part ends on it, so the position cannot pass Target
+    // however long Dt is, and it arrives in a finite time with no snap.
     const double Start = FMath::Abs(Target - Position);
     const double Sign = Target > Position ? 1.0 : -1.0;
     const double Knee = Rate * EaseSeconds;
+    const double Tail = FMath::Min(ArriveNotches, Knee);
     double Error = Start;
     double Left = Dt;
     if (Error > Knee)
@@ -135,27 +179,23 @@ double ShipDriveLever::Ease(double Position, double Target, double Dt, double Ma
         const double ToKnee = (Error - Knee) / Rate;
         if (Left <= ToKnee)
         {
-            Error -= Rate * Left;
-            Left = 0.0;
+            return Target - Sign * (Error - Rate * Left);
         }
-        else
+        Error = Knee;
+        Left -= ToKnee;
+    }
+    if (Error > Tail)
+    {
+        const double ToTail = EaseSeconds * FMath::Loge(Error / Tail);
+        if (Left <= ToTail)
         {
-            Error = Knee;
-            Left -= ToKnee;
+            return Target - Sign * Error * FMath::Exp(-Left / EaseSeconds);
         }
+        Error = Tail;
+        Left -= ToTail;
     }
-    if (Left > 0.0)
-    {
-        Error *= FMath::Exp(-Left / EaseSeconds);
-    }
-
-    // Arrive rather than approach forever -- but only where the whole move,
-    // snap included, is still inside the rate limit.
-    if (Error <= SettleNotches && Start <= Rate * Dt)
-    {
-        return Target;
-    }
-    return Target - Sign * Error;
+    Error -= Tail / EaseSeconds * Left;
+    return Error <= 0.0 ? Target : Target - Sign * Error;
 }
 
 int32 ShipDriveLever::TapDown(int32 Notch, double Position)
@@ -187,9 +227,11 @@ int32 ShipDriveLever::FNotchRepeat::Update(bool bHeld, double Dt, double Rate)
 }
 
 double ShipDriveLever::SweepCruise(double Throttle, bool bHeldUp, bool bHeldDown,
-                                   int32 PressesUp, int32 PressesDown, double Dt, double Rate)
+                                   int32 PressesUp, int32 PressesDown, double Dt, double Rate,
+                                   double AsternLimit)
 {
-    const double From = FMath::Clamp(Throttle, -1.0, 1.0);
+    const double Astern = FMath::Clamp(AsternLimit, 0.0, 1.0);
+    const double From = FMath::Clamp(Throttle, -Astern, 1.0);
     const int32 Direction = (bHeldUp ? 1 : 0) - (bHeldDown ? 1 : 0);
     if (Direction == 0 || !(Dt > 0.0) || Rate <= 0.0)
     {
@@ -199,7 +241,7 @@ double ShipDriveLever::SweepCruise(double Throttle, bool bHeldUp, bool bHeldDown
     {
         return 0.0;
     }
-    const double To = FMath::Clamp(From + Direction * Rate * Dt, -1.0, 1.0);
+    const double To = FMath::Clamp(From + Direction * Rate * Dt, -Astern, 1.0);
     if ((From > 0.0 && To < 0.0) || (From < 0.0 && To > 0.0))
     {
         return 0.0;

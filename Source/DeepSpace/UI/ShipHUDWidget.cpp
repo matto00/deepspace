@@ -581,8 +581,8 @@ namespace
     }
 
     /**
-     * How close under a hundredth of light still counts as one: the table's
-     * 0.01 c is 0.01 x c in floating point, and read back as a fraction it
+     * How close under a tenth of light still counts as one: the table's
+     * 0.1 c is 0.1 x c in floating point, and read back as a fraction it
      * can come out a rounding error short. A billionth is far below anything
      * the readout can show and far above that error.
      */
@@ -641,12 +641,14 @@ FString UShipHUDWidget::SpeedWordsKept(double CmPerSecond, bool bDropZeros)
     {
         return Decimal(TenthsKm, 1, bDropZeros) + TEXT(" KM/S");
     }
-    // Light takes over at a hundredth of itself, the lever's own seam
-    // between its two halves: 2,000 KM/S is the last notch in kilometres
-    // and 0.01 C the first in light. Eleven digits of metres say nothing
-    // about what the drive is doing; a fraction of light does.
+    // Light takes over at a tenth of itself, the drive's top and the one
+    // notch not in kilometres: 20,000 KM/S is the last notch in kilometres
+    // and 0.1 C the first in light (the 2026-09-27 ruling; the seam was 0.01
+    // c when the lever ran to 1 c). Below it every notch reads as its own
+    // round label -- 5,000 KM/S, never "0.02 C" -- and a fraction of light
+    // says what the top is.
     const double Light = FMath::Max(CmPerSecond, 0.0) / ShipDriveLever::LightCmPerSecond;
-    if (Light < 0.01 * (1.0 - OnLightThreshold))
+    if (Light < 0.1 * (1.0 - OnLightThreshold))
     {
         return Grouped(FMath::RoundToInt64(Km)) + TEXT(" KM/S");
     }
@@ -655,8 +657,8 @@ FString UShipHUDWidget::SpeedWordsKept(double CmPerSecond, bool bDropZeros)
     {
         return Decimal(HundredthsLight, 2, bDropZeros) + TEXT(" C");
     }
-    // 1 C is as fast as the drive goes (ruling 1); whole multiples above it
-    // only so nothing past it can print as a fraction.
+    // 0.1 C is as fast as the drive goes; hundredths above it to 1 C, and
+    // whole multiples past that only so nothing can print as a fraction.
     return Grouped(FMath::RoundToInt64(Light)) + TEXT(" C");
 }
 

@@ -17,6 +17,92 @@ content*, *the anti-chore principle*, *the cruise is when you live in the
 ship*; CLAUDE.md: *Flying*, *The drive and the jump*, *The sky*
 **Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
 
+## Ruling, 2026-09-27: the speed bands
+
+After the third playtest the developer re-ranged both levers. Verbatim:
+"Let's limit Drive Speed from 20Km/s to 0.1C, and cruise from 0m/s to
+20Km/s. I think this will balance the pace around and between planets."
+This **supersedes ruling 1's "tops out at 1c"**: the drive now tops out at
+0.1 c, and anything faster is a jump. Everything below that disagrees is
+overridden by this note. Decisions 3, 4 and 5 are revised in place where
+they state a number or a law this ruling changed, each superseded statement
+kept beside its replacement and marked *(Superseded 2026-09-27)*; CLAUDE.md
+(*Flying*, *The drive and the jump*, *The sky*, the tunables table) is the
+current statement of all of them.
+
+- **Cruise: rest to 20 km/s**, at 2 km/s^2 (was 200 m/s at 40 m/s^2). Rest
+  to the top is 10 s with the lever thrown and 13 s with Shift held; from
+  the top the braking curve stops the ship in 125 km.
+- **The cruise lever reads on a log scale**, fine at the bottom: forward
+  position p in (0, 1] asks for 1 m/s x (20 km/s / 1 m/s)^p, and p = 0 is
+  rest. The detent at zero is exactly as before. `ds.Cruise.Sweep` is 0.2 of
+  the travel a second, five seconds from rest to full.
+- **Astern, decided here:** the same law mirrored, position for position
+  (-p asks for what +p asks ahead), and the lever's astern travel **ends**
+  where that reaches 200 m/s, at p = ln 200 / ln 20,000 = 0.535. The
+  rejected alternatives were a lever that ran on to -1 with the speed capped
+  at 200 m/s -- nearly half the astern travel doing nothing, which a held
+  Ctrl would sweep through and a Shift would have to sweep back -- and
+  stretching the whole astern travel over 1-200 m/s, under which the same
+  position meant a different speed either side of zero.
+- **The drive: STOP and eleven notches**, 20, 50, 100, 200, 500, 1,000,
+  2,000, 5,000, 10,000, 20,000 km/s and 0.1 c. `ds.Drive.Top` is clamped
+  to [20 km/s, 0.1 c]. The drive's bottom notch is cruise's top, so leaving
+  the drive spools down to 20 km/s and cruise holds it there: the handover
+  is seamless -- the substep that would ease under 20 km/s lands on it, so
+  with cruise's lever at full the speed never dips and never rises back
+  (`DeepSpace.Ship.FlightSpoolDown`). Every other drive behaviour is kept;
+  STOP to 0.1 c held is 3.7 s, X from 0.1 c is under cruise's top in 3.3 s
+  and at rest in 5.9 s, X from 20 km/s is at rest in 2.5 s (both asserted,
+  `DeepSpace.Playtest.LeverToLightAndBack`), and the spool-down from 0.1 c
+  is 3.3 s.
+- **The ease arrives** (a fix the new scale forced). Below
+  `ShipDriveLever::ArriveNotches`, 5e-3 of a notch (100 m/s off STOP), the
+  0.4 s exponential closes at the pace it had there, held steady, so a
+  one-notch tap is on its notch, exactly, 2.52 s after it (a quarter thrust,
+  four times that). The exponential alone never arrives, and the snap that
+  ended it could not be both invisible at STOP and prompt at the top: at a
+  thousandth of a notch it would snap the last 20 m/s to rest; at 5e-5 it
+  came four seconds after a tap, with the reading a kilometre a second
+  short of its lever's "20,000 KM/S" for the last of them.
+- **Leaving the drive where cruise cannot brake is a spool too.** The
+  hold's d / 4 s beats the braking curve above the knee (below), so the
+  drive can be held off a floor faster than cruise could stop from: 17.5
+  km/s at 70 km, where cruise needs 77 km. F there does not hand over; the
+  ship goes on down the drive's cap, `SPOOLING DOWN`, until its speed is on
+  cruise's braking curve (to a substep's braking), and cruise takes it on
+  the curve to rest on the floor. Handed over at once, it would have met the
+  hard stop at 5 km/s.
+- **The dust**: `ds.Sky.DustTop` is reached at the drive's top, 0.1 c; the
+  knee stays at 2 km/s, so cruise's upper decade runs through the log part
+  (its top seen at 2.2 km/s, drawn 1.6 times long, as the drive's bottom
+  notch is). The drive is never seen slower than cruise.
+- **The HUD's light seam moves to 0.1 c**, so every notch below the top
+  reads in kilometres ("5,000 KM/S", never "0.02 C"): 1 m/s, 150 m/s,
+  20 km/s, 500 km/s and 0.1 c read "1 M/S", "150 M/S", "20 KM/S",
+  "500 KM/S" and "0.1 C". Those are the notches' labels, and the ship's
+  reading says them once it arrives; on the way it is a moving reading in
+  its own unit (decision 7). So the climb to the top reads in kilometres
+  a second, up through 29,000, beside "DRIVE 0.1 C", and turns to "0.1 C" as it arrives, 2.5 s after the
+  tap -- the one notch whose reading changes unit on arrival.
+- **Unchanged:** the soft cap's hold, d / `ds.Drive.HoldSeconds` max'd with
+  a braking curve and bounded by d / step; the in-system jump; and the 10 km
+  floor. **Changed:** which braking curve (the stepped one, next bullet). The
+  ETA, `ShipFlight::SecondsToFloor`, still integrates the continuous curve,
+  sqrt(2bD): it differs from what the cap flies by b dt / 2 in speed, under
+  7 m/s, which is about half a substep of time, so the countdown is not
+  worth the stepped curve's closed form. Landing is designed separately. Two
+  consequences of the boosters' new strength are worth knowing: the braking
+  knee is 51.2 km at 12.8 km/s (was 1,024 m at 256 m/s), and 1 AU at 0.1 c
+  is 83 minutes.
+- **Two fixes the new scale forced.** The braking curve `MaySpeed` plans on
+  is now the *stepped* one, v^2 / 2b + v dt / 2 = D: on it the speed falls
+  exactly b dt a substep down to rest, where the continuous sqrt(2bD)
+  demanded more than the boosters had in its last substeps and cruise met
+  its floor at up to 50 m/s. And the cruise hard stop lands the ship on its
+  floor rather than leaving it where the substep began, which at 20 km/s
+  was up to 167 m above it.
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read revision 2 and the sibling map spec together and ruled on
@@ -25,7 +111,7 @@ disagrees. Every decision they change has been revised in place, and each
 superseded choice is kept beside it as a rejected alternative, as the
 revisions before this one were.
 
-1. **The drive tops out at 1 c.** Verbatim: "Top out at 1c, anything faster
+1. **The drive tops out at 1 c.** (Superseded 2026-09-27: 0.1 c, above.) Verbatim: "Top out at 1c, anything faster
    should be a jump (we should eventually limit the amount of jumps before a
    cooldown period. 1c already feels somewhat like quite the stretch from
    realism. there can be an option to 'jump to planet' within a system". The
@@ -92,7 +178,8 @@ revised in place below.
   `ds.Drive.HoldSeconds` at 0 or less drops the hold term from `MaySpeed`,
   leaving a cap that lets the ship close at full lever until it must brake.
   It never removes the cap.
-- **`ds.Drive.Top` is clamped to [1 km/s, 1 c]**, because the lever always
+- **`ds.Drive.Top` is clamped to [1 km/s, 1 c]** *(Superseded 2026-09-27:
+  [20 km/s, 0.1 c])*, because the lever always
   keeps its first notch, so a lower top could never make the CVar and the
   lever agree.
 
@@ -313,7 +400,11 @@ lever acting past what was asked.
 ### 3. The drive lever: a stop and 18 notches, 1 km/s to 1 c, and a tap moves the ship one notch
 
 *Revised by ruling 1: the lever ends at 1 c, where revision 2 ran on to
-100 c.*
+100 c.* *(Superseded 2026-09-27: STOP and eleven notches, 20 km/s to 0.1 c
+-- 20, 50, 100, 200, 500, 1,000, 2,000, 5,000, 10,000, 20,000 km/s and
+0.1 c; STOP to the top held is 3.7 s. The bottom is cruise's own top, so
+the two ranges meet exactly. The tap, the hold and the no-reverse rules
+below are unchanged; the table and the numbers drawn from it are not.)*
 
 The drive lever is a row of notches. Position 0 is **STOP**. Positions 1 to
 18 are a 1-2-5 series, in km/s to 2,000 and in fractions of light from 0.01,
@@ -334,7 +425,7 @@ can come back to.
   the ship applies each one; a press and release inside one 30 Hz frame is
   still one notch. A hold repeats after 0.3 s at `ds.Drive.Sweep`, 3 notches
   a second: STOP to 1 c is six seconds held, and a decade of speed is one
-  second.
+  second. *(Superseded 2026-09-27: STOP to 0.1 c is 3.7 s held.)*
 - **A tap moves the ship one notch from what it is doing, not from where the
   lever was.** Ctrl sets the lever to the notch below the ship's present
   speed, if that is lower than one notch down from the lever; Shift, the
@@ -350,11 +441,13 @@ can come back to.
   `up: notch = min(top, max(notch + 1, floor(p) + 1))`.
 - **No reverse.** Backing away from something at a kilometre a second is
   not a thing a pilot wants; turning round is. Ctrl at STOP does nothing.
-- **The bottom, 1 km/s, is five times cruise's top.** It is the first speed
+- **The bottom, 1 km/s, is five times cruise's top.** *(Superseded
+  2026-09-27: the bottom is 20 km/s, and is cruise's top.)* It is the first speed
   at which cruise would be a nuisance: 100 km at 1 km/s is a minute and a
   half. Anything slower is cruise's, and the two ranges meet with no gap the
   response cannot bridge (decision 4).
-- **The top, 1 c, is the developer's** (ruling 1): "anything faster should
+- **The top, 1 c, is the developer's** (ruling 1) *(Superseded 2026-09-27:
+  0.1 c, also the developer's; 1 AU at 0.1 c is 83 minutes)*: "anything faster should
   be a jump", and 1 c "already feels somewhat like quite the stretch from
   realism". Over 10,000 generated systems the leg from the arrival standoff
   to the innermost world is a median 0.2 AU (95th percentile 2.5 AU, longest
@@ -366,7 +459,8 @@ can come back to.
   the soft cap's (decision 5), and its last part takes about a minute from
   any notch that crosses the leg in less: from 0.2 AU at 1 c the floor is
   reached in 165 s, the last 64 of them under the cap. `ds.Drive.Top` (in c,
-  default 1, clamped to 1 km/s at the least and 1 c at the most) removes the notches above a lower top for
+  default 1, clamped to 1 km/s at the least and 1 c at the most; *superseded
+  2026-09-27: default 0.1, clamped to [20 km/s, 0.1 c]*) removes the notches above a lower top for
   a playtest that wants the lever shorter; it can never lengthen it.
 
 **Rejected: a continuous logarithmic lever.** A tap would move it by however
@@ -403,12 +497,18 @@ review). `R` itself is never scaled by thrust. Speed is the notch table read at 
 linear from STOP to the first. So:
 
 - one tap settles to 95% of its new speed in 1.2 s, with no overshoot;
+  *(added 2026-09-27)* below 5e-3 of a notch the ease closes at the pace it
+  had there, held steady, so a tap is on its notch, exactly, in 2.52 s;
 - **R equals the hold's sweep rate**, so while Shift is held the ship
   accelerates in step with the lever, and on release it settles within a
   second;
 - all stop from 1 c (notch 18) is under cruise's top in 6.3 s and at rest in
   about nine; from 0.1 c, 5.3 s and eight; cruise's all stop from 200 m/s is
-  five. The two stops feel alike;
+  five. The two stops feel alike; *(Superseded 2026-09-27: from 0.1 c, the
+  new top, the drive is under cruise's top in 3.3 s and at rest in 5.9; from
+  20 km/s at rest in 2.5. Cruise's all stop from its new top, 20 km/s at 2
+  km/s^2, is ten seconds, so the two stops no longer feel alike: the drive,
+  having no inertia, stops faster than cruise.)*
 - starved boosters slow the response, not the top: a quarter thrust takes
   four times as long to reach any notch, and gets there. That includes a
   one-notch tap. Scaling `R` alone would not slow a tap, because it never
@@ -431,7 +531,10 @@ nose first meets a world the ship would reach within the cap's few seconds
 above cruise's top does not clamp. It makes the cruise lever live at once,
 and the ship spools down on the drive's easing, along the nose, until it
 reaches 200 m/s; there it becomes an ordinary cruising ship, which chases
-its lever from there under inertia. Every case in it is pinned
+its lever from there under inertia. *(Superseded 2026-09-27: until it
+reaches 20 km/s, where it lands exactly, and until its speed is also on
+cruise's braking curve for the path, so a ship the cap is holding off a
+floor faster than cruise could brake from goes on down the cap first.)* Every case in it is pinned
 (`DeepSpace.Ship.FlightDrive`):
 
 | During the spool-down | What happens |
@@ -444,6 +547,8 @@ its lever from there under inertia. Every case in it is pinned
 | attitude | the velocity stays along the nose, as in the drive |
 
 From 1 c the spool takes about six seconds and cruise's braking five more.
+*(Superseded 2026-09-27: from 0.1 c the spool takes 3.3 s, and cruise's
+braking from 20 km/s ten more.)*
 
 **Engaging the drive starts p at the ship's present forward speed.** In
 forward flight neither toggle has a frame in which the speed jumps.
@@ -453,7 +558,9 @@ and the drive sets its velocity straight along the nose, so whatever a
 cruising ship had astern or sideways is gone in the first substep: engaged
 while backing at 85 m/s, the speed changes by about 106 m/s in one substep;
 engaged while sliding sideways at 85 m/s with the nose turned 90 degrees, the
-ship stops dead. Both are faster than cruise's 40 m/s^2. It is left as it is:
+ship stops dead. Both are faster than cruise's 40 m/s^2 *(superseded
+2026-09-27: 2 km/s^2, and the drive's bottom notch is 20 km/s, so the
+numbers here are larger in proportion)*. It is left as it is:
 the drive is engaged from a forward cruise in every case play has shown, and
 the fix -- p from `|v|`, with the velocity's direction eased onto the nose --
 is a second ease with its own feel to judge. If a playtest ever notices, that
@@ -519,6 +626,13 @@ speed <= MaySpeed(d) = min( max( d / N, sqrt(1.6 a d) ), d / step )
         N = ds.Drive.HoldSeconds = 4 s,  a = the boosters' present acceleration
 ```
 
+*(Superseded 2026-09-27: the braking term is the stepped curve, the v that
+solves v^2 / 2b + v step / 2 = d with b = 0.8 a, in place of
+sqrt(1.6 a d) = sqrt(2 b d). It is the continuous curve less b step / 2, and
+on it the speed falls exactly b step a substep down to rest; the continuous
+curve asked for more than the boosters had in its last substeps. The hold
+and the d / step bound are unchanged.)*
+
 and **the cap is on the whole speed, along the nose.** If the ray meets
 nothing, there is no cap and the lever is the speed.
 
@@ -531,7 +645,8 @@ nothing, there is no cap and the lever is the speed.
   error: a nose held still flies a straight line to the point it was on.
 - *It arrives.* Under the cap d falls by e every four seconds until d / N
   meets the braking curve, `sqrt(1.6 a d)`: 1.0 km from the floor at 256 m/s
-  with full boosters. From there it brakes as cruise does, at 80% of what the
+  with full boosters. *(Superseded 2026-09-27: at 2 km/s^2 the knee is 51.2
+  km from the floor at 12.8 km/s, on the stepped curve.)* From there it brakes as cruise does, at 80% of what the
   boosters have, and comes to rest on the floor about eight seconds later
   with no step in speed. `d / step` is the last guard: no substep can carry
   the ship past a surface, at any speed or frame chop, including a two-second

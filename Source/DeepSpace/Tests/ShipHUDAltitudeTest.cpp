@@ -154,13 +154,13 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("with the drive's lever up and the nose on the world, settled onto the floor, the corner says so"),
                 Settle(20 * 30).EndsWith(AtFloor));
 
-            // From 250 km, with the lever at 1 c: the ship is still coming
+            // From 250 km, with the lever at 0.1 c: the ship is still coming
             // down, and the cap is what is holding it to tens of km/s.
             PlaceAt(250.0 * Km);
             const FString Coming = Settle(1);
             TestFalse(TEXT("not at the floor from 250 km, where the ship is still coming down"), Coming.EndsWith(AtFloor));
             const FString Held = Settle(4 * 30);
-            TestTrue(FString::Printf(TEXT("coming down under the lever at 1 c, the cap holds it off, and says so ('%s')"), *Held),
+            TestTrue(FString::Printf(TEXT("coming down under the lever at 0.1 c, the cap holds it off, and says so ('%s')"), *Held),
                 Held.EndsWith(HoldingOff));
             TestTrue(TEXT("while the flight state says it holds more than 5% under the lever"),
                 Ship->GetFlightState().GetHold() == EFlightHold::HoldingOff
@@ -169,11 +169,13 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
             // Held a few percent under the lever, the corner says nothing:
             // the flight state does report HOLDING OFF, and it is the corner
             // that keeps it back, on the 5% rule. The lever at its first
-            // notch, settled far out; then the ship put where the cap's
-            // speed is 3.5% under that notch, and one frame flown.
+            // notch, settled far out -- 1,000 km, since eight seconds at 20
+            // km/s is 160 km and the cap binds under 80 km -- then the ship
+            // put where the cap's speed is 3.5% under that notch, and one
+            // frame flown.
             const double FirstNotch = ShipDriveLever::NotchSpeed(1);
             Ship->SetDriveLever(Pilot, 1);
-            PlaceAt(250.0 * Km);
+            PlaceAt(1000.0 * Km);
             Settle(8 * 30);
             TestEqual(TEXT("far out, settled on the first notch"), Ship->GetFlightState().GetSpeed(), FirstNotch, FirstNotch * 1.0e-3);
             const FShipFlightLimits& Limits = Ship->GetFlightState().GetLimits();

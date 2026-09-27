@@ -153,8 +153,8 @@ namespace PlaytestTestLocal
     /**
      * Puts the ship LightSeconds of light out from World's floor, on the line
      * from its centre through where the ship is, with the nose on the
-     * centre: far enough out that the drive reaches 1 c before the cap has
-     * anything to say. The opening shot is only 40,000 km per Earth radius
+     * centre: far enough out that the drive reaches its top, 0.1 c, before
+     * the cap has anything to say -- which at 0.1 c is 120,000 km out. The opening shot is only 40,000 km per Earth radius
      * out, which the spool-up never leaves.
      */
     void BackOff(UShipSubsystem* Ship, const FWorldFloor& World, double LightSeconds)
@@ -405,11 +405,11 @@ bool FPlaytestClickTargetFromHelmTest::RunTest(const FString& Parameters)
 // ---------------------------------------------------------------------------
 
 /**
- * The drive lever from STOP to 1 c and back, a tap at a time, then X (ruling
- * 1, flight-feel decisions 1-4). Every tap is one notch, the ship settles on
- * it without overshooting, and the corner's motion line then reads the
- * notch's own label for the ship and for the lever; at the top it says
- * "1 C", and one more Shift does nothing. Down again the same way, and X
+ * The drive lever from STOP to 0.1 c and back, a tap at a time, then X (the
+ * 2026-09-27 ruling, flight-feel decisions 1-4). Every tap is one notch, the
+ * ship settles on it without overshooting, and the corner's motion line then
+ * reads the notch's own label for the ship and for the lever; at the top it
+ * says "0.1 C", and one more Shift does nothing. Down again the same way, and X
  * brings the ship to rest with both levers at STOP, where it stays through F.
  * Through the pawn's hands, on a path that meets nothing, so the cap never
  * has a say.
@@ -447,7 +447,7 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("at STOP"), Notch(), 0);
 
     const int32 Top = Flight.GetDriveNotchCount() - 1;
-    TestEqual(TEXT("the lever is STOP and eighteen notches"), Top, 18);
+    TestEqual(TEXT("the lever is STOP and eleven notches"), Top, 11);
 
     bool bFree = true;
     bool bNeverFalls = true;
@@ -455,9 +455,14 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     double Previous = Flight.GetSpeed();
     for (int32 Want = 1; Want <= Top; ++Want)
     {
+        // 2.6 seconds a notch: the ease arrives on a notch, exactly, 2.52 s
+        // after a one-notch tap (ShipDriveLever::ArriveNotches), and the
+        // corner then reads its lever's own label -- the top's 0.1 C too,
+        // which is approached in kilometres a second and turns to light as
+        // it arrives.
         Tap(Player, Ship, 1);
         const double Speed = ShipDriveLever::NotchSpeed(Want);
-        for (int32 Tick = 0; Tick < 90; ++Tick)
+        for (int32 Tick = 0; Tick < 78; ++Tick)
         {
             Frame(Player, Ship);
             bFree &= Flight.GetHold() == EFlightHold::Free;
@@ -468,25 +473,26 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
         const FString Words = UShipHUDWidget::SpeedWords(Speed);
         const FString Ink = UShipHUDWidget::MotionLineOf(*Ship).Ink;
         TestEqual(FString::Printf(TEXT("Shift %d is notch %d"), Want, Want), Notch(), Want);
-        TestTrue(FString::Printf(TEXT("settled on %s in 3 s (%.6g cm/s)"), *Words, Flight.GetSpeed()),
-                 FMath::IsNearlyEqual(Flight.GetSpeed(), Speed, Speed * 1e-3));
+        TestTrue(FString::Printf(TEXT("on %s, exactly, in 2.6 s (%.9g cm/s)"), *Words, Flight.GetSpeed()),
+                 FMath::IsNearlyEqual(Flight.GetSpeed(), Speed, Speed * 1e-12));
         TestTrue(FString::Printf(TEXT("the corner reads the label for the ship and the lever: \"%s\""), *Ink),
                  Ink.StartsWith(Words + NavText::Separator) && Ink.Contains(FString(TEXT("DRIVE ")) + Words));
     }
     TestTrue(TEXT("the cap never has a say on a path that meets nothing"), bFree);
     TestTrue(TEXT("going up, the speed never falls"), bNeverFalls);
     TestTrue(TEXT("and never overshoots a notch"), bNeverOvershoots);
-    TestEqual(TEXT("the top notch reads 1 C"), UShipHUDWidget::SpeedWords(ShipDriveLever::NotchSpeed(Top)), FString(TEXT("1 C")));
-    TestTrue(FString::Printf(TEXT("and is light, exactly (%.9g cm/s)"), Flight.GetSpeed()),
-             FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-9));
+    const double TopSpeed = 0.1 * ShipDriveLever::LightCmPerSecond;
+    TestEqual(TEXT("the top notch reads 0.1 C"), UShipHUDWidget::SpeedWords(ShipDriveLever::NotchSpeed(Top)), FString(TEXT("0.1 C")));
+    TestTrue(FString::Printf(TEXT("and is a tenth of light, exactly (%.9g cm/s)"), Flight.GetSpeed()),
+             FMath::IsNearlyEqual(Flight.GetSpeed(), TopSpeed, TopSpeed * 1e-9));
 
     Tap(Player, Ship, 1);
     for (int32 Tick = 0; Tick < 30; ++Tick)
     {
         Frame(Player, Ship);
     }
-    TestEqual(TEXT("one more Shift at 1 c does nothing: anything faster is a jump"), Notch(), Top);
-    TestTrue(TEXT("and the ship stays at light"), Flight.GetSpeed() <= ShipDriveLever::LightCmPerSecond * (1.0 + 1e-9));
+    TestEqual(TEXT("one more Shift at 0.1 c does nothing: anything faster is a jump"), Notch(), Top);
+    TestTrue(TEXT("and the ship stays at 0.1 c"), Flight.GetSpeed() <= TopSpeed * (1.0 + 1e-9));
 
     bool bNeverRises = true;
     bool bNeverUndershoots = true;
@@ -509,20 +515,22 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("coming down, the speed never rises"), bNeverRises);
     TestTrue(TEXT("and never drops past a notch"), bNeverUndershoots);
 
-    // X from the bottom notch, and then from light itself.
+    // X from the bottom notch, and then from the top.
     Player->PressStop();
     double Seconds = 0.0;
-    while (Seconds < 5.0 && Flight.GetSpeed() > 0.0)
+    while (Seconds < 6.0 && Flight.GetSpeed() > 0.0)
     {
         Frame(Player, Ship);
         Seconds += Dt;
     }
-    TestTrue(FString::Printf(TEXT("X from 1 km/s: at rest, exactly, in %.2f s"), Seconds), Flight.GetSpeed() == 0.0);
+    AddInfo(FString::Printf(TEXT("X from 20 km/s comes to rest in %.2f s"), Seconds));
+    TestTrue(FString::Printf(TEXT("X from 20 km/s: at rest, exactly, in 2.5 s, as a tap arrives (%.2f s)"), Seconds),
+             Flight.GetSpeed() == 0.0 && Seconds > 2.45 && Seconds < 2.6);
     TestTrue(TEXT("with both levers at STOP"), Notch() == 0 && Flight.GetCommand().Throttle == 0.0);
 
     // Ctrl slows a ship still climbing, from the first tap (decision 3): the
     // lever flung to the top, a second of climbing, then one Ctrl. Counted
-    // from the lever it would be one notch under light and the ship would go
+    // from the lever it would be one notch under the top and the ship would go
     // on climbing; counted from the ship it is the notch under where the
     // ship is, and the ship slows from that frame.
     Ship->SetDriveLever(Player, Top);
@@ -549,7 +557,7 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     {
         Frame(Player, Ship);
     }
-    TestTrue(TEXT("back at light"), FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-3));
+    TestTrue(TEXT("back at 0.1 c"), FMath::IsNearlyEqual(Flight.GetSpeed(), TopSpeed, TopSpeed * 1e-3));
     Player->PressStop();
     Seconds = 0.0;
     while (Seconds < 12.0 && Flight.GetSpeed() > 0.0)
@@ -557,9 +565,9 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
         Frame(Player, Ship);
         Seconds += Dt;
     }
-    AddInfo(FString::Printf(TEXT("X from 1 c comes to rest in %.2f s"), Seconds));
-    TestTrue(FString::Printf(TEXT("X from 1 c: at rest in a known few seconds (%.2f s)"), Seconds),
-             Flight.GetSpeed() == 0.0 && Seconds < 10.0);
+    AddInfo(FString::Printf(TEXT("X from 0.1 c comes to rest in %.2f s"), Seconds));
+    TestTrue(FString::Printf(TEXT("X from 0.1 c: at rest in a known few seconds, 5.9 by the ease (%.2f s)"), Seconds),
+             Flight.GetSpeed() == 0.0 && Seconds > 5.8 && Seconds < 6.0);
 
     Player->PressDrive();
     for (int32 Tick = 0; Tick < 60; ++Tick)
@@ -574,7 +582,7 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("and F again: the drive, at STOP, still at rest"), Ship->IsDriveEngaged() && Notch() == 0 && Flight.GetSpeed() == 0.0);
     Tap(Player, Ship, 1);
-    TestEqual(TEXT("after X the lever starts again from STOP: one Shift is 1 km/s"), Notch(), 1);
+    TestEqual(TEXT("after X the lever starts again from STOP: one Shift is 20 km/s"), Notch(), 1);
     return true;
 }
 
@@ -582,8 +590,9 @@ bool FPlaytestLeverToLightAndBackTest::RunTest(const FString& Parameters)
 
 /**
  * The soft cap on a collision course (ruling 2, flight-feel decision 5):
- * thirty light seconds out from the largest world, nose on it, the drive
- * set to 1 c: the lever is left alone, all the way to light, until the floor is four seconds off at the present speed; then the
+ * three light seconds out from the largest world, nose on it, the drive
+ * set to 0.1 c: the lever is left alone, all the way to its top, until the
+ * floor is four seconds off at the present speed; then the
  * cap takes the whole speed, never gives any back, sheds it no faster than
  * the hold's e-every-four-seconds or the braking curve allow, and brings the
  * ship to rest on the floor -- the sky's rendered floor -- without passing
@@ -606,9 +615,9 @@ bool FPlaytestCapBindsOnCollisionTest::RunTest(const FString& Parameters)
     }
     const FWorldFloor World = WorldFloor(*Home, Largest);
     const FShipFlightState& Flight = Ship->GetFlightState();
-    BackOff(Ship, World, 30.0);
+    BackOff(Ship, World, 3.0);
     Test.Step(0.0f);
-    if (!TestTrue(TEXT("thirty light seconds out, the nose is on the world and on nothing nearer"),
+    if (!TestTrue(TEXT("three light seconds out, the nose is on the world and on nothing nearer"),
                   FirstOnPathIs(Flight, Flight.GetUniverseOrientation().GetForwardVector(), World)))
     {
         return false;
@@ -647,7 +656,7 @@ bool FPlaytestCapBindsOnCollisionTest::RunTest(const FString& Parameters)
         if (BoundAt < 0.0)
         {
             bUntouchedBefore &= Speed >= Previous * (1.0 - 1e-12);
-            bReachedLight |= FMath::IsNearlyEqual(Speed, ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-9);
+            bReachedLight |= FMath::IsNearlyEqual(Speed, ShipDriveLever::NotchSpeed(Top), ShipDriveLever::NotchSpeed(Top) * 1e-9);
         }
         else
         {
@@ -665,7 +674,7 @@ bool FPlaytestCapBindsOnCollisionTest::RunTest(const FString& Parameters)
                             BoundAt, LeadAtBind, Seconds, WorstDrop));
     TestTrue(TEXT("the cap binds"), BoundAt > 0.0);
     TestTrue(TEXT("until then the lever alone sets the speed, climbing"), bUntouchedBefore);
-    TestTrue(TEXT("all the way to light"), bReachedLight);
+    TestTrue(TEXT("all the way to the top, 0.1 c"), bReachedLight);
     TestTrue(FString::Printf(TEXT("it binds with the floor four seconds off at the present speed (%.2f s)"), LeadAtBind),
              FMath::Abs(LeadAtBind - Hold) <= 0.1 * Hold);
     TestTrue(TEXT("once bound it never gives speed back"), bNeverRisesAfter);
@@ -686,10 +695,10 @@ bool FPlaytestCapBindsOnCollisionTest::RunTest(const FString& Parameters)
 
 /**
  * A path that misses is untouched (ruling 2: only when the nose's ray meets
- * a floor sphere). Twenty light seconds out, the nose is laid three floor
+ * a floor sphere). Two light seconds out, the nose is laid three floor
  * radii off the largest world's centre at the closest approach, and the
- * drive flown at 1 c past
- * it: the cap never binds, the ship holds light exactly all the way past,
+ * drive flown at 0.1 c past
+ * it: the cap never binds, the ship holds 0.1 c exactly all the way past,
  * goes where the nose points, and never dips under the floor. The target
  * line says PASSING, not an ETA, while it closes.
  */
@@ -710,7 +719,7 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
     }
     const FWorldFloor World = WorldFloor(*Home, Largest);
     const FShipFlightState& Flight = Ship->GetFlightState();
-    BackOff(Ship, World, 20.0);
+    BackOff(Ship, World, 2.0);
 
     // Three floor radii off the centre at closest approach: turned off the
     // line to the centre by the angle that leaves that miss distance.
@@ -749,15 +758,15 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
         Seconds += Dt;
         bFree &= Flight.GetHold() == EFlightHold::Free;
         bNeverUnder &= Room(*Ship, World) >= 0.0;
-        if (Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches)
+        if (Flight.GetDrivePosition() == static_cast<double>(Top))
         {
-            bAtLight &= FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::LightCmPerSecond, ShipDriveLever::LightCmPerSecond * 1e-9);
+            bAtLight &= FMath::IsNearlyEqual(Flight.GetSpeed(), ShipDriveLever::NotchSpeed(Top), ShipDriveLever::NotchSpeed(Top) * 1e-9);
         }
         const double Now = Flight.GetUniversePosition().DistanceTo(World.Centre);
         if (Now < Closest)
         {
             Closest = Now;
-            bLightBeforeClosest = Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches;
+            bLightBeforeClosest = Flight.GetDrivePosition() == static_cast<double>(Top);
             const FString Line = UShipHUDWidget::TargetLineText(*Ship, Home).ToString();
             bSaidPassing |= Line.Contains(TEXT("PASSING"));
             bSaidEta |= Line.Contains(TEXT("ETA"));
@@ -771,8 +780,8 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
                             Closest / 1.0e5, Seconds, Expected / 1.0e5));
     TestTrue(TEXT("the ship flies past"), PastFor >= 5.0);
     TestTrue(TEXT("the cap never binds on a path that misses"), bFree);
-    TestTrue(TEXT("at light before it comes abreast of the world"), bLightBeforeClosest);
-    TestTrue(TEXT("and the ship holds light, exactly, all the way past"), bAtLight);
+    TestTrue(TEXT("at 0.1 c before it comes abreast of the world"), bLightBeforeClosest);
+    TestTrue(TEXT("and the ship holds 0.1 c, exactly, all the way past"), bAtLight);
     TestTrue(FString::Printf(TEXT("it goes where the nose points: past at %.0f km against %.0f aimed"), Closest / 1.0e5, Expected / 1.0e5),
              FMath::IsNearlyEqual(Closest, Expected, Expected * 0.01));
     TestTrue(TEXT("and never under the floor"), bNeverUnder);
@@ -786,7 +795,7 @@ bool FPlaytestCapIgnoresAMissTest::RunTest(const FString& Parameters)
 /**
  * The in-system jump to the target (ruling 1, map decision 12), flown as the
  * playtest will: a far world picked on the map, the drive under way at
- * light, "Jump here", the charge, the pilot's hands turning the nose onto it, and the
+ * its top, "Jump here", the charge, the pilot's hands turning the nose onto it, and the
  * fold opening by itself. The fold is an all stop; the arrival is at rest,
  * both levers at STOP, at the standoff that shows the world two degrees
  * across, above its floor and still the target -- and it stays at rest
@@ -826,7 +835,7 @@ bool FPlaytestInSystemJumpToTargetTest::RunTest(const FString& Parameters)
     const auto Levers = [&]() { return Flight.GetCommand().DriveNotch == 0 && Flight.GetCommand().Throttle == 0.0; };
 
     // Out of the plane, where nothing is in the way, and under way at
-    // light: Shift held to the top. The fold then opens with
+    // 0.1 c: Shift held to the top. The fold then opens with
     // more spool-down in hand than the fold lasts, so only the arrival's own
     // rest can put the ship at rest.
     const FVector Away = WayOut(Flight);
@@ -845,8 +854,8 @@ bool FPlaytestInSystemJumpToTargetTest::RunTest(const FString& Parameters)
     }
     Player->HoldLever(0);
     Frame(Player, Ship);
-    TestTrue(FString::Printf(TEXT("under way under the drive at light (%.3f c)"), Flight.GetSpeed() / ShipDriveLever::LightCmPerSecond),
-             Flight.GetCommand().DriveNotch == Flight.GetDriveNotchCount() - 1 && Flight.GetSpeed() > 0.5 * ShipDriveLever::LightCmPerSecond);
+    TestTrue(FString::Printf(TEXT("under way under the drive at its top (%.3f c)"), Flight.GetSpeed() / ShipDriveLever::LightCmPerSecond),
+             Flight.GetCommand().DriveNotch == Flight.GetDriveNotchCount() - 1 && Flight.GetSpeed() > 0.05 * ShipDriveLever::LightCmPerSecond);
 
     Map->RefreshFromShip();
     Map->SelectWorld(Orbit);
@@ -979,9 +988,9 @@ bool FPlaytestInterstellarJumpAtRestTest::RunTest(const FString& Parameters)
     Player->PressDrive();
     Player->TapLever(1);
     Player->HoldLever(1);
-    for (int32 Tick = 0; Tick < 90; ++Tick)
+    for (int32 Tick = 0; Tick < 180; ++Tick)
     {
-        Frame(Player, Ship);
+        Frame(Player, Ship);   // five seconds from rest to full at ds.Cruise.Sweep
     }
     Player->HoldLever(0);
     Player->PressDrive();
@@ -1060,9 +1069,9 @@ bool FPlaytestInterstellarJumpAtRestTest::RunTest(const FString& Parameters)
 // ---------------------------------------------------------------------------
 
 /**
- * The live ETA counts down as the ship closes (ruling 3). Thirty light
+ * The live ETA counts down as the ship closes (ruling 3). Three light
  * seconds out, the largest world targeted and the nose on it, the drive at
- * 1 c:
+ * its top, 0.1 c:
  * once the ship is at its lever's speed, every second's reading is a second
  * less, give or take a tenth, and the time it names is the time the ship
  * actually reaches the floor -- the ETA and the flight are the same law.
@@ -1086,7 +1095,7 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
     }
     const FWorldFloor World = WorldFloor(*Home, Largest);
     const FShipFlightState& Flight = Ship->GetFlightState();
-    BackOff(Ship, World, 30.0);
+    BackOff(Ship, World, 3.0);
     Test.Step(0.0f);
     TestTrue(TEXT("the world is targeted"), Ship->SetTarget(WorldId(*Home, Largest)));
     TestFalse(TEXT("at rest there is no ETA"), UShipHUDWidget::TargetLineText(*Ship, Home).ToString().Contains(TEXT("ETA")));
@@ -1113,7 +1122,7 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
         Ship->Tick(Dt);
         Seconds += Dt;
         ++Tick;
-        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetDrivePosition() >= Top - ShipDriveLever::SettleNotches;
+        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetDrivePosition() == static_cast<double>(Top);
         if (Tick % 30 == 0 && bSettled)
         {
             const TOptional<FTargetView> View = Ship->GetTargetView(*Home);
@@ -1138,7 +1147,7 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
     {
         Free += Reading.bCapped ? 0 : 1;
     }
-    TestTrue(FString::Printf(TEXT("read at light before the cap binds (%d) and under it (%d)"), Free, Readings.Num() - Free),
+    TestTrue(FString::Printf(TEXT("read at 0.1 c before the cap binds (%d) and under it (%d)"), Free, Readings.Num() - Free),
              Free >= 5 && Readings.Num() - Free >= 5);
     bool bCountsDown = true;
     double WorstStep = 0.0;
@@ -1175,16 +1184,17 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
 
     // -- Cruise, on starved boosters ------------------------------------------
     // Cruise brakes on the curve alone, with no hold, so its time is that
-    // law's. Starved is where the two differ: the drive's knee falls under
-    // cruise's top below about 78% thrust, and the in-system jump's wind-up is
-    // exactly when the boosters go short. At a quarter thrust from 8 km up,
-    // the hold's law named about 21 s for a 25 s flight.
+    // law's, and the hold's law would name the wrong time: the drive's knee,
+    // 12.8 km/s at full thrust, is under cruise's 20 km/s top at any thrust,
+    // and the in-system jump's wind-up is exactly when the boosters go short.
+    // At a quarter thrust cruise takes 40 s and 400 km to reach its top, and
+    // brakes from it over 500 km, so the flight starts 1,200 km up.
     Ship->AllStop(Pilot);
     Ship->SetDriveEngaged(Pilot, false);
     Ship->SetConsumerWeight(ShipPower::Boosters, 0.0f);
     {
         const FVector Out = (Flight.GetUniversePosition() - World.Centre).GetSafeNormal();
-        Ship->PlaceShip(World.Centre + Out * (World.Radius + World.Floor + 800000.0), Facing(-Out));
+        Ship->PlaceShip(World.Centre + Out * (World.Radius + World.Floor + 1.2e8), Facing(-Out));
     }
     Ship->Tick(Dt);
     TestTrue(TEXT("the boosters are starved"), Flight.GetLimits().LinearAcceleration < 0.3 * FShipFlightLimits::Cruise().LinearAcceleration);

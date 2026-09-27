@@ -28,9 +28,8 @@ namespace
     /** The lever's labels, as the flight-feel spec prints them (decision 3):
      *  what the readout must say at each notch, settled. */
     const TCHAR* const NotchLabels[] = {
-        TEXT("1 KM/S"), TEXT("2 KM/S"), TEXT("5 KM/S"), TEXT("10 KM/S"), TEXT("20 KM/S"), TEXT("50 KM/S"),
-        TEXT("100 KM/S"), TEXT("200 KM/S"), TEXT("500 KM/S"), TEXT("1,000 KM/S"), TEXT("2,000 KM/S"),
-        TEXT("0.01 C"), TEXT("0.02 C"), TEXT("0.05 C"), TEXT("0.1 C"), TEXT("0.2 C"), TEXT("0.5 C"), TEXT("1 C"),
+        TEXT("20 KM/S"), TEXT("50 KM/S"), TEXT("100 KM/S"), TEXT("200 KM/S"), TEXT("500 KM/S"), TEXT("1,000 KM/S"),
+        TEXT("2,000 KM/S"), TEXT("5,000 KM/S"), TEXT("10,000 KM/S"), TEXT("20,000 KM/S"), TEXT("0.1 C"),
     };
 
     /**
@@ -97,7 +96,15 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
     // -- The units, at each boundary ----------------------------------------
     TestEqual(TEXT("at rest"), Words(0.0), FString(TEXT("0 M/S")));
     TestEqual(TEXT("never negative"), Words(-500.0), FString(TEXT("0 M/S")));
-    TestEqual(TEXT("cruise's top"), Words(200.0 * MetresPerSecond), FString(TEXT("200 M/S")));
+    // The speeds the 2026-09-27 ruling's ranges turn on: the log scale's
+    // floor, a low cruise, cruise's astern top, cruise's top and the drive's
+    // bottom notch, a mid drive notch, and the drive's top.
+    TestEqual(TEXT("1 m/s, the cruise lever's first speed"), Words(1.0 * MetresPerSecond), FString(TEXT("1 M/S")));
+    TestEqual(TEXT("150 m/s"), Words(150.0 * MetresPerSecond), FString(TEXT("150 M/S")));
+    TestEqual(TEXT("cruise's astern top"), Words(200.0 * MetresPerSecond), FString(TEXT("200 M/S")));
+    TestEqual(TEXT("cruise's top, the drive's bottom notch"), Words(20.0 * KmPerSecond), FString(TEXT("20 KM/S")));
+    TestEqual(TEXT("500 km/s"), Words(500.0 * KmPerSecond), FString(TEXT("500 KM/S")));
+    TestEqual(TEXT("the drive's top"), Words(0.1 * Light), FString(TEXT("0.1 C")));
     TestEqual(TEXT("metres under a kilometre a second"), Words(999.4 * MetresPerSecond), FString(TEXT("999 M/S")));
     TestEqual(TEXT("a kilometre a second, never 1000 M/S"), Words(999.6 * MetresPerSecond), FString(TEXT("1 KM/S")));
     TestEqual(TEXT("tenths close in"), Words(12.43 * KmPerSecond), FString(TEXT("12.4 KM/S")));
@@ -106,11 +113,14 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("a hundred, never 100.0 KM/S"), Words(99.96 * KmPerSecond), FString(TEXT("100 KM/S")));
     TestEqual(TEXT("hundreds whole"), Words(437.4 * KmPerSecond), FString(TEXT("437 KM/S")));
     TestEqual(TEXT("thousands grouped"), Words(2000.0 * KmPerSecond), FString(TEXT("2,000 KM/S")));
-    TestEqual(TEXT("just under a hundredth of light, still kilometres"),
-              Words(0.00999 * Light), FString(TEXT("2,995 KM/S")));
-    TestEqual(TEXT("a hundredth of light, in light"), Words(0.01 * Light), FString(TEXT("0.01 C")));
-    TestEqual(TEXT("a rounding error short of a hundredth of light is still the notch, not 2,998 KM/S"),
-              Words(0.01 * Light * (1.0 - 1.0e-12)), FString(TEXT("0.01 C")));
+    TestEqual(TEXT("a hundredth of light is still kilometres: every notch under the top reads in them"),
+              Words(0.01 * Light), FString(TEXT("2,998 KM/S")));
+    TestEqual(TEXT("the last notch in kilometres"), Words(20000.0 * KmPerSecond), FString(TEXT("20,000 KM/S")));
+    TestEqual(TEXT("just under a tenth of light, still kilometres"),
+              Words(0.0999 * Light), FString(TEXT("29,949 KM/S")));
+    TestEqual(TEXT("a tenth of light, in light"), Words(0.1 * Light), FString(TEXT("0.1 C")));
+    TestEqual(TEXT("a rounding error short of a tenth of light is still the notch, not 29,979 KM/S"),
+              Words(0.1 * Light * (1.0 - 1.0e-12)), FString(TEXT("0.1 C")));
     TestEqual(TEXT("hundredths under one"), Words(0.37 * Light), FString(TEXT("0.37 C")));
     TestEqual(TEXT("just under one"), Words(0.994 * Light), FString(TEXT("0.99 C")));
     TestEqual(TEXT("one, never 1.00 C"), Words(0.996 * Light), FString(TEXT("1 C")));
@@ -157,40 +167,50 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         return Motion;
     };
 
-    // Cruising up to its lever, the drive left at 1 c: F's speed is on screen.
+    // Cruising up to its lever, the drive left at 0.1 c: F's speed is on
+    // screen. 3.55 s at 2 km/s^2 is 7.1 km/s.
     {
         const FShipFlightState State = Flying(1.0, false, ShipDriveLever::TableNotches(), 3.55);
         const UShipHUDWidget::FMotionWords Motion = Line(State);
-        TestEqual(TEXT("cruising, speed and the live lever in ink"), Motion.Ink, FString(TEXT("142 M/S")) + Sep + TEXT("CRUISE 200 M/S"));
-        TestEqual(TEXT("and the drive's lever dim"), Motion.Dim, Sep + TEXT("DRIVE 1 C"));
+        TestEqual(TEXT("cruising, speed and the live lever in ink"), Motion.Ink, FString(TEXT("7.1 KM/S")) + Sep + TEXT("CRUISE 20 KM/S"));
+        TestEqual(TEXT("and the drive's lever dim"), Motion.Dim, Sep + TEXT("DRIVE 0.1 C"));
     }
-    // Astern.
+    // Astern, at the lever's astern end-stop: 200 m/s.
     {
-        const FShipFlightState State = Flying(-0.5, false, 0, 2.0);
+        const FShipFlightState State = Flying(-1.0, false, 0, 2.0);
         const UShipHUDWidget::FMotionWords Motion = Line(State);
-        TestEqual(TEXT("astern is said"), Motion.Ink, FString(TEXT("80 M/S")) + Sep + TEXT("CRUISE ASTERN 100 M/S"));
+        TestEqual(TEXT("astern is said, and full astern is 200 m/s"), Motion.Ink, FString(TEXT("200 M/S")) + Sep + TEXT("CRUISE ASTERN 200 M/S"));
         TestEqual(TEXT("and the drive at STOP, dim"), Motion.Dim, Sep + TEXT("DRIVE STOP"));
+    }
+    // Half the lever is the log scale's middle, 141 m/s, either way.
+    {
+        TestEqual(TEXT("half ahead asks for 141 m/s"), Line(Flying(0.5, false, 0, 1.0)).Ink,
+                  FString(TEXT("141 M/S")) + Sep + TEXT("CRUISE 141 M/S"));
+        TestEqual(TEXT("and half astern the same, mirrored"), Line(Flying(-0.5, false, 0, 1.0)).Ink,
+                  FString(TEXT("141 M/S")) + Sep + TEXT("CRUISE ASTERN 141 M/S"));
     }
     // Under the drive, climbing to its notch, cruise's lever left at its top.
     {
-        const FShipFlightState State = Flying(1.0, true, 6, 1.0);
+        const double To100 = 100.0 * KmPerSecond;
+        const FShipFlightState State = Flying(1.0, true, 3, 0.5);
         const UShipHUDWidget::FMotionWords Motion = Line(State);
         TestTrue(FString::Printf(TEXT("climbing, the ship is short of its lever ('%s')"), *Motion.Ink),
-                 State.GetSpeed() < 50.0 * KmPerSecond && State.GetSpeed() > KmPerSecond);
-        TestEqual(TEXT("under the drive, its lever is live"), Motion.Ink, Reading(State.GetSpeed(), To50) + Sep + TEXT("DRIVE 50 KM/S"));
+                 State.GetSpeed() < To100 && State.GetSpeed() > 20.0 * KmPerSecond);
+        TestEqual(TEXT("under the drive, its lever is live"), Motion.Ink, Reading(State.GetSpeed(), To100) + Sep + TEXT("DRIVE 100 KM/S"));
         TestTrue(FString::Printf(TEXT("and the reading short of it keeps its tenth ('%s')"), *Motion.Ink),
-                 Motion.Ink.Contains(TEXT(".")) && Motion.Ink.StartsWith(Reading(State.GetSpeed(), To50)));
-        TestEqual(TEXT("and cruise's lever is what F would go to"), Motion.Dim, Sep + TEXT("CRUISE 200 M/S"));
+                 Motion.Ink.Contains(TEXT(".")) && Motion.Ink.StartsWith(Reading(State.GetSpeed(), To100)));
+        TestEqual(TEXT("and cruise's lever is what F would go to"), Motion.Dim, Sep + TEXT("CRUISE 20 KM/S"));
     }
     // At the top, cruise at STOP.
     FShipFlightState Top = Flying(0.0, true, ShipDriveLever::TableNotches(), 12.0);
     {
         const UShipHUDWidget::FMotionWords Motion = Line(Top);
-        TestEqual(TEXT("at the top"), Motion.Ink, FString(TEXT("1 C")) + Sep + TEXT("DRIVE 1 C"));
+        TestEqual(TEXT("at the top"), Motion.Ink, FString(TEXT("0.1 C")) + Sep + TEXT("DRIVE 0.1 C"));
         TestEqual(TEXT("cruise at STOP, dim"), Motion.Dim, Sep + TEXT("CRUISE STOP"));
     }
-    // Spooling down: F from the top, cruise's lever at half.
+    // Spooling down: F from the top, cruise's lever at half, 141 m/s.
     {
+        const double HalfLever = ShipDriveLever::CruiseSpeed(0.5, FShipFlightLimits::Cruise().MaxSpeed, FShipFlightLimits::Cruise().AsternSpeed);
         FShipFlightCommand Command = Top.GetCommand();
         Command.bDrive = false;
         Command.Throttle = 0.5;
@@ -199,15 +219,15 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("F above cruise's top spools down"), static_cast<int32>(Top.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
         const UShipHUDWidget::FMotionWords Motion = Line(Top);
         TestEqual(TEXT("spooling down, cruise's lever is live and the corner says why the speed is not yet it"),
-                  Motion.Ink, Reading(Top.GetSpeed(), 100.0 * MetresPerSecond) + Sep + TEXT("CRUISE 100 M/S") + Sep + TEXT("SPOOLING DOWN"));
-        TestTrue(FString::Printf(TEXT("still far above cruise ('%s')"), *Motion.Ink), Motion.Ink.StartsWith(TEXT("0.")));
-        TestEqual(TEXT("and the drive's 1 c is kept, dim"), Motion.Dim, Sep + TEXT("DRIVE 1 C"));
+                  Motion.Ink, Reading(Top.GetSpeed(), HalfLever) + Sep + TEXT("CRUISE 141 M/S") + Sep + TEXT("SPOOLING DOWN"));
+        TestTrue(FString::Printf(TEXT("still far above cruise ('%s')"), *Motion.Ink), Top.GetSpeed() > 1000.0 * KmPerSecond);
+        TestEqual(TEXT("and the drive's 0.1 c is kept, dim"), Motion.Dim, Sep + TEXT("DRIVE 0.1 C"));
 
         Fly(Top, 20.0);
         const UShipHUDWidget::FMotionWords After = Line(Top);
         TestEqual(TEXT("the spool over, it is cruise"), static_cast<int32>(Top.GetMode()), static_cast<int32>(EFlightMode::Cruise));
         TestFalse(TEXT("and SPOOLING DOWN is gone"), After.Ink.Contains(TEXT("SPOOLING")));
-        TestEqual(TEXT("cruising at its lever"), After.Ink, FString(TEXT("100 M/S")) + Sep + TEXT("CRUISE 100 M/S"));
+        TestEqual(TEXT("cruising at its lever"), After.Ink, FString(TEXT("141 M/S")) + Sep + TEXT("CRUISE 141 M/S"));
     }
     // At rest, both levers at STOP.
     {
@@ -217,18 +237,20 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("and cruise at STOP, dim"), Motion.Dim, Sep + TEXT("CRUISE STOP"));
     }
 
-    // A lever a hair off its detent is at STOP: a very short frame of Shift
-    // can leave cruise's lever a fraction of a metre a second up, and
-    // "CRUISE 0 M/S" would name as a setting what is none. Either way.
+    // A lever a hair off its detent asks for the log scale's floor, 1 m/s,
+    // and says so: on the log lever the first frame of a press is a
+    // setting, never "CRUISE 0 M/S". Either way. Only the detent is STOP.
     for (const double Hair : { 0.001, -0.001 })
     {
         const FShipFlightState State = Flying(Hair, false, 0, 1.0);
-        TestTrue(TEXT("the lever is off its detent"), State.GetLeverSpeed() != 0.0);
-        TestEqual(FString::Printf(TEXT("a lever at %g of its travel reads STOP"), Hair),
-                  Line(State).Ink, FString(TEXT("STATIONARY")) + Sep + TEXT("CRUISE STOP"));
+        const FString Named = Hair > 0.0 ? TEXT("CRUISE 1 M/S") : TEXT("CRUISE ASTERN 1 M/S");
+        TestTrue(TEXT("the lever is off its detent"), FMath::Abs(State.GetLeverSpeed()) >= 1.0 * MetresPerSecond);
+        TestEqual(FString::Printf(TEXT("a lever at %g of its travel reads 1 m/s"), Hair),
+                  Line(State).Ink, FString(TEXT("1 M/S")) + Sep + Named);
         FShipFlightState Other = Flying(Hair, true, 1, 1.0);
-        TestEqual(FString::Printf(TEXT("and at %g, dim, too"), Hair), Line(Other).Dim, Sep + TEXT("CRUISE STOP"));
+        TestEqual(FString::Printf(TEXT("and at %g, dim, too"), Hair), Line(Other).Dim, Sep + Named);
     }
+    TestEqual(TEXT("at the detent, STOP"), Line(Flying(0.0, false, 0, 1.0)).Ink, FString(TEXT("STATIONARY")) + Sep + TEXT("CRUISE STOP"));
 
     // In every mode the dim part names the other lever, and nothing in the
     // corner is a time.
@@ -283,9 +305,9 @@ bool FShipHUDSpeedTest::RunTest(const FString& Parameters)
             }
         });
         TestTrue(FString::Printf(TEXT("the HUD's corner reads '%s' in one block"), *Expected.Ink),
-                 Ink != nullptr && Expected.Ink.EndsWith(TEXT("CRUISE 200 M/S")));
+                 Ink != nullptr && Expected.Ink.EndsWith(TEXT("CRUISE 20 KM/S")));
         TestTrue(FString::Printf(TEXT("and '%s' in another"), *Expected.Dim),
-                 Dim != nullptr && Expected.Dim == Sep + TEXT("DRIVE 5 KM/S"));
+                 Dim != nullptr && Expected.Dim == Sep + TEXT("DRIVE 100 KM/S"));
         if (Ink && Dim)
         {
             TestTrue(TEXT("the other lever is drawn dim, the live one in ink"),

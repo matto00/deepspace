@@ -61,7 +61,7 @@ bool FShipFlightStateTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("thrust is along the ship's nose"), State.GetVelocity().GetSafeNormal(),
                   FVector::ForwardVector);
 
-        // MaxSpeed is reached in 5 s at cruise; 30 s is well past it.
+        // MaxSpeed is reached in 10 s at cruise; 30 s is well past it.
         RunFor(State, 30.0, 1.0 / 60.0);
         TestEqual(TEXT("cruise tops out at MaxSpeed"), State.GetSpeed(), State.GetLimits().MaxSpeed);
         TestEqual(TEXT("and stops accelerating there"), State.GetLinearAcceleration().Size(), 0.0);
@@ -134,6 +134,9 @@ bool FShipFlightStateTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("throttle is clamped"), State.GetCommand().Throttle, 1.0);
         TestEqual(TEXT("attitude is clamped per axis"), State.GetCommand().AttitudeRate,
                   FVector(1.0, -1.0, 1.0));
+        State.SetCommand(MakeCommand(-5.0, FVector::ZeroVector));
+        TestEqual(TEXT("and astern, to the lever's astern end-stop"), State.GetCommand().Throttle, -State.CruiseAsternLimit());
+        TestTrue(TEXT("which asks for 200 m/s astern"), FMath::IsNearlyEqual(State.GetLeverSpeed(), -State.GetLimits().AsternSpeed, 1e-6));
     }
 
     // Standing up stops the turn but not the cruise.
@@ -203,10 +206,10 @@ namespace FlightDriveTestLocal
     constexpr double JupiterRadius = 7.1492e9;
     constexpr double MoonRadius = 1.7374e8;
 
-    /** The lever's top notch at 1 c: 18. */
+    /** The lever's top notch at ds.Drive.Top's default, 0.1 c: 11. */
     int32 TopNotch()
     {
-        return ShipDriveLever::NotchCount(Light) - 1;
+        return ShipDriveLever::NotchCount(ShipDriveLever::DefaultTopLight * Light) - 1;
     }
 
     /** A world's floor sphere, at the floor the subsystem's FloorFor gives a
@@ -321,7 +324,9 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     using namespace FlightDriveTestLocal;
     const double Step = FShipFlightState::FixedStep;
     const int32 Top = TopNotch();
-    TestEqual(TEXT("the lever tops out at notch 18, 1 c"), Top, 18);
+    const double TopSpeed = ShipDriveLever::NotchSpeed(Top);
+    TestEqual(TEXT("the lever tops out at notch 11"), Top, 11);
+    TestEqual(TEXT("which is 0.1 c"), TopSpeed, 0.1 * Light);
 
     // -- The lever ------------------------------------------------------------
     // A notch's speed is its table speed once settled, the ease never
@@ -331,14 +336,14 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         double Previous = 0.0;
         bool bRising = true;
         bool bNeverOver = true;
-        for (int32 Frame = 0; Frame < 5 * 60; ++Frame)
+        for (int32 Frame = 0; Frame < 8 * 60; ++Frame)
         {
             State.Step(1.0 / 60.0);
             bRising &= State.GetSpeed() >= Previous;
             bNeverOver &= State.GetSpeed() <= ShipDriveLever::NotchSpeed(5);
             Previous = State.GetSpeed();
         }
-        TestEqual(TEXT("settled, notch 5 is 50 km/s exactly"), State.GetSpeed(), ShipDriveLever::NotchSpeed(5));
+        TestEqual(TEXT("settled, notch 5 is 500 km/s exactly"), State.GetSpeed(), ShipDriveLever::NotchSpeed(5));
         TestTrue(TEXT("rising all the way"), bRising);
         TestTrue(TEXT("and never past it"), bNeverOver);
         TestTrue(TEXT("along the nose"), State.GetVelocity().GetSafeNormal().Equals(FVector::ForwardVector, 1e-12));
@@ -364,7 +369,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     }
 
     // -- The top --------------------------------------------------------------
-    // No notch and no speed above 1 c, whatever the limit says.
+    // No notch and no speed above 0.1 c, whatever the limit says.
     {
         FShipFlightState State = Driving(FUniversePosition(), FVector::ForwardVector, 99);
         FShipFlightLimits Fast = State.GetLimits();
@@ -374,27 +379,27 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         FShipFlightCommand Command = State.GetCommand();
         Command.DriveNotch = 99;
         State.SetCommand(Command);
-        TestEqual(TEXT("and the lever still stops at 1 c"), State.GetCommand().DriveNotch, Top);
+        TestEqual(TEXT("and the lever still stops at 0.1 c"), State.GetCommand().DriveNotch, Top);
         double Fastest = 0.0;
         for (int32 Frame = 0; Frame < 20 * 60; ++Frame)
         {
             State.Step(1.0 / 60.0);
             Fastest = FMath::Max(Fastest, State.GetSpeed());
         }
-        TestEqual(TEXT("the ship tops out at 1 c exactly"), State.GetSpeed(), Light);
-        TestTrue(TEXT("and was never faster"), Fastest <= Light);
+        TestEqual(TEXT("the ship tops out at 0.1 c exactly"), State.GetSpeed(), TopSpeed);
+        TestTrue(TEXT("and was never faster"), Fastest <= TopSpeed);
 
         // A lower top takes the notches above it away, the lever's with them.
-        Fast.DriveTop = 0.5 * Light;
+        Fast.DriveTop = 0.07 * Light;
         State.SetLimits(Fast);
-        TestEqual(TEXT("a top of 0.5 c is 18 positions"), State.GetDriveNotchCount(), Top);
+        TestEqual(TEXT("a top of 0.07 c is 11 positions, 20,000 km/s the last"), State.GetDriveNotchCount(), Top);
         TestEqual(TEXT("and the lever comes down to it"), State.GetCommand().DriveNotch, Top - 1);
     }
 
     // -- The cap binds only on the path ----------------------------------------
     // A path that misses a world's floor is not touched, bit for bit.
     {
-        const FFlightSurface Earth = World(At(0.2 * AU), EarthRadius);
+        const FFlightSurface Earth = World(At(0.02 * AU), EarthRadius);
         const FVector Off = FRotator(0.0, 1.0, 0.0).RotateVector(FVector::ForwardVector);
         FShipFlightState Near = Driving(FUniversePosition(), Off, Top, {Earth});
         FShipFlightState Alone = Driving(FUniversePosition(), Off, Top);
@@ -403,30 +408,32 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
             Near.Step(1.0 / 60.0);
             Alone.Step(1.0 / 60.0);
         }
-        TestTrue(TEXT("a degree off from 0.2 AU, the flight past an Earth is bit-identical to one with no Earth"),
+        TestTrue(TEXT("a degree off from 0.02 AU, the flight past an Earth is bit-identical to one with no Earth"),
                  Near.GetUniversePosition() == Alone.GetUniversePosition() && Near.GetVelocity() == Alone.GetVelocity());
         TestEqual(TEXT("and nothing held it"), static_cast<int32>(Near.GetHold()), static_cast<int32>(EFlightHold::Free));
     }
 
     // -- Aim error, and the arrival ---------------------------------------------
-    // From 0.2 AU at 1 c the ship either reaches the floor or passes at its
+    // From 0.02 AU at 0.1 c the ship either reaches the floor or passes at its
     // undisturbed miss distance, and never ends farther than it started except
     // by passing. On the world, it stays along the nose the whole way down.
+    // 0.1 degrees is 5,200 km off: a grazing hit on the floor sphere.
     for (const double Degrees : {0.0, 0.01, 0.1, 1.0})
     {
-        const FFlightSurface Earth = World(At(0.2 * AU), EarthRadius);
+        const FFlightSurface Earth = World(At(0.02 * AU), EarthRadius);
         const FVector Nose = FRotator(0.0, Degrees, 0.0).RotateVector(FVector::ForwardVector);
         FShipFlightState State = Driving(FUniversePosition(), Nose, Top, {Earth});
         const FFlown Flown = Fly(State, 200.0, 1.0 / 60.0, &Earth);
-        const double Miss = 0.2 * AU * FMath::Sin(FMath::DegreesToRadians(Degrees));
-        const FString Case = FString::Printf(TEXT("%.2f deg off from 0.2 AU at 1 c"), Degrees);
+        const double Miss = 0.02 * AU * FMath::Sin(FMath::DegreesToRadians(Degrees));
+        const FString Case = FString::Printf(TEXT("%.2f deg off from 0.02 AU at 0.1 c"), Degrees);
         TestTrue(Case + TEXT(": never below the floor"), Flown.Least >= -1.0);
         TestTrue(Case + TEXT(": the velocity along the nose throughout, to 1e-9"), Flown.bAlongNose);
         if (Miss < Earth.FloorRadius())
         {
-            TestTrue(FString::Printf(TEXT("%s: the nose meets the floor sphere, and the ship is on the floor within 170 s (%.1f s)"),
+            // 135 s by SecondsToFloor at 0.1 c, and the ease up from STOP.
+            TestTrue(FString::Printf(TEXT("%s: the nose meets the floor sphere, and the ship is on the floor within 145 s (%.1f s)"),
                                      *Case, Flown.AtFloorAfter),
-                     Flown.AtFloorAfter > 0.0 && Flown.AtFloorAfter <= 170.0);
+                     Flown.AtFloorAfter > 0.0 && Flown.AtFloorAfter <= 145.0);
             TestTrue(Case + TEXT(": and at rest there"), State.GetSpeed() < 1.0);
         }
         else
@@ -434,12 +441,13 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("%s: passes at its undisturbed miss, %.0f km up against %.0f"), *Case,
                                      (Flown.Closest - EarthRadius) / Km, (Miss - EarthRadius) / Km),
                      FMath::IsNearlyEqual(Flown.Closest / Miss, 1.0, 5e-3));
-            TestEqual(Case + TEXT(": and leaves at the lever's speed"), State.GetSpeed(), Light);
+            TestEqual(Case + TEXT(": and leaves at the lever's speed"), State.GetSpeed(), TopSpeed);
         }
     }
 
-    // From 250,000 km at 1 c: on the floor within 65 s, and never below any
-    // floor at any frame chop, a two-second hitch included.
+    // From 250,000 km at 0.1 c: on the floor within 50 s (43 s by
+    // SecondsToFloor, and the ease up), and never below any floor at any
+    // frame chop, a two-second hitch included.
     {
         const FFlightSurface Earth = World(At(2.5e5 * Km), EarthRadius);
         for (const double Hz : {30.0, 60.0, 144.0, 0.0})
@@ -447,8 +455,8 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
             FShipFlightState State = Driving(FUniversePosition(), FVector::ForwardVector, Top, {Earth});
             const FFlown Flown = Hz > 0.0 ? Fly(State, 80.0, 1.0 / Hz, &Earth) : Fly(State, 80.0, 1.0 / 60.0, &Earth, 20.0);
             const FString Chop = Hz > 0.0 ? FString::Printf(TEXT("at %.0f Hz"), Hz) : FString(TEXT("with a 2 s hitch"));
-            TestTrue(FString::Printf(TEXT("250,000 km at 1 c %s: on the floor within 65 s (%.1f s)"), *Chop, Flown.AtFloorAfter),
-                     Flown.AtFloorAfter > 0.0 && Flown.AtFloorAfter <= 65.0);
+            TestTrue(FString::Printf(TEXT("250,000 km at 0.1 c %s: on the floor within 50 s (%.1f s)"), *Chop, Flown.AtFloorAfter),
+                     Flown.AtFloorAfter > 0.0 && Flown.AtFloorAfter <= 50.0);
             TestTrue(FString::Printf(TEXT("%s: never below the floor (least %.3f cm)"), *Chop, Flown.Least), Flown.Least >= -1.0);
             TestTrue(Chop + TEXT(": at rest on it"), State.GetSpeed() < 1.0);
             TestEqual(Chop + TEXT(": held there"), static_cast<int32>(State.GetHold()), static_cast<int32>(EFlightHold::AtFloor));
@@ -457,7 +465,9 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
 
     // The same, one substep at a time: the hold says HoldingOff and then
     // AtFloor, each once, never flickering; and the finish is the braking
-    // curve's, with no step in speed.
+    // curve's, with no step in speed. The last few substeps -- under ten
+    // substeps' worth of braking, 267 m/s, the last 22 m -- are the curve's
+    // discrete crawl onto the floor, bounded separately.
     {
         const FFlightSurface Earth = World(At(2.5e5 * Km), EarthRadius);
         FShipFlightState State = Driving(FUniversePosition(), FVector::ForwardVector, Top, {Earth});
@@ -467,6 +477,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         double Previous = 0.0;
         double WorstFinish = 0.0;
         double WorstCrawl = 0.0;
+        const double CrawlSpeed = 10.0 * Braking * Step;
         for (int32 Sub = 0; Sub < 80 * 120; ++Sub)
         {
             State.Step(Step);
@@ -475,9 +486,12 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
                 Sequence.Add(State.GetHold());
             }
             const double Speed = State.GetSpeed();
-            if (Sequence.Num() > 1 && Previous <= KneeSpeed)
+            // On the braking curve: under the knee by a substep of braking,
+            // since the stepped curve meets the hold b x Step under the
+            // continuous knee, and the hold falls at 2b there.
+            if (Sequence.Num() > 1 && Previous <= KneeSpeed - Braking * Step)
             {
-                double& Worst = Previous > 500.0 ? WorstFinish : WorstCrawl;
+                double& Worst = Previous > CrawlSpeed ? WorstFinish : WorstCrawl;
                 Worst = FMath::Max(Worst, Previous - Speed);
             }
             Previous = Speed;
@@ -485,18 +499,19 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("the hold goes Free, HoldingOff, AtFloor, once each (%d changes)"), Sequence.Num() - 1),
                  Sequence.Num() == 3 && Sequence[1] == EFlightHold::HoldingOff && Sequence[2] == EFlightHold::AtFloor);
         const double Curve = 0.5 * Braking * Step;
-        TestTrue(FString::Printf(TEXT("above 5 m/s the finish falls no faster than the braking curve: %.2f cm/s a substep against %.2f"),
-                                 WorstFinish, Curve),
+        TestTrue(FString::Printf(TEXT("above %.0f m/s the finish falls no faster than the braking curve: %.2f cm/s a substep against %.2f"),
+                                 CrawlSpeed / 100.0, WorstFinish, Curve),
                  WorstFinish <= 1.05 * Curve);
-        TestTrue(FString::Printf(TEXT("and the last centimetre's snap is under twice it: %.2f cm/s"), WorstCrawl),
+        TestTrue(FString::Printf(TEXT("and the last 22 m's crawl is under twice it: %.2f cm/s"), WorstCrawl),
                  WorstCrawl <= 2.0 * Curve + 1e-9);
     }
 
     // -- Every surface, not the nearest ------------------------------------------
-    // At 1 c past a giant toward its moon, and toward a planet while the star
-    // is nearer: at every frame chop, no frame ends inside any floor sphere,
-    // and the ship arrives at what its nose was on. The moon is smaller than
-    // one substep's travel at 1 c, so only a per-substep ray keeps it solid.
+    // At 0.1 c past a giant toward its moon, and toward a planet while the
+    // star is nearer: at every frame chop, no frame ends inside any floor
+    // sphere, and the ship arrives at what its nose was on. The moon is
+    // smaller than one 2 s hitch's travel at 0.1 c, 60,000 km, so only a
+    // per-substep ray keeps it solid through the hitch.
     {
         const FFlightSurface Giant = World(At(1.0e12), JupiterRadius);
         const FFlightSurface Moon = World(At(1.0e12 + 4.0e10, 8.1e9), MoonRadius);
@@ -514,8 +529,9 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
             for (const double Hz : {30.0, 60.0, 144.0, 0.0})
             {
                 FShipFlightState State = Driving(FUniversePosition(), Case.Target->Centre - FUniversePosition(), Top, Case.Surfaces);
-                const FFlown Flown = Hz > 0.0 ? Fly(State, 150.0, 1.0 / Hz, Case.Target)
-                                              : Fly(State, 150.0, 1.0 / 60.0, Case.Target, 30.0);
+                // 382 s to the moon and 202 s to the planet by SecondsToFloor.
+                const FFlown Flown = Hz > 0.0 ? Fly(State, 420.0, 1.0 / Hz, Case.Target)
+                                              : Fly(State, 420.0, 1.0 / 60.0, Case.Target, 30.0);
                 const FString Chop = FString::Printf(TEXT("%s %s"), Case.Name,
                     Hz > 0.0 ? *FString::Printf(TEXT("at %.0f Hz"), Hz) : TEXT("with a 2 s hitch"));
                 TestTrue(FString::Printf(TEXT("%s: inside no floor sphere (least %.3f cm)"), *Chop, Flown.Least), Flown.Least >= -1.0);
@@ -559,22 +575,23 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     // -- What the cap holds, the ease follows ------------------------------------
     // In notch space the eased position never rises faster than the response
     // times the thrust -- not when a turn off the limb releases the cap at
-    // 1 c, not when a climb does -- and falls faster in one substep only:
-    // capture, the nose coming onto a world too fast to allow.
+    // 0.1 c, not when a climb does -- and falls faster in one substep only:
+    // capture, the nose coming onto a world too fast to allow. The world is
+    // 30,000 km off: the cap binds at 0.1 c inside 120,000 km.
     {
-        const FFlightSurface Earth = World(At(3.0e10), EarthRadius);
-        FShipFlightState State = Driving(At(0.0, -3.0e10 - 1.0e12), FVector::ForwardVector, Top);
+        const FFlightSurface Earth = World(At(3.0e9), EarthRadius);
+        FShipFlightState State = Driving(At(0.0, -3.0e9 - 1.0e12), FVector::ForwardVector, Top);
         for (int32 Frame = 0; Frame < 10 * 60; ++Frame)
         {
-            State.Step(1.0 / 60.0);   // 1 c, with nothing anywhere
+            State.Step(1.0 / 60.0);   // 0.1 c, with nothing anywhere
         }
-        TestEqual(TEXT("up to 1 c with nothing near"), State.GetSpeed(), Light);
+        TestEqual(TEXT("up to 0.1 c with nothing near"), State.GetSpeed(), TopSpeed);
 
         // Beside the world, the nose across it; then onto it.
         State.SetSurfaces({Earth});
         State.SetUniverseTransform(FUniversePosition(), Facing(FVector::RightVector));
         State.Step(Step);
-        TestEqual(TEXT("passing across a world, the cap does nothing"), State.GetSpeed(), Light);
+        TestEqual(TEXT("passing across a world, the cap does nothing"), State.GetSpeed(), TopSpeed);
         State.SetUniverseTransform(State.GetUniversePosition(), Facing(Earth.Centre - State.GetUniversePosition()));
 
         const double Rise = State.GetLimits().DriveResponse * State.GetLimits().DriveThrust * Step;
@@ -592,8 +609,8 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
             }
         };
         Watch(1);
-        TestTrue(FString::Printf(TEXT("capture drops the speed in that substep: to %.3f c"), State.GetSpeed() / Light),
-                 State.GetSpeed() < 0.5 * Light);
+        TestTrue(FString::Printf(TEXT("capture drops the speed in that substep: to %.4f c"), State.GetSpeed() / Light),
+                 State.GetSpeed() < 0.5 * TopSpeed);
         TestEqual(TEXT("and holds off"), static_cast<int32>(State.GetHold()), static_cast<int32>(EFlightHold::HoldingOff));
         Watch(10 * 120);
 
@@ -602,8 +619,8 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         State.SetUniverseTransform(State.GetUniversePosition(), Facing(FVector::UpVector));
         Watch(1);
         TestEqual(TEXT("turned off the world, the cap lets go"), static_cast<int32>(State.GetHold()), static_cast<int32>(EFlightHold::Free));
-        TestTrue(TEXT("and the speed rises one ease-step from where it was held, not back to 1 c"),
-                 State.GetDrivePosition() - Held <= Rise + 1e-12 && State.GetSpeed() < 0.5 * Light);
+        TestTrue(TEXT("and the speed rises one ease-step from where it was held, not back to 0.1 c"),
+                 State.GetDrivePosition() - Held <= Rise + 1e-12 && State.GetSpeed() < 0.5 * TopSpeed);
         Watch(2 * 120);
         TestEqual(TEXT("capture was the only fast fall"), FastFalls, 1);
 
@@ -626,16 +643,16 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
     }
 
     // -- The edge is a surface like a body ------------------------------------------
-    // 0.05 AU inside it, flown out at 1 c: the ship settles on its floor, just
-    // inside, and never leaves its system.
+    // 0.01 AU inside it, flown out at 0.1 c: the ship settles on its floor,
+    // just inside (85 s by SecondsToFloor), and never leaves its system.
     {
         FFlightSurface Edge;
         Edge.Radius = 1.0e14;
         Edge.Floor = ShipFlight::DefaultFloorCm;
         Edge.bInsideOut = true;
-        FShipFlightState State = Driving(At(Edge.Radius - 0.05 * AU), FVector::ForwardVector, Top, {Edge});
+        FShipFlightState State = Driving(At(Edge.Radius - 0.01 * AU), FVector::ForwardVector, Top, {Edge});
         const FFlown Flown = Fly(State, 150.0, 1.0 / 60.0, &Edge);
-        TestTrue(FString::Printf(TEXT("flown out at 1 c it never passes the edge's floor (least %.3f cm)"), Flown.Least), Flown.Least >= -1.0);
+        TestTrue(FString::Printf(TEXT("flown out at 0.1 c it never passes the edge's floor (least %.3f cm)"), Flown.Least), Flown.Least >= -1.0);
         TestTrue(TEXT("and settles on it, 10 km inside the edge"), Flown.AtFloorAfter > 0.0 && State.GetSpeed() < 1.0);
         TestEqual(TEXT("the edge holds it as a floor does"), static_cast<int32>(State.GetHold()), static_cast<int32>(EFlightHold::AtFloor));
     }
@@ -670,7 +687,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
                  FMath::IsNearlyEqual(StarvedTap / Tap, 4.0, 0.03));
         const double Climb = SecondsTo(1.0, 0, Top);
         const double StarvedClimb = SecondsTo(0.25, 0, Top);
-        TestTrue(FString::Printf(TEXT("and STOP to 1 c does too: %.2f s against %.2f"), StarvedClimb, Climb),
+        TestTrue(FString::Printf(TEXT("and STOP to 0.1 c does too: %.2f s against %.2f"), StarvedClimb, Climb),
                  FMath::IsNearlyEqual(StarvedClimb / Climb, 4.0, 0.03));
 
         FShipFlightState Starved = Driving(FUniversePosition(), FVector::ForwardVector, Top);
@@ -683,7 +700,7 @@ bool FShipFlightDriveTest::RunTest(const FString& Parameters)
         {
             Starved.Step(1.0);
         }
-        TestEqual(TEXT("and gets there: the top is 1 c at a quarter thrust too"), Starved.GetSpeed(), Light);
+        TestEqual(TEXT("and gets there: the top is 0.1 c at a quarter thrust too"), Starved.GetSpeed(), TopSpeed);
     }
 
     // -- The drive never touches attitude --------------------------------------------
@@ -739,14 +756,16 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
     using namespace FlightDriveTestLocal;
     const double Step = FShipFlightState::FixedStep;
     const int32 Top = TopNotch();
+    const double TopSpeed = ShipDriveLever::NotchSpeed(Top);
     const double Cruise = FShipFlightLimits::Cruise().MaxSpeed;
+    const double Astern = FShipFlightLimits::Cruise().AsternSpeed;
 
     const auto AtLight = [&](TArray<FFlightSurface> Surfaces = {})
     {
         FShipFlightState State = Driving(FUniversePosition(), FVector::ForwardVector, Top);
         for (int32 Second = 0; Second < 10; ++Second)
         {
-            State.Step(1.0);   // STOP to 1 c, settled: under nine seconds
+            State.Step(1.0);   // STOP to 0.1 c, settled: under eight seconds
         }
         State.SetSurfaces(MoveTemp(Surfaces));
         return State;
@@ -759,15 +778,16 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         State.SetCommand(Command);
     };
 
-    // Leaving at 1 c: no clamp; cruise's lever live; the drive's shown dim.
+    // Leaving at 0.1 c: no clamp; cruise's lever live; the drive's shown dim.
     {
+        const double HalfLever = ShipDriveLever::CruiseSpeed(0.5, Cruise, Astern);
         FShipFlightState State = AtLight();
-        TestEqual(TEXT("at 1 c"), State.GetSpeed(), Light);
+        TestEqual(TEXT("at 0.1 c"), State.GetSpeed(), TopSpeed);
         Leave(State, 0.5);
         TestEqual(TEXT("F above cruise's top spools down"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
-        TestEqual(TEXT("and does not clamp"), State.GetSpeed(), Light);
-        TestEqual(TEXT("cruise's lever is live"), State.GetLeverSpeed(), 0.5 * Cruise);
-        TestEqual(TEXT("and the drive's is the other, where it was"), State.GetOtherLeverSpeed(), Light);
+        TestEqual(TEXT("and does not clamp"), State.GetSpeed(), TopSpeed);
+        TestEqual(TEXT("cruise's lever is live: half way on its log scale, 141 m/s"), State.GetLeverSpeed(), HalfLever);
+        TestEqual(TEXT("and the drive's is the other, where it was"), State.GetOtherLeverSpeed(), TopSpeed);
 
         // Turning all the while: the velocity stays along the nose.
         FShipFlightCommand Command = State.GetCommand();
@@ -791,19 +811,126 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
                 Spooled = Sub * Step;
             }
         }
-        TestTrue(FString::Printf(TEXT("from 1 c the spool takes about six seconds (%.2f s)"), Spooled), Spooled > 5.5 && Spooled < 7.0);
+        TestTrue(FString::Printf(TEXT("from 0.1 c the spool takes about 3.3 seconds (%.2f s)"), Spooled), Spooled > 3.2 && Spooled < 3.5);
         TestTrue(TEXT("never rising on the way"), bNeverRises);
         TestTrue(TEXT("along the nose while turning, to 1e-9"), bAlongNose);
-        TestTrue(FString::Printf(TEXT("and it hands cruise the ship at cruise's top (%.1f m/s)"), State.GetSpeed() / 100.0),
-                 State.GetSpeed() <= Cruise && State.GetSpeed() >= Cruise * 0.97);
+        TestTrue(FString::Printf(TEXT("and it hands cruise the ship at cruise's top: one substep of cruise's braking under it (%.3f m/s)"),
+                                 State.GetSpeed() / 100.0),
+                 FMath::IsNearlyEqual(State.GetSpeed(), Cruise - State.GetLimits().LinearAcceleration * Step, 1e-3));
         TestEqual(TEXT("an ordinary cruising ship"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::Cruise));
         Command = State.GetCommand();
         Command.AttitudeRate = FVector::ZeroVector;
         State.SetCommand(Command);
-        State.Step(2.0);
-        State.Step(2.0);
-        State.Step(2.0);
-        TestTrue(TEXT("which chases its own lever from there"), FMath::IsNearlyEqual(State.GetSpeed(), 0.5 * Cruise, 1e-6));
+        for (int32 Second = 0; Second < 6; ++Second)
+        {
+            State.Step(2.0);   // 20 km/s to 141 m/s at 2 km/s^2: ten seconds
+        }
+        TestTrue(TEXT("which chases its own lever from there"), FMath::IsNearlyEqual(State.GetSpeed(), HalfLever, 1e-6));
+    }
+
+    // Seamless (the 2026-09-27 ruling): cruise's lever at full, the spool
+    // comes down to 20 km/s and cruise holds it there. The substep that
+    // would ease under cruise's top lands on it, so the speed never dips
+    // under it and never rises back to it.
+    {
+        FShipFlightState State = AtLight();
+        Leave(State, 1.0);
+        double Previous = State.GetSpeed();
+        bool bNeverRises = true;
+        double Least = TNumericLimits<double>::Max();
+        double HandedAt = -1.0;
+        for (int32 Sub = 1; Sub <= 8 * 120; ++Sub)
+        {
+            State.Step(Step);
+            bNeverRises &= State.GetSpeed() <= Previous * (1.0 + 1e-12);
+            Previous = State.GetSpeed();
+            Least = FMath::Min(Least, State.GetSpeed());
+            if (HandedAt < 0.0 && State.GetMode() == EFlightMode::Cruise)
+            {
+                HandedAt = Sub * Step;
+            }
+        }
+        TestTrue(FString::Printf(TEXT("cruise's lever at full: handed over (%.2f s)"), HandedAt), HandedAt > 3.2 && HandedAt < 3.5);
+        TestTrue(TEXT("and the speed never rises, over the handover or after it"), bNeverRises);
+        TestTrue(FString::Printf(TEXT("and never dips under cruise's top (least %.3f m/s)"), Least / 100.0), Least >= Cruise * (1.0 - 1e-12));
+        TestTrue(TEXT("cruise holds it there"), FMath::IsNearlyEqual(State.GetSpeed(), Cruise, 1e-6));
+    }
+
+    // Leaving the drive while the cap holds it off a floor faster than
+    // cruise could brake from. The hold allows d / 4 s, which above the
+    // knee, 12.8 km/s 51.2 km up, beats the braking curve: 70 km up it is
+    // 17.5 km/s, under cruise's top, where cruise needs 77 km to stop and
+    // would meet the floor at 5 km/s. (At 80 km it is 20 km/s, and a
+    // substep's rounding puts it either side of cruise's top.) Cruise must
+    // not be handed that; the spool goes on down the drive's cap until
+    // the braking curve is the cap, and cruise takes it on the curve and
+    // brings it to rest on the floor, never meeting the hard stop at speed.
+    {
+        FShipFlightState State = AtLight();
+        const FFlightSurface Earth = World(State.GetUniversePosition() + FVector(5.0e10, 0.0, 0.0), EarthRadius);
+        State.SetSurfaces({Earth});
+        const FVector Nose = State.GetUniverseOrientation().GetForwardVector();
+        const auto ToFloor = [&State, &Earth, &Nose]()
+        {
+            return ShipFlight::RayToFloor(Earth, State.GetUniversePosition(), Nose);
+        };
+        for (int32 Sub = 0; Sub < 90 * 120 && ToFloor().Get(0.0) > 70.0 * Km; ++Sub)
+        {
+            State.Step(Step);
+        }
+        const double LeftAt = ToFloor().Get(0.0);
+        TestTrue(FString::Printf(TEXT("held off 70 km up, under cruise's top (%.1f km, %.2f km/s)"), LeftAt / Km, State.GetSpeed() / Km),
+                 LeftAt > 69.0 * Km && LeftAt <= 70.0 * Km && State.GetHold() == EFlightHold::HoldingOff
+                 && State.GetSpeed() < Cruise && ShipDriveLever::SpeedAt(State.GetDrivePosition()) < Cruise
+                 && State.GetSpeed() > ShipFlight::MaySpeed(LeftAt, State.GetLimits().LinearAcceleration, 0.0, Step) * 1.1);
+        Leave(State, 1.0);
+        TestEqual(TEXT("under cruise's top but too fast to brake from: it spools down"),
+                  static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::SpoolingDown));
+
+        const double Slack = State.GetLimits().LinearAcceleration * Step;
+        bool bCruiseCanBrake = true;
+        bool bNeverRises = true;
+        double Previous = State.GetSpeed();
+        double Worst = 0.0;
+        double Handed = -1.0;
+        double AtFloorSpeed = -1.0;
+        double Least = TNumericLimits<double>::Max();
+        for (int32 Sub = 1; Sub <= 120 * 120 && AtFloorSpeed < 0.0; ++Sub)
+        {
+            const bool bCruising = State.GetMode() == EFlightMode::Cruise;
+            if (bCruising && Handed < 0.0)
+            {
+                Handed = Previous;
+            }
+            if (bCruising)
+            {
+                // What cruise is carrying against what its braking curve
+                // allows where it is: never more than a substep's braking.
+                const double D = ToFloor().Get(0.0);
+                const double Over = State.GetSpeed() - ShipFlight::MaySpeed(D, State.GetLimits().LinearAcceleration, 0.0, Step);
+                Worst = FMath::Max(Worst, Over);
+                bCruiseCanBrake &= Over <= Slack * (1.0 + 1e-9);
+            }
+            // The speed going into the substep that reaches the floor: the
+            // hard stop takes whatever is left in that substep, so the speed
+            // after it would read rest however hard the ship met it.
+            const double Before = State.GetSpeed();
+            State.Step(Step);
+            bNeverRises &= State.GetSpeed() <= Previous * (1.0 + 1e-12);
+            Previous = State.GetSpeed();
+            Least = FMath::Min(Least, LeastClearance(State));
+            if (LeastClearance(State) <= 100.0)
+            {
+                AtFloorSpeed = Before;
+            }
+        }
+        TestTrue(FString::Printf(TEXT("cruise takes it on the braking curve (at %.2f km/s)"), Handed / Km), Handed > 0.0);
+        TestTrue(FString::Printf(TEXT("and it never carries more than cruise can brake from (worst %.3f m/s over)"), Worst / 100.0),
+                 bCruiseCanBrake);
+        TestTrue(TEXT("the speed never rises on the way down"), bNeverRises);
+        TestTrue(FString::Printf(TEXT("it comes onto the floor at tens of metres a second, never km/s (%.3f m/s)"), AtFloorSpeed / 100.0),
+                 AtFloorSpeed >= 0.0 && AtFloorSpeed < 2.0e4);
+        TestTrue(TEXT("and never passes it"), Least >= -1.0);
     }
 
     // F again mid-spool: the drive resumes from where the spool had got to,
@@ -814,13 +941,13 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         State.Step(2.0);
         const double Position = State.GetDrivePosition();
         const double Speed = State.GetSpeed();
-        TestTrue(TEXT("two seconds into the spool, well down from 1 c"), Speed < 0.1 * Light && Speed > Cruise);
+        TestTrue(TEXT("two seconds into the spool, well down from 0.1 c"), Speed < 0.01 * Light && Speed > Cruise);
         FShipFlightCommand Command = State.GetCommand();
         Command.bDrive = true;
         State.SetCommand(Command);
         TestEqual(TEXT("F again is the drive"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::Drive));
         TestEqual(TEXT("from the spool's own position"), State.GetDrivePosition(), Position);
-        TestEqual(TEXT("its lever still at 1 c"), State.GetCommand().DriveNotch, Top);
+        TestEqual(TEXT("its lever still at 0.1 c"), State.GetCommand().DriveNotch, Top);
         State.Step(Step);
         TestTrue(TEXT("and the speed turns back up from there, by one ease-step"),
                  State.GetSpeed() > Speed && State.GetDrivePosition() - Position <= State.GetLimits().DriveResponse * Step + 1e-12);
@@ -849,11 +976,12 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("F after X: still at rest"), State.GetSpeed(), 0.0);
     }
 
-    // The cap holds throughout the spool: leaving the drive at 1 c with the
-    // nose on a world 300,000 km off, it is captured as the drive would be.
+    // The cap holds throughout the spool: leaving the drive at 0.1 c with the
+    // nose on a world 30,000 km off, inside the 120,000 km where the cap
+    // binds at 0.1 c, it is captured as the drive would be.
     {
         FShipFlightState State = AtLight();
-        const FFlightSurface Earth = World(State.GetUniversePosition() + FVector(3.0e10, 0.0, 0.0), EarthRadius);
+        const FFlightSurface Earth = World(State.GetUniversePosition() + FVector(3.0e9, 0.0, 0.0), EarthRadius);
         State.SetSurfaces({Earth});
         Leave(State, 1.0);
         bool bHeld = false;
@@ -867,15 +995,15 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
             bHeld |= bHeldNow;
             if (bHeldNow)
             {
-                // Against the speed the spool began from, 1 c, and not
-                // cruise's lever: that is 200 m/s, and would clamp to 0.
+                // Against the speed the spool began from, 0.1 c, and not
+                // cruise's lever: that is 20 km/s, and would clamp to 0.
                 Fraction = State.GetHeldFraction();
-                FractionOf = 1.0 - State.GetSpeed() / Light;
+                FractionOf = 1.0 - State.GetSpeed() / TopSpeed;
             }
             Least = FMath::Min(Least, LeastClearance(State));
         }
-        TestTrue(TEXT("spooling down onto a world 300,000 km ahead, the cap holds it off"), bHeld);
-        TestTrue(FString::Printf(TEXT("and the hold is measured against the 1 c the spool began from: %.6f against %.6f"),
+        TestTrue(TEXT("spooling down onto a world 30,000 km ahead, the cap holds it off"), bHeld);
+        TestTrue(FString::Printf(TEXT("and the hold is measured against the 0.1 c the spool began from: %.6f against %.6f"),
                                  Fraction, FractionOf),
                  Fraction > 0.0 && FMath::IsNearlyEqual(Fraction, FractionOf, 1e-9));
         TestTrue(TEXT("and it never passes the floor"), Least >= -1.0);
@@ -886,10 +1014,11 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
     {
         FShipFlightState State;
         State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));
-        State.Step(2.0);
-        State.Step(2.0);
-        State.Step(2.0);
-        TestTrue(TEXT("cruising at 200 m/s"), FMath::IsNearlyEqual(State.GetSpeed(), Cruise, 1e-6));
+        for (int32 Second = 0; Second < 6; ++Second)
+        {
+            State.Step(2.0);   // rest to 20 km/s: ten seconds
+        }
+        TestTrue(TEXT("cruising at 20 km/s"), FMath::IsNearlyEqual(State.GetSpeed(), Cruise, 1e-6));
         FShipFlightCommand Command = State.GetCommand();
         Command.bDrive = true;
         Command.DriveNotch = 0;
@@ -904,6 +1033,144 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         Command.bDrive = false;
         State.SetCommand(Command);
         TestEqual(TEXT("left under cruise's top, it is cruise at once"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::Cruise));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FShipFlightCruiseSettlesTest,
+    "DeepSpace.Ship.FlightCruiseSettles",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * Cruise's setpoint controller at the bottom of its log lever (the
+ * 2026-09-27 ruling). The boosters change the velocity by up to 2 km/s^2 x
+ * 1/120 s, 16.7 m/s a substep -- more than the whole of a 10 m/s setting --
+ * so a controller that stepped by its authority would hunt around a low
+ * setting for ever. It does not: it closes an error smaller than its
+ * authority in one substep, exactly. From rest, from cruise's top, at full
+ * and at a quarter thrust, every setting from 1 to 10 m/s is reached without
+ * passing it, without turning back, and then held exactly. And a lever swept
+ * up from rest is followed exactly while it is slow; rest to cruise's top is
+ * ten seconds with the lever thrown, thirteen with Shift held.
+ */
+bool FShipFlightCruiseSettlesTest::RunTest(const FString& Parameters)
+{
+    const double Step = FShipFlightState::FixedStep;
+    const FShipFlightLimits Rated = FShipFlightLimits::Cruise();
+    const double LogSpan = FMath::Loge(Rated.MaxSpeed / ShipDriveLever::CruiseFloorCmPerSecond);
+
+    for (const double Thrust : {1.0, 0.25})
+    {
+        for (const double Metres : {1.0, 2.0, 3.0, 5.0, 10.0})
+        {
+            // The lever position that asks for exactly this many metres a
+            // second on the log scale.
+            // 1 m/s is the floor itself, a hair off the detent.
+            const double Position = FMath::Max(FMath::Loge(Metres * 100.0 / ShipDriveLever::CruiseFloorCmPerSecond) / LogSpan, 1.0e-9);
+            for (const bool bFromAbove : {false, true})
+            {
+                FShipFlightState State;
+                FShipFlightLimits Limits = Rated;
+                Limits.LinearAcceleration *= Thrust;
+                State.SetLimits(Limits);
+                if (bFromAbove)
+                {
+                    State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));
+                    for (int32 Second = 0; Second < 50; ++Second)
+                    {
+                        State.Step(1.0);   // at a quarter thrust, forty seconds to the top
+                    }
+                }
+                State.SetCommand(MakeCommand(Position, FVector::ZeroVector));
+                const double Want = State.GetLeverSpeed();
+                const FString Case = FString::Printf(TEXT("%.0f m/s at %.2f thrust, from %s"), Metres, Thrust,
+                                                     bFromAbove ? TEXT("cruise's top") : TEXT("rest"));
+                TestTrue(Case + TEXT(": the lever asks for it"), FMath::IsNearlyEqual(Want, Metres * 100.0, 1e-6 * Metres * 100.0));
+
+                bool bNeverPast = true;
+                bool bNeverTurns = true;
+                bool bHeld = true;
+                int32 SettledAt = -1;
+                double Previous = State.GetSpeed();
+                for (int32 Sub = 1; Sub <= 60 * 120; ++Sub)
+                {
+                    State.Step(Step);
+                    const double Speed = State.GetSpeed();
+                    bNeverPast &= bFromAbove ? Speed >= Want * (1.0 - 1e-12) : Speed <= Want * (1.0 + 1e-12);
+                    bNeverTurns &= bFromAbove ? Speed <= Previous * (1.0 + 1e-12) : Speed >= Previous * (1.0 - 1e-12);
+                    if (SettledAt < 0 && FMath::IsNearlyEqual(Speed, Want, 1e-9 * Want))
+                    {
+                        SettledAt = Sub;
+                    }
+                    else if (SettledAt >= 0)
+                    {
+                        bHeld &= FMath::IsNearlyEqual(Speed, Want, 1e-9 * Want);
+                    }
+                    Previous = Speed;
+                }
+                // From rest the setting is inside one substep's authority at
+                // either thrust but a quarter's 4.2 m/s against 5 and 10;
+                // from the top, 2.5 s of braking at full and 40 at a quarter.
+                const double Allowed = (bFromAbove ? Rated.MaxSpeed / Limits.LinearAcceleration : Want / Limits.LinearAcceleration) + 2.0 * Step;
+                TestTrue(FString::Printf(TEXT("%s: never past it"), *Case), bNeverPast);
+                TestTrue(FString::Printf(TEXT("%s: never turning back -- no hunting"), *Case), bNeverTurns);
+                TestTrue(FString::Printf(TEXT("%s: settled exactly on it in %.3f s, no later than the boosters allow (%.3f s)"),
+                                         *Case, SettledAt * Step, Allowed),
+                         SettledAt > 0 && SettledAt * Step <= Allowed);
+                TestTrue(FString::Printf(TEXT("%s: and held there exactly for the rest of a minute"), *Case), bHeld);
+                TestEqual(FString::Printf(TEXT("%s: reporting no acceleration once there"), *Case), State.GetLinearAcceleration().Size(), 0.0);
+            }
+        }
+    }
+
+    // Swept up from rest with Shift held at ds.Cruise.Sweep, at 60 Hz: while
+    // the lever asks for 10 m/s or less it changes far slower than the
+    // boosters can, and the ship is on it exactly, every frame.
+    {
+        FShipFlightState State;
+        double Throttle = 0.0;
+        bool bOnLever = true;
+        int32 LowFrames = 0;
+        double AtTop = -1.0;
+        for (int32 Frame = 1; Frame <= 20 * 60 && AtTop < 0.0; ++Frame)
+        {
+            Throttle = ShipDriveLever::SweepCruise(Throttle, true, false, Frame == 1 ? 1 : 0, 0, 1.0 / 60.0,
+                                                   ShipDriveLever::DefaultCruiseSweep, State.CruiseAsternLimit());
+            FShipFlightCommand Command = State.GetCommand();
+            Command.Throttle = Throttle;
+            State.SetCommand(Command);
+            State.Step(1.0 / 60.0);
+            if (State.GetLeverSpeed() <= 1000.0)
+            {
+                ++LowFrames;
+                bOnLever &= FMath::IsNearlyEqual(State.GetSpeed(), State.GetLeverSpeed(), 1e-9 * State.GetLeverSpeed());
+            }
+            if (State.GetSpeed() >= Rated.MaxSpeed * (1.0 - 1e-12))
+            {
+                AtTop = Frame / 60.0;
+            }
+        }
+        TestTrue(FString::Printf(TEXT("swept up, the ship is on the lever exactly while it asks for 10 m/s or less (%d frames)"), LowFrames),
+                 bOnLever && LowFrames > 30);
+        AddInfo(FString::Printf(TEXT("rest to cruise's top with Shift held: %.2f s"), AtTop));
+        TestTrue(FString::Printf(TEXT("and rest to cruise's top with Shift held is about 13 s (%.2f s)"), AtTop),
+                 AtTop > 12.5 && AtTop < 13.5);
+    }
+
+    // The lever thrown to full from rest: 20 km/s at 2 km/s^2 is ten seconds.
+    {
+        FShipFlightState State;
+        State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));
+        int32 Substeps = 0;
+        while (State.GetSpeed() < Rated.MaxSpeed && Substeps < 60 * 120)
+        {
+            State.Step(Step);
+            ++Substeps;
+        }
+        AddInfo(FString::Printf(TEXT("rest to cruise's top with the lever thrown: %.3f s"), Substeps * Step));
+        TestTrue(FString::Printf(TEXT("rest to cruise's top with the lever thrown is ten seconds (%.3f s)"), Substeps * Step),
+                 FMath::IsNearlyEqual(Substeps * Step, 10.0, 1.5 * Step));
     }
     return true;
 }
@@ -957,16 +1224,22 @@ bool FShipFlightCruiseFloorTest::RunTest(const FString& Parameters)
         TestEqual(Case + TEXT(": at the floor"), static_cast<int32>(State.GetHold()), static_cast<int32>(EFlightHold::AtFloor));
     }
 
-    // A turn made while drifting in: the hard stop, and a slide.
+    // A turn made while drifting in: the hard stop, and a slide. Brought in
+    // at cruise's top with the world not yet a surface -- a floor raised in
+    // play, say -- to 10 km over it, where 20 km/s cannot be shed by
+    // anything short of 100 km; then the world is there, and the nose turns
+    // along it. (At cruise's top the braking curve would have started 125
+    // km up, and a turn made on it can stop the fall by a few metres or
+    // not, which is no test of the hard stop.)
     {
         FShipFlightState State;
-        State.SetUniverseTransform(High, Facing(-FVector::ForwardVector));
+        State.SetUniverseTransform(At(Earth.FloorRadius() + 400.0 * Km), Facing(-FVector::ForwardVector));
         State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));
-        State.SetSurfaces({Earth});
-        while (ShipFlight::FloorClearance(Earth, State.GetUniversePosition()) > 660.0 * 100.0)
+        while (ShipFlight::FloorClearance(Earth, State.GetUniversePosition()) > 10.0 * Km)
         {
             State.Step(1.0 / 60.0);
         }
+        State.SetSurfaces({Earth});
         TestTrue(TEXT("drifting in at cruise's top"), State.GetSpeed() > 0.99 * State.GetLimits().MaxSpeed);
         State.SetUniverseTransform(State.GetUniversePosition(), Facing(FVector::RightVector));
         double Least = TNumericLimits<double>::Max();
@@ -1045,24 +1318,24 @@ bool FShipFlightJumpTest::RunTest(const FString& Parameters)
     }
 
     // Every jump arrives at rest, whatever the drive was doing: a lever left
-    // at 1 c must not fly the arrival at the star (flight-feel decision 4).
+    // at 0.1 c must not fly the arrival at the star (flight-feel decision 4).
     {
         FShipFlightState State;
         FShipFlightCommand Command;
         Command.bDrive = true;
-        Command.DriveNotch = 18;
+        Command.DriveNotch = 11;
         State.SetCommand(Command);
         State.Step(2.0);
         State.Step(2.0);
         State.Step(2.0);
-        TestTrue(TEXT("under the drive, far past cruise"), State.GetSpeed() > 0.5 * ShipDriveLever::LightCmPerSecond);
+        TestTrue(TEXT("under the drive, far past cruise"), State.GetSpeed() > 0.05 * ShipDriveLever::LightCmPerSecond);
         State.JumpTo(FUniversePosition(FInt64Vector(530000, -120000, 7), FVector::ZeroVector));
         TestTrue(TEXT("after JumpTo the velocity is exactly zero"), State.GetVelocity().IsZero());
         TestEqual(TEXT("and so is the drive's eased position"), State.GetDrivePosition(), 0.0);
         TestEqual(TEXT("the mode it went in with"), static_cast<int32>(State.GetMode()), static_cast<int32>(EFlightMode::Drive));
 
         // Leaving the drive and jumping mid-spool ends the spool too.
-        Command.DriveNotch = 18;
+        Command.DriveNotch = 11;
         State.SetCommand(Command);
         State.Step(2.0);
         State.Step(2.0);

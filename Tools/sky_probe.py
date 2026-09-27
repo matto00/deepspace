@@ -7,16 +7,17 @@ each step: true angular size and pixels, the resolve blend, the proxy's
 stacked distance and the depth budget the whole system uses, how far the
 eye's offset in the hull slides the body against the stars, the honest
 surface brightness and the point boost, the ship's speed, and how long since
-the drive's lever went to 1 c.
+the drive's lever went to its top, 0.1 c.
 
 It mirrors SkyProjection.cpp's arithmetic (the homothety, the power-order
 stack, the photometry) and the drive's law from the flight-feel spec
 (decisions 3-6) --
 
-    the lever from STOP to its top, 1 c, eased in notch space at
+    the lever from STOP to its top, 0.1 c, eased in notch space at
     ds.Drive.Response, 3 notches a second (ShipDriveLever::Ease);
     the soft cap on the nose's own ray to the nearest floor sphere,
-    speed <= min(max(d / 4 s, sqrt(1.6 a d)), d / step) (ShipFlight::MaySpeed);
+    speed <= min(max(d / 4 s, the stepped braking curve), d / step), the
+    curve v^2 / 1.6a + v step / 2 = d (ShipFlight::MaySpeed);
     the floor the sky's own, max(10 km, 1.6e-3 R), one radius over a star
 
 -- flown at 120 Hz substeps as FShipFlightState flies it, and the arrival
@@ -29,7 +30,7 @@ red dwarf (three suns in four, procgen spec) with a compact system, the
 largest planet chosen for the opening view. SUNLIKE is the sky spec's own
 reference, a Sun with an Earth at 1 AU. Either table can be checked against
 the flight-feel spec's decision 5: the leg at the lever's speed, then the
-cap's last minute, about 64 s from where it binds to the floor at 1 c.
+cap's last forty seconds or so, from where it binds to the floor at 0.1 c.
 
     python3 Tools/sky_probe.py
     python3 Tools/sky_probe.py --night
@@ -73,16 +74,16 @@ MIN_ALTITUDE_OF_RADIUS = 1.6e-3
 
 # The drive (flight-feel decisions 3-6) and the arrival (plan conflict 9).
 # ShipDriveLever.cpp's table, cm/s, STOP not included: a 1-2-5 series in km/s
-# to 2,000, then in fractions of light to light itself.
+# from 20 to 20,000, then 0.1 c (the 2026-09-27 ruling).
 LIGHT = 2.99792458e10
-NOTCHES = [v * CM_PER_KM for v in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)] + \
-          [f * LIGHT for f in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0)]
+NOTCHES = [v * CM_PER_KM for v in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000)] + [0.1 * LIGHT]
+TOP_SPEED = NOTCHES[-1]
 EASE_SECONDS = 0.4
-SETTLE_NOTCHES = 1.0e-3
+ARRIVE_NOTCHES = 5.0e-3
 RESPONSE = 3.0                  # ds.Drive.Response, notches/s
 HOLD_SECONDS = 4.0              # ds.Drive.HoldSeconds
 BRAKING_MARGIN = 0.8            # ShipFlight::BrakingMargin
-BOOSTERS = 4000.0               # cm/s^2, full thrust
+BOOSTERS = 2.0e5                # cm/s^2, full thrust (FShipFlightLimits)
 FLIGHT_FLOOR = 1.0e6            # ds.Flight.Floor, 10 km
 STEP = 1.0 / 120.0              # FShipFlightState::FixedStep
 AT_FLOOR = 100.0                # FShipFlightState::AtFloorCm
@@ -216,29 +217,36 @@ def position_of(v):
 
 
 def ease(p, target, dt, rate=RESPONSE, thrust=1.0):
-    """ShipDriveLever::Ease: the rate limit, then the exponential, solved."""
+    """ShipDriveLever::Ease: the rate limit, the exponential down to
+    ARRIVE_NOTCHES, then that pace held onto the notch, solved."""
     dt *= thrust
-    start = abs(target - p)
+    if dt <= 0.0 or rate <= 0.0 or p == target:
+        return p
     sign = 1.0 if target > p else -1.0
-    error, left, knee = start, dt, rate * EASE_SECONDS
+    error, left, knee = abs(target - p), dt, rate * EASE_SECONDS
+    tail = min(ARRIVE_NOTCHES, knee)
     if error > knee:
         to_knee = (error - knee) / rate
         if left <= to_knee:
-            error, left = error - rate * left, 0.0
-        else:
-            error, left = knee, left - to_knee
-    if left > 0.0:
-        error *= math.exp(-left / EASE_SECONDS)
-    if error <= SETTLE_NOTCHES and start <= rate * dt:
-        return target
-    return target - sign * error
+            return target - sign * (error - rate * left)
+        error, left = knee, left - to_knee
+    if error > tail:
+        to_tail = EASE_SECONDS * math.log(error / tail)
+        if left <= to_tail:
+            return target - sign * error * math.exp(-left / EASE_SECONDS)
+        error, left = tail, left - to_tail
+    error -= tail / EASE_SECONDS * left
+    return target if error <= 0.0 else target - sign * error
 
 
 def may_speed(d, a=BOOSTERS):
     """ShipFlight::MaySpeed: the hold, the braking curve, the substep bound."""
     if d <= 0.0:
         return 0.0
-    return min(max(d / HOLD_SECONDS, math.sqrt(2.0 * BRAKING_MARGIN * a * d)), d / STEP)
+    braking = 2.0 * BRAKING_MARGIN * a
+    half = 0.25 * braking * STEP
+    brake = braking * d / (math.sqrt(braking * d + half * half) + half)
+    return min(max(d / HOLD_SECONDS, brake), d / STEP)
 
 
 def floor_of(b):
@@ -264,7 +272,7 @@ def ray_to_floor(b, ship, u):
 
 
 def fly(bodies, ship0, line, target):
-    """The lever from STOP to 1 c at t = 0, the nose fixed on the target:
+    """The lever from STOP to 0.1 c at t = 0, the nose fixed on the target:
     (t, altitude, speed) at every substep while anything is happening, and
     once across each stretch at the top where nothing binds -- a straight
     run at constant speed, taken in one step rather than a million.
@@ -285,9 +293,9 @@ def fly(bodies, ship0, line, target):
         track.append((t, altitude, speed_at(p)))
         if altitude - floor_of(target) <= AT_FLOOR:
             break
-        if p == top and d > 2.0 * LIGHT * HOLD_SECONDS:
-            run = (d - 1.5 * LIGHT * HOLD_SECONDS) / LIGHT
-            s, t = s + LIGHT * run, t + run
+        if p == top and d > 2.0 * TOP_SPEED * HOLD_SECONDS:
+            run = (d - 1.5 * TOP_SPEED * HOLD_SECONDS) / TOP_SPEED
+            s, t = s + TOP_SPEED * run, t + run
             continue
         p = ease(p, top, STEP)
         v = speed_at(p)
@@ -319,7 +327,7 @@ def approach(title, bodies, target_index):
     print("%s -- arrival standoff %.3f AU (%s)" % (
         title, standoff / CM_PER_AU,
         "sqrt(L) term" if standoff > 1.5 * outermost + 1 else "1.5 x outermost orbit"))
-    print("target %s, radius %.0f km, %.4f AU from its star; the drive's lever to 1 c, floor %.1f km" % (
+    print("target %s, radius %.0f km, %.4f AU from its star; the drive's lever to 0.1 c, floor %.1f km" % (
         target["name"], target["radius"] / CM_PER_KM, norm(sub(target["pos"], star["pos"])) / CM_PER_AU,
         floor_of(target) / CM_PER_KM))
     print("the star from arrival: %.2f px, irradiance %.3f (compressed; 1 = a Sun at 1 AU)" % (
@@ -358,7 +366,7 @@ def approach(title, bodies, target_index):
         if altitude < 1.5 * floor_of(target):
             break
     print("-" * 118)
-    print("resolves (2 px) %.0f s after the lever goes to 1 c; the cap binds at %.0f s; on the %.1f km floor at %.0f s" % (
+    print("resolves (2 px) %.0f s after the lever goes to 0.1 c; the cap binds at %.0f s; on the %.1f km floor at %.0f s" % (
         resolved_at if resolved_at is not None else float("nan"), binds if binds is not None else float("nan"),
         floor_of(target) / CM_PER_KM, track[-1][0]))
 

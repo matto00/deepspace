@@ -479,7 +479,7 @@ private:
 
     /** Where an in-system jump's fold opened: its arrival is on the line
      *  from here to the world. Taken when the fold opens, because the ship
-     *  still coasts through the fold, and at 1 c that is a sizeable part of
+     *  still coasts through the fold, and at 0.1 c that is a sizeable part of
      *  the world's standoff. Empty outside an in-system fold. */
     TOptional<FUniversePosition> FoldDeparture;
 
