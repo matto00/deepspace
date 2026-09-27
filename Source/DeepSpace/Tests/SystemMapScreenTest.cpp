@@ -240,6 +240,23 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
         Ship->PlaceShip(Home->Stub.Position + FVector(Out, 0.0, -Out * FMath::Tan(FMath::DegreesToRadians(18.0))), Facing());
         Look();
         TestEqual(TEXT("and below it"), Map->GetFooterText().ToString(), FString(TEXT("18° below the plane.")));
+
+        // The longest footer there is, both held and off the plane, shares
+        // its row with the band's button: it wraps short of the room the
+        // button keeps, in the two lines the row has, and never runs under it.
+        const double Inner = 0.5 * Scale.InnerAU * UniverseUnits::CmPerAU;
+        Ship->PlaceShip(Home->Stub.Position + Inner * FVector(FMath::Cos(FMath::DegreesToRadians(34.0)), 0.0,
+                                                              FMath::Sin(FMath::DegreesToRadians(34.0))), Facing());
+        Look();
+        TestEqual(TEXT("held inside and off the plane, the footer says both"), Map->GetFooterText().ToString(),
+                  FString::Printf(TEXT("Inside %s's orbit. 34° above the plane."), *Home->Planets[0].Designation));
+        const FVector2D Longest = Map->MeasureFooter();
+        const float Room = 600.0f - 2.0f * 6.0f - USystemMapWidget::JumpReserve;
+        AddInfo(FString::Printf(TEXT("the longest footer, \"%s\", is %.0f x %.0f px in a row of %.0f"),
+                                *Map->GetFooterText().ToString(), Longest.X, Longest.Y, Room));
+        TestTrue(FString::Printf(TEXT("it is measured (%.0f x %.0f px)"), Longest.X, Longest.Y), Longest.X > 100.0 && Longest.Y > 10.0);
+        TestTrue(FString::Printf(TEXT("and stops short of the button's room (%.0f of %.0f px)"), Longest.X, Room), Longest.X <= Room);
+        TestTrue(FString::Printf(TEXT("in no more than the row's 44 px (%.0f px)"), Longest.Y), Longest.Y <= 44.0);
         Ship->PlaceShip(Home->Stub.Position + FVector(Out, 0.0, Out * FMath::Tan(FMath::DegreesToRadians(4.0))), Facing());
         Look();
         TestTrue(TEXT("but not within 5 degrees of it"), Map->GetFooterText().IsEmpty());
@@ -354,6 +371,10 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
         Look();
         TestEqual(TEXT("inside the reach it reads Near enough to fly"), Map->GetJumpButtonText().ToString(), FString(TEXT("Near enough to fly")));
         TestFalse(TEXT("and cannot be pressed"), Map->IsJumpButtonEnabled());
+        const FVector2D Widest = Map->MeasureJumpButton();
+        TestTrue(FString::Printf(TEXT("its widest label fits the room the footer leaves it (%.0f px of %.0f)"), Widest.X,
+                                 USystemMapWidget::JumpReserve - USystemMapWidget::JumpGap),
+                 Widest.X > 60.0 && Widest.X <= USystemMapWidget::JumpReserve - USystemMapWidget::JumpGap);
         Map->PressJump();
         TestFalse(TEXT("pressed anyway, nothing is plotted"), Ship->HasCourse());
 

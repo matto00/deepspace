@@ -110,6 +110,24 @@ public:
      *  there and can be pressed. */
     void PressJumpButton();
 
+    /**
+     * The room the footer's row keeps at its right for the band's button,
+     * slate units: the widest button, "Near enough to fly" at the footer's
+     * size with 8 px of padding a side, which Slate measures at 168 px, and
+     * a 10 px gap, rounded up. The footer wraps at the rest of the row
+     * (600 - 2 x 6 - JumpReserve, 408 px).
+     */
+    static constexpr float JumpReserve = 180.0f;
+
+    /** The least gap kept between the footer and the button, slate units. */
+    static constexpr float JumpGap = 10.0f;
+
+    /** For tests: what Slate lays the footer and the band's button out at,
+     *  slate units, measured by a prepass. Fonts are measured without a
+     *  renderer, so this holds under -nullrhi, which cannot paint. */
+    FVector2D MeasureFooter() const;
+    FVector2D MeasureJumpButton() const;
+
     /** The layout as drawn, for a test to hold the orrery to it. */
     const SystemMap::FMapLayout* GetLayout() const;
 

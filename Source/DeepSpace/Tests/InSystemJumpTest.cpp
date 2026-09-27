@@ -189,6 +189,18 @@ bool FInSystemJumpTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("a star course is independent of the target"), Nav.GetPlotted() == TOptional<FSystemId>(Orvane));
         Nav.ClearTarget();
         TestTrue(TEXT("both ways"), Nav.GetPlotted() == TOptional<FSystemId>(Orvane));
+
+        // Replacing the course's kind leaves the jump engaged, as a star
+        // replotted over a star always has: a star row pressed on the chart
+        // while the helm's in-system jump is engaged makes an engaged star
+        // jump. Whether changing the kind should stand the jump down is an
+        // open question put to the developer (map spec, Open questions);
+        // this pins what stands until it is ruled.
+        Nav.SetTarget(World(Kessa, 1));
+        Nav.PlotWorld(World(Kessa, 1));
+        Nav.SetEngaged(true);
+        TestTrue(TEXT("a star over an engaged world course: still engaged, as ruled so far"), Nav.Plot(Orvane) && Nav.IsEngaged());
+        TestTrue(TEXT("and the world back over the star: still engaged"), Nav.PlotWorld(World(Kessa, 1)) && Nav.IsEngaged());
     }
 
     // -- FShipNavState: the fold, and the arrival at a world ------------------
@@ -639,6 +651,30 @@ bool FChartInSystemCourseTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and the row is marked"), Chart->GetRowText(0).ToString().StartsWith(UNavigationWidget::PlottedMark));
     TestFalse(TEXT("the course line no longer says in this system"), Chart->GetCourseText().ToString().Contains(UNavigationWidget::InSystemWords));
     TestTrue(TEXT("the target was left alone"), Ship->GetTarget() == TOptional<FBodyId>(World(Home->Stub.Id, Orbit)));
+    TestTrue(TEXT("and the jump stays engaged, pending the developer's ruling (map spec, Open questions)"), Ship->IsJumpEngaged());
+
+    // Through the fold (decision 12): an in-system fold is not between
+    // stars. The chart keeps the system the ship is still in -- its here
+    // line and its rows -- and its jump word is the fold's.
+    Ship->SetJumpEngaged(false);
+    const FString HereBefore = Chart->GetHereText().ToString();
+    const int32 RowsBefore = Chart->GetShownRowCount();
+    TestNotEqual(TEXT("before the fold the chart says where the ship is"), HereBefore, NavText::JumpWord(EJumpState::Transit));
+    TestTrue(TEXT("the target plotted again"), Ship->PlotTarget());
+    TestTrue(TEXT("and engaged"), Ship->SetJumpEngaged(true));
+    Console(Test.World, TEXT("ds.Nav.Charge"), {});
+    Test.Step(0.1f);
+    Ship->PlaceShip(Ship->GetFlightState().GetUniversePosition(), FRotationMatrix::MakeFromX(*Ship->GetCourseDirection()).ToQuat());
+    Test.Step(0.1f);
+    if (!TestTrue(TEXT("aligned and charged, the in-system fold opens"), Ship->IsInTransit()))
+    {
+        return false;
+    }
+    Chart->RefreshFromShip();
+    TestEqual(TEXT("in the fold the here line still names the system"), Chart->GetHereText().ToString(), HereBefore);
+    TestEqual(TEXT("its rows are still shown"), Chart->GetShownRowCount(), RowsBefore);
+    TestTrue(TEXT("and there are some"), RowsBefore > 0);
+    TestEqual(TEXT("and the jump word is the fold's, not between stars"), Chart->GetJumpText().ToString(), FString(TEXT("In the fold.")));
     return true;
 }
 

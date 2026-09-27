@@ -53,6 +53,12 @@ namespace
     constexpr float JumpHeight = 24.0f;
     constexpr float JumpMinWidth = 120.0f;
 
+    // The footer shares that row, left of the button, and wraps rather than
+    // run under it: "Inside <a given name>'s orbit. 34° above the plane." is
+    // wider than the room the button leaves. The row has 44 px under
+    // FooterTop, room for two lines at the footer's size.
+    constexpr float FooterWidth = PanelWidth - 2.0f * Edge - USystemMapWidget::JumpReserve;
+
     // A row's columns, in the list's 322 px: the target's mark, the numeral
     // (or a given name), the kind, and the distance right-aligned. The
     // numeral's is 40 px, not the spec's 34: "VIII" at size 14 is 36 px wide,
@@ -189,6 +195,7 @@ UWidget* USystemMapWidget::BuildScreen()
     Place(Canvas, TargetLine, FVector2D(Edge, BandTop), FVector2D(PanelWidth - 2.0f * Edge, TargetHeight));
 
     Footer = MakeText(FText::GetEmpty(), FooterSize, Dim);
+    Footer->SetWrapTextAt(FooterWidth);
     UCanvasPanelSlot* FooterCell = Place(Canvas, Footer, FVector2D(Edge, FooterTop), FVector2D::ZeroVector);
     FooterCell->SetAutoSize(true);
 
@@ -578,6 +585,31 @@ bool USystemMapWidget::IsRowEnabled(int32 Index) const
 FText USystemMapWidget::GetTitleText() const
 {
     return TitlePlace ? TitlePlace->GetText() : FText::GetEmpty();
+}
+
+namespace
+{
+    /** What Slate would lay Widget out at, measured by a prepass of it. */
+    FVector2D Measure(UWidget* Widget)
+    {
+        if (!Widget)
+        {
+            return FVector2D::ZeroVector;
+        }
+        const TSharedRef<SWidget> Built = Widget->TakeWidget();
+        Built->SlatePrepass(1.0f);
+        return Built->GetDesiredSize();
+    }
+}
+
+FVector2D USystemMapWidget::MeasureFooter() const
+{
+    return Measure(Footer.Get());
+}
+
+FVector2D USystemMapWidget::MeasureJumpButton() const
+{
+    return Measure(JumpButton.Get());
 }
 
 FText USystemMapWidget::GetFooterText() const

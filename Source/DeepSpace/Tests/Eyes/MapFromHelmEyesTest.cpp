@@ -11,8 +11,10 @@
 #include "ShaderCompiler.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipMapScreen.h"
+#include "Ship/ShipSubsystem.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/NavText.h"
+#include "UI/SystemMapLayout.h"
 #include "UI/SystemMapWidget.h"
 #include "Universe/UniverseUnits.h"
 
@@ -33,7 +35,8 @@
  * middle on 4K -- and writes Saved/Eyes/MapFromHelm/<shot>.png and
  * report.txt. For stage 1 the frames are judged on the rows, the rings and
  * the title; stage 3 runs it again with a target (home_target_ahead, with a
- * live ETA and "Near enough to fly"; home_target_far, with "Jump here"), to
+ * live ETA and "Near enough to fly"; home_target_far, with "Jump here";
+ * home_footer_longest, the longest footer beside the button), to
  * judge the target ring, the band's lines and the button, and this file is
  * deleted with that verdict.
  *
@@ -221,6 +224,16 @@ bool FMapFromHelmEyesTest::RunTest(const FString& Parameters)
                 {
                     Test.Ship->SetTarget(FBodyId{ Opening->Stub.Id, Orbit, -1 });
                     Shoot(TEXT("home_target_far"));
+
+                    // The longest footer the map writes, held inside the
+                    // innermost orbit and off the plane, on the row the
+                    // button shares: it must wrap short of the button.
+                    const SystemMap::FMapScale Scale = SystemMap::Fit(*Opening, UShipSubsystem::GetStandoffAU());
+                    const double Inner = 0.5 * Scale.InnerAU * UniverseUnits::CmPerAU;
+                    const FQuat Facing = Test.Ship->GetFlightState().GetUniverseOrientation();
+                    Test.Ship->PlaceShip(Opening->Stub.Position + Inner * FVector(FMath::Cos(FMath::DegreesToRadians(34.0)), 0.0,
+                                                                                  FMath::Sin(FMath::DegreesToRadians(34.0))), Facing);
+                    Shoot(TEXT("home_footer_longest"));
                     break;
                 }
             }

@@ -4,8 +4,14 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Ship/NavStart.h"
+#include "Ship/ShipDriveLever.h"
+#include "Ship/ShipFlightState.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipNavState.h"
+#include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
+#include "Sky/LocalSystem.h"
+#include "Sky/SkySystem.h"
 #include "Tests/SkyTestWorld.h"
 #include "Tests/StockShip.h"
 #include "UI/TargetMarker.h"
@@ -296,6 +302,133 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("an orbit it lacks changes nothing"), Ship->GetTarget() == TOptional<FBodyId>(World(HomeId, 0)));
         Console(Test.World, TEXT("ds.Nav.Target"), {});
         TestTrue(TEXT("listing changes nothing"), Ship->GetTarget() == TOptional<FBodyId>(World(HomeId, 0)));
+    }
+
+    // The live ETA as the ship builds it (ruling 3): GetTargetView, which
+    // hands TargetMarker::View the boosters' braking at this moment's power
+    // and ds.Drive.HoldSeconds, held to the approach the soft cap actually
+    // flies through Tick. DeepSpace.UI.TargetMarker.Eta steps the flight
+    // state against its own rated limits; this is the one check that the
+    // time the map and the HUD print is the moment this ship arrives. At 1 c
+    // from 0.25 AU, sampled once the lever has settled, to within 0.5 s all
+    // the way down -- on fed boosters, and again browned out, where the
+    // braking is a quarter and so is the knee the approach brakes from.
+    {
+        const double C = ShipDriveLever::LightCmPerSecond;
+        const double AU = UniverseUnits::CmPerAU;
+        const FSkySystem Sky = LocalSystem::Here(Home);
+        // A world, and a side of it from which the straight line in meets
+        // its floor before any other body's, from a point still in home.
+        int32 Orbit = INDEX_NONE;
+        FVector Out = FVector::ZeroVector;
+        FFlightSurface Own;
+        const FVector Sides[] = { FVector(0.0, 0.0, 1.0), FVector(0.0, 0.0, -1.0), FVector(0.0, 1.0, 0.0),
+                                  FVector(0.0, -1.0, 0.0), FVector(1.0, 0.0, 0.0), FVector(-1.0, 0.0, 0.0) };
+        for (int32 Candidate = 0; Candidate < Home->Planets.Num() && Orbit == INDEX_NONE; ++Candidate)
+        {
+            const FSkyBody& Body = Sky.Bodies[Candidate + 1];
+            const FFlightSurface Surface{ Body.Position, Body.Radius, UShipSubsystem::FloorFor(Body), false };
+            for (const FVector& Side : Sides)
+            {
+                const FUniversePosition From = Body.Position + Side * (0.25 * AU);
+                if (Universe->GetSystemIdAt(From) != TOptional<FSystemId>(HomeId))
+                {
+                    continue;
+                }
+                Ship->PlaceShip(From, FRotationMatrix::MakeFromX(-Side).ToQuat());
+                Ship->Tick(0.01f);
+                const TOptional<double> ToOwn = ShipFlight::RayToFloor(Surface, From, -Side);
+                bool bClear = ToOwn.IsSet();
+                for (const FFlightSurface& Other : Ship->GetFlightState().GetSurfaces())
+                {
+                    if (!Other.bInsideOut && Other.Centre.DistanceTo(Body.Position) < 100.0)
+                    {
+                        continue;   // the world's own floor
+                    }
+                    const TOptional<double> Hit = ShipFlight::RayToFloor(Other, From, -Side);
+                    bClear &= !Hit || (ToOwn && *Hit > *ToOwn);
+                }
+                if (bClear)
+                {
+                    Orbit = Candidate;
+                    Out = Side;
+                    Own = Surface;
+                    break;
+                }
+            }
+        }
+        if (TestTrue(TEXT("eta: a world with a clear line in from 0.25 AU"), Orbit != INDEX_NONE))
+        {
+            Ship->SetTarget(World(HomeId, Orbit));
+            const FUniversePosition From = Own.Centre + Out * (0.25 * AU);
+            const auto Fly = [&](float BoosterWeight, const TCHAR* How)
+            {
+                Ship->SetConsumerWeight(ShipPower::Boosters, BoosterWeight);
+                Ship->PlaceShip(From, FRotationMatrix::MakeFromX(-Out).ToQuat());
+                Ship->SetPilot(Pilot);
+                Ship->SetDriveEngaged(Pilot, true);
+                Ship->SetDriveLever(Pilot, Ship->GetFlightState().GetDriveNotchCount() - 1);
+                constexpr float Step = 0.25f;
+                const auto Room = [&]() { return Where().DistanceTo(Own.Centre) - Own.Radius - Own.Floor; };
+                double Clock = 0.0;
+                while (Clock < 120.0 && Ship->GetShipSpeed() < 0.999 * C)
+                {
+                    Ship->Tick(Step);
+                    Clock += Step;
+                }
+                const double Braking = Ship->GetFlightState().GetLimits().LinearAcceleration;
+                AddInfo(FString::Printf(TEXT("eta, %s: at %.4f c after %.1f s, %.0f km out, braking %.0f cm/s^2"), How,
+                                        Ship->GetShipSpeed() / C, Clock, Room() / UniverseUnits::CmPerKm, Braking));
+                TestTrue(FString::Printf(TEXT("eta, %s: the lever settles at 1 c before the cap binds"), How),
+                         Ship->GetShipSpeed() >= 0.999 * C && Room() > 2.0 * C * Ship->GetFlightState().GetLimits().HoldSeconds);
+
+                TArray<TPair<double, double>> Predicted;   // (when, when it says it will arrive)
+                TOptional<double> Arrived;
+                while (Clock < 600.0 && !Arrived)
+                {
+                    const TOptional<FTargetView> Now = Ship->GetTargetView(*Home);
+                    if (Now && Now->EtaSeconds && Ship->GetShipSpeed() >= TargetMarker::MinSpeed)
+                    {
+                        Predicted.Emplace(Clock, Clock + *Now->EtaSeconds);
+                    }
+                    if (Room() <= FShipFlightState::AtFloorCm)
+                    {
+                        // The flight is at the floor a metre off it; the ETA
+                        // is to the floor itself. The braking curve's last
+                        // metre is 0.25 s on fed boosters and 0.5 s browned
+                        // out -- the whole tolerance -- so it is added back,
+                        // from the flight's own limits, not the view's.
+                        const FShipFlightLimits& Flown = Ship->GetFlightState().GetLimits();
+                        Arrived = Clock + ShipFlight::SecondsToFloor(FMath::Max(0.0, Room()), Ship->GetShipSpeed(),
+                                                                     Flown.LinearAcceleration, Flown.HoldSeconds);
+                    }
+                    Ship->Tick(Step);
+                    Clock += Step;
+                }
+                if (TestTrue(FString::Printf(TEXT("eta, %s: the approach arrives at the floor"), How), Arrived.IsSet())
+                    && TestTrue(FString::Printf(TEXT("eta, %s: with a time all the way"), How), Predicted.Num() > 200))
+                {
+                    double Worst = 0.0;
+                    for (const TPair<double, double>& Sample : Predicted)
+                    {
+                        Worst = FMath::Max(Worst, FMath::Abs(Sample.Value - *Arrived));
+                    }
+                    AddInfo(FString::Printf(TEXT("eta, %s: arrived %.2f s after the first sample, the ETA at most %.3f s off"),
+                                            How, *Arrived - Predicted[0].Key, Worst));
+                    TestTrue(FString::Printf(TEXT("eta, %s: the ship's ETA is the flown arrival, to within 0.5 s (%.3f s)"), How, Worst),
+                             Worst <= 0.5);
+                }
+                Ship->AllStop(Pilot);
+                Ship->SetDriveEngaged(Pilot, false);
+                return Braking;
+            };
+            const double Fed = Fly(1.0f, TEXT("fed boosters"));
+            const double Starved = Fly(0.0f, TEXT("boosters browned out"));
+            TestTrue(FString::Printf(TEXT("eta: browned out, the braking really is a quarter (%.0f of %.0f cm/s^2)"), Starved, Fed),
+                     FMath::IsNearlyEqual(Starved, 0.25 * Fed, 1e-3 * Fed));
+            Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
+        }
+        Ship->SetTarget(World(HomeId, 0));
     }
 
     // Placed into another system without a jump: the id is held, and names

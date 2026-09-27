@@ -1359,6 +1359,24 @@ But it is the same shape of confusion the developer reported ("heading
 straight to it"). Watch for it in play. One option, needing an amendment: on
 a world course the jump line says `in the cone` rather than `dead ahead`.
 
+### An engaged jump whose course changes kind (for the developer; not ruled)
+
+Plotting a course never touches whether the jump is engaged, so replacing a
+course keeps an engaged jump engaged. Star over star it always has; the
+in-system jump adds star over world and world over star. The case that
+matters: the pilot presses `Jump here` at the helm, and the copilot, at the
+chart, presses a star row. The result is an engaged interstellar jump that,
+charged, opens by itself as soon as the nose passes within 8 degrees of that
+star -- and the fold takes the target with it. That is a way to leave the
+system nobody chose as such, the opposite of the jump being deliberate. Two
+answers, both small: **(a)** a course that changes kind stands the jump down
+(`FShipNavState::Plot` and `PlotWorld` clear `bEngaged` when the other kind
+was plotted), so the player who plotted the new course engages it; or **(b)**
+keep it engaged, as star over star is, and record here that one engage lever
+serves whichever course is plotted. Until it is ruled the build does (b), and
+`DeepSpace.Ship.InSystemJump` and `DeepSpace.UI.ChartInSystemCourse` pin it,
+so either answer is a deliberate change to those two lines.
+
 ## The anti-chore audit
 
 - **Nothing on the map or the HUD says the player is behind.** No count of
