@@ -31,7 +31,7 @@ namespace SkyMaterial
     inline const TCHAR* const BodyMeshPath = TEXT("/Game/Materials/Sky/SM_SkyBody.SM_SkyBody");
 
     // M_SkyBody: planets and moons.
-    //   vectors Colour, LightDirection, Rim, SurfaceSeed;
+    //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY;
     //   scalars Brightness, PointBlend, Mottle, Detail, Banding, Relief, Cratering.
     inline const FName Colour = TEXT("Colour");                 // vector: albedo colour, or the star's
     inline const FName LightDirection = TEXT("LightDirection"); // vector: world space, body toward its star
@@ -44,6 +44,12 @@ namespace SkyMaterial
     inline const FName Relief = TEXT("Relief");                 // scalar: the detail bands' slope, the normal's tilt
     inline const FName Cratering = TEXT("Cratering");           // scalar: how much of its craters a world has kept
     inline const FName SurfaceSeed = TEXT("SurfaceSeed");       // vector: xyz noise offset, w belt pairs; ShipSky::SurfaceSeed
+    // The universe's X and Y axes in world space, the rows that turn a world
+    // direction into the body's own axes. The proxy is drawn unturned (a GPU
+    // instance rotation is 16-bit, and the ground amplifies its error by R/h;
+    // SkyProjection::RenderedScaleBits), so the face turns with the ship here.
+    inline const FName BodyAxisX = TEXT("BodyAxisX");           // vector: world space, unit
+    inline const FName BodyAxisY = TEXT("BodyAxisY");           // vector: world space, unit, square to X
 
     // M_SkyStar: the local star, the motes, navigation's course marker.
     //   vector Colour; scalar Brightness.
@@ -66,7 +72,7 @@ namespace SkyMaterial
     // these and every loaded asset against the JSON, so a parameter added on
     // one side and not the other is a red test, not a silent no-op.
     inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, Relief, Cratering }; }
-    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed }; }
+    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY }; }
     inline TArray<FName> StarScalars() { return { Brightness }; }
     inline TArray<FName> StarVectors() { return { Colour }; }
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }

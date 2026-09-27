@@ -63,6 +63,8 @@ namespace
             { TEXT("relief"), SkyMaterial::Relief, TEXT("scalar") },
             { TEXT("cratering"), SkyMaterial::Cratering, TEXT("scalar") },
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
+            { TEXT("body_axis_x"), SkyMaterial::BodyAxisX, TEXT("vector") },
+            { TEXT("body_axis_y"), SkyMaterial::BodyAxisY, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
         };

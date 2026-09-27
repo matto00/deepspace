@@ -1,5 +1,6 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "RenderTransform.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyColour.h"
@@ -871,6 +872,134 @@ bool FSkyColourTest::RunTest(const FString& Parameters)
     {
         TestTrue(TEXT("a blackbody is a chromaticity: its brightest channel is 1"), FMath::IsNearlyEqual(Colour.GetMax(), 1.0f));
         TestTrue(TEXT("and no channel is negative"), Colour.GetMin() >= 0.0f);
+    }
+    return true;
+}
+
+namespace SkyGpuTransformLocal
+{
+    /** What the GPU draws for a component transform: the engine's own
+     *  instance compression (GPU Scene's FCompressedTransform) there and
+     *  back, as every desktop shader platform this project runs on stores
+     *  it. */
+    FRenderTransform OnTheGpu(const FTransform& Transform)
+    {
+        return FCompressedTransform(FRenderTransform(Transform.ToMatrixWithScale())).ToRenderTransform();
+    }
+
+    /** The distance from the ship's origin to the near side of the sphere
+     *  the GPU draws for Transform -- the mesh's centre-origin sphere of
+     *  MeshRadius, its scale and rotation decoded -- along the direction to
+     *  its centre. The centre is taken as given: GPU Scene keeps it as a
+     *  float offset from a tile near the proxy, whose rounding is a few
+     *  metres of a centre thousands of kilometres off and is not this
+     *  test's business. */
+    double GpuNearSide(const FTransform& Transform, double MeshRadius)
+    {
+        const FRenderTransform Drawn = OnTheGpu(Transform);
+        // The sphere's point nearest the ship, in the mesh's own space: the
+        // direction to the ship, turned back through the decoded rotation.
+        const FVector ToShip = -Transform.GetLocation().GetSafeNormal();
+        const FMatrix Decoded = Drawn.ToMatrix();
+        const FVector Local = Decoded.GetMatrixWithoutScale().InverseTransformVector(ToShip) * MeshRadius;
+        return (Transform.GetLocation() + Decoded.TransformVector(Local)).Size();
+    }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FSkyProxyOnTheGpuTest,
+    "DeepSpace.Sky.ProxyOnTheGpu",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSkyProxyOnTheGpuTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyGpuTransformLocal;
+
+    // The trap, measured, so this test says so if the engine ever stops
+    // setting it: an arbitrary scale, or rotation, does not come back.
+    {
+        const FTransform Arbitrary(FQuat(FVector(0.3, -0.7, 0.2).GetSafeNormal(), 0.83), FVector(1.0e9, 2.0e9, -5.0e8),
+                                   FVector(6.2345678e7));
+        const FRenderTransform Drawn = OnTheGpu(Arbitrary);
+        const double ScaleError = FMath::Abs(Drawn.TransformRows[0].Size() / 6.2345678e7 - 1.0);
+        const double TurnError = FVector(Drawn.TransformRows[2].GetSafeNormal())
+            .Cross(Arbitrary.GetRotation().GetAxisZ()).Size();
+        AddInfo(FString::Printf(TEXT("the GPU draws an arbitrary scale %.2g off and an arbitrary rotation %.2g rad off"),
+            ScaleError, TurnError));
+    }
+
+    // RenderableScale: at or above, by at most 2^-14, and exactly what the
+    // GPU keeps -- across every magnitude a proxy has.
+    {
+        double WorstGrowth = 0.0;
+        bool bAllKept = true;
+        bool bNeverBelow = true;
+        for (double Scale = 1.0e-3; Scale < 1.0e12; Scale *= 1.0371)
+        {
+            const double Renderable = SkyProjection::RenderableScale(Scale);
+            bNeverBelow &= Renderable >= Scale;
+            WorstGrowth = FMath::Max(WorstGrowth, Renderable / Scale - 1.0);
+            const FRenderTransform Drawn = OnTheGpu(FTransform(FQuat::Identity, FVector::ZeroVector, FVector(Renderable)));
+            for (int32 Axis = 0; Axis < 3; ++Axis)
+            {
+                FVector3f Expected = FVector3f::ZeroVector;
+                Expected[Axis] = static_cast<float>(Renderable);
+                bAllKept &= Drawn.TransformRows[Axis] == Expected && static_cast<double>(static_cast<float>(Renderable)) == Renderable;
+            }
+        }
+        TestTrue(TEXT("a renderable scale is never below the one asked for"), bNeverBelow);
+        TestTrue(FString::Printf(TEXT("and at most 2^-14 above it (worst %.3g)"), WorstGrowth), WorstGrowth <= FMath::Pow(2.0, -14.0));
+        TestTrue(TEXT("and the GPU draws it, unturned, exactly"), bAllKept);
+        TestEqual(TEXT("a scale that is already renderable stays put"), SkyProjection::RenderableScale(0.75), 0.75);
+        TestEqual(TEXT("a power of two stays put"), SkyProjection::RenderableScale(1048576.0), 1048576.0);
+    }
+
+    // The ground under the ship is drawn at exactly the distance the
+    // projection put it, from each body's floor to 30 AU, and densely over
+    // the last decade where R / h is largest -- where a 2^-15 scale rounding
+    // put it a percent or two off, a different percent every frame. Measured
+    // through the transform the actor gives the component: identity
+    // rotation, the view's scale.
+    {
+        const FSkyViewParams Params;
+        const FSkySystem Fixture = SkyTestFixtures::System();
+        double Worst = 0.0;
+        double WorstUnrounded = 0.0;
+        int32 Checked = 0;
+        for (const FSkyBody& Approached : Fixture.Bodies)
+        {
+            TArray<FUniversePosition> Ships = Sweep(Approached, Params);
+            const double Low = Floor(Approached, Params);
+            for (int32 Step = 0; Step <= 200; ++Step)
+            {
+                Ships.Add(Approached.Position + ApproachDirection() * (Approached.Radius + Low * (1.0 + 0.047 * Step)));
+            }
+            for (const FUniversePosition& Ship : Ships)
+            {
+                const FSkyFrame Frame = SkyProjection::Project(Fixture, Ship, Params);
+                for (const FSkyBodyView& View : Frame.Bodies)
+                {
+                    const double Near = ProxyNear(View);
+                    TestTrue(TEXT("the proxy's radius is its scale times the mesh's, exactly"),
+                        View.ProxyRadius == View.ProxyScale * Params.ProxyMeshRadius);
+                    const FTransform Given(FQuat::Identity, View.ProxyLocation, FVector(View.ProxyScale));
+                    Worst = FMath::Max(Worst, FMath::Abs(GpuNearSide(Given, Params.ProxyMeshRadius) - Near) / Near);
+
+                    // What the same proxy cost before the rounding, for the log.
+                    const double Unrounded = View.ProxyRadius * (1.0 + 1.5e-5) / Params.ProxyMeshRadius;
+                    const FTransform Raw(FQuat::Identity, View.ProxyLocation, FVector(Unrounded));
+                    const double RawNear = View.ProxyLocation.Size() - Unrounded * Params.ProxyMeshRadius;
+                    WorstUnrounded = FMath::Max(WorstUnrounded, FMath::Abs(GpuNearSide(Raw, Params.ProxyMeshRadius) - RawNear) / RawNear);
+                    ++Checked;
+                }
+            }
+        }
+        // Exact but for double rounding: the scale is one the GPU keeps.
+        const double Bound = 1.0e-9;
+        AddInfo(FString::Printf(TEXT("%d proxies: the ground's distance on the GPU is off by at most %.3g of itself; "
+            "an unrounded scale put it %.3g off"), Checked, Worst, WorstUnrounded));
+        TestTrue(FString::Printf(TEXT("the GPU draws the ground under the ship where the projection put it, to %.0g"), Bound),
+            Worst < Bound);
     }
     return true;
 }

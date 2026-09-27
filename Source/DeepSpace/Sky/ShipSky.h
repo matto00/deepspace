@@ -332,7 +332,18 @@ namespace ShipSky
          *  the geometry DeepSpace.Sky.NightSideIsDrawn and sky_probe --night
          *  measure, put where eyes can judge it (system map decision 8). */
         Night,
+
+        /** Over the ground where the star stands DuskSunElevation above the
+         *  horizon, aside from the star in the system's plane: the relief's
+         *  own light, where slopes and crater walls show, and the terminator
+         *  a short way off. */
+        Dusk,
     };
+
+    /** The star's height above the horizon under a dusk goto, rad: ten
+     *  degrees, low enough that relief reads, high enough that the ground
+     *  under the ship is still lit. */
+    inline constexpr double DuskSunElevation = 10.0 * UE_DOUBLE_PI / 180.0;
 
     /** How far aside of the anti-star line the night side hangs, as a slope:
      *  NightSideIsDrawn's 0.002 AU to one side at 0.03 AU out, 3.8 degrees

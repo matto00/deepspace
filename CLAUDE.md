@@ -464,6 +464,27 @@ key stops matching. Its one write to the flight state is `ds.Sky.Goto`, a
 one-shot placement for tuning. The counter-frame follows the same rule for
 the course marker and the streaks.
 
+**The GPU rounds a proxy's transform, and the ground amplifies it by R /
+h.** GPU Scene stores every instance transform compressed
+(`FCompressedTransform`, on for Vulkan SM5/SM6): the scale keeps 15
+significant bits and the rotation is a 16-bit octahedral axis and a 15-bit
+spin, so either comes back up to ~3e-5 off. A proxy's near side is its
+centre minus its radius, both R / h times the near side, so that rounding
+lands on the ground under the ship times R / h -- a percent or two of the
+altitude in the last 50 km, a different percent every frame as the scale
+moves, and a sideways slide of the face whenever the ship turned. That was
+the playtest's "tearing" 10-15 km up. So `SkyProjection::Project` rounds each
+proxy's scale *up* to one the GPU keeps exactly (`RenderableScale`, a
+homothety 2^-14 larger at most, placed to match), and `AShipSky` draws every
+proxy **unturned** -- absolute identity rotation and scale -- while
+`M_SkyBody` turns the face with the ship itself through `BodyAxisX` and
+`BodyAxisY`, full-float parameters. Never give a proxy a rotation, and never
+set its scale to anything but `FSkyBodyView::ProxyScale`.
+`DeepSpace.Sky.ProxyOnTheGpu` runs the proxies through the engine's own
+compression. The pair of frames in the fix's renders is the evidence: the
+ground's frame-to-frame zoom from a 1 m descent at 10 km was 30-80 times the
+true one, and after, is the true one.
+
 **The material contract.** Every parameter name C++ drives lives in
 `Sky/SkyMaterialContract.h`, mirrored by `Tools/sky_material_contract.json`,
 which `Tools/setup_sky_materials.py` reads to author `M_SkyBody`, `M_SkyStar`,
@@ -903,6 +924,7 @@ ds.Nav.Target               the worlds here, numbered by orbit (I is 1), the tar
 ds.Nav.Target 2             target world II (or a name, next, none)
 ds.Nav.Plot target          the target as the jump's course (the map's Jump here, without the engage)
 ds.Sky.Goto 3 4.5e6 night   the .03 AU question: 4,500,000 km beyond body 3, its star behind it
+ds.Sky.Goto 3 10 dusk       10 km over ground where its star stands 10 degrees high: relief and craters in raking light
 ds.Drive.Top 0.1            shorten the drive lever to 0.1 c for a session (never above 1 c)
 ```
 

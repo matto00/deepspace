@@ -77,6 +77,11 @@ struct DEEPSPACE_API FSkyViewParams
      * and facets, too, go with altitude over radius rather than altitude.
      */
     double MinRenderedAltitudeOfRadius = 1.6e-3;
+
+    /** The radius of the mesh every proxy is drawn with, cm: SM_SkyBody's,
+     *  from its bounds. A proxy's scale is ProxyRadius over this, and it is
+     *  the scale that has to survive the trip to the GPU (RenderableScale). */
+    double ProxyMeshRadius = 50.0;
 };
 
 struct DEEPSPACE_API FSkyBodyView
@@ -84,8 +89,13 @@ struct DEEPSPACE_API FSkyBodyView
     /** Counter-frame local, which is universe axes, cm. */
     FVector ProxyLocation = FVector::ZeroVector;
 
-    /** cm, the radius of the drawn sphere. */
+    /** cm, the radius of the drawn sphere: exactly ProxyScale times
+     *  FSkyViewParams::ProxyMeshRadius. */
     double ProxyRadius = 0.0;
+
+    /** The proxy mesh's uniform scale, always a RenderableScale: what the
+     *  component is given, and exactly what the GPU draws. */
+    double ProxyScale = 1.0;
 
     /** Unit, universe axes, from the ship's origin. */
     FVector Direction = FVector::ForwardVector;
@@ -205,6 +215,38 @@ namespace SkyProjection
      * nothing here. 0 at or below 0 K.
      */
     DEEPSPACE_API double StarWarmth(double TemperatureK, double Gamma = 1.0);
+
+    /**
+     * How many significant bits a primitive's scale keeps on its way to the
+     * GPU: 15. The renderer does not draw a mesh with the transform it is
+     * given. GPU Scene stores every instance's transform compressed
+     * (FCompressedTransform, on every desktop shader platform this project
+     * runs on) -- a float translation, the rotation as a 16-bit octahedral
+     * axis and a 15-bit spin, and the scale as a 15-bit mantissa under a
+     * shared exponent. A proxy's scale therefore reaches the GPU up to 3e-5
+     * off (2^-15 relative, rounded).
+     *
+     * On most meshes nobody could see that. On a proxy it is amplified by
+     * R / h, the world's radius over the ship's altitude: the proxy's near
+     * side is centre minus radius, two numbers each R / h times the near
+     * side, so a radius 3e-5 off puts the ground under the ship 3e-5 R / h
+     * off its distance -- 1.6% at 10 km over a 5,400 km world, a different
+     * 1.6% every frame the scale moves. The ground pumped in and out by a
+     * dozen pixels as the ship came down to the floor, and a rotation off by
+     * the same fraction slid its face sideways as the ship turned (the
+     * playtest's "tearing" 10-15 km up). Hence RenderableScale, and the
+     * proxies' identity world rotation in AShipSky::DrawBodies.
+     */
+    inline constexpr int32 RenderedScaleBits = 15;
+
+    /**
+     * The smallest scale at or above Scale that RenderedScaleBits hold
+     * exactly: Scale rounded up to 15 significant bits, so the GPU draws
+     * exactly the proxy the projection placed. Up, so a proxy grows by at
+     * most 2^-14 and its near side never moves inside the stack's cursor.
+     * Non-positive and non-finite scales come back as they went.
+     */
+    DEEPSPACE_API double RenderableScale(double Scale);
 
     /** Ratio ^ Gamma: how irradiance spans are squeezed into a screen. */
     DEEPSPACE_API double Compress(double Ratio, double Gamma);

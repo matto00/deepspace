@@ -479,6 +479,33 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             const FLinearColor Light = Instance->K2_GetVectorParameterValue(SkyMaterial::LightDirection);
             TestTrue(TEXT("its light comes from its star, in world space"),
                 FVector(Light.R, Light.G, Light.B).Equals(Counter.RotateVector(Frame.Bodies[SkyTestFixtures::HomeIndex].LightDirection), 1e-5));
+
+            // Its face turns with the ship in the material, not the mesh.
+            const FLinearColor AxisX = Instance->K2_GetVectorParameterValue(SkyMaterial::BodyAxisX);
+            const FLinearColor AxisY = Instance->K2_GetVectorParameterValue(SkyMaterial::BodyAxisY);
+            TestTrue(TEXT("its face's axes are the universe's, turned with the counter-frame"),
+                FVector(AxisX.R, AxisX.G, AxisX.B).Equals(Counter.GetAxisX(), 1e-6)
+                && FVector(AxisY.R, AxisY.G, AxisY.B).Equals(Counter.GetAxisY(), 1e-6));
+        }
+
+        // Every proxy is drawn unturned and at exactly the projection's
+        // scale, the only transform a GPU instance keeps without rounding
+        // (SkyProjection::RenderedScaleBits): turned with the counter-frame,
+        // the ground under the ship slid by the rotation's rounding times
+        // R / h as the ship turned.
+        for (int32 Index = 0; Index < Frame.Bodies.Num(); ++Index)
+        {
+            const UStaticMeshComponent* Proxy = Sky->GetProxy(Index);
+            if (!Proxy)
+            {
+                continue;
+            }
+            const FTransform& World = Proxy->GetComponentTransform();
+            TestTrue(FString::Printf(TEXT("proxy %d is unturned in the world, whatever the ship's attitude"), Index),
+                World.GetRotation().Equals(FQuat::Identity, 0.0));
+            TestTrue(FString::Printf(TEXT("and proxy %d is drawn at exactly its renderable scale"), Index),
+                World.GetScale3D() == FVector(Frame.Bodies[Index].ProxyScale)
+                && SkyProjection::RenderableScale(Frame.Bodies[Index].ProxyScale) == Frame.Bodies[Index].ProxyScale);
         }
         const UMaterialInstanceDynamic* StarInstance = Cast<UMaterialInstanceDynamic>(Sky->GetProxy(SkyTestFixtures::StarIndex)->GetMaterial(0));
         TestTrue(TEXT("the star's material is the star's"), StarInstance && StarInstance->Parent == Sky->StarMaterial);
