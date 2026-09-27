@@ -30,11 +30,16 @@
  *     nodes: "the orbital look unchanged", as a number;
  *   - to the C++, at the very D the GPU drew;
  *
- * to a maximum absolute difference of 1e-3, over 256 x 256 samples at each
- * of five footprints. A crater band's albedo and slope step at its rim and
- * at the bisector between two sites, where any rounding at all can change
- * the side a sample lands on: samples within 2e-3 cells of a step are left
- * out, and no more than 1% may be.
+ * over 256 x 256 samples at each of five footprints, per footprint and per
+ * term (the developer's ruling after the spike): every value (continent,
+ * detail, crater albedo) at every footprint, and the slopes at 1/12, 1/96
+ * and 1/768, to a maximum absolute difference of 1e-3; the slopes at 1/3072
+ * and 1/12288 to 5e-3, the measured float floor there -- every float
+ * evaluation, the engine's own nodes included, differs from double by 1e-3
+ * to 5e-3 at those noise coordinates. A crater band's albedo and slope step
+ * at a held crater's rim and at the bisector beside one, where any rounding
+ * at all can change the side a sample lands on: samples within 2e-3 cells
+ * of such a step are left out, and no more than 1% may be.
  *
  * It must compile the Custom node to draw anything, so it also catches what
  * the headless suite cannot see: an HLSL error in WorldRelief.ush ships the
@@ -48,6 +53,8 @@
  * verdict table).
  *
  * Spike verdict (landing R1): FLOAT FLOOR -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 1.376%
+ *
+ * Verdict under the ruling (per footprint and per term; held sites' steps only): GO -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 0.462%
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -58,6 +65,10 @@ namespace WorldReliefParityLocal
 {
     constexpr int32 Side = 256;
     constexpr double Tolerance = 1.0e-3;
+    /** The slopes' float floor at the two finest footprints (the ruling). */
+    constexpr double FineSlopeTolerance = 5.0e-3;
+    /** Footprints at or under this are the fine ones. */
+    constexpr double FineFootprint = 1.0 / 3072.0;
     constexpr double StepMarginCells = 2.0e-3;
     constexpr double MaxLeftOut = 0.01;
 
@@ -147,6 +158,22 @@ namespace WorldReliefParityLocal
             CraterAlbedo = FMath::Max(CraterAlbedo, FMath::Abs(A.CraterAlbedo - B.CraterAlbedo));
             DetailSlope = FMath::Max(DetailSlope, (A.DetailSlope - B.DetailSlope).GetAbsMax());
             CraterSlope = FMath::Max(CraterSlope, (A.CraterSlope - B.CraterSlope).GetAbsMax());
+        }
+
+        double WorstValue() const
+        {
+            return FMath::Max3(Continent, Detail, CraterAlbedo);
+        }
+
+        double WorstSlope() const
+        {
+            return FMath::Max(DetailSlope, CraterSlope);
+        }
+
+        /** Held per term: values to Tolerance, slopes to SlopeTolerance. */
+        bool Within(double SlopeTolerance) const
+        {
+            return WorstValue() <= Tolerance && WorstSlope() <= SlopeTolerance;
         }
 
         double Worst() const
@@ -269,15 +296,16 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             }
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
+            const double SlopeTolerance = FootprintD <= FineFootprint * (1.0 + 1.0e-9) ? FineSlopeTolerance : Tolerance;
             TestEqual(At + TEXT(": both probes drew the same directions"), Unmatched, 0);
             TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on a crater's step (%.3f%%)"), *At, 100.0 * LeftOutShare),
                 LeftOutShare <= MaxLeftOut);
-            TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew (%s)"), *At, *NewVsOld.Describe()),
-                NewVsOld.Worst() <= Tolerance);
+            TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew, values to %.0e, slopes to %.0e (%s)"),
+                *At, Tolerance, SlopeTolerance, *NewVsOld.Describe()), NewVsOld.Within(SlopeTolerance));
             if (World.bHoldCpp)
             {
-                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew (%s)"), *At, *CppVsNew.Describe()),
-                    CppVsNew.Worst() <= Tolerance);
+                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, values to %.0e, slopes to %.0e (%s)"),
+                    *At, Tolerance, SlopeTolerance, *CppVsNew.Describe()), CppVsNew.Within(SlopeTolerance));
                 WorstCppNew = FMath::Max(WorstCppNew, CppVsNew.Worst());
                 WorstFloatNew = FMath::Max(WorstFloatNew, FloatVsNew.Worst());
                 WorstCppOld = FMath::Max(WorstCppOld, CppVsOld.Worst());

@@ -91,23 +91,39 @@ double WorldReliefNoise::CraterMargin(const FVector3d& D, double FootprintD, con
         const FVector3d Cell(FMath::Floor(V.X), FMath::Floor(V.Y), FMath::Floor(V.Z));
         double Nearest = TNumericLimits<double>::Max();
         double Second = TNumericLimits<double>::Max();
+        bool bNearestHeld = false;
+        bool bSecondHeld = false;
         for (int32 Corner = 0; Corner < 8; ++Corner)
         {
             const FVector3d Lattice = Cell + FVector3d(static_cast<double>(Corner & 1), static_cast<double>((Corner >> 1) & 1),
                 static_cast<double>((Corner >> 2) & 1));
             const WorldReliefF64::WR_Vec3 Jitter = WorldReliefF64::WR_VoronoiJitter(Lattice.X, Lattice.Y, Lattice.Z);
-            const double Distance = FVector3d::Dist(V, Lattice + FVector3d(Jitter.X, Jitter.Y, Jitter.Z));
+            const FVector3d Site = Lattice + FVector3d(Jitter.X, Jitter.Y, Jitter.Z);
+            const double Distance = FVector3d::Dist(V, Site);
+            // WR_CraterBand's keep: the hash of the site's own cell.
+            const bool bHeld = WorldReliefF64::WR_CellHash(Site.X + 0.5, Site.Y + 0.5, Site.Z + 0.5) <= WorldReliefF64::WR_CRATER_KEEP;
             if (Distance < Nearest)
             {
                 Second = Nearest;
+                bSecondHeld = bNearestHeld;
                 Nearest = Distance;
+                bNearestHeld = bHeld;
             }
             else if (Distance < Second)
             {
                 Second = Distance;
+                bSecondHeld = bHeld;
             }
         }
-        Margin = FMath::Min3(Margin, Second - Nearest, FMath::Abs(Nearest - WorldReliefF64::WR_CRATER_RADIUS));
+        const double Reach = 1.5 * WorldReliefF64::WR_CRATER_RADIUS;
+        if (bNearestHeld)
+        {
+            Margin = FMath::Min(Margin, FMath::Abs(Nearest - WorldReliefF64::WR_CRATER_RADIUS));
+        }
+        if ((bNearestHeld && Nearest < Reach) || (bSecondHeld && Second < Reach))
+        {
+            Margin = FMath::Min(Margin, Second - Nearest);
+        }
     }
     return Margin;
 }

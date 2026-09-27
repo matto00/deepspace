@@ -59,7 +59,13 @@ namespace WorldReliefNoise
     /** How near D lies to a crater's step, in cells, across every crater
      *  band the footprint has not faded: the least of the rim's distance
      *  (|F1 - radius|) and the bisector's (F2 - F1). A height or slope that
-     *  steps there differs by a whole step for any rounding at all. */
+     *  steps there differs by a whole step for any rounding at all.
+     *
+     *  Only real steps count (the developer's ruling after the spike): a
+     *  rim only where the nearest site holds a crater, and a bisector only
+     *  where a held site of the two lies within 1.5 radii -- the rim's
+     *  reach, past which every term is 0 whichever side is taken. Where no
+     *  step is real the margin is the largest double. */
     DEEPSPACE_API double CraterMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset);
 
     /** The file's tables and constants, for DeepSpace.Sky.MaterialContract. */
