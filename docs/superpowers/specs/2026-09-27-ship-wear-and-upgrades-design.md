@@ -1,8 +1,8 @@
 # DeepSpace — Ship Wear and Upgrades
 
 **Date:** 2026-09-27
-**Status:** Draft for sign-off. Not implemented. Nothing below is built
-until the developer has approved *Decisions needing sign-off*.
+**Status:** Approved by the developer, 2026-09-27: every item of
+*Decisions needing sign-off* as recommended. Not implemented.
 **Answers:** the developer's rulings on wear and upgrades, recorded below
 **Follows:** the interactable ship and power (implemented; its decision 2,
 "under-powered systems degrade, they never fail", is the law every deficit

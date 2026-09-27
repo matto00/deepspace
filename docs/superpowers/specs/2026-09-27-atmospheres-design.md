@@ -1,9 +1,8 @@
 # DeepSpace — Atmospheres: Air From Orbit to the Ground
 
 **Date:** 2026-09-27
-**Status:** Draft for sign-off. Nothing here is built. The developer approves
-*Decisions needing sign-off* before any code except the pure optics model
-(ruling 1 lets that start now).
+**Status:** Approved by the developer, 2026-09-27: every item of
+*Decisions needing sign-off* as recommended. Not implemented.
 **Answers:** the developer's rulings on atmospheres, recorded below
 **Follows:** landing (approved 2026-09-27, not implemented; its ruling 7 said
 "Atmosphere is its own later sub-project", and its non-goals listed
