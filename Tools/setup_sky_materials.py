@@ -579,6 +579,10 @@ def relief_probe(asset, terms):
     so each pass reads back one set of terms unaltered. Selecting nothing
     draws the bias alone: the test's check of the pipe itself."""
     material = fresh_material(asset)
+    # The terms are signed, and the material template clamps emissive at 0
+    # unless the material says otherwise (MATERIAL_ALLOW_NEGATIVE_EMISSIVECOLOR):
+    # the pipe check read -0.375 back as 0 until this was set.
+    material.set_editor_property("allow_negative_emissive_color", True)
     g = Graph(material)
     seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
     banding = g.scalar("banding", 0.0)

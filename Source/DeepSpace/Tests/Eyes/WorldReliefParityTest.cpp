@@ -46,6 +46,8 @@
  * the GPU, and the C++ against the engine's nodes -- which tell a file that
  * computes the wrong thing from float's own floor (landing task R1's
  * verdict table).
+ *
+ * Spike verdict (landing R1): FLOAT FLOOR -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 1.376%
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -197,12 +199,18 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         const FLinearColor Known(-0.375f, 1234.5f, 3.0e-5f, 0.0f);
         const TArray<FVector3d> Drawn = Draw(Test.World, Target, NewProbe, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f), Known);
         int32 Wrong = 0;
-        for (const FVector3d& Pixel : Drawn)
+        FString FirstWrong;
+        for (int32 Index = 0; Index < Drawn.Num(); ++Index)
         {
-            Wrong += (Pixel.X == Known.R && Pixel.Y == Known.G && Pixel.Z == Known.B) ? 0 : 1;
+            const FVector3d& Pixel = Drawn[Index];
+            const bool bRight = Pixel.X == Known.R && Pixel.Y == Known.G && Pixel.Z == Known.B;
+            if (!bRight && Wrong++ == 0)
+            {
+                FirstWrong = FString::Printf(TEXT("pixel %d read (%.9g, %.9g, %.9g)"), Index, Pixel.X, Pixel.Y, Pixel.Z);
+            }
         }
         const bool bWhole = TestEqual(TEXT("the target holds every pixel"), Drawn.Num(), Side * Side);
-        if (!TestEqual(TEXT("and hands back what the probe drew, signed and unrounded, at every one"), Wrong, 0) || !bWhole)
+        if (!TestEqual(FString::Printf(TEXT("and hands back what the probe drew, signed and unrounded, at every one (%s)"), *FirstWrong), Wrong, 0) || !bWhole)
         {
             return false;
         }
