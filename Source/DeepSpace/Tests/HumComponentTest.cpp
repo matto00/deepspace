@@ -270,6 +270,39 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("starved boosters hiss thinner at the same throttle (push %.3f)"), Starved),
              Starved > 0.0f && Starved < CruiseHiss);
     Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
+    Tick(0.1f);
+
+    // Under the drive, which reports no acceleration, the hiss is the live
+    // lever's travel: where the ship has eased to along the notches, over
+    // the lever's length -- so it swells as the ship spools up, and does not
+    // jump at the tap.
+    {
+        const FShipFlightState& Flight = Ship->GetFlightState();
+        const float LastNotch = static_cast<float>(Flight.GetDriveNotchCount() - 1);
+        Ship->SetDriveLever(Pilot, Flight.GetDriveNotchCount() - 1);
+        Ship->SetDriveEngaged(Pilot, true);
+        Tick(0.5f);
+        const float Early = UShipHumComponent::AskShip(*Ship).Push;
+        TestTrue(FString::Printf(TEXT("half a second after the lever went to 1 c, the hiss has only begun (push %.3f)"), Early),
+                 Early > 0.0f && Early < 0.5f * CruiseHiss);
+        TestTrue(TEXT("it is ds.Hum.CruiseHiss times the eased position over the lever's length"),
+                 Near(Early, CruiseHiss * static_cast<float>(Flight.GetDrivePosition()) / LastNotch));
+        for (int32 Step = 0; Step < 100; ++Step)
+        {
+            Tick(0.1f);
+        }
+        const float Spooled = UShipHumComponent::AskShip(*Ship).Push;
+        TestTrue(FString::Printf(TEXT("spooled up, it has swelled (push %.3f at position %.2f)"), Spooled, Flight.GetDrivePosition()),
+                 Spooled > Early && Near(Spooled, CruiseHiss * static_cast<float>(Flight.GetDrivePosition()) / LastNotch));
+        Ship->AllStop(Pilot);
+        for (int32 Step = 0; Step < 150; ++Step)
+        {
+            Tick(0.1f);
+        }
+        TestTrue(TEXT("and at STOP, at rest, the drive is quiet"), Near(UShipHumComponent::AskShip(*Ship).Push, 0.0f));
+        Ship->SetDriveEngaged(Pilot, false);
+        Tick(0.1f);
+    }
 
     // -- ds.Hum.Volume, the way out if the hum wears ---------------------------
     //

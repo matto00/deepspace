@@ -10,6 +10,29 @@
 class APawn;
 class UShipModuleDataAsset;
 class UUniverseSubsystem;
+struct FSkyBody;
+
+/**
+ * What the helm's hands are doing this frame (flight-feel decision 1): held
+ * attitude, whether each lever key is down, and how many times each was
+ * pressed since the last hand-over. Not a lever position -- the levers are
+ * the ship's, in FShipFlightCommand -- so a pawn keeps no copy of ship state,
+ * and a tap pressed and released inside one frame still arrives as a press.
+ */
+struct DEEPSPACE_API FHelmInput
+{
+    /** -1..1 per body axis: X pitch, Y yaw, Z roll. */
+    FVector Attitude = FVector::ZeroVector;
+
+    /** Shift and Ctrl held: the live lever's up and down. */
+    bool bUpHeld = false;
+    bool bDownHeld = false;
+
+    /** Presses since the last hand-over, each one notch under the drive and
+     *  the fresh press cruise's detent at zero asks for. */
+    int32 UpPresses = 0;
+    int32 DownPresses = 0;
+};
 
 /**
  * Authoritative ship state. Knows nothing about meshes, rooms, or the player.
@@ -146,9 +169,58 @@ public:
      * authoritatively -- and because a named pawn commanding through one gated
      * function is already the shape of a client-to-server RPC, should netcode
      * ever arrive.
+     *
+     * The absolute setter: the cruise lever to Throttle and the attitude to
+     * AttitudeRate, the drive lever and the mode left as they are. Tests and
+     * tools; the helm itself goes through SetHelmInput. Refused in transit,
+     * where the helm is inert and the levers do not move.
      */
     UFUNCTION(BlueprintCallable, Category = "Flight")
     bool SetFlightCommand(APawn* Commander, float Throttle, FVector AttitudeRate);
+
+    /**
+     * The helm, once a frame: the attitude goes straight into the command,
+     * and the lever keys wait for this subsystem's tick, which moves
+     * whichever lever is live -- a press one notch of the drive from what the
+     * ship is doing (ShipDriveLever::TapUp and TapDown against the eased
+     * position), a hold repeating after a moment at ds.Drive.Sweep; or
+     * cruise swept at ds.Cruise.Sweep with its detent at zero. Presses
+     * accumulate until the tick spends them, so none is lost however the
+     * frames fall. Pilot-gated; refused in transit, where the ship drops
+     * lever input as it drops attitude.
+     */
+    bool SetHelmInput(APawn* Commander, const FHelmInput& Input);
+
+    /**
+     * All stop (X): both levers to STOP at once, whichever is live, so the
+     * ship comes to rest in a known few seconds and stays at rest if F is
+     * pressed afterwards. A key still held from before the stop moves
+     * nothing until it is let go: the next speed after a stop is a new
+     * choice. Pilot-gated; refused in transit.
+     */
+    bool AllStop(APawn* Commander);
+
+    /** The drive lever to Notch, absolute, clamped to the lever: for tests
+     *  and tools, as SetFlightCommand is for cruise. Pilot-gated; refused in
+     *  transit. */
+    bool SetDriveLever(APawn* Commander, int32 Notch);
+
+    /**
+     * How low the ship may go over Body, cm (flight-feel decision 6): over a
+     * planet or moon the larger of ds.Flight.Floor and the sky's own rendered
+     * floor, SkyProjection::RenderedFloor, below which a proxy stops growing
+     * and the picture stops being true -- 10.2 km over an Earth, 112 km over
+     * a Jupiter; over a star ds.Flight.StarFloorRadii of its radius, where
+     * its disc fills 60 degrees and the rest of the sky is still there.
+     *
+     * The one function that answers it. Landing, when it comes, replaces or
+     * lowers this as it takes over drawing the ground; the in-system jump
+     * asks it for its guard. Read at use, like every tunable here.
+     */
+    static double FloorFor(const FSkyBody& Body);
+
+    /** How far inside the system's edge the ship stops, cm: ds.Flight.Floor. */
+    static double EdgeFloor();
 
     UFUNCTION(BlueprintPure, Category = "Flight")
     FVector GetShipVelocity() const;
@@ -168,21 +240,24 @@ public:
     void PlaceShip(const FUniversePosition& NewPosition, const FQuat& NewOrientation);
 
     /** Read-only. There is no non-const accessor: the only write paths are
-     *  SetFlightCommand, SetDriveEngaged, ClearPilot and this subsystem's own
-     *  tick -- which is where the jump's JumpTo happens -- and that is what
-     *  makes the state trustworthy. */
+     *  SetFlightCommand, SetHelmInput, AllStop, SetDriveLever,
+     *  SetDriveEngaged, ClearPilot and this subsystem's own tick -- which is
+     *  where the jump's JumpTo happens -- and that is what makes the state
+     *  trustworthy. */
     const FShipFlightState& GetFlightState() const;
 
-    // -- the drive: the in-system lever at the helm (sky decision 8) --------
+    // -- the drive: the in-system lever at the helm (flight-feel spec) -------
     //
     // Two levers, and two words that never swap (plan conflict 7): "the
-    // drive" closes on what is near, "the jump" folds between stars. All C++
-    // only, so nothing a Blueprint inherits changes.
+    // drive" crosses a system on its own lever, "the jump" folds between
+    // stars. All C++ only, so nothing a Blueprint inherits changes.
 
     /**
-     * Gated on the pilot exactly as SetFlightCommand is; false if refused.
-     * A lever, like the throttle: it persists when the pilot stands up, so an
-     * approach can be set and watched from the galley.
+     * F: which lever is live. Gated on the pilot exactly as SetFlightCommand
+     * is; false if refused, and refused in transit. Each lever keeps its
+     * setting across F in both directions, and across the pilot standing up,
+     * so an approach can be set and watched from the galley and a look round
+     * in cruise costs nothing to come back from (decision 1).
      */
     bool SetDriveEngaged(APawn* Commander, bool bOn);
     bool IsDriveEngaged() const;
@@ -267,8 +342,29 @@ private:
      *  the lighting subsystem's job; these are the ones that live here. */
     void ApplyAllocation(float DeltaSeconds);
 
-    /** The drive's input: the nearest surface, from LocalSystem, read once. */
-    void UpdateDriveRoom();
+    /** The flight law's input: every body in the system here and its edge,
+     *  as floor spheres (FloorFor), from LocalSystem::Here once a frame --
+     *  never Current, whose neighbours are never surfaces. None in transit. */
+    void UpdateSurfaces();
+
+    /** Moves the live lever from what the helm handed over since the last
+     *  tick, then spends the presses. */
+    void ApplyHelm(float DeltaSeconds);
+
+    /** True for the pilot, outside transit: every helm write asks this. */
+    bool MayCommand(const APawn* Commander) const;
+
+    /** The helm's hands, as last handed over; presses accumulate. */
+    FHelmInput Helm;
+
+    /** The drive lever's hold repeat, one per key. */
+    ShipDriveLever::FNotchRepeat UpRepeat;
+    ShipDriveLever::FNotchRepeat DownRepeat;
+
+    /** Set by AllStop against a key held through it; cleared when that key
+     *  is let go. A held key never undoes a stop. */
+    bool bUpHoldSpent = false;
+    bool bDownHoldSpent = false;
 
     /** NavState.Step, then act on what it asks for. */
     void StepNavigation(float DeltaSeconds);

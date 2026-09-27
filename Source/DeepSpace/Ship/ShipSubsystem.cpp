@@ -7,6 +7,7 @@
 #include "Ship/NavStart.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Sky/LocalSystem.h"
+#include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
 #include "UI/NavText.h"
 #include "Universe/UniverseSubsystem.h"
@@ -69,14 +70,43 @@ namespace
         TEXT("Place the ship at the opening shot when the world begins play (0: leave it where it is)."),
         ECVF_Default);
 
-    TAutoConsoleVariable<float> CVarDriveTau(
-        TEXT("ds.Drive.Tau"), static_cast<float>(FShipFlightLimits::Cruise().DriveTau),
-        TEXT("The in-system drive's time constant at full throttle, seconds, before thin boosters stretch it."),
+    // The drive and the soft cap (flight-feel decisions 3-6). Each default
+    // is the pure layer's named constant, so a test and a CVar can never
+    // disagree about what "the default" is.
+
+    TAutoConsoleVariable<float> CVarDriveTop(
+        TEXT("ds.Drive.Top"), static_cast<float>(ShipDriveLever::DefaultTopLight),
+        TEXT("The drive lever's top, in c: 1 at most (anything faster is a jump), 1 km/s at least. Shortens the lever; never lengthens it."),
         ECVF_Default);
 
-    TAutoConsoleVariable<float> CVarDriveFloorKm(
-        TEXT("ds.Drive.Floor"), static_cast<float>(FShipFlightLimits::Cruise().DriveFloor / UniverseUnits::CmPerKm),
-        TEXT("Altitude, km, at which the in-system drive's room runs out."),
+    TAutoConsoleVariable<float> CVarDriveResponse(
+        TEXT("ds.Drive.Response"), static_cast<float>(ShipDriveLever::DefaultResponse),
+        TEXT("Notches a second the drive's speed may move at full thrust. Thin boosters slow the whole ease, never this."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarDriveSweep(
+        TEXT("ds.Drive.Sweep"), static_cast<float>(ShipDriveLever::DefaultSweep),
+        TEXT("Notches a second a held lever key repeats at under the drive, after a moment."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarHoldSeconds(
+        TEXT("ds.Drive.HoldSeconds"), static_cast<float>(ShipFlight::DefaultHoldSeconds),
+        TEXT("The soft cap: the nose's path meeting a floor within this many seconds is held off, the distance falling by e each. 0 or less: the braking curve alone."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarFlightFloorKm(
+        TEXT("ds.Flight.Floor"), static_cast<float>(ShipFlight::DefaultFloorCm / UniverseUnits::CmPerKm),
+        TEXT("The lowest the ship goes over a world, km, and how far inside the system's edge it stops. Never under the sky's own rendered floor."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarStarFloorRadii(
+        TEXT("ds.Flight.StarFloorRadii"), static_cast<float>(ShipFlight::DefaultStarFloorRadii),
+        TEXT("The lowest the ship goes over a star, in its radii."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarCruiseSweep(
+        TEXT("ds.Cruise.Sweep"), static_cast<float>(ShipDriveLever::DefaultCruiseSweep),
+        TEXT("How fast a held lever key sweeps the cruise lever, fraction a second."),
         ECVF_Default);
 
     /** The name the fold's draw goes on the reactor under. Not a module: a
@@ -344,11 +374,21 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     const FShipFlightLimits Rated = FShipFlightLimits::Cruise();
     Limits.LinearAcceleration = Rated.LinearAcceleration * Thrust;
 
-    // Thin boosters stretch the drive's time constant by the same fraction
-    // they soften the throttle: a starved ship approaches in eight minutes,
-    // not two, and it always arrives.
-    Limits.DriveTau = FMath::Max(0.0f, CVarDriveTau.GetValueOnGameThread()) / Thrust;
-    Limits.DriveFloor = FMath::Max(0.0f, CVarDriveFloorKm.GetValueOnGameThread()) * UniverseUnits::CmPerKm;
+    // Thin boosters slow the drive's whole ease by the fraction they soften
+    // cruise (decision 4): a quarter thrust takes four times as long to reach
+    // any notch, and reaches it. The response is handed over unscaled --
+    // scaling it as well would slow a starved ship sixteen times -- and the
+    // top is never touched, so nothing ever reads as lost potential.
+    Limits.DriveThrust = Thrust;
+    Limits.DriveResponse = FMath::Max(0.0f, CVarDriveResponse.GetValueOnGameThread());
+    Limits.HoldSeconds = CVarHoldSeconds.GetValueOnGameThread();
+
+    // In c, and never above it: the ruled top (ruling 1). Never below the
+    // lever's first notch either, which the lever always keeps, so the CVar
+    // and the lever can never disagree about where it ends.
+    const double TopLight = FMath::Clamp(static_cast<double>(CVarDriveTop.GetValueOnGameThread()),
+        ShipDriveLever::NotchSpeed(1) / ShipDriveLever::LightCmPerSecond, 1.0);
+    Limits.DriveTop = TopLight * ShipDriveLever::LightCmPerSecond;
     FlightState.SetLimits(Limits);
 
     // The charge winds only while engaged, and otherwise holds exactly where
@@ -386,25 +426,117 @@ void UShipSubsystem::SetFoldDraw(float Watts)
     FoldDrawWatts = Watts;
 }
 
-void UShipSubsystem::UpdateDriveRoom()
+double UShipSubsystem::FloorFor(const FSkyBody& Body)
 {
-    // Between stars there is nothing to close on, and the drive gives only
-    // cruise until the ship lands (plan conflict 10).
+    if (Body.Kind == ESkyBodyKind::Star)
+    {
+        return FMath::Max(0.0f, CVarStarFloorRadii.GetValueOnGameThread()) * Body.Radius;
+    }
+    // The sky's floor is the one the picture is true to, so the flight's is
+    // never under it: the drive takes the ship exactly as low as the world
+    // keeps getting nearer, and no lower.
+    return FMath::Max(EdgeFloor(), SkyProjection::RenderedFloor(Body.Radius, FSkyViewParams()));
+}
+
+double UShipSubsystem::EdgeFloor()
+{
+    return FMath::Max(0.0f, CVarFlightFloorKm.GetValueOnGameThread()) * UniverseUnits::CmPerKm;
+}
+
+void UShipSubsystem::UpdateSurfaces()
+{
+    // Between stars there is nothing to be near (plan conflict 10).
     if (NavState.IsInTransit())
     {
-        FlightState.SetDriveRoom(0.0, FVector::ZeroVector);
+        FlightState.SetSurfaces({});
         return;
     }
 
-    // Once a tick, the one system: the six probes AwayFromSurface makes all
-    // measure this copy, and regenerate nothing.
-    const FSkySystem Here = LocalSystem::Current(GetWorld());
-    const FUniversePosition Where = FlightState.GetUniversePosition();
-    const auto Surface = [&Here](const FUniversePosition& At)
+    // Once a tick, the system here: its bodies and its edge, never the
+    // thirty neighbours Current would generate and throw away.
+    const FSkySystem Here = LocalSystem::Here(GetWorld());
+    TArray<FFlightSurface> Surfaces;
+    Surfaces.Reserve(Here.Bodies.Num() + 1);
+    for (const FSkyBody& Body : Here.Bodies)
     {
-        return LocalSystem::NearestSurfaceDistance(Here, At);
-    };
-    FlightState.SetDriveRoom(Surface(Where), ShipDrive::AwayFromSurface(Surface, Where));
+        FFlightSurface Surface;
+        Surface.Centre = Body.Position;
+        Surface.Radius = Body.Radius;
+        Surface.Floor = FloorFor(Body);
+        Surfaces.Add(Surface);
+    }
+
+    // The edge is a surface on exactly the same rule, inside out about the
+    // star: the drive settles just inside it and never flies the ship out of
+    // its system, so the sky never draws a system the ship has left. You
+    // leave by jumping.
+    const FSkyBody* Star = Here.Bodies.FindByPredicate([](const FSkyBody& Body) { return Body.Kind == ESkyBodyKind::Star; });
+    if (Star && Here.EdgeRadius > 0.0)
+    {
+        FFlightSurface Edge;
+        Edge.Centre = Star->Position;
+        Edge.Radius = Here.EdgeRadius;
+        Edge.Floor = EdgeFloor();
+        Edge.bInsideOut = true;
+        Surfaces.Add(Edge);
+    }
+    FlightState.SetSurfaces(MoveTemp(Surfaces));
+}
+
+void UShipSubsystem::ApplyHelm(float DeltaSeconds)
+{
+    // A frame with no time in it moves nothing, and spends nothing: the
+    // presses wait for the next, or a fresh press would be used up leaving
+    // the detent by zero seconds' worth of sweep.
+    if (!(DeltaSeconds > 0.0f))
+    {
+        return;
+    }
+
+    // Spent whatever happens next: presses are for this tick or none.
+    const int32 UpPresses = Helm.UpPresses;
+    const int32 DownPresses = Helm.DownPresses;
+    Helm.UpPresses = 0;
+    Helm.DownPresses = 0;
+
+    // A key held through an all stop moves nothing until it is let go.
+    bUpHoldSpent &= Helm.bUpHeld;
+    bDownHoldSpent &= Helm.bDownHeld;
+    const bool bUpHeld = Helm.bUpHeld && !bUpHoldSpent;
+    const bool bDownHeld = Helm.bDownHeld && !bDownHoldSpent;
+
+    FShipFlightCommand Command = FlightState.GetCommand();
+    if (Command.bDrive)
+    {
+        // A press is one notch from what the ship is doing, not from where
+        // the lever was (decision 3): Ctrl always slows the ship and Shift
+        // always speeds it, from the first tap, under the cap, spooling up,
+        // or stopping. A hold repeats the same tap after a moment.
+        const double P = FlightState.GetDrivePosition();
+        const int32 Top = FlightState.GetDriveNotchCount() - 1;
+        const double Sweep = FMath::Max(0.0f, CVarDriveSweep.GetValueOnGameThread());
+        const int32 Ups = UpPresses + UpRepeat.Update(bUpHeld, DeltaSeconds, Sweep);
+        const int32 Downs = DownPresses + DownRepeat.Update(bDownHeld, DeltaSeconds, Sweep);
+        for (int32 Tap = 0; Tap < Ups; ++Tap)
+        {
+            Command.DriveNotch = ShipDriveLever::TapUp(Command.DriveNotch, P, Top);
+        }
+        for (int32 Tap = 0; Tap < Downs; ++Tap)
+        {
+            Command.DriveNotch = ShipDriveLever::TapDown(Command.DriveNotch, P);
+        }
+    }
+    else
+    {
+        // Cruise's lever, live from the press of F even while the drive
+        // spools down. Once a frame with this frame's presses, which is what
+        // lets a fresh press, and only a fresh press, leave the detent.
+        UpRepeat.Update(false, 0.0, 0.0);
+        DownRepeat.Update(false, 0.0, 0.0);
+        Command.Throttle = ShipDriveLever::SweepCruise(Command.Throttle, bUpHeld, bDownHeld, UpPresses, DownPresses,
+            DeltaSeconds, FMath::Max(0.0f, CVarCruiseSweep.GetValueOnGameThread()));
+    }
+    FlightState.SetCommand(Command);
 }
 
 void UShipSubsystem::StepNavigation(float DeltaSeconds)
@@ -419,10 +551,20 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
     switch (NavState.Step(DeltaSeconds, FlightState.GetJumpCharge(), OffBoresight, Tuning))
     {
     case ENavEvent::TransitBegan:
-        // The fold has opened, and the helm does nothing between stars.
+    {
+        // The fold has opened, and the helm does nothing between stars. It is
+        // an all stop, too (flight-feel decision 4): both levers to STOP, so
+        // the ship comes out of every jump at rest -- JumpTo makes that exact
+        // -- and the first speed in the new place is the pilot's to choose.
         FlightState.SpendJumpCharge();
         FlightState.ReleaseAttitude();
+        FShipFlightCommand Stopped = FlightState.GetCommand();
+        Stopped.Throttle = 0.0;
+        Stopped.DriveNotch = 0;
+        FlightState.SetCommand(Stopped);
+        Helm = FHelmInput();
         break;
+    }
 
     case ENavEvent::Arrived:
     {
@@ -504,9 +646,11 @@ void UShipSubsystem::ClearPilot()
 {
     Pilot.Reset();
 
-    // A ship nobody is flying does not keep turning. The throttle stays: a
-    // cruise the player set and then walked away from is the point.
+    // A ship nobody is flying does not keep turning, and no key is held at an
+    // empty helm. Both levers stay: a cruise the player set and then walked
+    // away from is the point.
     FlightState.ReleaseAttitude();
+    Helm = FHelmInput();
 }
 
 bool UShipSubsystem::IsPiloted() const
@@ -524,11 +668,13 @@ void UShipSubsystem::Tick(float DeltaTime)
     ApplyAllocation(DeltaTime);
     if (NavState.IsInTransit())
     {
-        // A pilot's attitude input arrives every frame from the character's
-        // tick; between stars it is dropped before it can turn anything.
+        // Between stars the helm is inert: attitude and lever input alike are
+        // dropped before they can move anything.
         FlightState.ReleaseAttitude();
+        Helm = FHelmInput();
     }
-    UpdateDriveRoom();
+    ApplyHelm(DeltaTime);
+    UpdateSurfaces();
     FlightState.Step(DeltaTime);
     StepNavigation(DeltaTime);
 }
@@ -538,16 +684,20 @@ TStatId UShipSubsystem::GetStatId() const
     RETURN_QUICK_DECLARE_CYCLE_STAT(UShipSubsystem, STATGROUP_Tickables);
 }
 
+bool UShipSubsystem::MayCommand(const APawn* Commander) const
+{
+    return Commander && Commander == Pilot.Get() && !NavState.IsInTransit();
+}
+
 bool UShipSubsystem::SetFlightCommand(APawn* Commander, float Throttle, FVector AttitudeRate)
 {
-    if (!Commander || Commander != Pilot.Get())
+    if (!MayCommand(Commander))
     {
         return false;
     }
 
-    // From the command in force, not a fresh one: SetCommand turns the drive
-    // off whenever an incoming command has it off, so a fresh command would
-    // disengage the drive on every attitude or throttle input.
+    // From the command in force, not a fresh one: a fresh command would
+    // disengage the drive and zero its lever on every input.
     FShipFlightCommand Command = FlightState.GetCommand();
     Command.Throttle = Throttle;
     Command.AttitudeRate = AttitudeRate;
@@ -555,9 +705,59 @@ bool UShipSubsystem::SetFlightCommand(APawn* Commander, float Throttle, FVector 
     return true;
 }
 
+bool UShipSubsystem::SetHelmInput(APawn* Commander, const FHelmInput& Input)
+{
+    if (!MayCommand(Commander))
+    {
+        return false;
+    }
+    FShipFlightCommand Command = FlightState.GetCommand();
+    Command.AttitudeRate = Input.Attitude;
+    FlightState.SetCommand(Command);
+
+    Helm.Attitude = Input.Attitude;
+    Helm.bUpHeld = Input.bUpHeld;
+    Helm.bDownHeld = Input.bDownHeld;
+    Helm.UpPresses += FMath::Max(0, Input.UpPresses);
+    Helm.DownPresses += FMath::Max(0, Input.DownPresses);
+    return true;
+}
+
+bool UShipSubsystem::AllStop(APawn* Commander)
+{
+    if (!MayCommand(Commander))
+    {
+        return false;
+    }
+    FShipFlightCommand Command = FlightState.GetCommand();
+    Command.Throttle = 0.0;
+    Command.DriveNotch = 0;
+    FlightState.SetCommand(Command);
+
+    // Nothing pressed before the stop survives it, and nothing held through
+    // it moves a lever until it is let go and pressed again.
+    Helm.UpPresses = 0;
+    Helm.DownPresses = 0;
+    bUpHoldSpent = Helm.bUpHeld;
+    bDownHoldSpent = Helm.bDownHeld;
+    return true;
+}
+
+bool UShipSubsystem::SetDriveLever(APawn* Commander, int32 Notch)
+{
+    if (!MayCommand(Commander))
+    {
+        return false;
+    }
+    FShipFlightCommand Command = FlightState.GetCommand();
+    Command.DriveNotch = Notch;
+    FlightState.SetCommand(Command);
+    return true;
+}
+
 bool UShipSubsystem::SetDriveEngaged(APawn* Commander, bool bOn)
 {
-    if (!Commander || Commander != Pilot.Get())
+    if (!MayCommand(Commander))
     {
         return false;
     }
