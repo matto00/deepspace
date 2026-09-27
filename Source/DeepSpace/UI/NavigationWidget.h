@@ -38,7 +38,7 @@ class UTextBlock;
  * row per system with the mark in a column of its own, and the band at the
  * bottom -- the jump's word with the one toggle at its right, then the
  * course. Its 816 x 576 is what the panel spans from its own chair (about
- * 940 x 650 screen pixels on the 4K display), so it is never minified where
+ * 970 x 660 screen pixels on the 4K display), so it is never minified where
  * it is read; and every size is the map's times 816 / 600, so the two desk
  * screens' text is one physical size.
  */

@@ -36,8 +36,8 @@ namespace
     // times 816 / 600. The two desk screens are the same 68 cm panel, so at
     // these sizes their text is the same physical size, and a reader in the
     // chart chair sees one type across the desk. From the chair's eye the
-    // panel spans about 940 x 650 screen pixels on the 4K display, so these
-    // are close to chair pixels (1.15 screen pixels each): magnified a
+    // panel spans about 970 x 660 screen pixels on the 4K display, so these
+    // are close to chair pixels (1.19 screen pixels each): magnified a
     // little, never minified, as the map is at the helm.
     //
     // The first cut stacked eleven lines of 22-26 pt in a vertical box, with
@@ -87,13 +87,16 @@ namespace
     // A row's columns, in the list's 800 px, as the map's are in its 322:
     // the mark, the name, the distance right-aligned, a gap, the class, and
     // whether visited. Each is wider than the widest it prints at TextSize:
-    // a thirteen-letter name ("Sharsathhaith", the longest in the corpus),
-    // "12.0 ly", "yellow-white star", "visited".
+    // the widest name the syllable tables can make (SystemNames::WidestName,
+    // "Shaemshaemshaesh", 233 px -- the corpus's longest, "Sharsathhaith",
+    // is one seed's nearest systems and not the limit), "10.0 ly",
+    // "yellow-white star", "visited". DeepSpace.UI.ChartLayout asks each of
+    // what makes it and holds the columns to them.
     constexpr float MarkColumn = 16.0f;
-    constexpr float NameColumn = 232.0f;
+    constexpr float NameColumn = 256.0f;
     constexpr float DistanceColumn = 112.0f;
     constexpr float GapColumn = 32.0f;
-    constexpr float ClassColumn = 272.0f;
+    constexpr float ClassColumn = 248.0f;
     constexpr float VisitedColumn = 136.0f;
     static_assert(MarkColumn + NameColumn + DistanceColumn + GapColumn + ClassColumn + VisitedColumn == ListWidth,
                   "the columns fill the list");
