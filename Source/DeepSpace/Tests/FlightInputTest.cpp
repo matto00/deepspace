@@ -112,7 +112,11 @@ bool FFlightInputTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("with its lever at STOP"), Notch(), 0);
 
         // A press and release inside one frame: the frame hands over one
-        // press and no hold, and that is one notch.
+        // press and no hold, and that is one notch. This starts at the
+        // pawn's count; whether Enhanced Input fires Started for a Boolean
+        // action pressed and released inside one frame is left to playtest
+        // (the spec's risk, with the BindKey fallback): -nullrhi has no
+        // local player to inject a key through.
         Player->TapLever(1);
         Player->HoldLever(0);
         Frame(1.0f / 30.0f);

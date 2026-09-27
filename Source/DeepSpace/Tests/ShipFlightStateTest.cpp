@@ -857,18 +857,32 @@ bool FShipFlightSpoolDownTest::RunTest(const FString& Parameters)
         State.SetSurfaces({Earth});
         Leave(State, 1.0);
         bool bHeld = false;
+        double Fraction = -1.0;
+        double FractionOf = -2.0;
         double Least = TNumericLimits<double>::Max();
         for (int32 Sub = 0; Sub < 6 * 120; ++Sub)
         {
             State.Step(Step);
-            bHeld |= State.GetMode() == EFlightMode::SpoolingDown && State.GetHold() == EFlightHold::HoldingOff;
+            const bool bHeldNow = State.GetMode() == EFlightMode::SpoolingDown && State.GetHold() == EFlightHold::HoldingOff;
+            bHeld |= bHeldNow;
+            if (bHeldNow)
+            {
+                // Against the speed the spool began from, 1 c, and not
+                // cruise's lever: that is 200 m/s, and would clamp to 0.
+                Fraction = State.GetHeldFraction();
+                FractionOf = 1.0 - State.GetSpeed() / Light;
+            }
             Least = FMath::Min(Least, LeastClearance(State));
         }
         TestTrue(TEXT("spooling down onto a world 300,000 km ahead, the cap holds it off"), bHeld);
+        TestTrue(FString::Printf(TEXT("and the hold is measured against the 1 c the spool began from: %.6f against %.6f"),
+                                 Fraction, FractionOf),
+                 Fraction > 0.0 && FMath::IsNearlyEqual(Fraction, FractionOf, 1e-9));
         TestTrue(TEXT("and it never passes the floor"), Least >= -1.0);
     }
 
-    // Engaging from cruise starts where cruise was: no substep jumps.
+    // Engaging from a forward cruise starts where cruise was: no substep
+    // jumps. (Astern or sideways it does -- the spec's known edge.)
     {
         FShipFlightState State;
         State.SetCommand(MakeCommand(1.0, FVector::ZeroVector));

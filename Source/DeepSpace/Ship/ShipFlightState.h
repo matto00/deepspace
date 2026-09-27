@@ -141,9 +141,12 @@ public:
     /**
      * Clamped on the way in, the drive's notch to the lever's top included.
      *
-     * The two toggles are the only places the mode changes, and neither has
-     * a substep in which the speed jumps. Engaging starts the drive's eased
-     * position at the ship's present forward speed. Disengaging above
+     * The two toggles are the only places the mode changes, and in forward
+     * flight neither has a substep in which the speed jumps. Engaging starts
+     * the drive's eased position at the ship's present forward speed, and
+     * sets the velocity along the nose: whatever cruise had astern or
+     * sideways is gone in the first substep. A known edge, recorded in the
+     * flight-feel spec -- the drive is engaged from a forward cruise. Disengaging above
      * cruise's top does not clamp: it starts SpoolingDown (EFlightMode), and
      * engaging again mid-spool carries on from where the spool had got to.
      */
@@ -199,7 +202,9 @@ public:
     /** How far below the live lever's speed the cap holds the ship, as a
      *  fraction of that speed, 0..1: 0 when Free, 1 at a floor. Against the
      *  lever and not the eased position, which follows the cap and so would
-     *  sit a hair under it every substep. */
+     *  sit a hair under it every substep. While spooling down, against the
+     *  speed the spool began from: the live lever is then cruise's, often
+     *  STOP, and says nothing about what the cap is holding back. */
     double GetHeldFraction() const;
 
     /** What the live lever asks for, cm/s: the drive's notch speed, or
@@ -316,9 +321,10 @@ private:
     /** MaySpeed of a distance to a floor, at the boosters' present thrust. */
     double MaySpeedAt(double D) const;
 
-    /** The cap bound this substep, D cm from a floor, at HeldSpeed: record
-     *  what it did for GetHold and GetHeldFraction. */
-    void RecordHold(double D, double HeldSpeed);
+    /** The cap bound this substep, D cm from a floor, at HeldSpeed, below
+     *  what the ship was being asked for, LeverSpeed: record what it did for
+     *  GetHold and GetHeldFraction. */
+    void RecordHold(double D, double HeldSpeed, double LeverSpeed);
 
     FUniversePosition Position;
     FQuat   Orientation = FQuat::Identity;
@@ -334,6 +340,10 @@ private:
 
     /** Leaving the drive above cruise's top, until the spool reaches it. */
     bool bSpoolingDown = false;
+
+    /** The speed the spool began from, cm/s: what a hold during the spool
+     *  is measured against. */
+    double SpoolFromSpeed = 0.0;
 
     EFlightHold LastHold = EFlightHold::Free;
     double LastHeldFraction = 0.0;

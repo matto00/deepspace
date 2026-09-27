@@ -48,7 +48,8 @@ void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
         // Leaving: never a clamp. Above cruise's top the ship spools down on
         // the drive's own curve; at or under it, it is already a cruising
         // ship, and cruise's inertia takes it from exactly here.
-        bSpoolingDown = ShipDriveLever::SpeedAt(DrivePosition) > Limits.MaxSpeed;
+        SpoolFromSpeed = ShipDriveLever::SpeedAt(DrivePosition);
+        bSpoolingDown = SpoolFromSpeed > Limits.MaxSpeed;
         if (!bSpoolingDown)
         {
             DrivePosition = 0.0;
@@ -238,7 +239,7 @@ bool FShipFlightState::DriveSubStep(double FixedDelta)
             // substep. The one fall faster than the ease is capture, the
             // substep the nose first comes onto a world too fast to allow.
             DrivePosition = ShipDriveLever::PositionOf(May);
-            RecordHold(*D, May);
+            RecordHold(*D, May, bSpoolingDown ? SpoolFromSpeed : FMath::Abs(GetLeverSpeed()));
         }
     }
 
@@ -252,9 +253,9 @@ bool FShipFlightState::DriveSubStep(double FixedDelta)
     return true;
 }
 
-void FShipFlightState::RecordHold(double D, double HeldSpeed)
+void FShipFlightState::RecordHold(double D, double HeldSpeed, double LeverSpeed)
 {
-    const double Lever = FMath::Abs(GetLeverSpeed());
+    const double Lever = FMath::Abs(LeverSpeed);
     LastHold = D <= AtFloorCm && Lever > 0.0 ? EFlightHold::AtFloor : EFlightHold::HoldingOff;
     LastHeldFraction = Lever > 0.0 ? FMath::Clamp(1.0 - HeldSpeed / Lever, 0.0, 1.0) : 0.0;
 }
@@ -288,7 +289,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
             if (May < TargetSpeed)
             {
                 TargetSpeed = May;
-                RecordHold(*D, May);
+                RecordHold(*D, May, FMath::Abs(GetLeverSpeed()));
             }
         }
     }

@@ -173,6 +173,16 @@ stepped half in stage 3 (3c owns `TargetMarkerTest.cpp` then).
 No file twice. (`NavText.*` was 1b's in stage 1; a later stage may own it
 again.)
 
+**What 2a had to touch outside its lane.** Track A removed `DriveFloor`,
+`AwayFromSurface` and `GetDriveRoom`, which the HUD read, so it edited
+`UI/ShipHUDWidget.h/.cpp` and `Tests/ShipHUDAltitudeTest.cpp` (3a's in stage
+3) and `Tests/ShipCounterFrameTest.cpp` (3b's) to keep them compiling: the
+removals only, no new HUD behaviour. 3a and 3b therefore branch from the
+integrated stage-2 result, never from stage 1, and own those files from
+there. **A build of stage 2 alone is not for a playtest:** until 3a's motion
+line lands, the HUD shows neither lever's notch nor SPOOLING DOWN, so the
+pilot cannot read the lever they are moving.
+
 ## Stage 3: the HUD corner, the dust and the star, the target and the in-system jump
 
 ### 3a. Flight track B

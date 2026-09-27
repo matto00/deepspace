@@ -99,12 +99,17 @@ FShipHumInputs UShipHumComponent::AskShip(const UShipSubsystem& Ship)
     // Under the drive it is where the ship has eased to along the notches,
     // not the notch it is heading for -- the drive reports no acceleration,
     // so this is the whole of its hiss, and it should swell as the ship
-    // spools up, not jump at the tap. Cruise's lever is live from the press
-    // of F, spooling down included.
+    // spools up, not jump at the tap. Spooling down, it is the larger of the
+    // drive's fading travel and cruise's lever, live from the press of F: a
+    // ship still easing down from 1 c is not silent because cruise's lever
+    // is at STOP, and the two meet as the spool hands the ship to cruise.
     const int32 LastNotch = Flight.GetDriveNotchCount() - 1;
-    const double Lever = Flight.GetMode() == EFlightMode::Drive
-        ? (LastNotch > 0 ? FMath::Clamp(Flight.GetDrivePosition() / LastNotch, 0.0, 1.0) : 0.0)
-        : FMath::Abs(Flight.GetCommand().Throttle);
+    const double Travel = LastNotch > 0 ? FMath::Clamp(Flight.GetDrivePosition() / LastNotch, 0.0, 1.0) : 0.0;
+    const double Cruising = FMath::Abs(Flight.GetCommand().Throttle);
+    const EFlightMode Mode = Flight.GetMode();
+    const double Lever = Mode == EFlightMode::Drive ? Travel
+        : Mode == EFlightMode::SpoolingDown ? FMath::Max(Travel, Cruising)
+        : Cruising;
     Inputs.Push = ShipHum::Push(static_cast<float>(Flight.GetLinearAcceleration().Size()), Rated,
                                 static_cast<float>(Lever),
                                 Rated > 0.0f ? Ship.GetLinearAcceleration() / Rated : 0.0f,
