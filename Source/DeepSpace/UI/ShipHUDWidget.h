@@ -4,14 +4,17 @@
 #include "CoreMinimal.h"
 #include "Ship/ShipFlightState.h"
 #include "Sky/SkySystem.h"
+#include "Universe/StarSystem.h"
 #include "ShipHUDWidget.generated.h"
 
 class ADeepSpaceCharacter;
 class APawn;
+class APlayerController;
 class UBorder;
 class UCanvasPanel;
 class UShipSubsystem;
 class UTextBlock;
+class UShipTargetOverlay;
 class UUniverseSubsystem;
 
 /**
@@ -40,6 +43,17 @@ public:
     virtual void NativeTick(const FGeometry& Geometry, float DeltaSeconds) override;
 
     /**
+     * Everything NativeTick does, for Controller's view: the dot, the prompt,
+     * every corner, the caret and the target's marks. NativeTick is this
+     * with the owning player and nothing else, so a headless test -- which
+     * cannot tick a widget that was never painted -- drives exactly the path
+     * play does, and with no controller sees the overlay hide. The caret
+     * still projects through the owning player, as PlaceNoseCaret always
+     * does.
+     */
+    void Refresh(float DeltaSeconds, APlayerController* Controller);
+
+    /**
      * The jump corner's line: the jump in words, the course, and its bearing
      * from the ship's nose -- not from a free-looking head, and not in the
      * universe's axes -- or a dash with no course. Static and asked of its
@@ -48,8 +62,39 @@ public:
      * Named for the jump, not the drive (flight-feel decision 7): the
      * bottom-left corner now speaks for the drive, and a top-right member
      * called DriveLine showing the jump would be a swap waiting to happen.
+     *
+     * A course to a world in this system (system map decision 12) is named
+     * as the world, "JUMP READY · Kessa II · dead ahead", in the jump's
+     * cone words, since it is the jump's cone; its fold reads "IN THE FOLD
+     * · Kessa II", never BETWEEN STARS, which it is not.
      */
     static FText JumpLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
+
+    /**
+     * The place line, top left: the system and its star's class, as
+     * NavText::Place words them, from Here, the system the HUD asked for
+     * this frame; in a star jump's fold BETWEEN STARS; in an in-system
+     * fold IN THE FOLD, since the ship has not left the system and is not
+     * between stars (decision 12). A dash where there is no system. Static
+     * and asked of its owners, so a test reads what the corner draws.
+     */
+    static FText PlaceLineText(const UShipSubsystem& Ship, const TOptional<FStarSystem>& Here);
+
+    /**
+     * The target readout, under the jump line (system map decision 6):
+     * TargetMarker::Line of the ship's own view of the target -- name,
+     * bearing from the nose, distance to the surface, a live ETA or the
+     * altitude it will pass at, NIGHT SIDE -- the one string the map prints
+     * too (DeepSpace.Ship.ScreensAgree). Empty, not a dash, with no target,
+     * one that names nothing in Here, and in the fold: the corner does not
+     * grow a placeholder for something the player never asked for.
+     */
+    static FText TargetLineText(const UShipSubsystem& Ship, const TOptional<FStarSystem>& Here);
+
+    /** The target readout and the overlay, built with the layout and found
+     *  again by these names, as the caret is. */
+    static const FName TargetLineName;
+    static const FName TargetOverlayName;
 
     /**
      * A speed in the unit a person would say it in (flight-feel decision 7):
@@ -158,10 +203,14 @@ public:
      */
     static const FName NoseCaretName;
 
-    /** Whether Viewer sees the caret: only while they fly the ship, with a
-     *  course plotted, and not between stars, where there is no marker to
-     *  put it on. Asked of the ship every frame. */
-    static bool ShowsNoseCaret(const UShipSubsystem& Ship, const APawn* Viewer);
+    /** Whether Viewer sees the caret: only while they fly the ship, not in
+     *  the fold, and whenever there is something to aim at -- a course, to
+     *  a star or a world, or a target that resolves in Here, the system the
+     *  HUD asked for this frame (system map decision 7). Without it a pilot
+     *  in a system they have just arrived in has a bracket showing where
+     *  the world is from their head, and nothing showing where the ship
+     *  points. Asked of the ship every frame. */
+    static bool ShowsNoseCaret(const UShipSubsystem& Ship, const APawn* Viewer, const TOptional<FStarSystem>& Here);
 
     /**
      * The world point the caret is projected from: along the ship's nose from
@@ -174,11 +223,12 @@ public:
 
     /**
      * Shows the caret where the nose projects into this HUD's view, or hides
-     * it: with no course, no pilot, no camera to project through, or the
-     * nose off the edge of the view. Called every frame by NativeTick, and
-     * public so a headless test can ask the built widget what it decided.
+     * it: with nothing to aim at, no pilot, no camera to project through, or
+     * the nose off the edge of the view. Called every frame by NativeTick,
+     * with the system it has already asked for, and public so a headless
+     * test can ask the built widget what it decided.
      */
-    void PlaceNoseCaret(const UShipSubsystem* ShipState);
+    void PlaceNoseCaret(const UShipSubsystem* ShipState, const TOptional<FStarSystem>& Here);
 
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -200,7 +250,6 @@ private:
     void PlaceCorner(UWidget* Widget, const FVector2D& Anchor, const FVector2D& Offset);
     void SetTarget(ETarget NewTarget);
 
-    ADeepSpaceCharacter* Player() const;
     UShipSubsystem* Ship() const;
 
     UPROPERTY() TObjectPtr<UBorder> Dot;
@@ -209,6 +258,8 @@ private:
     UPROPERTY() TObjectPtr<UTextBlock> PlaceLine;
     UPROPERTY() TObjectPtr<UTextBlock> PowerLine;
     UPROPERTY() TObjectPtr<UTextBlock> JumpLine;
+    UPROPERTY() TObjectPtr<UTextBlock> TargetLine;
+    UPROPERTY() TObjectPtr<UShipTargetOverlay> Overlay;
     UPROPERTY() TObjectPtr<UTextBlock> MotionInk;
     UPROPERTY() TObjectPtr<UTextBlock> MotionDim;
     UPROPERTY() TObjectPtr<UTextBlock> AltitudeReadout;

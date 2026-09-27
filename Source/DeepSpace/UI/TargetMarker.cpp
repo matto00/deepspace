@@ -183,11 +183,28 @@ bool TargetMarker::SeenThroughGlass(const UWorld* World, FVector Eye, FVector Di
         return false;
     }
     FCollisionQueryParams Params(SCENE_QUERY_STAT(TargetSeenThroughGlass), false, Viewer);
-    FHitResult Hit;
-    if (!World->LineTraceSingleByChannel(Hit, Eye, Eye + Unit * GlassTraceCm, ECC_Visibility, Params))
+    const FVector End = Eye + Unit * GlassTraceCm;
+    // What the eye starts inside hides nothing: it is stepped past and the
+    // trace asked again. The camera is swept clear of every wall
+    // (ADeepSpaceCharacter::PlaceCamera), so anything that encloses it is a
+    // volume that blocks Visibility for another reason -- the helm seat's
+    // reach box, there so a standing player's E finds the chair, envelops
+    // the seated pilot's head, and taken as a wall it hid the target from
+    // the one person steering. Bounded, since each pass ignores one more.
+    for (int32 Pass = 0; Pass < MaxEnclosing; ++Pass)
     {
-        return true;
+        FHitResult Hit;
+        if (!World->LineTraceSingleByChannel(Hit, Eye, End, ECC_Visibility, Params))
+        {
+            return true;
+        }
+        if (Hit.bStartPenetrating && Hit.GetComponent())
+        {
+            Params.AddIgnoredComponent(Hit.GetComponent());
+            continue;
+        }
+        const AActor* Blocker = Hit.GetActor();
+        return Blocker && Blocker->ActorHasTag(ShipTags::Glass);
     }
-    const AActor* Blocker = Hit.GetActor();
-    return Blocker && Blocker->ActorHasTag(ShipTags::Glass);
+    return false;
 }

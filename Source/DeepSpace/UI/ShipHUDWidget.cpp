@@ -17,6 +17,8 @@
 #include "Sky/LocalSystem.h"
 #include "UI/NavText.h"
 #include "UI/ShipScreenWidget.h"
+#include "UI/ShipTargetOverlay.h"
+#include "UI/TargetMarker.h"
 #include "Universe/UniverseSubsystem.h"
 #include "Universe/UniverseUnits.h"
 
@@ -50,6 +52,8 @@ namespace
 }
 
 const FName UShipHUDWidget::NoseCaretName(TEXT("NoseCaret"));
+const FName UShipHUDWidget::TargetLineName(TEXT("TargetLine"));
+const FName UShipHUDWidget::TargetOverlayName(TEXT("TargetOverlay"));
 
 UShipHUDWidget::UShipHUDWidget(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
@@ -57,11 +61,6 @@ UShipHUDWidget::UShipHUDWidget(const FObjectInitializer& ObjectInitializer)
     // The HUD is painted over the world and never takes input: the pointer
     // must reach the screens behind it, and nothing here is clickable.
     SetIsFocusable(false);
-}
-
-ADeepSpaceCharacter* UShipHUDWidget::Player() const
-{
-    return GetOwningPlayerPawn<ADeepSpaceCharacter>();
 }
 
 UShipSubsystem* UShipHUDWidget::Ship() const
@@ -97,6 +96,20 @@ void UShipHUDWidget::PlaceCorner(UWidget* Widget, const FVector2D& Anchor, const
 UCanvasPanel* UShipHUDWidget::BuildLayout()
 {
     UCanvasPanel* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+
+    // The target's marks, under everything else: the bracket, the chevron
+    // and the prograde mark are drawn over the glass, and the corners' text
+    // and the caret read over them. It fills the canvas, so its own space is
+    // the one the caret is placed in, and it is built hidden until there is
+    // a target to mark (system map decision 7).
+    Overlay = WidgetTree->ConstructWidget<UShipTargetOverlay>(UShipTargetOverlay::StaticClass(), TargetOverlayName);
+    Overlay->SetVisibility(ESlateVisibility::Collapsed);
+    Canvas->AddChild(Overlay);
+    if (UCanvasPanelSlot* OverlaySlot = Cast<UCanvasPanelSlot>(Overlay->Slot))
+    {
+        OverlaySlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+        OverlaySlot->SetOffsets(FMargin(0.0f));
+    }
 
     // The dot. A rounded box with its radius at half its size is a circle,
     // which avoids needing a texture for four pixels of crosshair.
@@ -147,6 +160,16 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     PlaceLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
     PowerLine = MakeReadout(Blank, UShipScreenWidget::Ink, 12.0f);
     JumpLine = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
+    // Empty rather than a dash with no target: the corner does not grow a
+    // placeholder for something the player never asked for.
+    TargetLine = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TargetLineName);
+    {
+        FSlateFontInfo Font = TargetLine->GetFont();
+        Font.Size = 10;
+        Font.LetterSpacing = 160;
+        TargetLine->SetFont(Font);
+        TargetLine->SetColorAndOpacity(FSlateColor(UShipScreenWidget::Dim));
+    }
     AltitudeReadout = MakeReadout(Blank, UShipScreenWidget::Dim, 10.0f);
 
     // The motion line is two blocks side by side, the live lever in ink and
@@ -160,7 +183,7 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     Motion->AddChildToHorizontalBox(MotionDim)->SetVerticalAlignment(VAlign_Bottom);
 
     const TArray<UWidget*> Corners = {ShipLine, PlaceLine, PowerLine,
-                                      JumpLine, Motion, AltitudeReadout};
+                                      JumpLine, TargetLine, Motion, AltitudeReadout};
     for (UWidget* Widget : Corners)
     {
         Canvas->AddChild(Widget);
@@ -170,6 +193,9 @@ UCanvasPanel* UShipHUDWidget::BuildLayout()
     PlaceCorner(PlaceLine,  FVector2D(0.0f, 0.0f), FVector2D(Margin, Margin + 20.0f));
     PlaceCorner(PowerLine,  FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin));
     PlaceCorner(JumpLine,   FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin + 20.0f));
+    // Under the jump: the course and the target, the two things chosen,
+    // read together -- and apart, since they are two lines.
+    PlaceCorner(TargetLine, FVector2D(1.0f, 0.0f), FVector2D(-Margin, Margin + 40.0f));
     PlaceCorner(Motion,     FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin));
     // Over the speed: how fast and how far from anything read together.
     PlaceCorner(AltitudeReadout, FVector2D(0.0f, 1.0f), FVector2D(Margin, -Margin - 20.0f));
@@ -194,7 +220,11 @@ void UShipHUDWidget::SetTarget(ETarget NewTarget)
 void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 {
     Super::NativeTick(Geometry, DeltaSeconds);
+    Refresh(DeltaSeconds, GetOwningPlayer());
+}
 
+void UShipHUDWidget::Refresh(float DeltaSeconds, APlayerController* Controller)
+{
     const bool bShow = CVarHUD.GetValueOnGameThread() != 0;
     SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
     if (!bShow)
@@ -202,7 +232,7 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
         return;
     }
 
-    const ADeepSpaceCharacter* Character = Player();
+    const ADeepSpaceCharacter* Character = Controller ? Cast<ADeepSpaceCharacter>(Controller->GetPawn()) : nullptr;
     const UShipSubsystem* ShipState = Ship();
 
     // The dot: what is under it decides how much of it there is.
@@ -244,10 +274,13 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
             : FText::Format(NSLOCTEXT("DeepSpace", "HUDPrompt", "(E)  {0}"), What));
     }
 
-    PlaceNoseCaret(ShipState);
-
     if (!ShipState)
     {
+        PlaceNoseCaret(nullptr, {});
+        if (Overlay)
+        {
+            Overlay->SetVisibility(ESlateVisibility::Collapsed);
+        }
         return;
     }
 
@@ -271,12 +304,19 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     }
 
     // Where the ship is: the system asked of its position, never remembered,
-    // and asked once this frame for both lines that need it. The altitude
-    // wants only its surfaces, so nothing out to the neighbours is searched.
+    // and asked once this frame for everything that needs it -- the lines,
+    // the caret and the target's marks. The altitude wants only its
+    // surfaces, so nothing out to the neighbours is searched.
     const UUniverseSubsystem* Universe = UUniverseSubsystem::Get(this);
     const TOptional<FStarSystem> Here = (Universe && !ShipState->IsInTransit())
         ? Universe->GetSystemAt(ShipState->GetFlightState().GetUniversePosition())
         : TOptional<FStarSystem>();
+
+    PlaceNoseCaret(ShipState, Here);
+    if (Overlay)
+    {
+        Overlay->PlaceFor(*ShipState, Here, Controller);
+    }
 
     if (AltitudeReadout)
     {
@@ -285,9 +325,7 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 
     if (PlaceLine)
     {
-        PlaceLine->SetText(ShipState->IsInTransit() ? FText::FromString(NavText::Jump(EJumpState::Transit))
-                           : Here ? FText::FromString(NavText::Place(Here->Stub.Name, Here->Star.Class))
-                                  : Blank);
+        PlaceLine->SetText(PlaceLineText(*ShipState, Here));
     }
 
     // The jump, in words and never a number, with the bearing to the course
@@ -297,9 +335,35 @@ void UShipHUDWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
     {
         JumpLine->SetText(JumpLineText(*ShipState, Universe));
     }
+
+    // The target: where it is from the nose, how far, and when the ship's
+    // path brings it down on it -- live, at the present speed (ruling 3).
+    if (TargetLine)
+    {
+        TargetLine->SetText(TargetLineText(*ShipState, Here));
+    }
 }
 
-void UShipHUDWidget::PlaceNoseCaret(const UShipSubsystem* ShipState)
+FText UShipHUDWidget::PlaceLineText(const UShipSubsystem& ShipState, const TOptional<FStarSystem>& Here)
+{
+    if (ShipState.IsInTransit())
+    {
+        // Folding to a world of this system is not between stars: the ship
+        // has not left, and saying so would tell the pilot it had.
+        return FText::FromString(NavText::Jump(EJumpState::Transit, ShipState.GetPlottedWorld().IsSet()));
+    }
+    return Here ? FText::FromString(NavText::Place(Here->Stub.Name, Here->Star.Class)) : Blank;
+}
+
+FText UShipHUDWidget::TargetLineText(const UShipSubsystem& ShipState, const TOptional<FStarSystem>& Here)
+{
+    // The ship's own view of it, printed: the map prints the same view, so
+    // the two can never disagree (ScreensAgree).
+    const TOptional<FTargetView> View = Here ? ShipState.GetTargetView(*Here) : TOptional<FTargetView>();
+    return View ? FText::FromString(TargetMarker::Line(*View)) : FText::GetEmpty();
+}
+
+void UShipHUDWidget::PlaceNoseCaret(const UShipSubsystem* ShipState, const TOptional<FStarSystem>& Here)
 {
     UWidget* Caret = WidgetTree ? WidgetTree->FindWidget(NoseCaretName) : nullptr;
     if (!Caret)
@@ -313,7 +377,7 @@ void UShipHUDWidget::PlaceNoseCaret(const UShipSubsystem* ShipState)
     // mouse keeps looking, so the view is not the nose, and the caret must
     // say where the nose is wherever the head has turned.
     FVector2D Position = FVector2D::ZeroVector;
-    bool bShow = ShipState && Camera && ShowsNoseCaret(*ShipState, GetOwningPlayerPawn())
+    bool bShow = ShipState && Camera && ShowsNoseCaret(*ShipState, GetOwningPlayerPawn(), Here)
         && UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(
                Controller, NoseCaretWorldPoint(Camera->GetCameraLocation()), Position, false);
     if (bShow)
@@ -335,9 +399,18 @@ void UShipHUDWidget::PlaceNoseCaret(const UShipSubsystem* ShipState)
     }
 }
 
-bool UShipHUDWidget::ShowsNoseCaret(const UShipSubsystem& ShipState, const APawn* Viewer)
+bool UShipHUDWidget::ShowsNoseCaret(const UShipSubsystem& ShipState, const APawn* Viewer,
+                                    const TOptional<FStarSystem>& Here)
 {
-    return Viewer && ShipState.GetPilot() == Viewer && ShipState.GetPlottedSystem().IsSet() && !ShipState.IsInTransit();
+    if (!Viewer || ShipState.GetPilot() != Viewer || ShipState.IsInTransit())
+    {
+        return false;
+    }
+    // Something to aim at: a course of either kind, or a target that names
+    // a world of the system in hand -- one held from another system, after
+    // a PlaceShip, names nothing here and gives the nose nothing to meet.
+    const TOptional<FBodyId> Target = ShipState.GetTarget();
+    return ShipState.HasCourse() || (Here && Target && ShipNav::TargetPlanet(*Here, *Target) != nullptr);
 }
 
 FVector UShipHUDWidget::NoseCaretWorldPoint(const FVector& CameraLocation)
@@ -347,10 +420,26 @@ FVector UShipHUDWidget::NoseCaretWorldPoint(const FVector& CameraLocation)
 
 FText UShipHUDWidget::JumpLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)
 {
-    const TOptional<FSystemId> Course = ShipState.GetPlottedSystem();
-    const TOptional<FStarSystem> Star = (Universe && Course) ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
     const TOptional<FVector> Bearing = ShipState.GetCourseDirectionShipLocal();
-    return Star && Bearing
+    if (!Universe || !Bearing)
+    {
+        return Blank;
+    }
+    // A world course is named as the world, and its system is the world's
+    // own id's -- asked of that, not of where the ship is, so the name holds
+    // through the fold, when the HUD asks for no system at all.
+    if (const TOptional<FBodyId> World = ShipState.GetPlottedWorld())
+    {
+        const TOptional<FStarSystem> System = Universe->GetSystem(World->System);
+        const FPlanet* Planet = System ? ShipNav::TargetPlanet(*System, *World) : nullptr;
+        return Planet
+            ? FText::FromString(NavText::Jump(ShipState.GetJumpState(), true, NavText::WorldName(*Planet), *Bearing,
+                                              ShipState.GetJumpConeRadians()))
+            : Blank;
+    }
+    const TOptional<FSystemId> Course = ShipState.GetPlottedSystem();
+    const TOptional<FStarSystem> Star = Course ? Universe->GetSystem(*Course) : TOptional<FStarSystem>();
+    return Star
         ? FText::FromString(NavText::Jump(ShipState.GetJumpState(), Star->Stub.Name, *Bearing,
                                           ShipState.GetJumpConeRadians()))
         : Blank;

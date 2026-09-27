@@ -138,6 +138,11 @@ namespace TargetMarker
      *  hull from anywhere inside it, and nowhere near the sky's 50 km. */
     inline constexpr double GlassTraceCm = 3000.0;
 
+    /** How many volumes round the eye the glass trace steps past before it
+     *  gives up and says the target is hidden: a seat's reach box and a
+     *  screen chair's are the most an eye is ever inside at once. */
+    inline constexpr int32 MaxEnclosing = 4;
+
     /**
      * The target as seen from the ship: unset when the id does not name a
      * world of System (another system's, an orbit it lacks, a moon), and in
@@ -200,8 +205,9 @@ namespace TargetMarker
 
     /**
      * Whether the sky can be seen from Eye along Dir: a Visibility trace for
-     * GlassTraceCm, ignoring Viewer, that meets nothing or meets an actor
-     * tagged ShipTags::Glass first. So the bracket is shown to anyone who
+     * GlassTraceCm, ignoring Viewer and anything the eye starts inside (the
+     * helm seat's reach box holds the seated pilot's eye), that meets
+     * nothing or meets an actor tagged ShipTags::Glass first. So the bracket is shown to anyone who
      * can see the target -- the pilot, someone at the fore glass, someone in
      * the galley whose window faces it -- and never drawn on a wall. The
      * dressing's clutter blocks only the camera channel, so a mug never

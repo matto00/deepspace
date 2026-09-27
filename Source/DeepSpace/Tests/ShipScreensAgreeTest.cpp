@@ -1,10 +1,19 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Ship/ShipFlightState.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/EngineeringConsoleWidget.h"
 #include "UI/PowerAllocationWidget.h"
+#include "UI/ShipHUDWidget.h"
+#include "UI/SystemMapWidget.h"
+#include "UI/TargetMarker.h"
+#include "GameFramework/Pawn.h"
+#include "Sky/LocalSystem.h"
+#include "Tests/SkyTestWorld.h"
+#include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -99,6 +108,115 @@ bool FShipScreensAgreeTest::RunTest(const FString& Parameters)
 
     GEngine->DestroyWorldContext(World);
     World->DestroyWorld(false);
+
+    // The target line: the HUD's readout and the map's band print one
+    // string (system map decision 6), because both print the ship's own
+    // view of the target and neither composes its own. Checked at rest, at
+    // speed on a path that brings the ship down on the world (the live
+    // ETA), and with the target let go.
+    {
+        SkyTestWorld::FSkyWorld Test(TEXT("ScreensAgreeTargetWorld"));
+        UShipSubsystem* Aboard = Test.Ship;
+        if (TestNotNull(TEXT("the target world has a ship"), Aboard) && TestNotNull(TEXT("and a universe"), Test.Universe))
+        {
+            Test.BeginPlay();
+            APawn* Pilot = Test.World->SpawnActor<APawn>();
+            Aboard->SetPilot(Pilot);
+            USystemMapWidget* Map = MakeScreen<USystemMapWidget>(Test.World);
+            const auto HereNow = [&]() { return Test.Universe->GetSystemAt(Aboard->GetFlightState().GetUniversePosition()); };
+            const TOptional<FStarSystem> Home = HereNow();
+            const auto Agree = [&](const TCHAR* When)
+            {
+                Map->RefreshFromShip();
+                const FString Hud = UShipHUDWidget::TargetLineText(*Aboard, HereNow()).ToString();
+                TestEqual(FString::Printf(TEXT("%s: the HUD and the map print one target line"), When), Hud,
+                          Map->GetTargetText().ToString());
+                return Hud;
+            };
+
+            if (TestTrue(TEXT("the ship starts among worlds"), Home.IsSet() && Home->Planets.Num() > 0))
+            {
+                TestTrue(TEXT("with no target both lines are empty"), Agree(TEXT("no target")).IsEmpty());
+                const int32 Orbit = Home->Planets.Num() - 1;
+                TestTrue(TEXT("a world is targeted"), Aboard->SetTarget(FBodyId{ Home->Stub.Id, Orbit, -1 }));
+                const FString AtRest = Agree(TEXT("at rest"));
+                TestTrue(TEXT("and the line names it"), AtRest.Contains(Home->Planets[Orbit].Designation));
+                TestFalse(TEXT("at rest there is no time to arrival"), AtRest.Contains(TEXT("ETA")));
+
+                // At the drive's top, nose on the world: a live ETA.
+                const FUniversePosition Start = Aboard->GetFlightState().GetUniversePosition();
+                const FVector ToWorld = (Home->PlanetPosition(Orbit) - Start).GetSafeNormal();
+                Aboard->PlaceShip(Start, FRotationMatrix::MakeFromX(ToWorld).ToQuat());
+                Aboard->SetDriveEngaged(Pilot, true);
+                Aboard->SetDriveLever(Pilot, Aboard->GetFlightState().GetDriveNotchCount() - 1);
+                for (int32 Tick = 0; Tick < 20; ++Tick)
+                {
+                    Aboard->Tick(0.05f);
+                }
+                const FString Flying = Agree(TEXT("flying at it"));
+                TestTrue(FString::Printf(TEXT("under way onto it, the line has a live ETA (%s)"), *Flying), Flying.Contains(TEXT("ETA")));
+                const TOptional<FTargetView> Before = Aboard->GetTargetView(*HereNow());
+                Aboard->Tick(0.5f);
+                Agree(TEXT("half a second on"));
+                const TOptional<FTargetView> After = Aboard->GetTargetView(*HereNow());
+                TestTrue(TEXT("and it is live: half a second on, the time to arrival has fallen"),
+                         Before && After && Before->EtaSeconds && After->EtaSeconds && *After->EtaSeconds < *Before->EtaSeconds);
+
+                // At the present speed (ruling 3), not the lever's or the
+                // drive's top: the cap's own law, ShipFlight::SecondsToFloor,
+                // run from the speed the ship has this moment along the ray
+                // it is on. So a notch down reads longer on the next read,
+                // before the ship has gone anywhere much.
+                const auto AtPresentSpeed = [&]() -> TOptional<double>
+                {
+                    const FSkySystem Sky = LocalSystem::Here(HereNow());
+                    if (!Sky.Bodies.IsValidIndex(Orbit + 1))
+                    {
+                        return {};
+                    }
+                    const FSkyBody& Body = Sky.Bodies[Orbit + 1];   // the star first, then the planets
+                    FFlightSurface Floor;
+                    Floor.Centre = Body.Position;
+                    Floor.Radius = Body.Radius;
+                    Floor.Floor = UShipSubsystem::FloorFor(Body);
+                    const FShipFlightState& Flight = Aboard->GetFlightState();
+                    const TOptional<double> ToFloor = ShipFlight::RayToFloor(Floor, Flight.GetUniversePosition(), Flight.GetVelocity());
+                    if (!ToFloor)
+                    {
+                        return {};
+                    }
+                    return ShipFlight::SecondsToFloor(*ToFloor, Aboard->GetShipSpeed(), Flight.GetLimits().LinearAcceleration,
+                                                      Flight.GetLimits().HoldSeconds);
+                };
+                const auto Matches = [&](const TOptional<FTargetView>& View, const TCHAR* When)
+                {
+                    const TOptional<double> Expected = AtPresentSpeed();
+                    const bool bMatch = View && View->EtaSeconds && Expected
+                        && FMath::IsNearlyEqual(*View->EtaSeconds, *Expected, 1.0e-4 * *Expected);
+                    TestTrue(FString::Printf(TEXT("%s, the ETA is the time at the present speed, %.3g m/s (%.6g s, %.6g s)"), When,
+                                             Aboard->GetShipSpeed() * 0.01, View && View->EtaSeconds ? *View->EtaSeconds : -1.0,
+                                             Expected ? *Expected : -1.0),
+                             bMatch);
+                };
+                Matches(After, TEXT("spooling toward the lever"));
+                const int32 Lower = FMath::Max(1, FMath::FloorToInt(Aboard->GetFlightState().GetDrivePosition()) - 1);
+                const float Was = Aboard->GetShipSpeed();
+                TestTrue(TEXT("the lever goes a notch under the drive"), Aboard->SetDriveLever(Pilot, Lower));
+                Aboard->Tick(0.05f);
+                const TOptional<FTargetView> Lowered = Aboard->GetTargetView(*HereNow());
+                TestTrue(FString::Printf(TEXT("a notch down, the ship eases off (%.3g to %.3g m/s)"), Was * 0.01,
+                                         Aboard->GetShipSpeed() * 0.01),
+                         Aboard->GetShipSpeed() < Was);
+                TestTrue(TEXT("and the next read of the time to arrival is longer"),
+                         Lowered && Lowered->EtaSeconds && After && After->EtaSeconds && *Lowered->EtaSeconds > *After->EtaSeconds);
+                Matches(Lowered, TEXT("eased a notch down"));
+                Agree(TEXT("a notch down"));
+
+                Aboard->ClearTarget();
+                TestTrue(TEXT("let go, both lines are empty"), Agree(TEXT("let go")).IsEmpty());
+            }
+        }
+    }
     return true;
 }
 
