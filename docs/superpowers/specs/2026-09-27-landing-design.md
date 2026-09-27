@@ -1,8 +1,8 @@
 # DeepSpace — Landing, Slice 1: Fly Down and Set Down
 
 **Date:** 2026-09-27
-**Status:** Draft for sign-off. Not implemented. No code before the
-developer approves *Decisions needing sign-off*.
+**Status:** Approved by the developer, 2026-09-27: every item of
+*Decisions needing sign-off* as recommended. Not implemented.
 **Answers:** the third playtest, and the developer's rulings on landing
 recorded below
 **Follows:** flight feel (implemented; its decision 6 named the floor
