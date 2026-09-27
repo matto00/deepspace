@@ -34,7 +34,10 @@ namespace ShipDust
     inline constexpr double DefaultKnee = 2.0e5;
 
     /** ds.Sky.DustTop: the seen speed at the drive's top, cm/s (3 km/s): 50 m
-     *  a frame at 60 Hz, under the strobe limit. */
+     *  a frame at 60 Hz, under the ~60 m half-spacing that strobes. Only at
+     *  60 Hz: the step is per frame and nothing here scales with frame time,
+     *  so at 45 Hz it is 67 m and at 30 Hz 100 m -- past the limit, as the
+     *  knee itself is at 30 Hz. A playtest question at the real frame rate. */
     inline constexpr double DefaultDustTop = 3.0e5;
 
     /** ds.Sky.DustStretch: how many times its width a mote is drawn long at
