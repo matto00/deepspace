@@ -30,7 +30,8 @@ is clickable from the helm too, for full parity with the map.**
 looked at and clicked unzoomed from the chart chair and from the helm, the
 pointer handed the gate's own hit. E and Tab are unchanged: E zooms the chart
 or the map only from the chart chair, and Tab cycles only on the zoomed map.
-Decisions 2 and 13 are amended below. The chart was also relaid to the map's
+Decisions 2, 12 and 13 are amended below, each at the sentences the ruling
+changes; where anything below still disagrees, this ruling holds. The chart was also relaid to the map's
 standard (`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`).
 
 ## Amendment, 2026-09-26: the developer's rulings
@@ -353,6 +354,13 @@ any code exists.) Because it is not a
 `DeepSpace.Ship.MapScreen` holds that the map says yes and the chart, the
 laptop and the engineering console say no.
 
+*Amended 2026-09-27 (the ruling at the top): `AShipNavScreen` overrides it
+to return true as well, and the comment above now names both desk screens.
+It is still a class decision -- no placed instance can change it -- but it is
+the chart's class that says yes. `DeepSpace.Ship.MapScreen` holds that the
+map and the chart say yes and the laptop says no; the engineering console
+carries no `AShipScreen` and is never asked.*
+
 `UpdatePointer`'s seated branch stops deactivating the pointer outright and
 gates it instead. It runs a line trace from the eye along the view on the
 pointer's own channel (`Visibility`), out to `InteractionRange`, ignoring the
@@ -389,7 +397,10 @@ still "stand up", and the flight keys are still the ship's. What the rule
 protected against was the pointer finding *any* screen in reach from the
 seat. The chart is 2 m from the helm's eye, inside the 250 cm reach, and it
 is sized to be read from 60 cm in its own chair. It stays unreachable from
-the helm, because it does not say yes.
+the helm, because it does not say yes. *Amended 2026-09-27: it says yes now,
+by ruling, and is clicked from the helm as the map is. What the rule still
+protects is the rest: the laptop and anything else in reach say no, so a
+seat never drives a screen it was not meant to.*
 
 The HUD's dot already turns teal over a screen (`IsPointingAtScreen`), so the
 pilot sees they can click without anything new.
@@ -405,8 +416,9 @@ clicked from the helm at all.
 
 **Rejected: a per-instance `bDrivableFromHelm` `UPROPERTY`.** It was the first
 draft too. An `EditAnywhere` flag can be changed on one placed instance, which
-would make the chart drivable from the helm with nothing to catch it. It is
-also a reflected-layout change for no benefit.
+would make a screen drivable from a seat with nothing to catch it -- the
+chart, when this was written; the laptop, now that the chart is drivable by
+class (2026-09-27). It is also a reflected-layout change for no benefit.
 
 **Rejected: a helm key that cycles the target** (say T, with the map
 following). It is attractive, since cycling while looking out of the glass
@@ -1150,11 +1162,14 @@ map's band shows one button (decision 3's layout). `Jump here` plots the
 target as the course *and* engages the jump, in one press. Pressed again it
 reads `Stand down`, and clears the course, which stands the jump down, as
 clearing does on the chart. One press does both because the in-system jump is
-chosen where the map is used, from the helm, and the chart that engages is
-out of the helm's reach (decision 2). A plot that still needed the chart
-would send the pilot out of the helm, into the other chair and back, for
-every hop. It is still the one engage lever the chart's toggle moves, and the
-chart shows it. Console: `ds.Nav.Plot target` plots the target as the
+chosen where the map is used, from the helm, and needs no second screen.
+(As signed off, the reason was that the chart that engages was out of the
+helm's reach (decision 2), and a plot that still needed it would send the
+pilot out of the helm, into the other chair and back, for every hop. *Amended
+2026-09-27:* the chart is clickable from the helm now, so that reason is
+gone; the one press stays, because a hop chosen on the map should not need a
+glance to another screen to send it.) It is still the one engage lever the
+chart's toggle moves, and the chart shows it. Console: `ds.Nav.Plot target` plots the target as the
 course, and `ds.Nav.Engage` engages, as they do for a star.
 
 **One course.** `FShipNavState` holds a course that is a star *or* a world:

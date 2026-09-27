@@ -723,8 +723,15 @@ the first chart's spacing fault, and the map's before it. Set the button
 slot to `HAlign_Fill`. `DeepSpace.UI.ChartLayout` lays the tree out as Slate
 does with no renderer (`SlatePrepass`, then `ArrangeChildren` down the tree,
 which works under `-nullrhi`) and holds every word to the panel, to the room
-it asks for and clear of every other, the columns to one x, and all of it
-again at the widest the chart can print.
+it asks for and clear of every other, the columns to one x, a plot to moving
+no name, and all of it again at the widest the chart can print -- each asked
+of what makes it and measured in the chart's font, never typed in: the name
+from `SystemNames::WidestName` (the tables' limit, 16 letters, wider than
+anything in the corpus), the bearing from every direction `NavText::Bearing`
+can word. It measures the span from the chart's own seat
+(`GetUseTransform` and `SeatedEyeOffset`), so moving the chair back until
+the chart is minified fails it, and holds every font size the chart sets to
+one the map sets at the same centimetres on the glass.
 
 It is placed by `build_hauler.py` (`place_nav_screen`, `hauler_nav_screen`)
 from `NAV_SCREEN` in `hauler_layout.py`. **Its two seat tunables,
