@@ -44,6 +44,47 @@ namespace
         }
     };
 
+    /** Fold Value into [-Radius, Radius): the streaks' wrap, written out
+     *  here so the test holds the formula rather than borrowing it. */
+    double Wrapped(double Value, double Radius)
+    {
+        if (FMath::Abs(Value) < Radius)
+        {
+            return Value;
+        }
+        double Folded = FMath::Fmod(Value + Radius, 2.0 * Radius);
+        if (Folded < 0.0)
+        {
+            Folded += 2.0 * Radius;
+        }
+        return Folded - Radius;
+    }
+
+    /**
+     * The streaks as they were drawn before the dust moved to field space,
+     * for a mote at Offset from the ship in universe axes: turned into ship
+     * axes and wrapped in the ship's own cube, swept aft by
+     * ds.Nav.StreakSweep field-widths over the transit, and stretched along
+     * the ship's forward by 1 + ds.Nav.StreakLength x sin(pi x progress).
+     */
+    FTransform StreakFormula(const FShipFlightState& Flight, const FVector& Offset, double Progress,
+                             double Radius, double Scale)
+    {
+        const float Length = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.StreakLength"))->GetFloat();
+        const float SweepWidths = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.StreakSweep"))->GetFloat();
+        FVector Local = Flight.UniverseDirectionToWorld(Offset);
+        Local.X = Wrapped(Local.X, Radius);
+        Local.Y = Wrapped(Local.Y, Radius);
+        Local.Z = Wrapped(Local.Z, Radius);
+        const double Sweep = SweepWidths * Radius * (1.0 - FMath::Cos(UE_DOUBLE_PI * Progress));
+        if (Sweep > 0.0)
+        {
+            Local.X = Wrapped(Local.X - Sweep, Radius);
+        }
+        const double Stretch = 1.0 + Length * FMath::Sin(UE_DOUBLE_PI * Progress);
+        return FTransform(FQuat::Identity, Local, FVector(Scale * Stretch, Scale, Scale));
+    }
+
     /** The near field's instances, in world space. */
     TArray<FTransform> Motes(const AShipCounterFrame* Frame)
     {
@@ -128,25 +169,59 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
         Ship->Tick(0.05f);
         if (TestTrue(TEXT("the jump has begun"), Ship->IsInTransit()))
         {
-            // Well into the transit, so the streaks are long.
-            for (int32 Step = 0; Step < 100 && Ship->IsInTransit() && Ship->GetTransitProgress() < 0.4; ++Step)
+            // A quarter, half and three quarters of the way through: the
+            // streaks are long, and exactly the shape they always were.
+            TArray<FVector> FieldAtFirst;
+            for (const double Mark : { 0.25, 0.5, 0.75 })
             {
-                Ship->Tick(0.25f);
-            }
-            Frame->SyncToShip();
-            TestFalse(TEXT("between stars the dome is hidden"), Frame->GetDistantStars()->IsVisible());
-            TestFalse(TEXT("and so is the marker"), Marker && Marker->IsVisible());
+                for (int32 Step = 0; Step < 400 && Ship->IsInTransit() && Ship->GetTransitProgress() < Mark; ++Step)
+                {
+                    Ship->Tick(0.05f);
+                    Frame->SyncToShip();
+                }
+                if (!TestTrue(FString::Printf(TEXT("still in the fold at %.2f"), Mark), Ship->IsInTransit()))
+                {
+                    break;
+                }
+                Frame->SyncToShip();
+                const double Progress = Ship->GetTransitProgress();
+                TestFalse(TEXT("between stars the dome is hidden"), Frame->GetDistantStars()->IsVisible());
+                TestFalse(TEXT("and so is the marker"), Marker && Marker->IsVisible());
 
-            bool bStretched = true;
-            bool bInField = true;
-            for (const FTransform& Mote : Motes(Frame))
-            {
-                const FVector Scale = Mote.GetScale3D();
-                bStretched &= Scale.X > 10.0 * Scale.Y && FMath::IsNearlyEqual(Scale.Y, Scale.Z, 1e-6);
-                bInField &= Mote.GetLocation().GetAbsMax() <= Frame->NearFieldRadius + 1.0;
+                const TArray<FTransform> Shown = Motes(Frame);
+                const TConstArrayView<FVector> Field = Frame->GetDustField();
+                bool bStretched = true;
+                bool bInField = true;
+                bool bFormula = Shown.Num() == Field.Num() && Shown.Num() > 0;
+                for (int32 Index = 0; bFormula && Index < Shown.Num(); ++Index)
+                {
+                    const FTransform& Mote = Shown[Index];
+                    const FVector Scale = Mote.GetScale3D();
+                    bStretched &= Scale.X > 10.0 * Scale.Y && FMath::IsNearlyEqual(Scale.Y, Scale.Z, 1e-6);
+                    bInField &= Mote.GetLocation().GetAbsMax() <= Frame->NearFieldRadius + 1.0;
+
+                    const FTransform Expected = StreakFormula(Ship->GetFlightState(), Field[Index], Progress,
+                                                              Frame->NearFieldRadius, Frame->NearStarScale);
+                    bFormula &= Mote.GetLocation().Equals(Expected.GetLocation(), 0.05)
+                        && Mote.GetRotation().Equals(Expected.GetRotation(), 1e-6)
+                        && Mote.GetScale3D().Equals(Expected.GetScale3D(), 1e-4 * Expected.GetScale3D().X);
+                }
+                TestTrue(FString::Printf(TEXT("at %.3f the motes are streaks along the ship's forward"), Progress), bStretched);
+                TestTrue(FString::Printf(TEXT("at %.3f still wrapped into the ship's field"), Progress), bInField);
+                TestTrue(FString::Printf(TEXT("at %.3f every mote is the streak formula of its field position"), Progress), bFormula);
+
+                // Between stars the seen speed is not used: the dust does not
+                // stream, and the sweep is the whole of the motion.
+                if (FieldAtFirst.IsEmpty())
+                {
+                    FieldAtFirst = TArray<FVector>(Field);
+                }
+                else
+                {
+                    TestTrue(FString::Printf(TEXT("at %.3f the dust itself has not moved"), Progress),
+                             FieldAtFirst == TArray<FVector>(Field));
+                }
             }
-            TestTrue(TEXT("the motes are streaks along the ship's forward"), bStretched);
-            TestTrue(TEXT("still wrapped into the field"), bInField);
         }
 
         for (int32 Step = 0; Step < 100 && Ship->GetJumpSerial() == 0; ++Step)
@@ -157,11 +232,14 @@ bool FShipCounterFrameJumpTest::RunTest(const FString& Parameters)
         Frame->SyncToShip();
         TestEqual(TEXT("the near field is scattered for the new serial"), Frame->GetBuiltForSerial(), 1);
 
+        // The field is a cube in universe axes, so round the ship means in
+        // the field's own axes.
         bool bAround = true;
         bool bRound = true;
         for (const FTransform& Mote : Motes(Frame))
         {
-            bAround &= Mote.GetLocation().GetAbsMax() <= Frame->NearFieldRadius + 1.0;
+            const FVector InFieldAxes = Ship->GetFlightState().GetUniverseOrientation().RotateVector(Mote.GetLocation());
+            bAround &= InFieldAxes.GetAbsMax() <= Frame->NearFieldRadius + 1.0;
             bRound &= Mote.GetScale3D().Equals(FVector(Frame->NearStarScale), 1e-9);
         }
         TestTrue(TEXT("after a jump every mote is round the ship, not light years behind"), bAround);

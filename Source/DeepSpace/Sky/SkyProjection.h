@@ -52,8 +52,17 @@ struct DEEPSPACE_API FSkyViewParams
     double FluxGamma = 0.5;
 
     /** A resolved Sun's surface brightness. Every other star scales from it
-     *  by (T / T_sun)^4, compressed. */
+     *  by SkyProjection::StarWarmth: (T / T_sun)^4, honest, to a ceiling. */
     double StarSurface = 1.0;
+
+    /**
+     * TEMPORARY (flight-feel decision 9): the exponent on the star's (T /
+     * T_sun)^4 before the ceiling. 1 is the ruled law, honest; 0.5 is the
+     * compressed T^2 the sky shipped with, kept only so the developer can put
+     * the two side by side in play (ds.Sky.StarWarmthGamma). Removed, with
+     * its CVar, once the verdict is in.
+     */
+    double StarWarmthGamma = 1.0;
 
     /** 10 km. Nearer than this the proxy stops growing: the engine sphere's
      *  facets would show first, and below orbit landing replaces this. */
@@ -172,6 +181,30 @@ namespace SkyProjection
      * both ask, so the two floors cannot drift apart.
      */
     DEEPSPACE_API double RenderedFloor(double RadiusCm, const FSkyViewParams& Params);
+
+    /**
+     * The hottest a star's surface is drawn, relative to a Sun's: 8 is a star
+     * at 1.68 times the Sun's temperature, about 9,700 K. Hotter stars differ
+     * above it only in colour. It is the half-float guard as well: at
+     * ds.Sky.StarSurface 1,000, ds.Sky.Radiance 3 and the galley's exposure a
+     * star at the ceiling is about 30,000 in scene colour, under half of
+     * 65,504, where the honest 41x of the hottest star the priors make would
+     * be past it and draw as infinity, taking the bloom with it.
+     */
+    inline constexpr double MaxStarWarmth = 8.0;
+
+    /**
+     * A star's surface brightness relative to a Sun's (flight-feel decision
+     * 9): (T / T_sun)^4, raised to Gamma, and never above MaxStarWarmth.
+     *
+     * Honest at Gamma 1, because the arrival standoff (2.4 AU x sqrt(L))
+     * equalises irradiance: with honest surfaces every star's glare at
+     * arrival is about a Sun's, where the compressed law made a red dwarf's
+     * 3.6 times a Sun's -- and three stars in four are red dwarfs. A disc is
+     * never in danger of vanishing, so the compression irradiance needs buys
+     * nothing here. 0 at or below 0 K.
+     */
+    DEEPSPACE_API double StarWarmth(double TemperatureK, double Gamma = 1.0);
 
     /** Ratio ^ Gamma: how irradiance spans are squeezed into a screen. */
     DEEPSPACE_API double Compress(double Ratio, double Gamma);
