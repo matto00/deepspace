@@ -27,6 +27,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 EDITOR_BIN="$HOME/.local/bin/unreal-editor"   # absolute: desktop entries get a minimal PATH
 PROJECT="$PWD/DeepSpace.uproject"
 LIB=Binaries/Linux/libUnrealEditor-DeepSpace.so
+SHADERS_LIB=Binaries/Linux/libUnrealEditor-DeepSpaceShaders.so
 REBUILD_LOG=Saved/Logs/launch-rebuild.log
 
 notify() {
@@ -45,10 +46,14 @@ stale_reason() {
         echo "the module has never been built"
     elif compgen -G "Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.so" >/dev/null; then
         echo "stray hot-reload libraries are present"
-    elif [[ -n $(find Source DeepSpace.uproject -newer "$LIB" -type f \
-                 \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' -o -name '*.uproject' \) \
+    elif [[ -n $(find Source/DeepSpace Source/DeepSpace.Target.cs Source/DeepSpaceEditor.Target.cs Shaders DeepSpace.uproject \
+                 -newer "$LIB" -type f \
+                 \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' -o -name '*.uproject' -o -name '*.ush' \) \
                  -print -quit) ]]; then
+        # Shaders/: the DeepSpace module compiles the shared ground file too.
         echo "C++ has changed since the last build"
+    elif [[ ! -f $SHADERS_LIB || -n $(find Source/DeepSpaceShaders -newer "$SHADERS_LIB" -type f -print -quit) ]]; then
+        echo "the shader-path module has changed since the last build"
     fi
 }
 

@@ -69,6 +69,9 @@ echo "==> Removing stale hot-reload libraries"
 rm -fv Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.so \
        Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.debug \
        Binaries/Linux/libUnrealEditor-DeepSpace-[0-9]*.sym 2>/dev/null || true
+rm -fv Binaries/Linux/libUnrealEditor-DeepSpaceShaders-[0-9]*.so \
+       Binaries/Linux/libUnrealEditor-DeepSpaceShaders-[0-9]*.debug \
+       Binaries/Linux/libUnrealEditor-DeepSpaceShaders-[0-9]*.sym 2>/dev/null || true
 
 echo "==> Building"
 ./build.sh
@@ -86,9 +89,18 @@ fi
 # find -newer, not arithmetic on timestamps: no dependency on bc, which is
 # not installed here -- an earlier version used it, and failed after every
 # successful build, which made launch.sh refuse to open the editor.
-if [[ -n $(find Source -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' \) \
+# The DeepSpace library against its own sources -- which include the shared
+# ground file, Shaders/Private/WorldRelief.ush (landing decision 1) -- and the
+# shader-path module's library against its own.
+if [[ -n $(find Source/DeepSpace Source/DeepSpace.Target.cs Source/DeepSpaceEditor.Target.cs Shaders -type f \
+               \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' -o -name '*.ush' \) \
                -newer "$LIB" -print -quit) ]]; then
     echo "!!! $LIB is older than the newest source file." >&2
+    exit 1
+fi
+SHADERS_LIB="Binaries/Linux/$(python3 -c "import json;print(json.load(open('$MANIFEST'))['Modules']['DeepSpaceShaders'])")"
+if [[ -n $(find Source/DeepSpaceShaders -type f -newer "$SHADERS_LIB" -print -quit) ]]; then
+    echo "!!! $SHADERS_LIB is older than the newest source file." >&2
     exit 1
 fi
 

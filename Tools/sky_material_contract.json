@@ -15,6 +15,9 @@
     "surface_seed":    { "name": "SurfaceSeed",    "type": "vector" },
     "body_axis_x":     { "name": "BodyAxisX",      "type": "vector" },
     "body_axis_y":     { "name": "BodyAxisY",      "type": "vector" },
+    "probe_footprint": { "name": "ProbeFootprint", "type": "scalar" },
+    "probe_select":    { "name": "ProbeSelect",    "type": "vector" },
+    "probe_bias":      { "name": "ProbeBias",      "type": "vector" },
     "interior_light":  { "name": "InteriorLight",  "type": "scalar" },
     "veil":            { "name": "Veil",           "type": "scalar" }
   },
@@ -22,7 +25,16 @@
     "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "body_axis_x", "body_axis_y", "brightness", "point_blend", "mottle", "detail", "banding", "relief", "cratering"] },
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
-    "M_SkyGlass":     { "parameters": [] }
+    "M_SkyGlass":     { "parameters": [] },
+    "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] },
+    "M_SkyReliefProbeLegacy": { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] }
+  },
+  "shared_relief": {
+    "comment": "M_SkyBody's face as one Custom node over Shaders/Private/WorldRelief.ush, the file the C++ compiles too (landing decision 1). SkyMaterialContract.h holds the same include, entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them, and the file's tables to this file's constants.",
+    "include": "/Project/Private/WorldRelief.ush",
+    "entry": "WR_SurfaceTerms",
+    "inputs": ["Direction", "Footprint", "SeedOffset", "Stretch"],
+    "outputs": [["Continent", "CMOT_FLOAT1"], ["CraterAlbedo", "CMOT_FLOAT1"], ["CraterSlope", "CMOT_FLOAT3"]]
   },
   "meshes": {
     "comment": "SM_SkyBody: the sphere every body and neighbour is drawn with, built by UDeepSpaceEditorScripting::BuildSkySphere as an equal-angle cube sphere, one LOD per entry of cells_per_lod, finest first. SkySphereMesh.h decides the screen size each LOD switches at, from the view it is sized for: no facet more than half a 4K pixel inside the limb. 224 is what LOD 0 needs at the nearest the sky ever draws a world, 1.6e-3 of its radius; each coarser LOD halves the cells and takes over once it is far enough away not to show.",
@@ -59,6 +71,9 @@
     "rim_exponent": 5.0,
     "glass_opacity": 0.12,
     "glass_tint": [0.0, 0.004, 0.005],
-    "veil_colour": [0.5, 0.47, 0.42]
+    "veil_colour": [0.5, 0.47, 0.42],
+    "probe_comment": "Eyes.WorldReliefParity's probes: D over a fixed patch -- normalize(centre + (u - 0.5) span east + (v - 0.5) span north), the three an orthonormal frame -- and the bands the legacy probe draws, by band number (detail n is detail_frequencies[n - 1], crater n is crater_frequencies[n - 101]); the shared file must carry exactly these.",
+    "probe_patch": { "centre": [0.6, -0.48, 0.64], "east": [0.8, 0.36, -0.48], "north": [0.0, 0.8, 0.6], "span": 0.5 },
+    "probe_bands": { "detail": [8], "crater": [104] }
   }
 }

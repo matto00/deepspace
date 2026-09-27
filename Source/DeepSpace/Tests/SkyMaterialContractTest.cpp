@@ -37,6 +37,8 @@
 #include "HAL/IConsoleManager.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Materials/MaterialExpressionCustom.h"
+#include "Surface/WorldRelief.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -72,6 +74,9 @@ namespace
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
             { TEXT("body_axis_x"), SkyMaterial::BodyAxisX, TEXT("vector") },
             { TEXT("body_axis_y"), SkyMaterial::BodyAxisY, TEXT("vector") },
+            { TEXT("probe_footprint"), SkyMaterial::ProbeFootprint, TEXT("scalar") },
+            { TEXT("probe_select"), SkyMaterial::ProbeSelect, TEXT("vector") },
+            { TEXT("probe_bias"), SkyMaterial::ProbeBias, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
         };
@@ -201,6 +206,121 @@ namespace
             Found.Append(ScaledBy(*Next, Depth - 1));
         }
         return Found;
+    }
+
+    /** The shared file as a material reaches it (landing decision 1): one
+     *  Custom node that includes WorldRelief.ush and calls its entry point,
+     *  its pins the file's, and no engine noise anywhere -- a band left on an
+     *  engine node is a band the C++ does not have. Returns the node. */
+    const UMaterialExpressionCustom* CheckSharedRelief(FAutomationTestBase& Test, const UMaterial& Material)
+    {
+        const FString Asset = Material.GetName();
+        TArray<const UMaterialExpressionCustom*> Customs;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            if (const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get()))
+            {
+                Customs.Add(Custom);
+            }
+            const bool bEngineNoise = Cast<UMaterialExpressionNoise>(Expression.Get()) || Cast<UMaterialExpressionVectorNoise>(Expression.Get());
+            Test.TestFalse(FString::Printf(TEXT("%s draws no band on an engine noise node (%s)"), *Asset, *Expression->GetName()), bEngineNoise);
+        }
+        if (!Test.TestEqual(FString::Printf(TEXT("%s reaches the shared file through one Custom node"), *Asset), Customs.Num(), 1))
+        {
+            return nullptr;
+        }
+        const UMaterialExpressionCustom* Node = Customs[0];
+        Test.TestTrue(FString::Printf(TEXT("%s's Custom node includes %s, and only it"), *Asset, SkyMaterial::WorldReliefInclude),
+            Node->IncludeFilePaths.Num() == 1 && Node->IncludeFilePaths[0] == SkyMaterial::WorldReliefInclude);
+        Test.TestTrue(FString::Printf(TEXT("and calls %s"), SkyMaterial::WorldReliefEntry),
+            Node->Code.Contains(FString(SkyMaterial::WorldReliefEntry) + TEXT("(")));
+        TArray<FName> Inputs;
+        for (const FCustomInput& Input : Node->Inputs)
+        {
+            Inputs.Add(Input.InputName);
+            Test.TestNotNull(FString::Printf(TEXT("%s's %s is wired"), *Asset, *Input.InputName.ToString()), Input.Input.Expression);
+        }
+        Test.TestTrue(TEXT("its inputs are the file's, in order"), Inputs == SkyMaterial::WorldReliefInputs());
+        TArray<FName> Outputs;
+        for (const FCustomOutput& Output : Node->AdditionalOutputs)
+        {
+            Outputs.Add(Output.OutputName);
+        }
+        Test.TestTrue(TEXT("and so are its outputs"), Outputs == SkyMaterial::WorldReliefOutputs());
+        return Node;
+    }
+
+    /** The JSON's shared_relief and band constants against the header and
+     *  against the shared file's own tables: the file is the source, the
+     *  JSON the list the legacy graph and the docs are built from. */
+    void CheckSharedTables(FAutomationTestBase& Test, const TSharedPtr<FJsonObject>& Contract)
+    {
+        const TSharedPtr<FJsonObject> Shared = Contract->GetObjectField(TEXT("shared_relief"));
+        Test.TestEqual(TEXT("the JSON's include is the header's"), Shared->GetStringField(TEXT("include")), FString(SkyMaterial::WorldReliefInclude));
+        Test.TestEqual(TEXT("and its entry point"), Shared->GetStringField(TEXT("entry")), FString(SkyMaterial::WorldReliefEntry));
+        TArray<FName> Inputs;
+        for (const TSharedPtr<FJsonValue>& Value : Shared->GetArrayField(TEXT("inputs")))
+        {
+            Inputs.Add(FName(*Value->AsString()));
+        }
+        Test.TestTrue(TEXT("and its inputs"), Inputs == SkyMaterial::WorldReliefInputs());
+        TArray<FName> Outputs;
+        for (const TSharedPtr<FJsonValue>& Value : Shared->GetArrayField(TEXT("outputs")))
+        {
+            Outputs.Add(FName(*Value->AsArray()[0]->AsString()));
+        }
+        Test.TestTrue(TEXT("and its outputs"), Outputs == SkyMaterial::WorldReliefOutputs());
+
+        const TSharedPtr<FJsonObject> Constants = Contract->GetObjectField(TEXT("constants"));
+        const WorldReliefNoise::FBands Bands = WorldReliefNoise::Bands();
+        Test.TestEqual(TEXT("the file's coarse band is the contract's"), Bands.ContinentFrequency, Constants->GetNumberField(TEXT("continent_frequency")));
+        Test.TestEqual(TEXT("with its octaves"), Bands.ContinentLevels, static_cast<int32>(Constants->GetNumberField(TEXT("continent_levels"))));
+        Test.TestEqual(TEXT("at its step"), Bands.LevelScale, Constants->GetNumberField(TEXT("level_scale")));
+
+        const TSharedPtr<FJsonObject> Probe = Constants->GetObjectField(TEXT("probe_bands"));
+        TArray<int32> ProbeDetail;
+        for (const TSharedPtr<FJsonValue>& Value : Probe->GetArrayField(TEXT("detail")))
+        {
+            ProbeDetail.Add(static_cast<int32>(Value->AsNumber()));
+        }
+        TArray<int32> ProbeCrater;
+        for (const TSharedPtr<FJsonValue>& Value : Probe->GetArrayField(TEXT("crater")))
+        {
+            ProbeCrater.Add(static_cast<int32>(Value->AsNumber()));
+        }
+        Test.TestTrue(TEXT("the shared file carries exactly the probes' detail bands"), Bands.DetailIndices == ProbeDetail);
+        Test.TestTrue(TEXT("and exactly their crater bands"), Bands.CraterIndices == ProbeCrater);
+
+        const TArray<TSharedPtr<FJsonValue>>& Frequencies = Constants->GetArrayField(TEXT("detail_frequencies"));
+        const TArray<TSharedPtr<FJsonValue>>& Weights = Constants->GetArrayField(TEXT("detail_weights"));
+        for (int32 Band = 0; Band < Bands.DetailIndices.Num(); ++Band)
+        {
+            const int32 Number = Bands.DetailIndices[Band];
+            if (Test.TestTrue(FString::Printf(TEXT("detail band %d is one the contract has"), Number), Frequencies.IsValidIndex(Number - 1)))
+            {
+                Test.TestEqual(FString::Printf(TEXT("detail band %d's frequency"), Number), Bands.DetailFrequencies[Band], Frequencies[Number - 1]->AsNumber());
+                Test.TestEqual(FString::Printf(TEXT("detail band %d's weight"), Number), Bands.DetailWeights[Band], Weights[Number - 1]->AsNumber());
+            }
+        }
+        const TArray<TSharedPtr<FJsonValue>>& CraterFrequencies = Constants->GetArrayField(TEXT("crater_frequencies"));
+        for (int32 Band = 0; Band < Bands.CraterIndices.Num(); ++Band)
+        {
+            const int32 Number = Bands.CraterIndices[Band];
+            if (Test.TestTrue(FString::Printf(TEXT("crater band %d is one the contract has"), Number), CraterFrequencies.IsValidIndex(Number - 101)))
+            {
+                Test.TestEqual(FString::Printf(TEXT("crater band %d's frequency"), Number), Bands.CraterFrequencies[Band], CraterFrequencies[Number - 101]->AsNumber());
+            }
+        }
+        const double Radius = Constants->GetNumberField(TEXT("crater_radius"));
+        const double Depth = Constants->GetNumberField(TEXT("crater_depth"));
+        const double Rim = Constants->GetNumberField(TEXT("crater_rim"));
+        Test.TestEqual(TEXT("a crater's radius"), Bands.CraterRadius, Radius);
+        Test.TestEqual(TEXT("its reciprocal, as the graph computed it"), Bands.CraterInvRadius, 1.0 / Radius);
+        Test.TestEqual(TEXT("its bowl's slope, 2 x depth"), Bands.CraterWall, 2.0 * Depth);
+        Test.TestEqual(TEXT("its rim's fall, -4 x depth x rim"), Bands.CraterRimFall, -4.0 * Depth * Rim);
+        Test.TestEqual(TEXT("the share of sites kept"), Bands.CraterKeep, Constants->GetNumberField(TEXT("crater_keep")));
+        Test.TestEqual(TEXT("the floor's darkening"), Bands.CraterFloorDark, Constants->GetNumberField(TEXT("crater_floor_dark")));
+        Test.TestEqual(TEXT("the rim's brightening"), Bands.CraterRimBright, Constants->GetNumberField(TEXT("crater_rim_bright")));
     }
 
     /**
@@ -816,6 +936,8 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         { TEXT("M_SkyStar"), SkyMaterial::StarPath, SkyMaterial::StarScalars(), SkyMaterial::StarVectors() },
         { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {} },
         { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {} },
+        { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
+        { TEXT("M_SkyReliefProbeLegacy"), SkyMaterial::ReliefProbeLegacyPath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
     };
 
     const TSharedPtr<FJsonObject> JsonMaterials = Contract->GetObjectField(TEXT("materials"));
@@ -878,6 +1000,10 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         {
             TestTrue(TEXT("M_SkyGlass is translucent"), Material->GetBlendMode() == BLEND_Translucent);
         }
+        if (Material->GetFName() == TEXT("M_SkyReliefProbe"))
+        {
+            CheckSharedRelief(*this, *Material);
+        }
         if (Material->GetFName() == TEXT("M_SkyStarfield"))
         {
             // Editor-only data, present under UnrealEditor-Cmd.
@@ -904,6 +1030,8 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("M_SkyStar may be used on instanced meshes (the motes)"), Material->GetUsageByFlag(MATUSAGE_InstancedStaticMeshes));
         }
     }
+
+    CheckSharedTables(*this, Contract);
 
     // MPC_Sky: the header, the JSON and the asset hold the same scalars, and
     // M_SkyGlass reads exactly those -- by an id that still resolves.
