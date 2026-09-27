@@ -223,6 +223,11 @@ the test file deleted with the verdict.
 **Tests:** `DeepSpace.Ship.Target`, `DeepSpace.Ship.InSystemJump`,
 `DeepSpace.Loop.InSystemJump`, `DeepSpace.UI.NavigationScreen.InSystemCourse`,
 `DeepSpace.UI.SystemMapScreen`'s target cases, `.Eta`'s stepped case.
+The stepped case is the only check that the ETA and the soft cap agree, so
+it must not be lost here: at 1 c from 0.2 AU, stepped through
+`FShipFlightState`, the ETA falls one second a second to within 0.5 s; and a
+stepped cruise slide, nose and velocity apart, pins that the ETA follows the
+velocity's ray as it swings (2b pins the unstepped half).
 
 ### Stage 3 ownership check
 

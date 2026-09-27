@@ -412,6 +412,41 @@ bool FTargetMarkerPlaceTest::RunTest(const FString& Parameters)
     Chevron(TargetMarker::Place(true, FVector2D(2500.0, 540.0), 0.3f, FromAngles(70.0, 0.0), View, Min, Inset, true, false),
             FVector2D(1920.0 - Inset, 540.0), FVector2D(1.0, 0.0), TEXT("off to starboard, behind a wall"));
 
+    // Each of the other three edges alone, projected and off by one axis
+    // only, so no other edge's check can stand in for it: a world to port,
+    // above and below the view gets its chevron on that edge, and a walker
+    // nothing. The centre line along the edge is the projection's own.
+    {
+        struct FEdge
+        {
+            FVector2D Projected;
+            FVector Dir;
+            FVector2D Expected;
+            FVector2D Pointing;
+            const TCHAR* What;
+        };
+        const FEdge Edges[] = {
+            { FVector2D(-500.0, 540.0), FromAngles(-70.0, 0.0), FVector2D(Inset, 540.0), FVector2D(-1.0, 0.0),
+              TEXT("off to port") },
+            { FVector2D(960.0, -500.0), FromAngles(0.0, 50.0), FVector2D(960.0, Inset), FVector2D(0.0, -1.0),
+              TEXT("off above") },
+            { FVector2D(960.0, 1600.0), FromAngles(0.0, -50.0), FVector2D(960.0, 1080.0 - Inset), FVector2D(0.0, 1.0),
+              TEXT("off below") },
+        };
+        for (const FEdge& Edge : Edges)
+        {
+            Chevron(TargetMarker::Place(true, Edge.Projected, 0.3f, Edge.Dir, View, Min, Inset, true, true), Edge.Expected,
+                    Edge.Pointing, Edge.What);
+            TestEqual(FString(Edge.What) + TEXT(": a walker gets nothing"),
+                      TargetMarker::Place(true, Edge.Projected, 0.3f, Edge.Dir, View, Min, Inset, false, true).Shape,
+                      ETargetMarkShape::None);
+        }
+        // And the bottom-left corner is on it, as the top-right is.
+        TestEqual(TEXT("on the opposite corner it is still in view"),
+                  TargetMarker::Place(true, FVector2D(0.0, 1080.0), 0.3f, Ahead, View, Min, Inset, true, true).Shape,
+                  ETargetMarkShape::Bracket);
+    }
+
     // Up and to port, along the diagonal: it meets the top inset first.
     {
         const FVector2D Way = FVector2D(-1.0, -1.0).GetSafeNormal();
@@ -505,6 +540,29 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
         }
     }
 
+    // Sliding (a cruise turn the velocity has not followed): the ETA is the
+    // velocity's ray, not the nose's. Nose 30 degrees off the world while
+    // the ship still falls straight at it: the same time as nose-on. Nose on
+    // it while the ship drifts a degree wide: a pass, and no time.
+    {
+        const FQuat NoseToPort(FVector::UpVector, Deg(-30.0));
+        const TOptional<FTargetView> Straight = ViewFrom(System, 1, From, FQuat::Identity, FVector(C, 0.0, 0.0));
+        const TOptional<FTargetView> NoseOff = ViewFrom(System, 1, From, NoseToPort, FVector(C, 0.0, 0.0));
+        const TOptional<FTargetView> Drifting =
+            ViewFrom(System, 1, From, FQuat::Identity, C * FVector(FMath::Cos(Deg(1.0)), FMath::Sin(Deg(1.0)), 0.0));
+        if (TestTrue(TEXT("sliding: all resolve"), Straight && NoseOff && Drifting))
+        {
+            TestFalse(TEXT("the nose really is off it"), NoseOff->ShipLocalDir.Equals(FVector::ForwardVector, 1e-3));
+            TestTrue(TEXT("nose off, falling straight in: a time"), NoseOff->EtaSeconds.IsSet());
+            if (NoseOff->EtaSeconds && Straight->EtaSeconds)
+            {
+                TestEqual(TEXT("and it is the nose-on time"), *NoseOff->EtaSeconds, *Straight->EtaSeconds, 1e-6);
+            }
+            TestFalse(TEXT("nose on, drifting wide: no time"), Drifting->EtaSeconds.IsSet());
+            TestTrue(TEXT("but a pass"), Drifting->PassingCm.IsSet());
+        }
+    }
+
     // Neither at rest, under 1 m/s, or opening; at 1 m/s, a time.
     {
         const auto Toward = [&](double Speed) { return ViewFrom(System, 1, From, FQuat::Identity, FVector(Speed, 0.0, 0.0)); };
@@ -553,6 +611,12 @@ bool FTargetMarkerEtaTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("47.9 H"), NavText::Duration(47.94 * 3600.0), FString(TEXT("47.9 H")));
     TestEqual(TEXT("47.96 h is not 48.0 H but 2 D"), NavText::Duration(47.96 * 3600.0), FString(TEXT("2 D")));
     TestEqual(TEXT("3 D"), NavText::Duration(3.0 * 86400.0), FString(TEXT("3 D")));
+    // The long end has no ceiling and no grouping: cruise's 200 m/s across
+    // 0.2 AU is 1.5e8 s. Pinned as it is, not as it should be: whether a
+    // four-digit day count reads as information or as being behind is the
+    // developer's call (the spec's open question, "The ETA's long end").
+    TestEqual(TEXT("cruise across 0.2 AU: 1731 D"),
+              NavText::Duration(0.2 * UniverseUnits::CmPerAU / FShipFlightLimits().MaxSpeed), FString(TEXT("1731 D")));
     TestEqual(TEXT("arrived: 0 S"), NavText::Duration(0.0), FString(TEXT("0 S")));
     TestEqual(TEXT("never negative"), NavText::Duration(-5.0), FString(TEXT("0 S")));
     TestTrue(TEXT("a time that never comes has no words"), NavText::Duration(std::numeric_limits<double>::infinity()).IsEmpty());
