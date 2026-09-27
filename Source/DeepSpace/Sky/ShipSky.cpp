@@ -837,34 +837,46 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
     return Placement;
 }
 
-// ---------------------------------------------------------------------------
-// ds.Sky.Goto: the sky's one write path, a one-shot PlaceShip for tuning.
-
-void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
-                    FOutputDevice& Out)
+TOptional<ShipSky::FGotoRequest> ShipSky::ParseGoto(TConstArrayView<FString> Args)
 {
     // A trailing "night" asks for the far side from the star, "dusk" for
     // ground under a low sun (EGotoSide::Dusk); either is always
     // taken off before the rest is read: "1 night", its altitude forgotten,
     // is then the usage, never night read as 0 km, onto the surface.
+    FGotoRequest Request;
     TConstArrayView<FString> Rest = Args;
-    ShipSky::EGotoSide Side = ShipSky::EGotoSide::Day;
     if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("night"), ESearchCase::IgnoreCase))
     {
-        Side = ShipSky::EGotoSide::Night;
+        Request.Side = EGotoSide::Night;
         Rest = Rest.Slice(0, Rest.Num() - 1);
     }
     else if (!Rest.IsEmpty() && Rest.Last().Equals(TEXT("dusk"), ESearchCase::IgnoreCase))
     {
-        Side = ShipSky::EGotoSide::Dusk;
+        Request.Side = EGotoSide::Dusk;
         Rest = Rest.Slice(0, Rest.Num() - 1);
     }
     // The altitude must be a number: a body's name has spaces in it, so a
     // forgotten altitude would otherwise read the name's last word as 0 km.
     // Any number, exponent form included: the .03 AU case is 4500000 km,
     // and 4.5e6 is how a person writes it.
-    double AltitudeKm = 0.0;
-    if (Rest.Num() < 2 || !LexTryParseString(AltitudeKm, *Rest.Last()) || !FMath::IsFinite(AltitudeKm))
+    if (Rest.Num() < 2 || !LexTryParseString(Request.AltitudeKm, *Rest.Last()) || !FMath::IsFinite(Request.AltitudeKm))
+    {
+        return {};
+    }
+    // A body's Id can have spaces in it, so every argument but the last is
+    // the body.
+    Request.Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
+    return Request;
+}
+
+// ---------------------------------------------------------------------------
+// ds.Sky.Goto: the sky's one write path, a one-shot PlaceShip for tuning.
+
+void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTransit, TConstArrayView<FString> Args,
+                    FOutputDevice& Out)
+{
+    const TOptional<ShipSky::FGotoRequest> Request = ShipSky::ParseGoto(Args);
+    if (!Request)
     {
         Out.Log(TEXT("ds.Sky.Goto <body> <altitude_km> [night|dusk]: onto the body's day side, its night side, ")
                 TEXT("or under a low sun, facing it. Bodies:"));
@@ -880,9 +892,9 @@ void AShipSky::Goto(UShipSubsystem& Ship, const FSkySystem& System, bool bInTran
         return;
     }
 
-    // A body's Id can have spaces in it, so every argument but the last is
-    // the body.
-    const FString Which = FString::Join(Rest.Slice(0, Rest.Num() - 1), TEXT(" "));
+    const FString& Which = Request->Which;
+    const double AltitudeKm = Request->AltitudeKm;
+    const ShipSky::EGotoSide Side = Request->Side;
     const int32 Body = ShipSky::FindBody(System, Which);
     const TOptional<FNavPlacement> Placement = ShipSky::GotoPlacement(
         System, Body, AltitudeKm * UniverseUnits::CmPerKm, Ship.GetFlightState().GetUniversePosition(), Side);

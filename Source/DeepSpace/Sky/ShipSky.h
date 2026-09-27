@@ -360,4 +360,22 @@ namespace ShipSky
     DEEPSPACE_API TOptional<FNavPlacement> GotoPlacement(const FSkySystem& System, int32 Body,
                                                          double AltitudeCm, const FUniversePosition& From,
                                                          EGotoSide Side = EGotoSide::Day);
+
+    /** ds.Sky.Goto's arguments, read: which body, how high, which side. */
+    struct FGotoRequest
+    {
+        FString Which;
+        double AltitudeKm = 0.0;
+        EGotoSide Side = EGotoSide::Day;
+    };
+
+    /**
+     * ds.Sky.Goto's arguments, `<body> <altitude_km> [night|dusk]`. A
+     * trailing side word is always taken off before the rest is read, so
+     * "1 night" or "1 dusk" -- the altitude forgotten -- is empty (the
+     * usage), never the side read as 0 km, onto the surface. The altitude
+     * must be a finite number, exponent form included (4.5e6); every
+     * argument before it is the body, whose name can have spaces in it.
+     */
+    DEEPSPACE_API TOptional<FGotoRequest> ParseGoto(TConstArrayView<FString> Args);
 }

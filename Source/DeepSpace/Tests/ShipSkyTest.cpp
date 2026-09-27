@@ -223,6 +223,67 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                                                                           SkyTestFixtures::Opening(), ShipSky::EGotoSide::Night);
         TestTrue(TEXT("a star has no night side: night is the side the ship was on, as by day"),
             StarNight.IsSet() && Far.IsSet() && StarNight->Position == Far->Position);
+
+        // Goto dusk: the same height over ground where the star stands
+        // DuskSunElevation -- ten degrees -- above the horizon, aside from it
+        // in the system's plane, facing the world: the relief's raking light.
+        const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::HomeIndex, 1.5e7,
+                                                                     SkyTestFixtures::Opening(), ShipSky::EGotoSide::Dusk);
+        if (TestTrue(TEXT("goto dusk places over a body"), Dusk.IsSet()))
+        {
+            const FVector ToBody = Home.Position - Dusk->Position;
+            const FVector Zenith = (-ToBody).GetSafeNormal();
+            const FVector Nose = Dusk->Orientation.GetForwardVector();
+            const FVector Sunward = (Star.Position - Home.Position).GetSafeNormal();
+            TestTrue(TEXT("dusk: at its altitude above the surface"), FMath::IsNearlyEqual(ToBody.Size(), Home.Radius + 1.5e7, 1.0));
+            TestTrue(TEXT("dusk: facing it"), FVector::DotProduct(Nose, ToBody.GetSafeNormal()) > 1.0 - 1e-9);
+            // The sun's elevation over the ground under the ship: the star is
+            // so far that its direction from there is the world's sunward.
+            const double Elevation = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Zenith, Sunward)));
+            TestTrue(FString::Printf(TEXT("dusk: the star stands 10 degrees above the ground's horizon (%.4f)"), Elevation),
+                FMath::IsNearlyEqual(Elevation, 10.0, 1e-6));
+            const double FromShip = FMath::RadiansToDegrees(FMath::Asin(
+                FVector::DotProduct(Zenith, (Star.Position - Dusk->Position).GetSafeNormal())));
+            TestTrue(FString::Printf(TEXT("dusk: and so it does seen from the ship (%.3f)"), FromShip),
+                FMath::IsNearlyEqual(FromShip, 10.0, 0.05));
+            const FVector OutOfLine = Zenith - Sunward * FVector::DotProduct(Zenith, Sunward);
+            TestTrue(TEXT("dusk: aside level, in the system's plane rather than above or below it"),
+                FMath::Abs(OutOfLine.GetSafeNormal().Z) < 1e-6);
+            TestTrue(TEXT("dusk: with the system's up kept up"), Dusk->Orientation.GetUpVector().Z > 0.99);
+        }
+        const TOptional<FNavPlacement> StarDusk = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::StarIndex, ThirtyAU,
+                                                                         SkyTestFixtures::Opening(), ShipSky::EGotoSide::Dusk);
+        TestTrue(TEXT("a star has no dusk: dusk is the side the ship was on, as by day"),
+            StarDusk.IsSet() && Far.IsSet() && StarDusk->Position == Far->Position);
+
+        // The command's words: the side is taken off the end before the
+        // altitude is read, so a forgotten altitude is the usage, never 0 km.
+        {
+            const auto Parse = [](std::initializer_list<const TCHAR*> Words)
+            {
+                TArray<FString> Args;
+                for (const TCHAR* Word : Words)
+                {
+                    Args.Add(Word);
+                }
+                return ShipSky::ParseGoto(Args);
+            };
+            const TOptional<ShipSky::FGotoRequest> DuskWords = Parse({ TEXT("3"), TEXT("10"), TEXT("dusk") });
+            TestTrue(TEXT("'3 10 dusk' is body 3, 10 km, at dusk"), DuskWords.IsSet() && DuskWords->Which == TEXT("3")
+                && DuskWords->AltitudeKm == 10.0 && DuskWords->Side == ShipSky::EGotoSide::Dusk);
+            const TOptional<ShipSky::FGotoRequest> DuskCase = Parse({ TEXT("Fixture IIa"), TEXT("2.5"), TEXT("DUSK") });
+            TestTrue(TEXT("a named body, any case of dusk"), DuskCase.IsSet() && DuskCase->Which == TEXT("Fixture IIa")
+                && DuskCase->AltitudeKm == 2.5 && DuskCase->Side == ShipSky::EGotoSide::Dusk);
+            const TOptional<ShipSky::FGotoRequest> NightWords = Parse({ TEXT("3"), TEXT("4.5e6"), TEXT("night") });
+            TestTrue(TEXT("'3 4.5e6 night' is the night side, in exponent form"), NightWords.IsSet()
+                && NightWords->AltitudeKm == 4.5e6 && NightWords->Side == ShipSky::EGotoSide::Night);
+            const TOptional<ShipSky::FGotoRequest> DayWords = Parse({ TEXT("1"), TEXT("40000") });
+            TestTrue(TEXT("no side word is the day side"), DayWords.IsSet() && DayWords->Which == TEXT("1")
+                && DayWords->AltitudeKm == 40000.0 && DayWords->Side == ShipSky::EGotoSide::Day);
+            TestFalse(TEXT("'1 dusk', the altitude forgotten, is the usage"), Parse({ TEXT("1"), TEXT("dusk") }).IsSet());
+            TestFalse(TEXT("'1 night', the altitude forgotten, is the usage"), Parse({ TEXT("1"), TEXT("night") }).IsSet());
+            TestFalse(TEXT("a name without an altitude is the usage"), Parse({ TEXT("Fixture"), TEXT("IIa") }).IsSet());
+        }
     }
 
     // -- The actor, as the level build places it ------------------------------

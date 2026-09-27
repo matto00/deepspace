@@ -916,7 +916,12 @@ bool FSkyProxyOnTheGpuTest::RunTest(const FString& Parameters)
     using namespace SkyGpuTransformLocal;
 
     // The trap, measured, so this test says so if the engine ever stops
-    // setting it: an arbitrary scale, or rotation, does not come back.
+    // setting it: an arbitrary scale, or rotation, does not come back. If
+    // the compression here ever goes lossless, everything below passes
+    // trivially, so that is a failure here, not a note: then either the
+    // engine changed and RenderableScale and the unturned proxies can go,
+    // or OnTheGpu no longer runs the path GPU Scene does, and must be made
+    // to again.
     {
         const FTransform Arbitrary(FQuat(FVector(0.3, -0.7, 0.2).GetSafeNormal(), 0.83), FVector(1.0e9, 2.0e9, -5.0e8),
                                    FVector(6.2345678e7));
@@ -926,6 +931,8 @@ bool FSkyProxyOnTheGpuTest::RunTest(const FString& Parameters)
             .Cross(Arbitrary.GetRotation().GetAxisZ()).Size();
         AddInfo(FString::Printf(TEXT("the GPU draws an arbitrary scale %.2g off and an arbitrary rotation %.2g rad off"),
             ScaleError, TurnError));
+        TestTrue(FString::Printf(TEXT("the GPU rounds an arbitrary scale (%.2g off)"), ScaleError), ScaleError > 1.0e-7);
+        TestTrue(FString::Printf(TEXT("and an arbitrary rotation (%.2g rad off)"), TurnError), TurnError > 1.0e-7);
     }
 
     // RenderableScale: at or above, by at most 2^-14, and exactly what the
@@ -1000,6 +1007,10 @@ bool FSkyProxyOnTheGpuTest::RunTest(const FString& Parameters)
             "an unrounded scale put it %.3g off"), Checked, Worst, WorstUnrounded));
         TestTrue(FString::Printf(TEXT("the GPU draws the ground under the ship where the projection put it, to %.0g"), Bound),
             Worst < Bound);
+        // And the same check sees the bug it guards against: the proxies at
+        // a scale the GPU does not keep put the ground a visible fraction off.
+        TestTrue(FString::Printf(TEXT("and at an unrounded scale this check sees the ground drawn off (%.3g)"), WorstUnrounded),
+            WorstUnrounded > 1.0e-3);
     }
     return true;
 }

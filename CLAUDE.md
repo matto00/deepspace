@@ -470,20 +470,27 @@ h.** GPU Scene stores every instance transform compressed
 significant bits and the rotation is a 16-bit octahedral axis and a 15-bit
 spin, so either comes back up to ~3e-5 off. A proxy's near side is its
 centre minus its radius, both R / h times the near side, so that rounding
-lands on the ground under the ship times R / h -- a percent or two of the
-altitude in the last 50 km, a different percent every frame as the scale
-moves, and a sideways slide of the face whenever the ship turned. That was
+lands on the ground under the ship times R / h -- up to 3e-5 R / h of the
+altitude, 1.6% at 10 km over a 5,400 km world and about 1.9% at an Earth's
+or a Jupiter's floor, falling as the ship climbs (0.4% at 50 km over an
+Earth); a different fraction every frame as the scale moves, and a sideways
+slide of the face whenever the ship turned. That was
 the playtest's "tearing" 10-15 km up. So `SkyProjection::Project` rounds each
 proxy's scale *up* to one the GPU keeps exactly (`RenderableScale`, a
 homothety 2^-14 larger at most, placed to match), and `AShipSky` draws every
-proxy **unturned** -- absolute identity rotation and scale -- while
+proxy **unturned** -- an absolute rotation, the identity, and an absolute
+scale, the view's -- while
 `M_SkyBody` turns the face with the ship itself through `BodyAxisX` and
 `BodyAxisY`, full-float parameters. Never give a proxy a rotation, and never
 set its scale to anything but `FSkyBodyView::ProxyScale`.
 `DeepSpace.Sky.ProxyOnTheGpu` runs the proxies through the engine's own
-compression. The pair of frames in the fix's renders is the evidence: the
-ground's frame-to-frame zoom from a 1 m descent at 10 km was 30-80 times the
-true one, and after, is the true one.
+compression, fails if that compression ever stops rounding, and shows the
+unrounded scale putting the ground about 1% off; it is the evidence the repo
+keeps. (The fix was also judged on before/after offscreen renders of a 1 m
+descent at 10 km, which were not kept.) `DeepSpace.Sky.MaterialContract`
+evaluates `M_SkyBody`'s turn -- the direction the noise reads and the
+normal the light meets -- under an oblique `BodyAxisX`/`BodyAxisY`, so a
+graph that skips the turn or transposes it goes red.
 
 **The material contract.** Every parameter name C++ drives lives in
 `Sky/SkyMaterialContract.h`, mirrored by `Tools/sky_material_contract.json`,
