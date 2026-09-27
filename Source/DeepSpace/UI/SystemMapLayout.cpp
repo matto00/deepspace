@@ -171,7 +171,7 @@ SystemMap::FMapScale SystemMap::Fit(const FStarSystem& System, double StandoffAU
 FVector2D SystemMap::Place(const FMapScale& Scale, const FUniversePosition& Where)
 {
     const FVector Offset = Where - Scale.Star;
-    const double RadiusPx = Scale.RadiusPx(Offset.Size() / UniverseUnits::CmPerAU);
+    const double RadiusPx = Scale.RadiusPx(FVector2D(Offset.X, Offset.Y).Size() / UniverseUnits::CmPerAU);
     return Scale.Pixels.Centre + PanelDirection(Offset.X, Offset.Y) * RadiusPx;
 }
 
@@ -179,7 +179,6 @@ TOptional<FVector2D> SystemMap::MotionOnMap(const FMapScale& Scale, const FUnive
                                            const FVector& Direction)
 {
     const FVector Offset = Where - Scale.Star;
-    const double Distance = Offset.Size();
     const double InPlane = FVector2D(Offset.X, Offset.Y).Size();
     const FVector Step = Direction.GetSafeNormal();
     if (InPlane <= NoDirectionCm || Step.IsNearlyZero())
@@ -187,25 +186,26 @@ TOptional<FVector2D> SystemMap::MotionOnMap(const FMapScale& Scale, const FUnive
         return {};
     }
 
-    // Ship draws the glyph at R(|offset|) along the offset's azimuth in the
-    // plane. Its derivative along Step, per cm, has two parts:
-    //  - radial: R' times the rate the true distance changes, along the
-    //    azimuth's panel direction;
+    // Ship draws the glyph at R(r), r the offset's distance in the plane,
+    // along its azimuth there. Its derivative along Step, per cm, has two
+    // parts:
+    //  - radial: R' times the rate r changes, along the azimuth's panel
+    //    direction;
     //  - round: R times the rate the azimuth turns, which is Step's in-plane
     //    part square to the offset over the in-plane distance.
     // The second is R / r of the first's scale R', which for a log map is
     // several times larger: the map is stretched round each ring, and a
     // direction taken straight from the universe misreads it.
-    const double DistanceAU = Distance / UniverseUnits::CmPerAU;
-    const double Closing = FVector::DotProduct(Offset, Step) / Distance;
+    const FVector2D Radial(Offset.X / InPlane, Offset.Y / InPlane);
+    const FVector2D Flat(Step.X, Step.Y);
+    const double DistanceAU = InPlane / UniverseUnits::CmPerAU;
+    const double Closing = FVector2D::DotProduct(Flat, Radial);
     const double RawRadiusPx = Scale.RadiusPx(DistanceAU);
     const double RadiusPx = FMath::Max(RawRadiusPx, GlyphFloorPx(Scale));
     const double SlopePxPerCm = RawRadiusPx < GlyphFloorPx(Scale)
         ? 0.0
         : Scale.RadiusSlopePxPerAU(DistanceAU, Closing > 0.0) / UniverseUnits::CmPerAU;
 
-    const FVector2D Radial(Offset.X / InPlane, Offset.Y / InPlane);
-    const FVector2D Flat(Step.X, Step.Y);
     const FVector2D Round = Flat - FVector2D::DotProduct(Flat, Radial) * Radial;
 
     const FVector2D Motion = PanelVector(Radial.X, Radial.Y) * (SlopePxPerCm * Closing)
@@ -223,7 +223,13 @@ SystemMap::FMapShip SystemMap::Ship(const FMapScale& Scale, const FUniversePosit
     FMapShip Glyph;
     const FVector Offset = Where - Scale.Star;
     const double Distance = Offset.Size();
-    const double DistanceAU = Distance / UniverseUnits::CmPerAU;
+    // Top-down: the glyph is placed by the distance in the plane, as the
+    // worlds are, so a ship closing on a world closes on its dot from off
+    // the plane too. How far off it is, is the footer's (ElevationDeg).
+    // Taken from the 3D distance, as it once was, an approach from an
+    // interstellar arrival stepped the glyph away from the dot for a while
+    // in about 1 in 80 (developer's ruling, 2026-09-27).
+    const double DistanceAU = FVector2D(Offset.X, Offset.Y).Size() / UniverseUnits::CmPerAU;
 
     Glyph.Pin = DistanceAU <= Scale.InnerAU ? EMapPin::Inside
               : DistanceAU >= Scale.RimAU ? EMapPin::Beyond

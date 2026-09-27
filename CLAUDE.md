@@ -758,16 +758,20 @@ round each ring several times more than across it (`R / (r dR/dr)`, about
 star, or between two points at the same distance from it, is drawn true;
 any other is bent, median ~4 and up to ~50 degrees. The ship's glyph
 therefore takes the same warp as the dots (on the dot at the world, closing
-on it monotonically along any straight flight in the plane:
+on it monotonically along any straight flight:
 `DeepSpace.UI.SystemMap.StraightApproach`), and **its tick is the way the
 glyph moves, never the nose's universe direction** (`SystemMap::MotionOnMap`,
 the derivative of `Ship`'s own placement). Drawn in universe directions it
 pointed up to 90 degrees off the glyph's motion and ~50 off the dot the nose
 was on -- the playtest's "map does not track" (`.TickFollowsGlyph`, and
-`.Bearing` for the two true bearings). Off the plane the glyph's radius is
-the true 3D distance while its azimuth is top-down, so about 1 approach in
-80 from an interstellar arrival steps the glyph away from the dot for a
-while (up to ~7 px) before closing: a known open question, not guarded.
+`.Bearing` for the two true bearings). The bent bearings stay, to be tried in
+play (developer's ruling, 2026-09-27). **The ship is drawn top-down**: radius
+and azimuth both from its position in the plane, the elevation the footer's
+line, a ship over the pole held at the star's edge (the same ruling, which
+reversed the spec's true-3D-distance radius: approaching from an interstellar
+arrival, off the plane, that stepped the glyph away from the dot about 1 time
+in 80). `.StraightApproach` flies from off the plane and from arrival points
+too.
 
 **The helm looks and clicks** (decision 2, ruling 4): E at the map sits
 nobody down. Seated, `UpdatePointer` gates the pointer on a trace along the

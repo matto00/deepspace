@@ -236,8 +236,11 @@ bool FSystemMapScreenTest::RunTest(const FString& Parameters)
         const double Out = Home->Planets.Last().SemiMajorAxisAU * UniverseUnits::CmPerAU;
         Ship->PlaceShip(Home->Stub.Position + FVector(0.0, 0.0, Out), Facing());
         Look();
-        TestEqual(TEXT("over the pole, the footer says how far above the plane"), Map->GetFooterText().ToString(),
-                  FString(TEXT("90° above the plane.")));
+        // Top-down (ruling, 2026-09-27): over the pole is on the star's
+        // axis, held at its edge, and the footer says how far above it is.
+        TestEqual(TEXT("over the pole, held at the star, the footer says how far above the plane"),
+                  Map->GetFooterText().ToString(),
+                  FString::Printf(TEXT("Inside %s's orbit. 90° above the plane."), *Home->Planets[0].Designation));
         Ship->PlaceShip(Home->Stub.Position + FVector(Out, 0.0, -Out * FMath::Tan(FMath::DegreesToRadians(18.0))), Facing());
         Look();
         TestEqual(TEXT("and below it"), Map->GetFooterText().ToString(), FString(TEXT("18° below the plane.")));

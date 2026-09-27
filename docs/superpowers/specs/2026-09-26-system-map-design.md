@@ -20,6 +20,33 @@ course as an id), ADR 0005 (the ship is the origin)
 anti-chore principle*, *shared presence, not division of labour*
 **Built in the order of:** `docs/superpowers/plans/2026-09-26-poc2-build-order.md`
 
+## Amendment, 2026-09-27: the ship is drawn top-down
+
+After the third playtest's note -- "map seems to not track location
+precisely. let's double check that movement on the map corresponds with
+movement in the system" -- the map was measured against straight flights to
+every world of 120 generated systems. Two things were found, and the
+developer ruled on both. Binding; they override anything below.
+
+1. **Bearings: kept as built, to be tried in play.** A radial log warp is
+   stretched round each ring about 3x more than across it, so only bearings
+   toward or away from the star, or between two points equally far from it,
+   are drawn true; any other is bent (median ~4, up to ~50 degrees). That is
+   inherent in the orrery and stays. What was wrong, and is fixed, was the
+   ship's tick: it was drawn in universe directions, up to 90 degrees off the
+   way the glyph actually moves. It is now the nose carried through the warp
+   (`SystemMap::MotionOnMap`), so the glyph moves along its tick. Nothing
+   more is added (no drawn course curve, no inset, no re-centred warp).
+2. **The ship is drawn at its top-down, in-plane distance.** This reverses
+   decision 3's *true distance* rule (below, marked superseded):
+   arrivals come in off the plane, and with the radius taken from the 3D
+   distance and the azimuth from the plane, about 1 approach in 80 from an
+   arrival stepped the glyph away from the dot it was closing on, by up to
+   ~7 px, before closing. Top-down, none do. The footer's elevation line says
+   how far above or below the plane the ship is, as before, and a ship over
+   the pole is held at the star's edge (`Inside <innermost>'s orbit. 90°
+   above the plane.`).
+
 ## Amendment, 2026-09-26: the developer's rulings
 
 The developer read this spec and the flight-feel spec together and ruled on
@@ -491,8 +518,11 @@ does not rescale as the ship flies, which would be disorienting. Beyond the
 rim, out toward the system's edge, the ship is pinned to the rim, and the
 footer says `Beyond the map.`
 
-**The ship's radius is its true distance from the star, and its azimuth is
-its position projected into the plane.** Arrivals come in along the line
+**Superseded by the 2026-09-27 ruling: the ship is drawn top-down, radius
+and azimuth both from its position projected into the plane, and a ship over
+the pole is held at the star's edge.** As first written: *The ship's radius
+is its true distance from the star, and its azimuth is its position
+projected into the plane.* Arrivals come in along the line
 from wherever the ship left, so the ship can be well above the plane. Taken
 from the projection, a ship 2 AU over the pole would be drawn on the star.
 Taken from the true distance, it is drawn 2 AU out, and the footer says
@@ -1540,7 +1570,8 @@ Pure, no world:
   ship at an orbit's radius is drawn on its ring; **a ship between the star's
   surface and `r_in` is drawn just outside the star's disc and reports it is
   inside the innermost orbit**; beyond the rim it is pinned and says so; 2 AU
-  over the pole it is drawn 2 AU out and reports 90 degrees above the plane.
+  over the pole it is held at the star's edge and reports 90 degrees above the
+  plane (the 2026-09-27 ruling; first written as drawn 2 AU out).
 - **`.Pick`**: a click on a dot picks it; two dots 9 px apart split at the
   midpoint (4 px from A picks A, 5 px picks B), and an exact tie picks the
   inner; a click 15 px from every dot picks nothing; a click on the star picks

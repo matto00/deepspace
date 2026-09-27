@@ -93,10 +93,13 @@ namespace SystemMapTrackingTestLocal
 }
 
 /**
- * Flying straight at a world in the plane the worlds are in, the ship's
+ * Flying straight at a world, from in the plane or out of it, the ship's
  * glyph never moves away from that world's dot, and it is on the dot at the
  * world. Checked for every world of every system round a generated home,
- * from 32 starts each.
+ * from 32 starts in the plane and 32 off it, and from 16 more placed as an
+ * interstellar arrival is: at the standoff, from anywhere round the star.
+ * Off the plane this holds because the glyph is placed top-down
+ * (developer's ruling, 2026-09-27); by the 3D distance it did not.
  */
 bool FSystemMapStraightApproachTest::RunTest(const FString& Parameters)
 {
@@ -117,7 +120,19 @@ bool FSystemMapStraightApproachTest::RunTest(const FString& Parameters)
         {
             const FUniversePosition World = System.PlanetPosition(Orbit);
             const FVector2D Dot = Drawn.Dots[Orbit].Centre;
-            for (const FUniversePosition& Start : Starts(System, Scale, Orbit, false))
+            TArray<FUniversePosition> From = Starts(System, Scale, Orbit, false);
+            From.Append(Starts(System, Scale, Orbit, true));
+            const double Standoff = NavStart::ArrivalStandoffAU(System, NavStart::DefaultStandoffAU) * AU;
+            for (int32 Arrival = 0; Arrival < 16; ++Arrival)
+            {
+                // Spread over the sphere (a Fibonacci lattice): elevations
+                // from pole to pole, azimuths all round.
+                const double Up = 1.0 - (Arrival + 0.5) / 8.0;
+                const double Azimuth = Arrival * 2.39996322972865332;
+                const double Flat = FMath::Sqrt(FMath::Max(0.0, 1.0 - Up * Up));
+                From.Add(System.Stub.Position + FVector(Flat * FMath::Cos(Azimuth), Flat * FMath::Sin(Azimuth), Up) * Standoff);
+            }
+            for (const FUniversePosition& Start : From)
             {
                 const FVector Leg = World - Start;
                 if (Leg.Size() < 1.0e-3 * AU)
@@ -144,7 +159,7 @@ bool FSystemMapStraightApproachTest::RunTest(const FString& Parameters)
             }
         }
     }
-    AddInfo(FString::Printf(TEXT("%d straight flights in the plane over %d systems"), Flights, Systems.Num()));
+    AddInfo(FString::Printf(TEXT("%d straight flights, in the plane and off it, over %d systems"), Flights, Systems.Num()));
     TestTrue(TEXT("flights to check"), Flights > 1000);
     TestEqual(FString::Printf(TEXT("flights whose glyph moved away from the dot it was closing on (worst %.3f px)"), WorstRetreatPx),
               Retreats, 0);

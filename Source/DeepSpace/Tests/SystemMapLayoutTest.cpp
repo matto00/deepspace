@@ -376,11 +376,16 @@ bool FSystemMapShipOnTheWarpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("past the rim the ship says it is beyond the map"), Beyond.Pin == EMapPin::Beyond);
     TestTrue(TEXT("and is held on the rim"), FMath::IsNearlyEqual(From(Beyond), Scale.Pixels.RimPx, 1.0e-6));
 
+    // Top-down (developer's ruling, 2026-09-27): the plane distance places
+    // the glyph, and the elevation is the footer's.
     const FMapShip Pole = Ship(Scale, StarAt + FVector(0.0, 0.0, 2.0 * UniverseUnits::CmPerAU), FQuat::Identity);
-    TestTrue(TEXT("2 AU over the pole is drawn 2 AU out, not on the star"),
-             FMath::IsNearlyEqual(From(Pole), Scale.RadiusPx(2.0), 1.0e-6) && From(Pole) > Scale.RingPx[1]);
+    TestTrue(TEXT("2 AU over the pole is held at the star's edge"),
+             Pole.Pin == EMapPin::Inside && FMath::IsNearlyEqual(From(Pole), Scale.Pixels.StarPx + 0.5 * ShipRingPx, 1.0e-6));
     TestTrue(TEXT("and reports 90 degrees above the plane"), FMath::IsNearlyEqual(Pole.ElevationDeg, 90.0, 1.0e-6));
-    TestTrue(TEXT("it is on the map, so not pinned"), Pole.Pin == EMapPin::None);
+    const FMapShip OverRing = Ship(Scale, StarAt + FVector(-0.6, 0.8, 0.0) * (1.0 * UniverseUnits::CmPerAU)
+                                              + FVector(0.0, 0.0, 3.0 * UniverseUnits::CmPerAU), FQuat::Identity);
+    TestTrue(TEXT("3 AU over orbit II's ring is drawn on the ring"),
+             FMath::IsNearlyEqual(From(OverRing), Scale.RingPx[1], 1.0e-6) && OverRing.Pin == EMapPin::None);
 
     const FMapShip Below = Ship(Scale, StarAt + FVector(1.0, 0.0, -1.0) * UniverseUnits::CmPerAU, FQuat::Identity);
     TestTrue(TEXT("below the plane is negative"), FMath::IsNearlyEqual(Below.ElevationDeg, -45.0, 1.0e-6));

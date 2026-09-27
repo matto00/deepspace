@@ -148,11 +148,12 @@ namespace SystemMap
     DEEPSPACE_API FMapScale Fit(const FStarSystem& System, double StandoffAU, const FMapPixels& Pixels = FMapPixels());
 
     /**
-     * Where a position is drawn: its true distance from the star through the
-     * warp, at its azimuth in the plane. The true distance, not the
-     * projected one, so a ship over the pole is drawn as far out as it is
-     * rather than on the star. For the worlds, which are in the plane, the
-     * two are the same.
+     * Where a position is drawn: straight down onto the plane, its distance
+     * from the star there through the warp, at its azimuth. Top-down, so a
+     * ship closing on a world closes on its dot from off the plane as well;
+     * a ship over the pole is drawn at the star's edge, and the footer says
+     * how far above the plane it is (developer's ruling, 2026-09-27, which
+     * reverses the true 3D distance the spec first chose).
      */
     DEEPSPACE_API FVector2D Place(const FMapScale& Scale, const FUniversePosition& Where);
 
