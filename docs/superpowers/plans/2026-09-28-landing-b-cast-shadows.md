@@ -1074,6 +1074,10 @@ Expected: a clean tree on `feat/landing-b-t` (the re-authored `Content/Materials
   - **GO at some N:** go on to Task 2 with that N as `shadow_samples`, and the early exit if it was needed.
   - **NO-GO:** go to Task 4b. Tasks 2-6 are not started.
 
+**Spike verdict (2026-09-28, track T, RTX 4070 Ti SUPER at 4K):** `NO-GO -- at N = 6 the worst case is 1.5m_dusk10 at +11.71 ms (spread 0.55); early exit tried: +13.07 ms (k = 6 coarse bands, the finer ones bounded by SimplexValueBound x weight / frequency -- looser than the saving)`. Tried: `N 12: worst +26.99 ms (1.5m_dusk10), N 8: worst +17.07 ms (1.5m_dusk10), N 6: worst +11.71 ms (1.5m_dusk10), N 6 + early exit: worst +13.07 ms (1.5m_dusk10)`. Per case at N 12 / 8 / 6: 50km_dusk10 +11.14 / +6.96 / +5.12, 200km_dusk10 +10.60 / +5.97 / +3.78, 1.5m_dusk3 +14.13 / +10.29 / +8.54, 1.5m_dusk10 +26.99 / +17.07 / +11.71; the start's two cases (sun 62.6 degrees, above the exit) +0.1 to +0.5, within their spread. Baseline (before the term): 50km 10.63, 1.5m 18.87, 50km_dusk10 9.39, 1.5m_dusk3 15.66, 200km_dusk10 12.87, 1.5m_dusk10 16.07 ms; a second baseline read every cost within 0.2 ms of zero. Nothing was committed from the spike. Task 0 was not answered before it ran; Task 4b goes to the developer.
+
+**Found while taking the baseline** (Task 1, as committed): the ground frames are not deterministic between two captures of a still scene -- the far tiles' skirts and seams flicker frame to frame (the near ground is identical) -- so `coverage` with no term at all reads 1-10% at the ground and up to 100% on the near-black 3-degree frames, and **Task 4's switch assertion (at least 1% at `1.5m_dusk3`) would pass with no switch**: the spike, which writes no `Shadows`, read 6-21% there. A GPU pipeline still compiling after `FinishAllCompilation` drew III's ground red in the first pass (fixed: both tests settle in wall-clock time). And `1.5m_dusk10`, taken straight after `50km_dusk10`, drew every frame slower than the last (150 ms to 1.4 s) and slowed the cases after it; taken last it is 16 ms. Neither is diagnosed.
+
 ---
 
 ## Task 2: `WR_SunVisible` in the shared file, and its C++ mirror
