@@ -130,6 +130,13 @@ public:
     /** The spares aboard, each one particular part. */
     const TArray<FShipPartState>& GetSpares() const;
 
+    /** A new spare of the part with this id, aboard (ds.Ship.Spares give).
+     *  False for an id that names no part. */
+    bool AddSpare(FName PartId);
+
+    /** No spares aboard (ds.Ship.Spares clear). */
+    void ClearSpares();
+
     /**
      * A seam for tests, not a part (decision 8): a standing draw off the top
      * under "Load.<Name>", replaced if Name already draws. No console

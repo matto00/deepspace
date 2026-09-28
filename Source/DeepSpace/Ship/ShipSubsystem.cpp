@@ -359,6 +359,129 @@ namespace
     FAutoConsoleCommandWithWorldArgsAndOutputDevice NavChargeCommand(
         TEXT("ds.Nav.Charge"), TEXT("Fill the jump's charge on the next tick, for running the loop in seconds."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavCharge));
+
+    // -- parts, from the console, until landing and a sourcing spec exist ------
+    // (wear and upgrades ruling 8). Developer's lines, not screens in the ship:
+    // ds.Ship.Describe may print what no player sees.
+
+    /** A catalogue part by id or display name, case-blind; the args are split
+     *  on spaces, so "Twin-core reactor" arrives as two. */
+    UShipModuleDataAsset* PartNamed(const UShipSubsystem& Ship, const TArray<FString>& Args)
+    {
+        const FString Wanted = FString::Join(Args, TEXT(" "));
+        for (UShipModuleDataAsset* Part : Ship.GetCatalogue())
+        {
+            if (Wanted.Equals(Part->ModuleId.ToString(), ESearchCase::IgnoreCase)
+                || Wanted.Equals(Part->DisplayName.ToString(), ESearchCase::IgnoreCase))
+            {
+                return Part;
+            }
+        }
+        return nullptr;
+    }
+
+    FString CatalogueIds(const UShipSubsystem& Ship)
+    {
+        TArray<FString> Ids;
+        for (const UShipModuleDataAsset* Part : Ship.GetCatalogue())
+        {
+            Ids.Add(Part->ModuleId.ToString());
+        }
+        return FString::Join(Ids, TEXT(", "));
+    }
+
+    void ShipInstall(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Install"));
+        if (!Ship)
+        {
+            return;
+        }
+        const UShipModuleDataAsset* Part = Args.IsEmpty() ? nullptr : PartNamed(*Ship, Args);
+        if (!Part)
+        {
+            Out.Logf(TEXT("ds.Ship.Install <part>: an id or a name, one of %s"), *CatalogueIds(*Ship));
+            return;
+        }
+        if (Ship->FitPartById(Part->ModuleId))
+        {
+            Out.Logf(TEXT("%s is fitted (%s)."), *Part->DisplayName.ToString(), *Part->ModuleId.ToString());
+        }
+        else
+        {
+            Out.Logf(TEXT("%s cannot be fitted."), *Part->ModuleId.ToString());
+        }
+    }
+
+    void ShipSpares(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Spares"));
+        if (!Ship)
+        {
+            return;
+        }
+        if (!Args.IsEmpty() && Args[0].Equals(TEXT("clear"), ESearchCase::IgnoreCase))
+        {
+            Ship->ClearSpares();
+            Out.Log(TEXT("No spares aboard."));
+            return;
+        }
+        if (!Args.IsEmpty() && Args[0].Equals(TEXT("give"), ESearchCase::IgnoreCase))
+        {
+            TArray<FString> Rest = Args;
+            Rest.RemoveAt(0);
+            const UShipModuleDataAsset* Part = Rest.IsEmpty() ? nullptr : PartNamed(*Ship, Rest);
+            if (!Part || !Ship->AddSpare(Part->ModuleId))
+            {
+                Out.Logf(TEXT("ds.Ship.Spares give <part>: an id or a name, one of %s"), *CatalogueIds(*Ship));
+                return;
+            }
+            Out.Logf(TEXT("A spare %s is aboard."), *Part->DisplayName.ToString());
+            return;
+        }
+        const TArray<FShipPartState>& Spares = Ship->GetSpares();
+        Out.Logf(TEXT("%d spares aboard. ds.Ship.Install <part> fits one; ds.Ship.Spares give <part> | clear."), Spares.Num());
+        for (int32 Index = 0; Index < Spares.Num(); ++Index)
+        {
+            Out.Logf(TEXT("%2d  %s"), Index, *Spares[Index].PartId.ToString());
+        }
+    }
+
+    void ShipDescribe(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        const UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Describe"));
+        if (!Ship)
+        {
+            return;
+        }
+        for (const EShipBay Bay : ShipBay::All())
+        {
+            FString Line = FString::Printf(TEXT("%-12s "), *ShipBay::Name(Bay).ToString());
+            if (const UShipModuleDataAsset* Part = Ship->GetFittedPart(Bay))
+            {
+                Line += FString::Printf(TEXT("%s  draw %.0f W"), *Part->ModuleId.ToString(), Part->PowerDraw);
+                for (const TPair<EShipRating, double>& Rated : Part->Ratings)
+                {
+                    Line += FString::Printf(TEXT("  %s %s"), *ShipParts::RatingName(Rated.Key).ToString(), *FString::SanitizeFloat(Rated.Value));
+                }
+            }
+            else
+            {
+                Line += TEXT("empty: reads the stock part, draws nothing");
+            }
+            Out.Log(Line);
+        }
+    }
+
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipInstallCommand(
+        TEXT("ds.Ship.Install"), TEXT("'ds.Ship.Install <part>': fit a part by id or name; a spare with that id first, else a new one. The displaced part becomes a spare."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipInstall));
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipSparesCommand(
+        TEXT("ds.Ship.Spares"), TEXT("'ds.Ship.Spares': the spares aboard. 'give <part>' adds one; 'clear' empties them."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipSpares));
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipDescribeCommand(
+        TEXT("ds.Ship.Describe"), TEXT("Every bay: its part, draw and ratings. A developer's line, not a screen in the ship."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipDescribe));
 }
 
 UShipSubsystem* UShipSubsystem::Get(const UObject* WorldContext)
@@ -1041,6 +1164,24 @@ bool UShipSubsystem::FitPartById(FName PartId)
     Loadout.Spares.RemoveAt(Spare);
     FitState(*Slot, State);
     return true;
+}
+
+bool UShipSubsystem::AddSpare(FName PartId)
+{
+    UShipModuleDataAsset* Part = PartFor(PartId);
+    if (!Part || !Register(Part))
+    {
+        return false;
+    }
+    FShipPartState Spare;
+    Spare.PartId = PartId;
+    Loadout.Spares.Add(Spare);
+    return true;
+}
+
+void UShipSubsystem::ClearSpares()
+{
+    Loadout.Spares.Reset();
 }
 
 const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const

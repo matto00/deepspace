@@ -3,6 +3,7 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDevice.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipNavState.h"
@@ -811,6 +812,103 @@ bool FShipPartsCatalogueResolvesTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and the twin core by id"), Ship->FitPartById(TEXT("Reactor.TwinCore")));
     TestEqual(TEXT("comes out of the spares, never conjured anew"), SpareIds(*Ship), FString(TEXT("Reactor.Stock")));
     TestEqual(TEXT("and runs the ship"), Ship->GetReactorOutput(), 1800.0f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsCommandsTest, "DeepSpace.Ship.Parts.Commands",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace ShipLoadoutTestLocal
+{
+    /** What a console command printed. */
+    struct FHeard : public FOutputDevice
+    {
+        FString Text;
+
+        virtual void Serialize(const TCHAR* Line, ELogVerbosity::Type Verbosity, const FName& Category) override
+        {
+            Text += Line;
+            Text += TEXT("\n");
+        }
+    };
+
+    FString Run(UWorld* World, const TCHAR* Command, const TArray<FString>& Args)
+    {
+        FHeard Heard;
+        if (IConsoleObject* Object = IConsoleManager::Get().FindConsoleObject(Command))
+        {
+            Object->AsCommand()->Execute(Args, World, Heard);
+        }
+        else
+        {
+            Heard.Text = FString::Printf(TEXT("no command %s"), Command);
+        }
+        return Heard.Text;
+    }
+}
+
+/*
+ * Ruling 8: until landing and a sourcing spec exist, parts come from the
+ * console. ds.Ship.Install fits the first spare with that id, else a new
+ * one, and each install restores its own bay's number (slice 1's done-when).
+ */
+bool FShipPartsCommandsTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    FSkyWorld Test(TEXT("ShipCommandsWorld"));
+    UShipSubsystem* Ship = Test.Ship;
+    if (!TestNotNull(TEXT("the world has a ship"), Ship))
+    {
+        return false;
+    }
+    Test.BeginPlay();
+    TestEqual(TEXT("the stock ship fits"), StockShip::Install(Ship), 6);
+    UWorld* World = Test.World;
+
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("Reactor.TwinCore") });
+    TestEqual(TEXT("ds.Ship.Install Reactor.TwinCore: 1800 W"), Ship->GetReactorOutput(), 1800.0f);
+    TestEqual(TEXT("and the stock reactor is a spare"), SpareIds(*Ship), FString(TEXT("Reactor.Stock")));
+    const float Response = Ship->GetDriveResponse();
+
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("Reactor.Stock") });
+    TestEqual(TEXT("ds.Ship.Install Reactor.Stock: 1400 W again"), Ship->GetReactorOutput(), 1400.0f);
+    TestEqual(TEXT("the stock reactor came back from the spares, and the twin core went in"), SpareIds(*Ship), FString(TEXT("Reactor.TwinCore")));
+    TestEqual(TEXT("and the drive's number is its own"), Ship->GetDriveResponse(), Response);
+
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("Drive.QuickLever") });
+    TestEqual(TEXT("ds.Ship.Install Drive.QuickLever: 4.5 notches a second"), Ship->GetDriveResponse(), 4.5f);
+    TestEqual(TEXT("and the reactor's number is its own"), Ship->GetReactorOutput(), 1400.0f);
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("Drive.Stock") });
+    TestEqual(TEXT("ds.Ship.Install Drive.Stock: 3 again"), Ship->GetDriveResponse(), 3.0f);
+
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("twin-core"), TEXT("REACTOR") });
+    TestEqual(TEXT("by display name, case-blind, split on spaces: the twin core"), Ship->GetReactorOutput(), 1800.0f);
+    TestEqual(TEXT("out of the spares"), SpareIds(*Ship), FString(TEXT("Drive.QuickLever,Reactor.Stock")));
+
+    // Review focus 2, by id: the part the bay already holds, with no spare of it.
+    Run(World, TEXT("ds.Ship.Install"), { TEXT("Reactor.TwinCore") });
+    TestEqual(TEXT("installing the fitted part changes no spare"), SpareIds(*Ship), FString(TEXT("Drive.QuickLever,Reactor.Stock")));
+    TestEqual(TEXT("and no number"), Ship->GetReactorOutput(), 1800.0f);
+
+    const FString Unknown = Run(World, TEXT("ds.Ship.Install"), { TEXT("Reactor.Nonesuch") });
+    TestTrue(TEXT("an unknown part prints the usage"), Unknown.Contains(TEXT("ds.Ship.Install <part>")));
+    TestTrue(TEXT("and names the parts there are"), Unknown.Contains(TEXT("Drive.QuickLever")));
+    TestTrue(TEXT("and changes nothing"),
+             Ship->GetReactorOutput() == 1800.0f && SpareIds(*Ship) == TEXT("Drive.QuickLever,Reactor.Stock"));
+
+    const FString Listed = Run(World, TEXT("ds.Ship.Spares"), {});
+    TestTrue(TEXT("ds.Ship.Spares lists each spare"), Listed.Contains(TEXT("Drive.QuickLever")) && Listed.Contains(TEXT("Reactor.Stock")));
+    Run(World, TEXT("ds.Ship.Spares"), { TEXT("give"), TEXT("Boosters.Stock") });
+    TestEqual(TEXT("ds.Ship.Spares give adds one"), Ship->GetSpares().Num(), 3);
+    const FString Refused = Run(World, TEXT("ds.Ship.Spares"), { TEXT("give"), TEXT("Reactor.Nonesuch") });
+    TestTrue(TEXT("giving an unknown part adds nothing"), Ship->GetSpares().Num() == 3 && Refused.Contains(TEXT("give <part>")));
+    Run(World, TEXT("ds.Ship.Spares"), { TEXT("clear") });
+    TestEqual(TEXT("ds.Ship.Spares clear empties them"), Ship->GetSpares().Num(), 0);
+
+    const FString Described = Run(World, TEXT("ds.Ship.Describe"), {});
+    TestTrue(TEXT("ds.Ship.Describe names what is in each bay"), Described.Contains(TEXT("Reactor.TwinCore")) && Described.Contains(TEXT("Sensors.Stock")));
+    TestTrue(TEXT("and says an empty slot reads stock"), Described.Contains(TEXT("Aux1")) && Described.Contains(TEXT("empty")));
     return true;
 }
 
