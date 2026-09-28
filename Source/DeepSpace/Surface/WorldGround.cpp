@@ -293,34 +293,16 @@ void AWorldGround::Launch()
     {
         return;
     }
-    TArray<FTileKey> Candidates;
-    const auto Consider = [&](const FTileKey& Key)
-    {
-        if (!Resident.Contains(Key)
-            && !InFlight.ContainsByPredicate([&](const FPending& Pending) { return Pending.Key == Key; })
-            && !Finished.ContainsByPredicate([&](const FTileBuild& Built) { return Built.Key == Key; }))
+    // Coarse first -- the chain and the cap under the ship -- then nearest;
+    // and every unbuilt ancestor of a wanted leaf, which the 2:1 rule can
+    // leave wanted by nothing else.
+    const TArray<FTileKey> Candidates = TerrainQuadtree::BuildOrder(Prefetch, Wanted, ShipFromCentre.GetSafeNormal(),
+        [&](const FTileKey& Key)
         {
-            Candidates.AddUnique(Key);
-        }
-    };
-    for (const FTileKey& Key : Prefetch)
-    {
-        Consider(Key);
-    }
-    for (const FTileKey& Key : Wanted)
-    {
-        Consider(Key);
-    }
-    // Coarse first -- the chain and the cap under the ship -- then nearest.
-    const FVector3d Nadir = ShipFromCentre.GetSafeNormal();
-    Candidates.Sort([&](const FTileKey& A, const FTileKey& B)
-    {
-        if (A.Level != B.Level)
-        {
-            return A.Level < B.Level;
-        }
-        return FVector3d::DotProduct(TerrainQuadtree::CentreDirection(A), Nadir) > FVector3d::DotProduct(TerrainQuadtree::CentreDirection(B), Nadir);
-    });
+            return !Resident.Contains(Key)
+                && !InFlight.ContainsByPredicate([&](const FPending& Pending) { return Pending.Key == Key; })
+                && !Finished.ContainsByPredicate([&](const FTileBuild& Built) { return Built.Key == Key; });
+        });
     for (int32 Index = 0; Index < FMath::Min(Slots, Candidates.Num()); ++Index)
     {
         const FTileKey Key = Candidates[Index];

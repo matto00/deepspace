@@ -16,6 +16,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeTest, "DeepSpace.Surface.Quadtr
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeSeamsTest, "DeepSpace.Surface.QuadtreeAtCubeSeams",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainCutBuildsAncestorsTest, "DeepSpace.Surface.CutBuildsItsAncestors",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace TerrainQuadtreeLocal
 {
@@ -328,6 +330,96 @@ bool FTerrainQuadtreeSeamsTest::RunTest(const FString& Parameters)
                       Broken, 0);
         }
     }
+    return true;
+}
+
+/*
+ * The 2:1 rule splits a leaf whether or not it is built, so a node the cut
+ * stopped at because it was not resident can be replaced by its children and
+ * wanted by nothing else. Built from resident sets as streaming leaves them:
+ * the ship's chain and its siblings resident, one level-8 neighbour X not.
+ * X is split by the balance, and BuildOrder must build it -- before its
+ * children -- or the cut asks for X's split forever and the handover, which
+ * waits on every wanted leaf's level-8 ancestor, never comes above the drive
+ * floor.
+ */
+bool FTerrainCutBuildsAncestorsTest::RunTest(const FString& Parameters)
+{
+    using namespace TerrainQuadtreeLocal;
+    const double Radius = 6.0e8;
+    const FVector3d D0 = FVector3d(0.3, 0.2, 1.0).GetSafeNormal();
+    const FTileKey C8 = KeyAt(D0, PrefetchLevel);
+    // A sibling of C8, across an edge: reachable, since their parent is on
+    // the ship's chain.
+    FTileKey X = C8;
+    for (const FTileKey& Neighbour : EdgeNeighbours(C8))
+    {
+        X = Neighbour.Parent() == C8.Parent() ? Neighbour : X;
+    }
+    // Just inside C8, a hundredth of a node from X.
+    const FVector3d D = (0.51 * CentreDirection(C8) + 0.49 * CentreDirection(X)).GetSafeNormal();
+    if (!TestTrue(TEXT("the ship is over C8, beside X"), KeyAt(D, PrefetchLevel) == C8))
+    {
+        return false;
+    }
+    FCutParams Params;
+    Params.RadiusCm = Radius;
+    Params.MaxLevel = MaxLevel(Radius);
+    Params.OccluderRadiusCm = Radius;
+    Params.GroundAltitudeCm = 1.0e3;
+
+    TSet<FTileKey> Resident;
+    for (int32 Face = 0; Face < 6; ++Face)
+    {
+        Resident.Add(FTileKey{ static_cast<uint8>(Face), 0, 0, 0 });
+    }
+    for (int32 Level = 1; Level <= Params.MaxLevel; ++Level)
+    {
+        const FTileKey Parent = KeyAt(D, Level).Parent();
+        for (int32 Quadrant = 0; Quadrant < 4; ++Quadrant)
+        {
+            Resident.Add(Parent.Child(Quadrant));
+        }
+    }
+    Resident.Remove(X);
+    const auto BoundsOf = [&](const FTileKey& Key) -> TOptional<FHeightRange>
+    {
+        if (Key.Level > 0 && !Resident.Contains(Key.Parent()))
+        {
+            return {};
+        }
+        return OwnRange(Key, Radius);
+    };
+    const FCut Cut = SelectCut(D * (Radius + Params.GroundAltitudeCm), Params, BoundsOf);
+    int32 UnderX = 0;
+    for (const FTileKey& Leaf : Cut.Leaves)
+    {
+        UnderX += X.Contains(Leaf) && Leaf != X ? 1 : 0;
+    }
+    TestTrue(TEXT("the cut is 2:1"), Balanced(Cut.Leaves));
+    if (!TestTrue(FString::Printf(TEXT("and the balance split X, which is not built, into %d leaves"), UnderX), UnderX > 0))
+    {
+        return false;
+    }
+
+    const TArray<FTileKey> Order = BuildOrder(Cut.Prefetch, Cut.Leaves, D, [&](const FTileKey& Key) { return !Resident.Contains(Key); });
+    const int32 XAt = Order.IndexOfByKey(X);
+    TestTrue(TEXT("X is built"), XAt != INDEX_NONE);
+    int32 Missing = 0;
+    int32 Early = 0;
+    for (const FTileKey& Leaf : Cut.Leaves)
+    {
+        for (FTileKey Key = Leaf; Key.Level > 0; Key = Key.Parent())
+        {
+            const int32 At = Order.IndexOfByKey(Key);
+            Missing += !Resident.Contains(Key) && At == INDEX_NONE ? 1 : 0;
+            const int32 ParentAt = Order.IndexOfByKey(Key.Parent());
+            Early += At != INDEX_NONE && ParentAt != INDEX_NONE && ParentAt > At ? 1 : 0;
+        }
+    }
+    TestEqual(TEXT("every unbuilt leaf and ancestor of a leaf is in the order"), Missing, 0);
+    TestEqual(TEXT("and every parent comes before its children"), Early, 0);
+    TestFalse(TEXT("nothing resident is built again"), Order.ContainsByPredicate([&](const FTileKey& Key) { return Resident.Contains(Key); }));
     return true;
 }
 

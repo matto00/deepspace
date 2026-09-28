@@ -307,3 +307,43 @@ TerrainQuadtree::FCut TerrainQuadtree::SelectCut(const FVector3d& ShipFromCentre
     }
     return Cut;
 }
+
+TArray<FTileKey> TerrainQuadtree::BuildOrder(TConstArrayView<FTileKey> Prefetch, TConstArrayView<FTileKey> Leaves,
+                                             const FVector3d& Nadir, TFunctionRef<bool(const FTileKey&)> NeedsBuild)
+{
+    TSet<FTileKey> Seen;
+    TArray<FTileKey> Order;
+    const auto Consider = [&](const FTileKey& Key)
+    {
+        bool bAlready = false;
+        Seen.Add(Key, &bAlready);
+        if (!bAlready && NeedsBuild(Key))
+        {
+            Order.Add(Key);
+        }
+        return bAlready;
+    };
+    for (const FTileKey& Key : Prefetch)
+    {
+        Consider(Key);
+    }
+    for (const FTileKey& Leaf : Leaves)
+    {
+        for (FTileKey Key = Leaf;; Key = Key.Parent())
+        {
+            if (Consider(Key) || Key.Level == 0)
+            {
+                break;
+            }
+        }
+    }
+    Order.Sort([&](const FTileKey& A, const FTileKey& B)
+    {
+        if (A.Level != B.Level)
+        {
+            return A.Level < B.Level;
+        }
+        return FVector3d::DotProduct(CentreDirection(A), Nadir) > FVector3d::DotProduct(CentreDirection(B), Nadir);
+    });
+    return Order;
+}
