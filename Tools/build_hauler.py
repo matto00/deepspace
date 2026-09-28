@@ -353,6 +353,22 @@ def place_sky(actor_sub):
     return sky
 
 
+def place_ground(actor_sub):
+    """The ground under the ship (landing decision 6): AWorldGround streams
+    the nearest solid world's tiles at runtime and draws them on the
+    counter-frame. The level holds one, at the origin, with its material --
+    asset assignment only (ADR 0002). It attaches itself to the
+    counter-frame at BeginPlay."""
+    ground = actor_sub.spawn_actor_from_class(
+        unreal.WorldGround, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    ground.set_actor_label(TAG + "ground")
+    ground.set_editor_property("ground_material", sky_asset("M_SkyGround"))
+    # AWorldGround tags itself in its constructor; the level carries the tag
+    # too, so verify_level finds it in the saved level without C++ running.
+    ground.set_editor_property("tags", [unreal.Name(PL.GROUND_TAG)])
+    return ground
+
+
 def place_nav_screen(actor_sub, ship):
     """The chart, over the starboard desk screen (nav spec B3). The two
     seat tunables are the chair playtest's knobs, per instance, so a nudge is
@@ -478,6 +494,7 @@ def build():
     sphere = unreal.EditorAssetLibrary.load_asset(SPHERE)
     place_counter_frame(actor_sub, sphere)
     place_sky(actor_sub)
+    place_ground(actor_sub)
 
     console = actor_sub.spawn_actor_from_class(
         unreal.EditorAssetLibrary.load_blueprint_class(CONSOLE_BP),

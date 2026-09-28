@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (GLASS_TAG, KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
+from placement import (GLASS_TAG, GROUND_TAG, KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
                        SURFACE_TAG, WEAR_TAG, Mood, Mount, Place, Practical, kelvin_to_rgb,
                        lamp_emissive, lamp_role, piece_of, resolve_lights, resolve_mount,
                        resolve_point, resolve_practicals, resolve_props, resolve_surfaces,
@@ -652,6 +652,12 @@ def test_the_glass_tag_is_the_one_the_cpp_traces_for():
     with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipTags.cpp")) as f:
         cpp = f.read()
     assert 'Glass(TEXT("%s"))' % GLASS_TAG in cpp, GLASS_TAG
+
+
+def test_the_ground_tag_is_the_one_the_cpp_sets():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Surface/WorldGround.cpp")) as f:
+        cpp = f.read()
+    assert 'GroundTag(TEXT("%s"))' % GROUND_TAG in cpp, GROUND_TAG
 
 
 def test_the_ship_has_glass_for_the_tag_to_mark():

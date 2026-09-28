@@ -255,3 +255,27 @@ private:
     TArray<int32> Indices;
     double SumBound = 0.0;
 };
+
+/** What M_SkyBody and M_SkyGround shade a rocky world with, computed by the
+ *  same shared file on the CPU, for the tests that hold them equal: the raw
+ *  face terms (both materials compose the face from them with one graph,
+ *  surface() in setup_sky_materials.py, so equal terms are an equal face),
+ *  the slope that graph forms, ReliefScale x (detail + Cratering x craters),
+ *  and the unit normal. */
+namespace WorldReliefShading
+{
+    struct FSurface
+    {
+        FFaceTerms Terms;
+        FVector3d Slope = FVector3d::ZeroVector;
+        FVector3d Normal = FVector3d::UnitZ();
+    };
+
+    /** M_SkyBody's: every slope the footprint keeps. */
+    DEEPSPACE_API FSurface Orbit(const FWorldReliefParams& Params, const FVector3d& D, double FootprintRadius);
+
+    /** M_SkyGround's: the tile's VertexNormal, and the pixel's slope of the
+     *  bands the vertices at VertexBandLimit (radius units) do not carry. */
+    DEEPSPACE_API FSurface Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
+                                  double FootprintRadius, double VertexBandLimit);
+}

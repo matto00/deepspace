@@ -416,3 +416,34 @@ double FWorldRelief::FinestWavelengthCm() const
 {
     return Frequencies.IsEmpty() ? 0.0 : Params.RadiusCm / Frequencies.Last();
 }
+
+namespace WorldReliefShadingLocal
+{
+    /** surface()'s slope for a rocky world (stretch 1). */
+    FVector3d SlopeOf(const FWorldReliefParams& Params, const FFaceTerms& Terms)
+    {
+        const double ReliefScale = FWorldRelief(Params).SlopeScale();
+        return (Terms.DetailSlope + Terms.CraterSlope * FMath::Max(Params.Cratering, 0.0)) * ReliefScale;
+    }
+}
+
+WorldReliefShading::FSurface WorldReliefShading::Orbit(const FWorldReliefParams& Params, const FVector3d& D, double FootprintRadius)
+{
+    FSurface Out;
+    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, 1.0);
+    Out.Slope = WorldReliefShadingLocal::SlopeOf(Params, Out.Terms);
+    Out.Normal = (D - (Out.Slope - D * FVector3d::DotProduct(Out.Slope, D))).GetSafeNormal();
+    return Out;
+}
+
+WorldReliefShading::FSurface WorldReliefShading::Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
+                                                        double FootprintRadius, double VertexBandLimit)
+{
+    FSurface Out;
+    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, VertexBandLimit);
+    Out.Slope = WorldReliefShadingLocal::SlopeOf(Params, Out.Terms);
+    const WR64::WR_GroundNormalOut N = WR64::WR_GroundNormal(D.X, D.Y, D.Z, VertexNormal.X, VertexNormal.Y, VertexNormal.Z,
+                                                             Out.Slope.X, Out.Slope.Y, Out.Slope.Z);
+    Out.Normal = FVector3d(N.NX, N.NY, N.NZ);
+    return Out;
+}
