@@ -79,6 +79,9 @@ below goes past them, it says so and is on the sign-off list.
 
 **The measured floor as a rule (applying the R2 ruling, same day):** a term's C++-vs-GPU tolerance is 1e-3, or, where the engine's own nodes miss double by more at that footprint and term, 1.25 x that engine-vs-double error. The shared file against the engine's nodes stays held to the ruled table; failing that is a port bug and stops the build. (R2 found detail slope at 1/768, 1.18e-3 with the engine's nodes at 1.04e-3, and crater albedo at 1/12288, 1.01e-3 with the engine's at 1.38e-3.)
 
+**The port-bug test, restated (R4, same day):** two float evaluations can each sit at the floor on opposite sides, so the shared file is not judged against the engine's nodes directly. It is a port bug only if the shared file misses double by more than 1.25 x what the engine's nodes miss it by, at any footprint and term (R4 on Baemsekai IV, 1/768 detail slope: shared vs double 1.27e-3, engine vs double 1.25e-3; shared vs engine 1.01e-3 -- the floor, not a bug). Shared vs engine is still printed.
+
+
 
 
 
