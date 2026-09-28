@@ -150,7 +150,9 @@ namespace AtmosphereAgreementTestLocal
         return Out;
     }
 
-    void Report(FAutomationTestBase& Test, const FAgreement& Result, const TCHAR* Tolerance)
+    /** Checked, when Expected is positive, must be exactly Expected: a share
+     *  picked by name can shrink when the fixture changes and still pass. */
+    void Report(FAutomationTestBase& Test, const FAgreement& Result, const TCHAR* Tolerance, int32 Expected = 0)
     {
         Test.AddInfo(FString::Printf(TEXT("the law against the reference: %d channel values checked, %d outside %s, the worst at %.2f of its allowance; %d changed by the gamut clamp"),
             Result.Checked, Result.Misses.Num(), Tolerance, Result.Worst, Result.Clamped));
@@ -159,6 +161,10 @@ namespace AtmosphereAgreementTestLocal
             Test.AddInfo(Result.Misses[I]);
         }
         Test.TestTrue(TEXT("the grid checked something: an empty grid is not agreement"), Result.Checked > 0);
+        if (Expected > 0)
+        {
+            Test.TestEqual(TEXT("the share checked every value it was chosen for"), Result.Checked, Expected);
+        }
         Test.TestEqual(FString::Printf(TEXT("every channel of both builds within %s of the reference"), Tolerance), Result.Misses.Num(), 0);
     }
 }
@@ -174,7 +180,11 @@ bool FAtmosphereLawMatchesReferenceTest::RunTest(const FString& Parameters)
     // from the ground and from inside the air.
     // Atmosphere.Full.LawMatchesReference is the whole grid.
     const TArray<FNamedAir> Hardest = {{TEXT("CO2 at its ceiling"), CarbonDioxide(CarbonDioxideCeilingBar)}};
-    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground eye, horizon"), TEXT("inside eye, horizon")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));
+    // Six rays (three suns from each of the two eyes), two builds, in-scatter
+    // and transmittance, three channels: 72 values, pinned so a renamed eye
+    // or a dropped sun cannot quietly shrink the hard case.
+    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground eye, horizon"), TEXT("inside eye, horizon")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"),
+        6 * 2 * 2 * 3);
     return true;
 }
 
@@ -295,7 +305,8 @@ bool FAtmosphereHomothetyInvarianceTest::RunTest(const FString& Parameters)
     const FAtmosphere Air = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
     const FVector3d Up = FVector3d(-1.0, 0.3, 0.2).GetSafeNormal();
     const FVector3d ToStar = (Star.Position - Body.Position).GetSafeNormal();
-    const FVector3d Views[] = {-Up, (FVector3d(0.0, 0.0, 1.0) - Up).GetSafeNormal(), FVector3d::CrossProduct(Up, FVector3d(0.0, 0.0, 1.0)).GetSafeNormal()};
+    const FVector3d Side = FVector3d::CrossProduct(Up, FVector3d(0.0, 0.0, 1.0)).GetSafeNormal();
+    const double Top = Air.GetAir().Top;
 
     for (const double Altitude : {5.0e6, 5.0e9})
     {
@@ -313,13 +324,26 @@ bool FAtmosphereHomothetyInvarianceTest::RunTest(const FString& Parameters)
         // 1e-9 on what the law makes of them, not bit for bit.
         TestTrue(TEXT("the eye in the proxy's radii is the true eye in the world's, to 1e-12"),
             (ProxyEye - TrueEye).Size() <= 1.0e-12 * TrueEye.Size());
-        for (const FVector3d& Direction : Views)
+        // The views are set by impact parameter, so each one crosses the air
+        // from either altitude: nadir; the ground half a radius off the axis,
+        // obliquely; and the limb, grazing 0.3 of the way up the air. From
+        // 50,000 km the air is under 7 degrees across, and a fixed angle off
+        // nadir misses it; a radial view there sees the same air wherever the
+        // eye sits along it, so only the oblique two can tell a radially
+        // misplaced eye -- which is what a wrong homothety makes.
+        const double Distance = TrueEye.Size();
+        const TPair<const TCHAR*, double> Aims[] = {{TEXT("nadir"), 0.0}, {TEXT("the ground, obliquely"), 0.5}, {TEXT("the limb"), 1.0 + 0.3 * Top}};
+        for (const TPair<const TCHAR*, double>& Aim : Aims)
         {
+            const double Sin = Aim.Value / Distance;
+            const FVector3d Direction = -Up * FMath::Sqrt(1.0 - Sin * Sin) + Side * Sin;
             const FAtmosphereScatter FromProxy = AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), ProxyEye, Direction, AtmosphereLaw::NoEnd, ToStar);
             const FAtmosphereScatter FromTrue = AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), TrueEye, Direction, AtmosphereLaw::NoEnd, ToStar);
+            TestTrue(FString::Printf(TEXT("%.0f km up, %s: the view crosses the air, so the check below can fail"), Altitude / 1.0e5, Aim.Key),
+                FromTrue.Transmittance[2] < 1.0 - 1.0e-6 && FromTrue.InScatter[2] > 0.0);
             for (int32 C = 0; C < 3; ++C)
             {
-                TestTrue(FString::Printf(TEXT("%.0f km up, channel %d: the air term does not see the proxy's scale"), Altitude / 1.0e5, C),
+                TestTrue(FString::Printf(TEXT("%.0f km up, %s, channel %d: the air term does not see the proxy's scale"), Altitude / 1.0e5, Aim.Key, C),
                     FMath::Abs(FromProxy.InScatter[C] - FromTrue.InScatter[C]) <= 1.0e-9 * FMath::Max(FMath::Abs(FromTrue.InScatter[C]), 1.0e-12)
                     && FMath::Abs(FromProxy.Transmittance[C] - FromTrue.Transmittance[C]) <= 1.0e-9);
             }
