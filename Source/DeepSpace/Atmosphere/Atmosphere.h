@@ -65,6 +65,30 @@ struct DEEPSPACE_API FAtmosphereTable
     void Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const;
 };
 
+/** How much of the multiple-scattering table Build fills. NoonOnly fills
+ *  the two columns either side of the noon sun's cosine -- every sample of
+ *  a zenith view under that sun reads only those, so it is all the noon
+ *  zenith needs and exactly what the full table holds there -- for the
+ *  corpus's sky of every world; None fills nothing (single scattering). */
+enum class EAtmosphereTable : uint8 { None, NoonOnly, Full };
+
+namespace AtmosphereLaw
+{
+    /** The sky's reference view, what the corpus's sky_zenith_rgb and
+     *  DeepSpace.Atmosphere.StarColour mean by "the noon zenith": straight
+     *  up from the ground under a sun 45 degrees high. Not a sun at the
+     *  zenith: the zenith would then be the star's own forward-scattered
+     *  aureole, and wear the star's colour rather than the sky's. */
+    inline constexpr double NoonSunElevationDeg = 45.0;
+
+    /** That sun, the zenith being +Z: (cos 45, 0, sin 45). */
+    inline FVector3d NoonSun()
+    {
+        const double Radians = FMath::DegreesToRadians(NoonSunElevationDeg);
+        return FVector3d(FMath::Cos(Radians), 0.0, FMath::Sin(Radians));
+    }
+}
+
 /** One world's air under one star, fitted for the law (decision 3). */
 class DEEPSPACE_API FAtmosphere
 {
@@ -74,9 +98,11 @@ public:
      * world's own spectral laws: scatter exact in the optically thin limit,
      * extinction exact at the nadir column (the aerosol's thin-limit share
      * on its own profile, the rest on the gas's). The star's temperature is
-     * clamped as SkyColour::Blackbody clamps it.
+     * clamped as SkyColour::Blackbody clamps it. The multiple-scattering
+     * table is built from the white air through the .ush's own
+     * AT_MultiScatterCell, and stored through half floats.
      */
-    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK);
+    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage = EAtmosphereTable::Full);
 
     bool HasAir() const { return !Air.IsAirless(); }
     const FAtmosphereAir& GetAir() const { return Air; }

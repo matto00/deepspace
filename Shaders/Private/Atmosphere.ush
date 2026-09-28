@@ -648,3 +648,63 @@ AT_Rgb AT_SunThrough(AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ, AT_REAL SX, A
     AT_REAL Cos = (PX * SX + PY * SY + PZ * SZ) / AT_max(Length, AT_TINY);
     return AT_SunAt(A, AT_max(Length, AT_REAL(1.0)), AT_max(Length - AT_REAL(1.0), AT_REAL(0.0)), Cos);
 }
+
+// -- The multiple-scattering table (decision 11) -------------------------------
+// The sphere of directions as rings of equal step in T, cos(zenith) = T |T|,
+// crowded toward the horizon -- where a ray's path through the air is longest
+// and most of the light at low altitude comes from -- by segments of equal
+// azimuth over half the circle: the texel's sun lies in the X-Z plane, so the
+// light field is mirror-symmetric in azimuth and the other half is the same.
+// A Fibonacci sphere of 64, 128 or 256 points gives this integral 10% apart
+// from itself (the thin band of long horizontal paths falls between its
+// points differently each time); 32 rings are within 6% of a 192-ring
+// integral at the ground, where it converges slowest.
+static const int AT_SPHERE_RINGS = 32;
+static const int AT_SPHERE_SEGMENTS = 8;
+
+// One texel (Hillaire 2020): at Altitude01 of the air's depth under a sun at
+// CosSunZenith, the light the air sends every way after one scattering,
+// averaged over the sphere, and grown by the geometric series of the fraction
+// F each scattering hands on: Psi = L1 / (1 - F). Built from the white air --
+// the star's colour left out of its scatter, so the colour enters once, where
+// Psi is used -- in C++ when a system loads, never in a frame, and read from
+// an empty table while it is built.
+AT_Rgb AT_MultiScatterCell(AT_Air White, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+{
+    AT_REAL R = AT_REAL(1.0) + AT_saturate(Altitude01) * White.Top;
+    AT_REAL SX = AT_sqrt(AT_max(AT_REAL(1.0) - CosSunZenith * CosSunZenith, AT_REAL(0.0)));
+    AT_REAL LR = AT_REAL(0.0);
+    AT_REAL LG = AT_REAL(0.0);
+    AT_REAL LB = AT_REAL(0.0);
+    AT_REAL FR = AT_REAL(0.0);
+    AT_REAL FG = AT_REAL(0.0);
+    AT_REAL FB = AT_REAL(0.0);
+    for (int I = 0; I < AT_SPHERE_RINGS; ++I)
+    {
+        AT_REAL T = AT_REAL(-1.0) + (AT_REAL(2.0) * AT_REAL(I) + AT_REAL(1.0)) / AT_REAL(AT_SPHERE_RINGS);
+        AT_REAL AbsT = AT_max(T, -T);
+        AT_REAL Mu = T * AbsT;
+        // The share of the sphere one direction stands for, its mirror image
+        // included: 2 x (2 |T| dT)(dPhi) / 4 pi, dT = 2 / RINGS, dPhi =
+        // pi / SEGMENTS.
+        AT_REAL Weight = AT_REAL(2.0) * AbsT / AT_REAL(AT_SPHERE_RINGS * AT_SPHERE_SEGMENTS);
+        AT_REAL Ring = AT_sqrt(AT_max(AT_REAL(1.0) - Mu * Mu, AT_REAL(0.0)));
+        for (int J = 0; J < AT_SPHERE_SEGMENTS; ++J)
+        {
+            AT_REAL Phi = AT_PI * (AT_REAL(J) + AT_REAL(0.5)) / AT_REAL(AT_SPHERE_SEGMENTS);
+            AT_March M = AT_MarchAir(White, AT_REAL(0.0), AT_REAL(0.0), R, Ring * AT_cos(Phi), Ring * AT_sin(Phi), Mu,
+                                     AT_NO_END, SX, AT_REAL(0.0), CosSunZenith AT_TABLE_ARG);
+            LR = LR + Weight * M.R;
+            LG = LG + Weight * M.G;
+            LB = LB + Weight * M.B;
+            FR = FR + Weight * M.FR;
+            FG = FG + Weight * M.FG;
+            FB = FB + Weight * M.FB;
+        }
+    }
+    AT_Rgb Out;
+    Out.R = LR / AT_max(AT_REAL(1.0) - FR, AT_REAL(0.001));
+    Out.G = LG / AT_max(AT_REAL(1.0) - FG, AT_REAL(0.001));
+    Out.B = LB / AT_max(AT_REAL(1.0) - FB, AT_REAL(0.001));
+    return Out;
+}

@@ -1,6 +1,7 @@
 #include "Atmosphere/Atmosphere.h"
 
 #include <cmath>
+#include "Math/Float16.h"
 
 // The shared file, twice. AT_CPP selects its C++ halves and AT_REAL its
 // precision; each copy lives in its own namespace, so the two sets of AT_
@@ -100,7 +101,7 @@ void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double& Ou
     OutB = Blend(C00.Z, C01.Z, C10.Z, C11.Z);
 }
 
-FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK)
+FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage)
 {
     using namespace AtmosphereReference;
     FAtmosphere Out;
@@ -143,6 +144,37 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK)
     {
         Out.White.GasScatter[C] = FMath::Max(GasScatterWhite[C], 0.0) / Spectra.GasH;
         Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
+    }
+
+    if (Coverage != EAtmosphereTable::None)
+    {
+        // Each texel from the .ush's own AT_MultiScatterCell in double, so
+        // the table is the law's (decision 11), read while it is built from
+        // an empty table -- single scattering only -- and stored through
+        // half floats, as the GPU's RGBA16F texture will hold it.
+        constexpr int32 Size = FAtmosphereTable::Size;
+        const AtmosphereF64::AT_Air WhiteAir = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Out.White);
+        const FAtmosphereTable Empty;
+        Out.Table.Texels.SetNumZeroed(Size * Size);
+        // NoonOnly: the two columns either side of the noon sun's cosine,
+        // which every sample of a zenith view under that sun reads.
+        const double NoonCos = AtmosphereLaw::NoonSun().Z;
+        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((NoonCos + 1.0) * 0.5 * (Size - 1)), Size - 2);
+        const int32 FirstColumn = Coverage == EAtmosphereTable::Full ? 0 : NoonColumn;
+        const int32 LastColumn = Coverage == EAtmosphereTable::Full ? Size - 1 : NoonColumn + 1;
+        for (int32 Row = 0; Row < Size; ++Row)
+        {
+            for (int32 Column = FirstColumn; Column <= LastColumn; ++Column)
+            {
+                const double Altitude01 = static_cast<double>(Row) / (Size - 1);
+                const double Cos = -1.0 + 2.0 * Column / (Size - 1);
+                const AtmosphereF64::AT_Rgb Cell = AtmosphereF64::AT_MultiScatterCell(WhiteAir, Altitude01, Cos, Empty);
+                Out.Table.Texels[Row * Size + Column] = FVector3f(
+                    FFloat16(static_cast<float>(Cell.R)).GetFloat(),
+                    FFloat16(static_cast<float>(Cell.G)).GetFloat(),
+                    FFloat16(static_cast<float>(Cell.B)).GetFloat());
+            }
+        }
     }
     return Out;
 }
