@@ -50,6 +50,12 @@ public class DeepSpace : ModuleRules
 		// BuildSkySphere) rather than modelled -- a quarter of a million
 		// triangles that no one should have to draw.
 		PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "AssetRegistry" });
+
+		// ProceduralMeshComponent: the terrain's tiles (landing decision 6) --
+		// pooled runtime mesh sections, rebuilt off the game thread and
+		// uploaded with UpdateMeshSection. Gated on the first day of slice (b)
+		// by Eyes.TerrainBudget; UTerrainTileComponent is the named fallback.
+		PrivateDependencyModuleNames.Add("ProceduralMeshComponent");
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
