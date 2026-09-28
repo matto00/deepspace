@@ -1,1086 +1,136 @@
-# Landing Slice (b): Cast Shadows Implementation Plan
+# Landing Slice (b): Cast Shadows, Baked -- Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Put cast shadows on the ground. A march toward the sun through the one height function, written once in `Shaders/Private/WorldRelief.ush`, is used by `M_SkyBody` and `M_SkyGround` alike. A C++ mirror holds it by `Eyes.WorldReliefParity`, its GPU cost is measured in `Eyes.LandingFrame`, and before/after frames judge it.
+**Goal:** Put cast shadows on the ground and on the orbit's worlds, **baked, not marched** (the developer's ruling, 2026-09-28). A pure C++ horizon march over the world's one height function computes the shadow. The ground tiles compute it per vertex while they are built, off the game thread, and carry it in a vertex channel. Each solid world gets one shadow map for the orbit, baked in C++ when the system loads, off the game thread. The two agree at the 50 km handover, use the sky's own sun direction, cost the frame nothing measurable, and are judged by before/after frames.
 
-**Architecture:** `WR_SunVisible` is added to the shared file in its scalar, no-swizzle subset. It marches a fixed number of geometric samples toward the sun's azimuth, reading the GPU's twelve detail bands of `FWorldRelief::Height` (craters and the C++-only finer octaves are left out). Each sample reads at twice the gap *ahead* of it, which is the face's own fade. It returns the least share of the star's disc any sample's horizon leaves, each sample's disc widened near the pixel to how far one pixel of motion moves that horizon. C++ compiles it in double as the mirror (`WorldReliefShading::SunVisible`) and in float as the floor's measure. Both materials call it through one more Custom node, with the same D, footprint and light (in body axes on the proxy, in tile-local axes on the ground). So the 50 km handover keeps it. `ds.Sky.Shadows` switches it and skips the march. The budget is timed against the frame **before the term existed** (Task 1's baseline), not against the switch: with the switch at 0 the pixel still runs the larger shader.
+**Architecture:**
 
-**Review status (2026-09-28):** revised against a critique of the first draft. Its three blockers are answered here: the 16.6 ms frame is reported, not asserted (the spec rules the frame over budget before the shadow, and hands it to profiling); the cost gate is timed as a spike before the mirror and the tests are built, and its likely NO-GO goes to the developer first (Task 0); and the `+/-` disc mutant is killed by a known value.
+- **The march.** `SunShadow` (`Surface/SunShadow.*`) is pure. It finds the highest horizon toward the star along the great circle through the point, using exact triangle geometry. The visibility is the share of the star's disc (its own angular radius) above that horizon. There are two schedules over one core:
+  - `SunShadow::Visible`, geometric samples read through `IGroundField::Height`, for a tile's vertices.
+  - `SunShadow::AlongProfile`, every texel ahead in a map column, for the orbit's map.
+- **The exits.**
+  - The night exit is a proof: no horizon is lower than the dip to the lowest ground.
+  - The day exit is a measurement with a margin: the steepest slope over 131,072 samples of the full height, times 1.5.
+  - Both in-loop exits are exact.
+- **The tiles.** `TerrainTile::Build` takes a `FTileShadow` (the light, the steepest slope, the sample count). It stores `FTileBuild::SunVisible` per grid vertex (skirts copy theirs), and `UTerrainTileComponent` writes it to UV0.x. UV0 was already allocated full-precision and unused, so the channel costs no vertex memory.
+- **The orbit's map.** `SunShadowMap` (`Surface/SunShadowMap.*`) is pure, and M_SkyBody reads it.
+  - It is an equirectangular map in the star's own frame: Z is the light, columns are the azimuth about it, rows are the star's elevation from `PsiLo` (under which no point of the world sees any of the star) up to the point under the star.
+  - A texel is `2 pi / Width` square at the terminator, where the shadows are. The night side past `PsiLo` is not stored, because it is provably dark.
+  - Each column's heights are read once. Each texel's horizon is `AlongProfile` over the texels ahead of it.
+  - It is quantised to 16 bits and given a mip per level.
+  - `AShipSky` bakes one world per task, nearest first, at most `ds.Sky.ShadowBakeTasks` at once. It uploads a transient G16 texture and cancels the bakes on a new system or at `EndPlay`.
+- **The lookup.** Both materials read the map through one Custom node over the shared file's `WR_ShadowMapCoord`, `WR_ShadowTapsAt` and `WR_Bilinear`. Eight texel loads give trilinear filtering at a level chosen from the pixel's footprint.
+  - `SunShadowMap::Sample` is the C++ mirror, in double and in float.
+  - M_SkyGround blends the map into the vertex shadow by the same `Morph` that grows the relief in: `lerp(map, vertex, Morph)`. At the 50 km handover (Morph 0) the ground's shadow *is* the orbit's, and by the drive floor it is the tile's.
+- **The switch.** `ds.Sky.Shadows` is the strength in both materials, `lerp(1, shadow, Shadows)`, so 0 draws the unshadowed look. Everything is baked, so the switch costs nothing either way.
 
-**Tech Stack:** Unreal Engine 5.8.2 C++ (module `DeepSpace`); HLSL in material Custom nodes through the engine's `/Project` mapping; Python editor scripting (`Tools/setup_sky_materials.py`); automation tests through `./test.sh`, rendered checks through `Tools/eyes.sh`, mutation proofs through `Tools/mutate.sh`.
+**Review status (2026-09-28):** rewritten for the ruling "cast shadows are baked, not marched". The per-pixel march of the first plan was spiked and measured NO-GO (+4 to +27 ms against a 1 ms budget). The ruling is in the spec's *Ruled on slice (b)'s build*. What the first plan built and learned is kept in *What was built and learned* below: the frames and timing baseline (Task 1), the spike's verdict (Task 1b), the gate tool, `Eyes.ReliefLook`'s still-pixel rule, `Eyes.LandingFrame`'s ABBA rounds and the exposure fix. The marched design's Tasks 2-6 are withdrawn. Their measurements that still bear on the bake are carried into *Measured while planning*.
 
-**Spec:** `/home/matt/Development/deepspace/docs/superpowers/specs/2026-09-27-landing-design.md`. The ruling is *Ruled on slice (b)'s build, 2026-09-28*, first bullet ("Cast shadows"). The parent plan is `docs/superpowers/plans/2026-09-27-landing-slice-1.md` as it stands on `feat/landing-b`. Its *Conventions for every task* bind here. Its *RULINGS AFTER PLANNING* set the parity rule that this plan applies to a new term.
+**Tech Stack:** Unreal Engine 5.8.2 C++ (module `DeepSpace`); HLSL in material Custom nodes through the engine's `/Project` mapping; Python editor scripting (`Tools/setup_sky_materials.py`); automation tests through `./test.sh`, rendered and timed checks through `Tools/eyes.sh`, mutation proofs through `Tools/mutate.sh`.
+
+**Spec:** `/home/matt/Development/deepspace/docs/superpowers/specs/2026-09-27-landing-design.md`, *Ruled on slice (b)'s build*, the bullets "Cast shadows are baked, not marched (2026-09-28)" and "Eyes captures now honour the game's exposure". The parent plan is `docs/superpowers/plans/2026-09-27-landing-slice-1.md`. Its *Conventions for every task* bind here, and so does its *RULINGS AFTER PLANNING* parity rule (the measured floor as a rule).
 
 ## Global Constraints
 
-- The ruling, verbatim: "the shared file gains a **shadow term marched through the height function toward the sun**, used by `M_SkyBody` and `M_SkyGround` alike. It is held to a C++ mirror by the parity test, its GPU cost is measured in `Eyes.LandingFrame`, and it is judged by before/after frames. Sign-off 2 stands as physical heights; it is not reversed to an exaggerated orbit."
-- The height the march reads is **the GPU's twelve detail bands of `FWorldRelief::Height`**, `PeakCm x PeakCap(S / S_max)` with S those bands alone. `S_max` is `FWorldRelief::SMaxMeasured` (0.029932993600784347) and the cap's knee is 0.8. Heights are physical and are never exaggerated. Left out, honestly: the craters, and the C++-only finer octaves (from footprint 1/98304 down to 5 m), both of which `Height` feeds into the cap's input. At 1.5 m the tiles' geometry carries both, so **features from 5 m up to the finest band's 116 m cast nothing**. That is a named limitation at the ground, stated in CLAUDE.md, and the developer rules whether craters must cast (Task 0).
-- The shared file stays in the scalar, no-swizzle subset. Every symbol is `WR_`-prefixed, and every literal is `WR_REAL(...)`. A syntax either compiler refuses fails that compiler: `./build.sh` for C++, `Eyes.WorldReliefParity` for the GPU.
-- Parity follows the measured floor as a rule, per footprint and per term. The tolerance is 1e-3, or 1.25 x the float floor's distance from double at that footprint, whichever is larger. The new term has no engine nodes, so its float floor is the shared file's own float build, measured in the same run at the same D. A term over its allowance is a port bug. A FLOAT FLOOR verdict escalates, and the tolerance is never loosened.
-- **The whole frame is reported, not asserted, in this plan.** The spec on main (*Ruled on slice (b)'s build*, last bullet) already records the ground frame at 19.4 ms against 16.6 (10.4 ms at 50 km), before any shadow, and rules "profile first, with the cast shadows in, and fix the real cost". That profiling owns the 16.6 ms; this plan hands it the frame times with the shadow in. `Eyes.LandingFrame` at 4K (3840 x 2160) on the RTX 4070 Ti SUPER prints each case's whole frame and asserts nothing about it.
-- **The gate is the shadow's added cost:** at most **1.0 ms** in every case (the terrain budget's spare: `Eyes.TerrainBudget` measured 4.96 ms of its 6 ms), measured as the frame with the shadow on minus **Task 1's baseline**, the same case before the term existed. The on-minus-off difference is reported beside it and is not the gate, since at 0 the pixel still runs the larger shader, with its registers and occupancy. Timings are ABBA-ordered, repeated, and taken as medians, with the spread reported.
-- Where it applies: the orbit proxy and the ground tiles, at every altitude, with the same function, D, footprint and light. The handover at 50 km stays seamless, which `Eyes.HandoverParity` holds to 1e-3 of the mean.
-- Black sky: no fill light, so a shadow is as dark as the night side. Worlds do not spin, and giants and oceans cast nothing.
-- Anti-chore: nothing here is a timer, a charge or a state.
-- All logic is C++ or the shared file. The material graph only wires. The material contract has three sides: `SkyMaterialContract.h`, `Tools/sky_material_contract.json` and the assets.
-- Build only with `./build.sh`, test only with `./test.sh`, render only with `Tools/eyes.sh`, and mutate only with `Tools/mutate.sh`, all behind `Tools/ue_lock.sh`. The editor is closed. At most 3-4 workers, `nice -n 19` for any local sweep.
-- Every test path is a sibling with no children. Every new test is proven able to fail.
+- **The ruling, verbatim:** "**Cast shadows are baked, not marched** (2026-09-28). A per-pixel march cost +4 to +27 ms at low sun against a 1 ms budget (the spike, NO-GO at N 12, 8 and 6). Because worlds do not spin and nothing orbits in this slice, the sun is fixed over every surface. So each ground tile computes its vertices' shadow while it is built, off the game thread, from the height function, and the orbital proxy reads a per-world shadow texture baked in C++ when the system loads. It costs nothing per frame. If worlds ever spin, the bake is redone as the sun moves."
+- **One height function.** The march reads `IGroundField::Height`: `FReliefGround` over `FWorldRelief`, whose `Height` carries every band, the C++-only finer octaves and the craters (`Cratering` times `WR_CraterSum`). So **craters cast**, which answers the first plan's Task 0 question 2 by construction. Heights are physical and are never exaggerated.
+- **One light.** The sun direction is the sky's own, `FSkyBodyView::LightDirection`: the unit vector from the body's centre to its star, universe axes. After Task 3 it comes from one function, `SkyProjection::LightDirection`, which `Project`, the tiles and the maps all call. The star's angular radius is `asin(R_star / d)`, clamped to `SunShadow::SunRadiusMax` (0.5 rad). No fill light is added: a shadow is as dark as the night side.
+- **Where it applies.** Solid worlds only. Giants and oceans have no ground field, so they get no tile and no map. Their materials keep the default white map and cast nothing.
+- **The handover.** At 50 km (Morph 0) M_SkyGround's shadow is the map, read through the same lookup code as M_SkyBody. `Eyes.HandoverParity` holds the ground to the orbit to 1e-3 of the mean with the shadow on, at a 3-degree dusk.
+- **Parity follows the measured floor as a rule**, per footprint: the tolerance is 1e-3, or 1.25 x the float mirror's distance from double at that footprint, whichever is larger. A term over its allowance is a port bug. A FLOAT FLOOR verdict escalates, and the tolerance is never loosened.
+- **The shared file** gains only the map's lookup (`WR_ShadowMapCoord`, `WR_ShadowTapsAt`, `WR_Bilinear`) and three shims. It stays in the scalar, no-swizzle subset, with every symbol `WR_`-prefixed and every literal `WR_REAL(...)`. A syntax either compiler refuses fails that compiler: `./build.sh` for C++, `Eyes.WorldReliefParity` for the GPU.
+- **The frame must not rise.** `Eyes.LandingFrame`'s every case with the baked shadow on is held against Task 1's baseline (taken before any shadow existed) by `Tools/landing_frame_gate.py --not-rise`. That gate is GO only if no case's cost exceeds the medians' own error band (floored at 0.2 ms, the most two quiet baselines have differed by). The whole frame is still reported, not asserted: the spec's profiling owns the 16.6 ms.
+- **The bake is measured and budgeted** (Task 7): per tile, per world, and the memory of each. The budgets are Task 0's ruling. The defaults the plan proceeds on are stated there.
+- **Anti-chore:** nothing here is a timer, a charge or a state. A bake is background work the player never waits on. Before it lands, the world simply draws unshadowed.
+- **All logic is C++ or the shared file.** The material graph only wires (ADR 0002). The material contract has three sides: `SkyMaterialContract.h`, `Tools/sky_material_contract.json` and the assets.
+- **Tools and limits.**
+  - Build only with `./build.sh`, test only with `./test.sh`, render and time only with `Tools/eyes.sh`, and mutate only with `Tools/mutate.sh`, all behind `Tools/ue_lock.sh`. The editor is closed.
+  - Any local sweep uses at most 3-4 workers, under `nice -n 19`. The bake's own tasks default to 2, the terrain's cap.
+  - Every test path is a sibling with no children. Every new test is proven able to fail.
+- **The default suite.** This plan's additions to `./test.sh DeepSpace` total at most 8 s, with no test over the 5 s cap. Heavy measures live in `Eyes.ShadowBakeCost`, outside the suite. Test worlds (`SkyTestWorld::FSkyWorld`) build **without** tile shadows and map bakes unless asked (`EShadows::On`), so the suite's existing grounds cost what they did.
+- **Header changes** (`ShipSky.h`, `WorldGround.h`, `TerrainTile.h`, `WorldRelief.h`) need `./rebuild.sh --force` before an editor session; `./build.sh` suffices for the tests. No `UPROPERTY`, component or `BlueprintImplementableEvent` is removed, so `check_blueprints.py` is not owed.
 
 ## Review Focus
 
-These are the six inputs the ruling implies and no happy-path test meets, most likely first. Each is pinned in its owning task.
+These are the inputs no happy-path test meets, most likely first. Each is pinned in its owning task.
 
-1. **The sun at the zenith, L = D, and at the nadir, L = -D.** The sun's azimuth along the ground is undefined, and a normalised zero is NaN. The expected result is a whole disc at the zenith and none at the nadir, both finite. (The first draft's zero-azimuth exit returned a whole disc at the nadir too: harmless on screen, since the lambert is 0 there, but the wrong value.) Pinned by `DeepSpace.Surface.WorldRelief.SunDisc` in **Task 2**.
-2. **A world with 1 cm of relief.** The march's end falls inside its first sample, and the only horizon is the sphere's own. The expected result is 0.5 with the sun's centre on the level, 1 above by two radii and 0 below, monotone between, all finite. Pinned by `.SunDisc` in **Task 2**.
-3. **A giant or an ocean.** A giant's `ReliefScale` is its cloud billow (0.066), not ground, and an ocean's is 0. Neither may cast a shadow. The C++ half is pinned by `.SunDisc`'s no-ground case in **Task 2**. The material half is pinned by `DeepSpace.Sky.MaterialContract`'s check that `M_SkyBody`'s shadow reads `ReliefScale x (1 - Banding)`, in **Task 3**.
-4. **The night side and the edges of the exits.** Past the steepest slope the ground can have, either way, the march is skipped. The skip must meet the march with no step, or the terminator shows a seam. Pinned by `.SunDisc`'s four cases at `+-(Steepest + r)` and `+-(Steepest + r/2)` in **Task 2**.
-5. **`ds.Sky.Shadows` out of range at the console** (7, -1, 0.5). The value is clamped to 0..1. 0 must skip the march and draw the unshadowed look, because the before/after frames depend on it. A star seen from inside its own radius gives an arcsine argument over 1, and a `SunRadius` near pi/2 would wrap `tan(Theta - r)` past -pi/2: the shared file clamps r to at most 0.5 rad. Pinned by `DeepSpace.Sky.ShadowParameters` in **Task 3**, by `.SunDisc`'s huge-sun case in **Task 2**, and by Task 6's check that the shadows-off frames are the before frames (amended after review: on the pixels both runs held still, at most 10% moved by more than 1 LSB and the rest within a quarter level of mean luma -- see *Amended after review* under Task 1b).
-6. **A shadow edge sharper than a pixel.** Near the pixel, the samples compare smoothed heights against the pixel's own full height; one pixel of motion moves that angle by about slope/2 (~0.05 rad) against a 2r (~0.058 rad) penumbra, so an unwidened edge switches within a pixel and crawls in motion. Each sample's disc is widened to `max(r, PixelSlope x Footprint / Along)`, how far one pixel of motion moves that sample's horizon. (The critique's literal `Footprint / Along` is about 1 rad at the first sample, which would darken every pixel under any sun below ~45 degrees; the ground's typical slope scales it to the height a pixel actually moves.) Pinned by Task 6's 2x-supersampled comparison, since still frames at 1x cannot see it.
+1. **The sun at the zenith and the nadir.** The azimuth is undefined there. The zenith is whole (the day exit, or the `CosT` guard), the nadir hidden (the night exit), and both are finite. Pinned by `DeepSpace.Surface.SunShadow.Exits` (**Task 2**).
+2. **Smooth ground (1 cm of relief) and no ground (0 cm).** Smooth ground's only horizon is the sphere's: 0.5 with the sun's centre on the level, monotone, and the in-loop bound stops the march early. No ground casts nothing and reads nothing. Pinned by `.Exits` (**Task 2**).
+3. **The exits meet the march with no step.** The night exit is a proof, and just inside it the march finds the disc hidden. The day exit rests on a sampled steepest slope with a 1.5 margin, and just inside it the real ground's march finds the disc whole. If that sample is wrong, the failure is a lit speck on the steepest slopes under a high sun. Pinned by `.Exits` and `.SteepestSlope` (**Task 2**).
+4. **The map's seam at azimuth +-pi, its clamped rows and the point under the star.** Bilinear taps wrap in columns and clamp in rows, and the level rises as `cos(psi)` narrows the texels toward the pole. Pinned by `DeepSpace.Surface.SunShadowMap.Lookup` (**Task 5**), and on the GPU by `Eyes.WorldReliefParity`'s seam patch (**Task 8**).
+5. **Rows the map leaves out are provably dark.** `PsiLo` is the dip from the highest peak to the lowest ground plus the star's radius. Pinned by `.Shape` and `.NightBelowTheMap` (**Task 5**).
+6. **`ds.Sky.Shadows` out of range at the console** (7, -1, 0.5). It is clamped to 0..1, and 0 must draw the old look to compiler noise. Pinned by `DeepSpace.Sky.ShadowParameters` (**Task 6**) and by Task 10's check that the shadows-off frames are the before frames.
+7. **A new system, or the end of play, mid-bake.** The bake polls a cancel flag once a column, so teardown waits at most one column. Pinned by `.ShadowParameters` (**Task 6**).
+8. **The light or the tile switch changing under a resident ground.** The ground rebuilds, and no tile keeps a stale shadow. Pinned by `DeepSpace.Surface.GroundShadowLight` (**Task 4**).
+9. **The cost lands where the frame cannot see it, and the suite does not pay it.** Pinned by `Eyes.ShadowBakeCost` (**Task 7**), `Eyes.LandingFrame --not-rise` (**Task 9**) and the suite timing (**Task 10**).
 
 ---
 
 ## Measured while planning
 
-The design points the task set were settled by measurement before this plan was written. The measurements used a standalone C++ build of the shared file (`WorldRelief.ush` at `feat/landing-b` `1b8234c`, compiled with `WR_CPP` in double and in float) together with the march's own text from Task 2, outside Unreal. The HLSL half of the same text was compiled by `glslangValidator -D -V`.
+### Before the ruling (the marched plan, kept where it still bears)
 
-"Random ground" here means random seed offsets (multiples of 1/256), random directions, and the sun at a fixed elevation with a random azimuth. Each world used its real radius and relief (`Saved/procgen_corpus.tsv`) and its real star size: Baemsekai is 0.16 R_sun, so its angular radius is 2.95 deg from III, 1.66 deg from IV and 0.97 deg from V. **Truth** is the same band-limited height at the pixel's footprint, marched densely (one step per eighth of the finest kept band's wavelength) under the same disc. **Shadowed** means visibility under 0.5.
+**Physical relief casts little at the dusk goto's 10 degrees** (the first plan's Finding 1). Share of the ground shadowed:
 
-### Finding 1: the ruled dusk casts little shadow
-
-At the dusk goto's 10 degrees, physical relief casts almost none.
-
-| Share of ground shadowed (truth) | 10 deg | 5 deg | 3 deg | 2 deg |
+| Share shadowed (dense truth) | 10 deg | 5 deg | 3 deg | 2 deg |
 |---|---|---|---|---|
-| III from 200 km (pixel 4e-5 R) | 0.0% | 0.0% | 0.3% | 6.3% |
+| III from 200 km | 0.0% | 0.0% | 0.3% | 6.3% |
 | IV from 200 km | 0.3% | 19.3% | 43.3% | 56.0% |
 | V from 200 km | 1.7% | 28.3% | 47.7% | 62.0% |
-| IV at the ground (pixel 1e-7 R) | 2.0% | 30.7% | 46.7% | - |
+| IV at the ground | 2.0% | 30.7% | 46.7% | - |
 | V at the ground | 5.3% | 42.0% | 59.3% | - |
 
-The steepest slope in the GPU's twelve bands is 5.5 deg on III (20,000 samples), 20.8 deg on IV and 23.1 deg on V. The medians are 1.6, 5.7 and 6.7 deg. A sun 10 degrees up therefore clears nearly every horizon, and on III it clears every one.
+That table was measured at the *pixel's* footprint. The bake's footprints are the tile's spacing on the ground and the map's texel from orbit, so the orbit's figures fall (below). The ruled frames at 10 degrees will therefore change little, and the 3-degree frames are where the shadow is seen.
 
-`Eyes.ReliefLook`'s 200 km frames look straight down the nose. Their 60-degree field spans only about +-1.2 degrees of sun elevation, so the whole ruled frame sits at 10 degrees, and **the shadow term will barely change the ruled before/after frames.** They are still built and reported, because they are the ruled done-when. Beside them, the frames test also takes the same views at **3 degrees**, where the term is plainly visible.
+**The per-pixel march is NO-GO** (Task 1b's verdict, below). That is why this plan bakes.
 
-Craters: a single crater wall is at most `2 x crater_depth x ReliefScale` steep, 1.5 degrees on IV. But up to four crater kernels can overlap (`WR_CRATER_BOUND_COUNT` 4), so a wall can reach about 6 degrees, and Finding 2's own row shows craters adding 0.8-2 points of shadowed ground at 5 degrees. They are not negligible at 3 degrees. The ruling's complaint was that "the craters nearly vanished", and this plan leaves craters out of the march, so **the term as planned does not bring them back**.
+### For the bake (2026-09-28)
 
-Together these are a ruling-level mismatch -- the ruled frames will show almost no change, and the craters will not return -- and under the spec approval gate that goes to the developer before anything is built (**Task 0**), not into Task 6's report.
+These were measured on a standalone build of `Shaders/Private/WorldRelief.ush`'s C++ half in double (`g++ -O2`, one core, `nice -n 19`), with the march exactly as Task 2 writes it, on Baemsekai III, IV and V's radius, peak, craters and star (`Saved/procgen_corpus.tsv`; the star is 0.16 R_sun, so it is 2.95, 1.66 and 0.97 degrees in radius from III, IV and V). Offsets and directions were random. The in-engine build may differ by a constant factor, and Task 6 measures there.
 
-The mean brightnesses the ruling quotes (42.9 -> 17.3 and the rest) are from main's spec (`3945176`), not `feat/landing-b`'s.
+| What | Measured |
+|---|---|
+| One height, `FWorldRelief::Height`'s work | 0.11 us a simplex band; the crater sum 5.1 us at footprint 0, 3.4 us at 1/3000, 1.7 us at 1/100; a whole height 3.3-15 us by footprint (16 bands on IV) |
+| A tile's vertices' shadow (33 x 33, IV-like, 12 samples, the day exit off) | heights alone 5-7 ms a tile; the shadow 16-70 ms. At a 10-degree dusk it is 48-60 ms (7.7-9.4 x the heights), at 3 degrees 16-47 ms (many vertices exit hidden), and at a 62.6-degree sun 63-70 ms without the day exit and about 0 with it. At 8 samples it is 16-45 ms. |
+| The cold cut at 1.5 m (951 tiles, 2 tasks) | about 3 s today; about 27 s with the shadow at 12 samples (estimate: 951 x 56 ms / 2) |
+| The geometric march against the dense truth (300 m and 100 m footprints) | at N 12, shaded ratio 0.79-1.03, mean \|dv\| 0.04-0.07 at 5 degrees and 0.10-0.14 at 2; at N 8, \|dv\| 0.07-0.14 at 5 and about 0.20 at 2; at N 16, 0.03-0.04 at 5 |
+| Steepest sampled slope along the ground, \|grad S\| at footprint 0 (131,072 samples) | 13.6 at 12 bands, 14.0 at 16, 15.4 at 17, 16.7 at 20; the median 3.1-4.0; the craters' 2.30 (all six bands) |
+| The day exit, `atan(SlopeScale x 1.5 x (16.72 + Cratering x 2.30)) + r` | III 14.4 deg, IV 42.4 deg, V 44.2 deg |
+| `PsiLo`, the map's lowest row | III -4.83 deg, IV -5.21 deg, V -4.84 deg |
+| A map at 4096 columns | about 1,084 rows (IV), 4.44 M texels, 8.9 MB at 16 bits plus 3 MB of mips; 14.6 s a world on one thread with the day exit off (rows above it need no heights, which roughly halves IV's and V's); 20 profile reads a texel |
+| A map at 2048 columns | 542 rows, 1.11 M texels, 3.4 s a world, 3 MB |
 
-### Finding 2: the march
+**A texel cannot be under a pixel wherever the proxy draws.** The proxy draws from 50 km up. At the game's 103-degree FOV on a 4K screen a pixel is 6.55e-4 rad at the centre, so a texel of `2 pi R / Width` is under a nadir pixel only above `h = (2 pi / Width) / 6.55e-4 x R`:
 
-| Design point | Settled | Measured |
-|---|---|---|
-| Which bands | The GPU's twelve detail bands (24..49,152 cycles per radius), each faded by the footprint rule. No crater bands. | With craters marched (N 16), shadowed at 5 deg IV rose 11.0% -> 11.8% and at the ground 15.3% -> 17.3%, for six more bands of 27 cells of hashes per sample, about 60% more work. |
-| Sample count | 12 (`shadow_samples`). The spike (Task 1b) may lower it to 8 or 6, and Task 4 confirms. | Ratio to truth at 5 deg, IV / V: N 12 0.84 / 0.79; N 8 0.81 / 0.78; N 6 0.79 / 0.79. At 2 deg: N 12 0.82 / 0.91; N 8 0.82 / 0.86; N 6 0.77 / 0.84. N 24 gains about 2 points over N 12. |
-| Step growth | Geometric from `Nearest = max(pixel footprint, half the finest band's wavelength)` to `End`. `End` is where the sun's lower edge, rising at `tan(theta - r)` with the ground curving away as `s^2 / 2`, clears `PeakCm` from the pixel's own height. | `End` is about 0.027 R at 5 deg on IV (150 km) and 0.06 R at 2 deg. |
-| Footprint rule | Each sample reads its bands at **twice the gap ahead of it**, `Along x (Growth - 1)` (`WR_SHADOW_FOOTPRINT_FACTOR` 2, the face's `filter_pixels`). A band has faded to nothing by the time it has two samples per cycle, measured ahead, so the march never aliases. (Measured with the gap *behind*; re-measured in Task 2, see *Corrections after review*.) | The rule costs up to a sixth of the truth's shadow compared with no fade, all at 5 deg: 22.3% against no fade's 25.3% on V from orbit (truth 28.3%); at the ground 24.0% against 27.3% on IV (30.7%) and 30.0% against 35.3% on V (42.0%). From orbit on IV the two are equal, at 16.3%. The fade is the price of never reading a band under two samples a cycle. |
-| Height compared against | The pixel's own full height at its footprint. | A variant that compared each sample against the pixel's height at the sample's own footprint was worse in every case (mean \|dv\| 0.061 vs 0.064 at 5 deg IV, 0.100 vs 0.119 at 2 deg V), so it was dropped. |
-| Softness | The share of a disc of the star's angular radius `r` above a straight horizon: `(acos x - x sqrt(1 - x^2)) / pi`, with `x = (H - theta) / r`. `r = asin(R_star / d)` per body (`ShipSky::SunAngularRadius`). | The penumbra covers 11% of the probe patch on IV and 7% on V. |
-| Exits | Above `theta - r >= atan(ReliefScale x 21.3)` the disc is whole. Below `theta + r <= -that` it is hidden. Inside the loop there are two exact exits: the disc is already hidden, or no ground from here on can rise above the horizon found. | The steepest `\|grad S\|` over 262,144 samples is 14.19, so 21.3 is 1.5 x that. This gives 34 deg on IV and 39 deg on V: the day side under a high sun costs nothing. |
-| Parity floor | The float build against double, measured per footprint in the same run. | Max visibility gap on IV / V: at 1/96 1.7e-5 / 4.3e-5, at 1/768 2.1e-4 / 4.1e-4, at 1/3072 1.1e-3 / 2.1e-3, at 1/12288 5.3e-3 / 1.2e-2. Mean gaps are under 3e-5. At 60 deg the gap is exactly 0 (the exit). |
+| Width | h_min / R | the world is then this wide | III texel, h_min | IV texel, h_min | V texel, h_min | IV at 200 km | IV at 50 km |
+|---|---|---|---|---|---|---|---|
+| 2048 | 4.69 | 20.3 deg | 27.1 km, 41,400 km | 17.5 km, 26,800 km | 16.5 km, 25,200 km | 134 px a texel | 536 |
+| 4096 | 2.34 | 34.8 deg | 13.6 km, 20,700 km | 8.8 km, 13,400 km | 8.3 km, 12,600 km | 67 | 268 |
+| 8192 | 1.17 | 54.8 deg | 6.8 km, 10,400 km | 4.4 km, 6,700 km | 4.1 km, 6,300 km | 34 | 134 |
 
-### Finding 3: the budget is the risk
-
-A value-only simplex band in the file is about 260 GPU instructions: four corners, each an LCG and six Feistel rounds, a gradient and a smoothstep. A marching pixel reads, per sample count:
-
-| Per marching pixel | 10 deg | 5 deg | 2 deg | Ground, 10 deg |
-|---|---|---|---|---|
-| N 12 | 98 bands | 86 | 66 | 107 |
-| N 8 | about 66 | about 60 | about 53 | about 72 |
-| N 6 | 50 | 45 | 37 | 55 |
-
-The face's own terms per pixel are 12 gradient bands, 6 crater bands of 27 cells and the continent, about 16,000 instructions. **N 12 is therefore about 1.5 times the face's own shading cost, N 8 about 1.0 and N 6 about 0.75**, wherever the sun is below the exit. At dusk that is every pixel of the ground.
-
-At 4K on a 4070 Ti SUPER this estimate says a full-screen march exceeds the 1 ms budget by several times. Roughly: 8.3M pixels x about 98 band evaluations x about 260 instructions is about 2e11 instructions, **+5 to 10 ms a frame at N 12 and about half that at N 6**. The face is most of the terrain's 4.96 ms, and N 6 is 0.75 of it. A NO-GO is close to certain. The estimate is a count, not a measurement, so it is measured first, as a **spike** (Task 1b: the march and the materials only, timed against Task 1's baseline) before the C++ mirror and the contract tests are written, and the question it will most likely raise goes to the developer now (Task 0). If the spike fails at N 6, and the coarse-band early exit (Task 1b, Step 4) does not rescue it, the plan stops at Task 4b having spent one spike.
-
-### Corrections after review
-
-- **`.ShadowCost`'s "187 bands with the footprint rule taken out" is impossible for the plan's text.** At the orbit's footprint 4e-5 the pixel keeps 11 bands (24 x 2^k under 25,000), and with the factor at 0 each sample keeps the same 11, so the most the text can read at N 12 is 11 + 11 x 12 = 143 (156 if all twelve bands were kept). The planning harness was therefore not exactly "the march's own text from Task 2", and Findings 2 and 3 are provisional. Task 2 re-measures them with the plan's text and prints the counts.
-- **Finding 2's footprint rule used the gap *behind* each sample**, `2 x (Along - Before)`. The gap ahead is `Growth` times larger -- about 2.05 at N 12, 3.1 at N 8 and 4.9 at N 6, with End/Nearest about 2700 -- so a band survived down to about 1/Growth samples a cycle measured ahead, which is exactly where the gate's lowered counts sit. The plan now fades by the gap ahead, `Along x (Growth - 1)` (Task 2), which fades more, so Finding 2's ratios and Finding 3's counts are re-measured in Task 2 (`.ShadowAgainstTruth`, `.ShadowCost` print them per angle and per N) before anything relies on them.
-- **"Mean |dv| at most 0.144" at N 8 or 6** (the first draft's Task 4 Step 3) was not given per angle. `.ShadowAgainstTruth` holds 0.12 at 5 degrees; if 0.144 was a 5-degree figure, the lowered count fails Task 2's own test. Task 2 now prints mean |dv| per angle at N 12, 8 and 6, and a count that fails the 5-degree bound is a quality NO-GO for that count, never a loosened bound.
-- **`Steepest` rests on a sampled maximum, not a proof.** 14.19 is the steepest of 262,144 samples. A steeper spot makes the upper exit wrong, and would show as a lit speck. `.ShadowGradientMax` now also logs the steepest finite-difference slope of the heights the march actually reads (`Here` against `There` at their different footprints).
-- **The parity probe's patch spans 0.5 in D, about 28 degrees.** At "2 degrees" the sun's elevation runs from about -12 to +16 degrees across it, so "about 50% shaded" is plausible only because of that spread. Whether planning's 46.9-50.1% used the same patch is **unconfirmed**; Task 5 reports the share and does not assert it.
-
-The fallback it would put to the developer is a genuinely different design. Worlds neither spin nor move, so the sun is fixed in each world's axes, and the shadow is a fixed function of D per world. It can be baked by this same `WR_SunVisible`, drawn with `DrawMaterialToRenderTarget` (the parity probe's own mechanism) into a clipmap centred on the ship, and sampled by both materials.
+A texel under a pixel at 200 km would take about 68,000 columns (2.8e10 texels), and at 50 km about 274,000. No per-world texture reaches that. So the orbit's map is finer than the screen while the world is under 20-55 degrees across, which includes the opening frame's ~18-degree world at every width above. Nearer than that, the map is magnified: its shadows are soft at the texel's scale, never aliased. Below 50 km the tiles take over, blended in by Morph, with shadows at their vertex spacing. On the ground, at 4K and the game's FOV, a drawn tile's vertices are 12-24 pixels apart (CDLOD split factor 2: a tile is drawn 2-4 edges away), so a vertex shadow's edge is spread over that many pixels. **This is the ruling's cost, and it goes to the developer as Task 0's first question.**
 
 ---
 
-## Execution: tree, order, ownership
+## What was built and learned (kept)
 
-Track T owns this work (parent plan: `setup_sky_materials.py`, the contract, `Surface/WorldRelief.*`, `ShipSky.*`). It runs in `/home/matt/Development/deepspace/.worktrees/landing-b-t` on `feat/landing-b-t`. For this work, T also takes `Eyes.LandingFrame`, which the orchestrator wrote in Task 39 (Z), and a paragraph of CLAUDE.md. The orchestrator merges `feat/landing-b-t` into `feat/landing-b` when Task 6 lands. The spec edit of Task 6 is made **on main**, where the ruling it sits under lives (`3945176`, `8741a48`).
+**Task 1 (done, `fbf172d`, amended in `4710b9a`, `5018fe2`, `3aacdc7`): the frames before and the timing baseline.** This built:
 
-**Amended after review (2026-09-28):** the track has since merged main (`cdbfadc`), so both `feat/landing-b-t` and `feat/landing-b` now carry the ruling's bullets (the spec's *Cast shadows* and *The frame at the ground*), and `feat/landing-b` was fast-forwarded to the track after the spike's verdict, before Task 6. The reason given for editing the spec only on main -- no anchor on the branch -- no longer holds. The spec edit may be made on the track, which then carries it to `feat/landing-b`; main gets it when the slice merges, not before (nothing on the track is merged into main by an agent). The review range for this work is `cdbfadc..feat/landing-b-t`, not `feat/landing-b...feat/landing-b-t`, which is empty once the two are merged.
+- `DeepSpace.Sky.GotoDuskElevation`: goto dusk takes the star's elevation.
+- `Eyes.ReliefLook`: III, IV and V from 200 km and at 1.5 m, at the dusk goto's 10 degrees and at 3, with `ds.Sky.Shadows` 0 and 1 when it exists.
+  - The ruled frames are drawn at the capture's default. The measured *read* frames are drawn at the game's exposure plus `ReadStops`, and read only on pixels two captures without the term held within 1 LSB. They carry the coverage, the flicker as noise, and aliasing against 2x (`alias_off`, `alias_off2`, `alias_on`).
+- `Eyes.LandingFrame`: six cases (`50km`, `1.5m`, `50km_dusk10`, `1.5m_dusk10`, `1.5m_dusk3`, `200km_dusk10`) at 4K, ABBA after one untimed warm-up round, with medians, IQR and raw times, each case's sun and `agl_m`, and `switch present|absent`. The switch's proof is a separate 1080p capture at the read exposure, read on held pixels.
+- `Tools/relief_look_compare.py` and `Tools/landing_frame_gate.py`, each with its tests. The gate reads twice the medians' combined standard error, floored at `RUN_TO_RUN_MS` 0.2 ms.
+- `Tests/Eyes/EyesFrames.h`, whose `Expose` persists a view state so captures honour `ds.Sky.Exposure`: the exposure fix.
 
-```
-Task 0  STOP: the developer rules on the dusk elevation, the craters and the likely budget NO-GO   -- before anything is built
-Task 1  the frames before (Eyes.ReliefLook) and the timing baseline (Eyes.LandingFrame)          -- run BEFORE any shader change
-Task 1b THE SPIKE: the march and the materials only, timed against the baseline; GO or NO-GO     -- uncommitted, thrown away
-Task 2  WR_SunVisible in the shared file, pure, and its C++ mirror; headless tests
-Task 3  the materials, the contract, the sky's parameters (SunRadius, Shadows)
-Task 4  THE GATE, confirmed: Eyes.LandingFrame against the baseline; the switch proven by pixels
-Task 4b (only on NO-GO) a stop-and-replan point: the report goes to the developer
-Task 5  parity: Eyes.WorldReliefParity's shadow leg; Eyes.HandoverParity at dusk
-Task 6  the frames after, the numbers, the docs
-```
+The before runs are in `Saved/Eyes/ReliefLook/shadows-before` and `-2`, and `Saved/Eyes/LandingFrame/baseline` and `-2`; the first versions are kept as `*-v1`. **Those are this plan's "before".** Nothing in Tasks 2-5 touches a shader, so they stay valid until Task 6.
 
-**First, in the tree:** it lacks `Eyes.LandingFrame` and the *Landing* section of CLAUDE.md that `feat/landing-b` has (`1b8234c`). Run this before Task 1:
+**Task 1b (done, uncommitted, thrown away): the spike.**
 
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git status --short && git merge -q feat/landing-b && git log --oneline -1
-```
+**Spike verdict (2026-09-28, track T, RTX 4070 Ti SUPER at 4K):** `NO-GO -- at N = 6 the worst case is 1.5m_dusk10 at +11.71 ms (spread 0.55); early exit tried: +13.07 ms (k = 6 coarse bands, the finer ones bounded by SimplexValueBound x weight / frequency -- looser than the saving)`. Tried: `N 12: worst +26.99 ms (1.5m_dusk10), N 8: worst +17.07 ms (1.5m_dusk10), N 6: worst +11.71 ms (1.5m_dusk10), N 6 + early exit: worst +13.07 ms (1.5m_dusk10)`. Per case at N 12 / 8 / 6: 50km_dusk10 +11.14 / +6.96 / +5.12, 200km_dusk10 +10.60 / +5.97 / +3.78, 1.5m_dusk3 +14.13 / +10.29 / +8.54, 1.5m_dusk10 +26.99 / +17.07 / +11.71; the start's two cases (sun 62.6 degrees, above the exit) +0.1 to +0.5, within their spread. Baseline (before the term): 50km 10.63, 1.5m 18.87, 50km_dusk10 9.39, 1.5m_dusk3 15.66, 200km_dusk10 12.87, 1.5m_dusk10 16.07 ms; a second baseline read every cost within 0.2 ms of zero. Nothing was committed from the spike.
 
-Expected: a clean tree, then the merge commit (or a fast-forward to `1b8234c`).
-
----
-
-## Task 0: STOP -- three questions for the developer, before anything is built
-
-**Owner:** the orchestrator. **Depends on:** nothing. This is not an executable task: it is the spec approval gate. Put these to the developer in one form (`AskUserQuestion`), with the numbers, and do not start Task 1b until they are answered. Task 1 may run meanwhile only if question 1 is answered "keep 10 degrees" or the answer's elevation is added to Task 1's views before its frames are taken.
-
-1. **The ruled frames will not change.** At the dusk goto's 10 degrees physical relief shades 0-5% of the ground, 0% on Baemsekai III (Finding 1), so the ruled before/after frames will look alike. Options: (a) lower the dusk goto's elevation (to 5 or 3 degrees, where IV and V shade 20-50%); (b) keep 10 degrees and judge by the extra 3-degree frames this plan takes; (c) something else.
-2. **The craters will not come back.** The ruling's complaint was that "the craters nearly vanished", and this plan does not march craters. Overlapping kernels make walls of up to about 6 degrees, and planning measured craters adding 0.8-2 points of shadow at 5 degrees for about 60% more work a pixel. Options: (a) craters are out, and the ruling's crater complaint is answered some other way; (b) craters must cast, which the budget below makes harder still.
-3. **The budget is very likely a NO-GO.** Finding 3's count puts the per-pixel march at +5 to 10 ms a frame at N 12 and about half at N 6, against a 1.0 ms allowance, on every pixel below the exit -- at dusk, all of the ground. Options: (a) spike it first as planned (Task 1b, one uncommitted task) and come back only on NO-GO; (b) go straight to Task 4b's bake; (c) relax the 1.0 ms allowance (the ground frame is already over 16.6 ms before any shadow, and the spec's profiling owns that).
-
-Write the answers into the spec on main under the ruling's first bullet, *Cast shadows*, as a sub-bullet, and amend this plan where they change it (the views of Tasks 1 and 6, the march's bands in Task 2, Task 4b).
-
----
-
-## Task 1: the frames before and the timing baseline -- `Eyes.ReliefLook` at 200 km and at the ground, at 10 and 3 degrees; `Eyes.LandingFrame` in every case the gate will time
-
-**Owner:** T. **Depends on:** the merge above, and Task 0's first answer. Run this task before Task 1b or Task 2 touches the shared file, so that its frames and its timings are the "before".
-
-**Files:**
-- Modify: `Source/DeepSpace/Sky/ShipSky.h:378-380` -- `GotoPlacement` gains `double DuskElevation = DuskSunElevation`
-- Modify: `Source/DeepSpace/Sky/ShipSky.cpp:800-846` -- `GotoPlacement` uses it
-- Modify: `Source/DeepSpace/Tests/ShipSkyTest.cpp` -- new sibling `DeepSpace.Sky.GotoDuskElevation`
-- Rewrite: `Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp` (`Eyes.ReliefLook`)
-- Modify: `Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp` (`Eyes.LandingFrame`; taken from the orchestrator's Task 39 (Z) for this work) -- the gate's cases, ABBA medians, the sun's elevation per case, a tagged report; the 16.6 ms assertion becomes a report line
-- Create: `Tools/relief_look_compare.py`, `Tools/test_relief_look_compare.py`, `Tools/landing_frame_gate.py`, `Tools/test_landing_frame_gate.py`
-
-**Interfaces:**
-- Consumes: `ShipSky::GotoPlacement`, `ShipSky::EGotoSide::Dusk`, `ShipSky::DuskSunElevation`, `ShipGround::FromRelief`, `SkyTestWorld::FSkyWorld`, `SkyTestWorld::PilotEye`, `AWorldGround::FlushBuildsForTest`.
-- Produces: `TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem&, int32 Body, double AltitudeCm, const FUniversePosition& From, EGotoSide Side = EGotoSide::Day, double DuskElevation = DuskSunElevation)`. It also produces `Saved/Eyes/ReliefLook/<tag>/report.txt`, one line per frame: `frame <name> sun <deg> off_mean <x> on_mean <x> coverage <share> off_crc <hex> on_crc <hex>`. `python3 Tools/relief_look_compare.py <before dir> <after dir>` compares the shadows-off PNGs pixel by pixel and exits 1 if any differs by more than 1 LSB in a channel or 0.01 in mean luma (the CRCs are printed beside it, and an unequal CRC within tolerance is reported, not failed: a changed graph can change how the SPIR-V compiler fuses FMAs elsewhere). **Superseded after review** by the contracts in *Amended after review* under Task 1b; the code blocks of Steps 5-9 are the first version, and the committed files are the ones that bind.
-- Produces, for the gate: `Saved/Eyes/LandingFrame/<tag>/report.txt`, one line per case: `case <name> sun <deg> on_ms <median> off_ms <median> spread_ms <max IQR> frame_crc_on <hex> frame_crc_off <hex> tiles <n>`, followed by the ground's `Describe()`. `python3 Tools/landing_frame_gate.py <baseline dir> <after dir> [budget ms]` prints each case's `on - baseline` (the gate) and `on - off` (reported) and exits 0 on GO, 1 on NO-GO, and 2 if a case is missing or any case's cost lies within 2x its spread of the budget (too noisy to decide: repeat the run). **Superseded after review:** 2x the per-frame IQR was wider than the budget; see *Amended after review* under Task 1b.
-
-- [ ] **Step 1: Write the failing test.** Add it to `Source/DeepSpace/Tests/ShipSkyTest.cpp`, after `FShipSkyTest::RunTest`:
-
-```cpp
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-    FGotoDuskElevationTest,
-    "DeepSpace.Sky.GotoDuskElevation",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-/**
- * Goto dusk at a chosen sun (the cast-shadow plan's frames): the star stands
- * DuskElevation above the ground's horizon under the ship. The default is
- * still DuskSunElevation, ten degrees, which DeepSpace.Sky.ShipSky holds.
- */
-bool FGotoDuskElevationTest::RunTest(const FString& Parameters)
-{
-    const FSkySystem Fixture = SkyTestFixtures::System();
-    const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
-    const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
-    const FVector Sunward = (Star.Position - Home.Position).GetSafeNormal();
-    for (const double Degrees : { 3.0, 10.0, 25.0 })
-    {
-        const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::HomeIndex, 1.5e7,
-            SkyTestFixtures::Opening(), ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(Degrees));
-        if (!TestTrue(FString::Printf(TEXT("goto dusk at %.0f degrees places over a body"), Degrees), Dusk.IsSet()))
-        {
-            continue;
-        }
-        const FVector Zenith = (Dusk->Position - Home.Position).GetSafeNormal();
-        const double Elevation = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Zenith, Sunward)));
-        TestTrue(FString::Printf(TEXT("the star stands %.0f degrees above the ground's horizon (%.6f)"), Degrees, Elevation),
-            FMath::IsNearlyEqual(Elevation, Degrees, 1e-6));
-    }
-    return true;
-}
-```
-
-- [ ] **Step 2: Run it to see it fail.**
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
-
-Expected: the build fails. `GotoPlacement` takes no sixth argument ("no matching function for call to 'GotoPlacement'").
-
-- [ ] **Step 3: The elevation.** In `Source/DeepSpace/Sky/ShipSky.h`, replace the declaration:
-
-```cpp
-    DEEPSPACE_API TOptional<FNavPlacement> GotoPlacement(const FSkySystem& System, int32 Body,
-                                                         double AltitudeCm, const FUniversePosition& From,
-                                                         EGotoSide Side = EGotoSide::Day,
-                                                         double DuskElevation = DuskSunElevation);
-```
-
-Also add to its comment: "`DuskElevation` is the star's height above the horizon under a dusk goto, rad; the frames of the cast-shadow plan take 3 degrees beside the goto's ten." Then in `ShipSky.cpp`, update the definition's signature to match:
-
-```cpp
-TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,
-                                                const FUniversePosition& From, EGotoSide Side, double DuskElevation)
-```
-
-In the same file, change the dusk branch's two lines:
-
-```cpp
-            // The zenith DuskElevation short of square to the star.
-            Out = (Aside * FMath::Cos(DuskElevation) + Sunward * FMath::Sin(DuskElevation)).GetSafeNormal();
-```
-
-- [ ] **Step 4: Run it to see it pass.**
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Sky.GotoDuskElevation && ./test.sh 'DeepSpace.Sky.ShipSky$'`
-
-Expected: both PASS.
-
-- [ ] **Step 5: The frames test.** Replace the whole of `Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp` with:
-
-```cpp
-#include "Components/SceneCaptureComponent2D.h"
-#include "Engine/TextureRenderTarget2D.h"
-#include "Engine/World.h"
-#include "HAL/FileManager.h"
-#include "HAL/IConsoleManager.h"
-#include "ImageUtils.h"
-#include "Misc/AutomationTest.h"
-#include "Misc/Crc.h"
-#include "Misc/FileHelper.h"
-#include "Misc/Paths.h"
-#include "ShaderCompiler.h"
-#include "Sky/LocalSystem.h"
-#include "Sky/ShipSky.h"
-#include "Surface/GroundField.h"
-#include "Surface/WorldGround.h"
-#include "Tests/SkyTestWorld.h"
-#include "TextureResource.h"
-
-#if WITH_DEV_AUTOMATION_TESTS
-
-/**
- * FRAMES, NOT A GUARD: Baemsekai III, IV and V under a low sun, for the
- * developer to judge the relief by (sign-off item 2; the ruling on slice
- * (b)'s build, cast shadows). Each world is taken four ways -- from 200 km
- * looking straight down the nose, and from the helm's eye 1.5 m over the
- * ground looking along the terminator, the sun on the side, each at the
- * dusk goto's 10 degrees and at 3 -- and each way twice, with ds.Sky.Shadows
- * 0 and 1. Before the term exists there is no such variable and both are the
- * same frame.
- *
- * Planning measured (the cast-shadow plan) that physical relief casts on
- * under 3% of the ground at ten degrees and on 40-60% at three: the ruled
- * frames are the ten-degree ones, the three-degree ones are where the term
- * is seen.
- *
- *   EYES_TAG=shadows-before Tools/eyes.sh Eyes.ReliefLook
- *   EYES_TAG=shadows-after  Tools/eyes.sh Eyes.ReliefLook
- *   python3 Tools/relief_look_compare.py Saved/Eyes/ReliefLook/shadows-before Saved/Eyes/ReliefLook/shadows-after
- *
- * Writes Saved/Eyes/ReliefLook/<tag>/world_<n>_<view>_shadows<0|1>.png and
- * report.txt: per frame the mean brightness without and with the term --
- * Rec. 601 luma, 0-255, exactly PIL's convert("L"), the measure the ruling's
- * 42.9 -> 17.3 (main's spec) was read with -- the share of the ground it
- * shades (of the pixels at 8 or more without it, those it takes under half),
- * each frame's pixel CRC, and its aliasing: the mean luma gap between the
- * 1x frame and the same view drawn at 2x and box-downsampled, without and
- * with the term. A shadow edge sharper than a pixel shows as alias_on well
- * over alias_off; a still frame at 1x cannot show it. Tools/
- * relief_look_compare.py holds a later run's shadows-off PNGs to these.
- *
- * A fresh editor draws a material as the engine's checkerboard until its
- * shaders compile, hence FinishAllCompilation before each capture.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReliefLookEyesTest, "Eyes.ReliefLook",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-namespace ReliefLookLocal
-{
-    struct FView
-    {
-        const TCHAR* Name;
-        double AltitudeCm;     // above the datum from orbit; above the ground itself at the ground
-        double SunDegrees;
-    };
-
-    const FView Views[] = {
-        { TEXT("orbit"), 2.0e7, 10.0 },
-        { TEXT("ground"), 150.0, 10.0 },
-        { TEXT("orbit_low"), 2.0e7, 3.0 },
-        { TEXT("ground_low"), 150.0, 3.0 },
-    };
-
-    /** PIL's convert("L"): (R 19595 + G 38470 + B 7471 + 0x8000) >> 16. */
-    int32 Luma(const FColor& C)
-    {
-        return (C.R * 19595 + C.G * 38470 + C.B * 7471 + 0x8000) >> 16;
-    }
-
-    double MeanLuma(const TArray<FColor>& Pixels)
-    {
-        double Sum = 0.0;
-        for (const FColor& Pixel : Pixels)
-        {
-            Sum += Luma(Pixel);
-        }
-        return Pixels.Num() > 0 ? Sum / Pixels.Num() : 0.0;
-    }
-
-    /** Of the pixels lit without the term (luma 8 or more), the share it
-     *  takes to under half. */
-    double Coverage(const TArray<FColor>& Off, const TArray<FColor>& On)
-    {
-        int32 Lit = 0;
-        int32 Shaded = 0;
-        for (int32 Index = 0; Index < Off.Num() && Index < On.Num(); ++Index)
-        {
-            const int32 Was = Luma(Off[Index]);
-            if (Was >= 8)
-            {
-                ++Lit;
-                Shaded += 2 * Luma(On[Index]) < Was ? 1 : 0;
-            }
-        }
-        return Lit > 0 ? static_cast<double>(Shaded) / Lit : 0.0;
-    }
-
-    uint32 Crc(const TArray<FColor>& Pixels)
-    {
-        return FCrc::MemCrc32(Pixels.GetData(), Pixels.Num() * sizeof(FColor));
-    }
-
-    /** Mean |luma| gap between a 1920 x 1080 frame and a 3840 x 2160 one
-     *  box-downsampled 2 x 2. */
-    double AliasGap(const TArray<FColor>& Once, const TArray<FColor>& Twice)
-    {
-        if (Once.Num() != 1920 * 1080 || Twice.Num() != 3840 * 2160)
-        {
-            return -1.0;
-        }
-        double Sum = 0.0;
-        for (int32 Y = 0; Y < 1080; ++Y)
-        {
-            for (int32 X = 0; X < 1920; ++X)
-            {
-                const int32 Row = 2 * Y * 3840 + 2 * X;
-                const double Down = 0.25 * (Luma(Twice[Row]) + Luma(Twice[Row + 1]) + Luma(Twice[Row + 3840]) + Luma(Twice[Row + 3841]));
-                Sum += FMath::Abs(Down - Luma(Once[Y * 1920 + X]));
-            }
-        }
-        return Sum / (1920.0 * 1080.0);
-    }
-}
-
-bool FReliefLookEyesTest::RunTest(const FString& Parameters)
-{
-    using namespace SkyTestWorld;
-    using namespace ReliefLookLocal;
-    if (GUsingNullRHI)
-    {
-        AddError(TEXT("Eyes.ReliefLook renders: run it without -nullrhi"));
-        return false;
-    }
-    const FString TagEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("EYES_TAG"));
-    const FString Tag = TagEnv.IsEmpty() ? FString(TEXT("untagged")) : TagEnv;
-    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ReliefLook") / Tag;
-    IFileManager::Get().MakeDirectory(*Dir, true);
-    // Absent before the term exists: then both passes draw the same frame.
-    IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
-    const float ShadowsWere = Shadows ? Shadows->GetFloat() : 1.0f;
-
-    FSkyWorld Test(TEXT("ReliefLookWorld"));
-    AActor* Camera = Test.World->SpawnActor<AActor>();
-    if (!TestNotNull(TEXT("a camera"), Camera))
-    {
-        return false;
-    }
-    USceneCaptureComponent2D* Capture = NewObject<USceneCaptureComponent2D>(Camera, TEXT("HelmEye"));
-    Camera->SetRootComponent(Capture);
-    Capture->RegisterComponent();
-    UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(Camera);
-    Target->RenderTargetFormat = RTF_RGBA8;
-    Target->InitAutoFormat(1920, 1080);
-    Target->UpdateResourceImmediate(true);
-    // The same view at 2x, box-downsampled against the 1x frame: aliasing.
-    UTextureRenderTarget2D* Target2x = NewObject<UTextureRenderTarget2D>(Camera);
-    Target2x->RenderTargetFormat = RTF_RGBA8;
-    Target2x->InitAutoFormat(3840, 2160);
-    Target2x->UpdateResourceImmediate(true);
-    Capture->TextureTarget = Target;
-    Capture->bCaptureEveryFrame = false;
-    Capture->bCaptureOnMovement = false;
-    Capture->FOVAngle = 60.0f;
-    Capture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
-    Test.BeginPlay();
-
-    TArray<FString> Report;
-    for (const int32 Index : { 3, 4, 5 })
-    {
-        const FSkySystem Here = LocalSystem::Here(Test.World);
-        if (!TestTrue(FString::Printf(TEXT("the start system has a body %d"), Index), Here.Bodies.IsValidIndex(Index)))
-        {
-            return false;
-        }
-        const FSkyBody& Body = Here.Bodies[Index];
-        const FSkyBody* Star = Here.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
-        for (const FView& View : Views)
-        {
-            const bool bGround = View.AltitudeCm < 1.0e5;
-            const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, Index, bGround ? 0.0 : View.AltitudeCm,
-                Test.Ship->GetFlightState().GetUniversePosition(), ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(View.SunDegrees));
-            if (!TestTrue(FString::Printf(TEXT("dusk places over body %d"), Index), Dusk.IsSet() && Star))
-            {
-                return false;
-            }
-            if (bGround)
-            {
-                // On the ground under the same sun, looking along the
-                // terminator with the star on the side: each hill's shadow
-                // falls across the view, not behind it.
-                const FVector Up = (Dusk->Position - Body.Position).GetSafeNormal();
-                const FVector Sunward = (Star->Position - Body.Position).GetSafeNormal();
-                const FVector Heading = FVector::CrossProduct(Up, Sunward).GetSafeNormal();
-                const FGroundFieldRef Field = ShipGround::FromRelief(Body.Relief);
-                Test.Ship->PlaceShip(Body.Position + Up * (Body.Radius + Field->Height(FVector3d(Up), 0.0) + View.AltitudeCm),
-                                     FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
-                Capture->SetWorldLocationAndRotation(PilotEye, FRotator(-10.0, 0.0, 0.0));
-            }
-            else
-            {
-                // The nose is at the world's centre: straight down.
-                Test.Ship->PlaceShip(Dusk->Position, Dusk->Orientation);
-                Capture->SetWorldLocationAndRotation(PilotEye, FRotator::ZeroRotator);
-            }
-            Test.Step(1.0f / 60.0f);
-            Test.Ground->FlushBuildsForTest();
-            Test.Step(1.0f / 60.0f);
-
-            TArray<FColor> Frames[2];
-            double Alias[2] = { 0.0, 0.0 };
-            for (int32 On = 0; On < 2; ++On)
-            {
-                if (Shadows)
-                {
-                    Shadows->Set(static_cast<float>(On), ECVF_SetByCode);
-                }
-                for (int32 Frame = 0; Frame < 8; ++Frame)
-                {
-                    if (GShaderCompilingManager)
-                    {
-                        GShaderCompilingManager->FinishAllCompilation();
-                    }
-                    Test.Step(1.0f / 60.0f);
-                    Test.World->SendAllEndOfFrameUpdates();
-                    Capture->CaptureScene();
-                }
-                Target->GameThread_GetRenderTargetResource()->ReadPixels(Frames[On]);
-                const FString Name = FString::Printf(TEXT("world_%d_%s_shadows%d.png"), Index, View.Name, On);
-                TUniquePtr<FArchive> File(IFileManager::Get().CreateFileWriter(*(Dir / Name)));
-                TestTrue(FString::Printf(TEXT("%s framed"), *Name), File && FImageUtils::ExportRenderTarget2DAsPNG(Target, *File));
-                // The same view at 2x, for the aliasing measure; then back to 1x.
-                Capture->TextureTarget = Target2x;
-                for (int32 Frame = 0; Frame < 8; ++Frame)
-                {
-                    Test.Step(1.0f / 60.0f);
-                    Test.World->SendAllEndOfFrameUpdates();
-                    Capture->CaptureScene();
-                }
-                TArray<FColor> Twice;
-                Target2x->GameThread_GetRenderTargetResource()->ReadPixels(Twice);
-                Capture->TextureTarget = Target;
-                Alias[On] = AliasGap(Frames[On], Twice);
-            }
-            const FString Line = FString::Printf(TEXT("frame world_%d_%s sun %.0f off_mean %.2f on_mean %.2f coverage %.4f off_crc %08x on_crc %08x alias_off %.3f alias_on %.3f"),
-                Index, View.Name, View.SunDegrees, MeanLuma(Frames[0]), MeanLuma(Frames[1]), Coverage(Frames[0], Frames[1]),
-                Crc(Frames[0]), Crc(Frames[1]), Alias[0], Alias[1]);
-            Report.Add(Line);
-            AddInfo(Line);
-        }
-    }
-    if (Shadows)
-    {
-        Shadows->Set(ShadowsWere, ECVF_SetByCode);
-    }
-    FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
-        FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
-    return true;
-}
-
-#endif
-```
-
-- [ ] **Step 6: The comparison tool's failing test.** Create `Tools/test_relief_look_compare.py`:
-
-```python
-"""Tools/relief_look_compare.py reads two Eyes.ReliefLook runs, and fails
-when a frame drawn without the cast shadow is not the frame of the run before
-it: every channel within 1 LSB, and the mean luma within 0.01.
-
-    python3 Tools/test_relief_look_compare.py
-"""
-import os
-import tempfile
-import unittest
-
-import numpy
-from PIL import Image
-
-import relief_look_compare as compare
-
-LINE = ("frame world_4_orbit sun 10 off_mean 12.70 on_mean %s coverage %s off_crc %s on_crc 0badf00d"
-        " alias_off 0.100 alias_on 0.120\n")
-
-
-def run(directory, pixels, *lines):
-    """A run: its report, and world_4_orbit's shadows-off frame."""
-    os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, "report.txt"), "w") as f:
-        f.writelines(lines)
-    if pixels is not None:
-        Image.fromarray(pixels).save(os.path.join(directory, "world_4_orbit_shadows0.png"))
-
-
-def frame(value):
-    return numpy.full((8, 8, 3), value, dtype=numpy.uint8)
-
-
-class CompareTest(unittest.TestCase):
-    def test_reads_every_field(self):
-        with tempfile.TemporaryDirectory() as root:
-            run(root, frame(40), LINE % ("12.10", "0.0040", "1a2b3c4d"))
-            frames = compare.read(root)
-            self.assertEqual(frames["world_4_orbit"]["on_mean"], "12.10")
-            self.assertEqual(frames["world_4_orbit"]["alias_on"], "0.120")
-
-    def test_same_off_frames_pass(self):
-        with tempfile.TemporaryDirectory() as root:
-            run(os.path.join(root, "a"), frame(40), LINE % ("12.70", "0.0000", "1a2b3c4d"))
-            run(os.path.join(root, "b"), frame(40), LINE % ("12.10", "0.0040", "1a2b3c4d"))
-            self.assertEqual(compare.main(os.path.join(root, "a"), os.path.join(root, "b")), 0)
-
-    def test_one_lsb_in_one_pixel_passes_though_the_crc_differs(self):
-        with tempfile.TemporaryDirectory() as root:
-            nudged = frame(40)
-            nudged[3, 3, 1] = 41
-            run(os.path.join(root, "a"), frame(40), LINE % ("12.70", "0.0000", "1a2b3c4d"))
-            run(os.path.join(root, "b"), nudged, LINE % ("12.10", "0.0040", "ffffffff"))
-            self.assertEqual(compare.main(os.path.join(root, "a"), os.path.join(root, "b")), 0)
-
-    def test_two_lsb_fails(self):
-        with tempfile.TemporaryDirectory() as root:
-            nudged = frame(40)
-            nudged[3, 3, 1] = 42
-            run(os.path.join(root, "a"), frame(40), LINE % ("12.70", "0.0000", "1a2b3c4d"))
-            run(os.path.join(root, "b"), nudged, LINE % ("12.10", "0.0040", "ffffffff"))
-            self.assertEqual(compare.main(os.path.join(root, "a"), os.path.join(root, "b")), 1)
-
-    def test_a_mean_shift_within_one_lsb_fails(self):
-        with tempfile.TemporaryDirectory() as root:
-            run(os.path.join(root, "a"), frame(40), LINE % ("12.70", "0.0000", "1a2b3c4d"))
-            run(os.path.join(root, "b"), frame(41), LINE % ("12.10", "0.0040", "ffffffff"))
-            self.assertEqual(compare.main(os.path.join(root, "a"), os.path.join(root, "b")), 1)
-
-    def test_a_frame_missing_before_fails(self):
-        with tempfile.TemporaryDirectory() as root:
-            run(os.path.join(root, "a"), None)
-            run(os.path.join(root, "b"), frame(40), LINE % ("12.10", "0.0040", "1a2b3c4d"))
-            self.assertEqual(compare.main(os.path.join(root, "a"), os.path.join(root, "b")), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
-```
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`
-
-Expected: ERROR, `ModuleNotFoundError: No module named 'relief_look_compare'`.
-
-- [ ] **Step 7: The tool.** Create `Tools/relief_look_compare.py`:
-
-```python
-"""Eyes.ReliefLook's two runs side by side: each frame's mean brightness
-before the cast shadow existed, without it now, and with it, the share of the
-ground it shades, and its aliasing (1x against 2x downsampled) without and
-with it. Fails if any frame drawn without the term is not the frame of the
-run before: every channel within 1 LSB, mean luma within 0.01. Exact pixel
-identity is not asked: multiplying by 1.0 is exact, but a changed graph can
-change how the SPIR-V compiler fuses FMAs elsewhere. The CRCs are printed.
-
-    python3 Tools/relief_look_compare.py Saved/Eyes/ReliefLook/shadows-before Saved/Eyes/ReliefLook/shadows-after
-"""
-import os
-import sys
-
-import numpy
-from PIL import Image
-
-MAX_LSB = 1
-MAX_MEAN_LUMA = 0.01
-
-
-def read(directory):
-    """{frame name: {field: value}} from a report's `frame` lines."""
-    frames = {}
-    with open(os.path.join(directory, "report.txt")) as f:
-        for line in f:
-            fields = line.split()
-            if len(fields) < 2 or fields[0] != "frame":
-                continue
-            frames[fields[1]] = dict(zip(fields[2::2], fields[3::2]))
-    return frames
-
-
-def off_frame(directory, name):
-    path = os.path.join(directory, name + "_shadows0.png")
-    if not os.path.exists(path):
-        return None
-    return numpy.asarray(Image.open(path).convert("RGB"), dtype=numpy.int32)
-
-
-def same(was, now):
-    """(same within tolerance, worst channel gap, mean luma gap)."""
-    if was is None or now is None or was.shape != now.shape:
-        return False, None, None
-    worst = int(numpy.abs(was - now).max())
-    weights = numpy.array([0.299, 0.587, 0.114])
-    mean = abs(float((was * weights).sum(axis=2).mean() - (now * weights).sum(axis=2).mean()))
-    return worst <= MAX_LSB and mean < MAX_MEAN_LUMA, worst, mean
-
-
-def main(before_dir, after_dir):
-    before, after = read(before_dir), read(after_dir)
-    failed = False
-    print("%-20s %4s %8s %8s %8s %9s %11s %9s" % ("frame", "sun", "before", "off", "on", "coverage", "alias", "off gap"))
-    for name in sorted(after):
-        now = after[name]
-        was = before.get(name)
-        ok, worst, mean = same(off_frame(before_dir, name), off_frame(after_dir, name))
-        failed = failed or was is None or not ok
-        crc = "" if was is not None and was["off_crc"] == now["off_crc"] else "  (crc differs)"
-        print("%-20s %4s %8s %8s %8s %8.1f%% %5s/%5s %9s%s%s" % (
-            name, now["sun"], was["off_mean"] if was else "-", now["off_mean"], now["on_mean"],
-            100.0 * float(now["coverage"]), now.get("alias_off", "-"), now.get("alias_on", "-"),
-            "-" if worst is None else "%d/%.3f" % (worst, mean), crc, "" if ok else "  OFF FRAME DIFFERS"))
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2]))
-```
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`
-
-Expected: 6 tests OK.
-
-- [ ] **Step 8: The timing baseline's test.** In `Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"`, `#include "Misc/Crc.h"` and `#include "Sky/ShipSky.h"`. Replace the header comment's last sentence, "Asserts the 16.6 ms budget.", with:
-
-```cpp
- * The frame is REPORTED, not asserted: the spec on main records the ground
- * at 19.4 ms against 16.6 before any shadow, and rules "profile first, with
- * the cast shadows in, and fix the real cost" -- that work owns the budget.
- *
- * The cast shadow's gate (the cast-shadow plan, Task 1b and Task 4) is
- * priced here. Six cases: the two above under whatever sun Baemsekai IV has
- * at the start, and four at a dusk placed as Eyes.ReliefLook places it --
- * 50 km, 1.5 m and 200 km at the dusk goto's 10 degrees, and 1.5 m at 3,
- * where every pixel of the ground marches. Each case prints its sun's
- * elevation. Each is timed with ds.Sky.Shadows 0 and 1 (when it exists) in
- * ABBA order, three times over, and the medians are reported with their
- * spread. The gate is Tools/landing_frame_gate.py: the frame with the term
- * against this run with EYES_TAG=baseline, taken before the term existed.
- * On minus off is reported beside it, not gated on: at 0 the pixel still
- * runs the larger shader. The one assertion is that the switch reaches the
- * materials, proven by pixels: at the 3-degree dusk the term shades at least
- * 1% of the lit ground.
- *
- *   EYES_TAG=baseline Tools/eyes.sh Eyes.LandingFrame      (before any shader change)
- *   EYES_TAG=shadows  Tools/eyes.sh Eyes.LandingFrame
- *   python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows
-```
-
-Then replace everything from `const FVector Up = ...` to the end of `RunTest` with:
-
-```cpp
-    const FSkyBody* Star = Here.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
-    if (!TestNotNull(TEXT("the start system has a star"), Star))
-    {
-        return false;
-    }
-    const FVector Sunward = (Star->Position - Fourth.Position).GetSafeNormal();
-    // Every case is placed from the opening, whatever the one before did.
-    const FUniversePosition Opening = Ship->GetFlightState().GetUniversePosition();
-    const FVector StartUp = (Opening - Fourth.Position).GetSafeNormal();
-    const FVector StartHeading = FVector::CrossProduct(StartUp, FVector(0.3, 0.9, 0.1)).GetSafeNormal();
-    const FString TagEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("EYES_TAG"));
-    const FString Tag = TagEnv.IsEmpty() ? FString(TEXT("untagged")) : TagEnv;
-    // Absent before the term exists (the baseline and the spike): then both
-    // halves of each A/B draw the same frame.
-    IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
-    const float ShadowsWere = Shadows ? Shadows->GetFloat() : 1.0f;
-
-    const auto TimeFrame = [&](float Strength) -> double
-    {
-        if (Shadows)
-        {
-            Shadows->Set(Strength, ECVF_SetByCode);
-        }
-        TArray<FColor> Pixel;
-        // The sky writes this frame's Shadows into every material.
-        Test.Step(1.0f / 60.0f);
-        for (int32 Warm = 0; Warm < 3; ++Warm)
-        {
-            // A fresh editor draws a material as the engine's default until
-            // its shaders compile: timing that would time the wrong frame.
-            if (GShaderCompilingManager)
-            {
-                GShaderCompilingManager->FinishAllCompilation();
-            }
-            Test.World->SendAllEndOfFrameUpdates();
-            Capture->CaptureScene();
-            FlushRenderingCommands();
-        }
-        const double Start = FPlatformTime::Seconds();
-        for (int32 Shot = 0; Shot < 20; ++Shot)
-        {
-            Test.Step(1.0f / 60.0f);
-            Test.World->SendAllEndOfFrameUpdates();
-            Capture->CaptureScene();
-            FlushRenderingCommands();
-            // One pixel read back: the GPU has finished the frame before the clock reads.
-            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(0, 0, 1, 1));
-        }
-        return (FPlatformTime::Seconds() - Start) * 1000.0 / 20.0;
-    };
-    const auto Median = [](TArray<double> Values)
-    {
-        Values.Sort();
-        const int32 N = Values.Num();
-        return N == 0 ? 0.0 : (N % 2 ? Values[N / 2] : 0.5 * (Values[N / 2 - 1] + Values[N / 2]));
-    };
-    const auto HalfRange = [](const TArray<double>& Values)
-    {
-        return Values.Num() == 0 ? 0.0 : 0.5 * (FMath::Max(Values) - FMath::Min(Values));
-    };
-    const auto Luma = [](const FColor& C) { return (C.R * 19595 + C.G * 38470 + C.B * 7471 + 0x8000) >> 16; };
-
-    struct FCase
-    {
-        const TCHAR* Slug;     // one word: Tools/landing_frame_gate.py splits on spaces
-        double AglCm;
-        double DuskDegrees;    // 0: the start's own sun
-    };
-    const FCase Cases[] = {
-        { TEXT("50km"), 5.0e6, 0.0 },
-        { TEXT("1.5m"), 150.0, 0.0 },
-        { TEXT("50km_dusk10"), 5.0e6, 10.0 },
-        { TEXT("1.5m_dusk10"), 150.0, 10.0 },
-        { TEXT("1.5m_dusk3"), 150.0, 3.0 },
-        { TEXT("200km_dusk10"), 2.0e7, 10.0 },
-    };
-    FString Report;
-    for (const FCase& Case : Cases)
-    {
-        FVector Up = StartUp;
-        FVector Heading = StartHeading;
-        if (Case.AglCm > 1.0e7)
-        {
-            // From orbit, as the ruled frames: the goto's own placement, the
-            // nose at the world's centre, the frame all ground.
-            const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, Case.AglCm, Opening, ShipSky::EGotoSide::Dusk,
-                                                                         FMath::DegreesToRadians(Case.DuskDegrees));
-            if (!TestTrue(FString::Printf(TEXT("goto dusk places over Baemsekai IV (%s)"), Case.Slug), Dusk.IsSet()))
-            {
-                continue;
-            }
-            Up = (Dusk->Position - Fourth.Position).GetSafeNormal();
-            Ship->PlaceShip(Dusk->Position, Dusk->Orientation);
-        }
-        else if (Case.DuskDegrees > 0.0)
-        {
-            const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, 0.0, Opening, ShipSky::EGotoSide::Dusk,
-                                                                         FMath::DegreesToRadians(Case.DuskDegrees));
-            if (!TestTrue(FString::Printf(TEXT("goto dusk places over Baemsekai IV (%s)"), Case.Slug), Dusk.IsSet()))
-            {
-                continue;
-            }
-            // As Eyes.ReliefLook: along the terminator, the star on the side.
-            Up = (Dusk->Position - Fourth.Position).GetSafeNormal();
-            Heading = FVector::CrossProduct(Up, Sunward).GetSafeNormal();
-        }
-        if (Case.AglCm <= 1.0e7)
-        {
-            Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + Field->Height(FVector3d(Up), 0.0) + Case.AglCm),
-                            FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
-        }
-        Test.Step(1.0f / 60.0f);
-        Test.Ground->FlushBuildsForTest();
-        Test.Step(1.0f / 60.0f);
-        // Looking out and a little down through the cockpit glass, as a pilot
-        // would; from orbit straight down the nose.
-        Capture->SetWorldLocationAndRotation(PilotEye, Case.AglCm > 1.0e7 ? FRotator::ZeroRotator : FRotator(-15.0, 0.0, 0.0));
-        const double SunDegrees = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Up, Sunward)));
-
-        // ABBA, three times over: 0 1 1 0, 0 1 1 0, 0 1 1 0.
-        TArray<double> Times[2];
-        for (int32 Round = 0; Round < 3; ++Round)
-        {
-            for (const int32 On : { 0, 1, 1, 0 })
-            {
-                Times[On].Add(TimeFrame(static_cast<float>(On)));
-            }
-        }
-        // The two frames themselves, for the switch's proof and the report.
-        TArray<FColor> Frames[2];
-        for (int32 On = 0; On < 2; ++On)
-        {
-            TimeFrame(static_cast<float>(On));
-            Target->GameThread_GetRenderTargetResource()->ReadPixels(Frames[On]);
-        }
-        int32 Lit = 0;
-        int32 Taken = 0;
-        for (int32 Index = 0; Index < Frames[0].Num() && Index < Frames[1].Num(); ++Index)
-        {
-            const int32 Was = Luma(Frames[0][Index]);
-            Lit += Was >= 8 ? 1 : 0;
-            Taken += Was >= 8 && 2 * Luma(Frames[1][Index]) < Was ? 1 : 0;
-        }
-        const double Coverage = Lit > 0 ? static_cast<double>(Taken) / Lit : 0.0;
-        const double On = Median(Times[1]);
-        const double Off = Median(Times[0]);
-        const double Spread = FMath::Max(HalfRange(Times[0]), HalfRange(Times[1]));
-        const FString Line = FString::Printf(
-            TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f coverage %.4f frame_crc_on %08x frame_crc_off %08x tiles %d\n%s\n"),
-            Case.Slug, SunDegrees, On, Off, Spread, Coverage,
-            FCrc::MemCrc32(Frames[1].GetData(), Frames[1].Num() * sizeof(FColor)),
-            FCrc::MemCrc32(Frames[0].GetData(), Frames[0].Num() * sizeof(FColor)),
-            Test.Ground->GetDrawnKeys().Num(), *Test.Ground->Describe());
-        Report += Line;
-        AddInfo(Line);
-        if (On > 16.6)
-        {
-            AddInfo(FString::Printf(TEXT("%s is over the 16.6 ms frame (%.2f): reported for the spec's profiling, not asserted here"), Case.Slug, On));
-        }
-        if (Shadows && Case.DuskDegrees > 0.0 && Case.DuskDegrees < 5.0 && Case.AglCm < 1.0e5)
-        {
-            TestTrue(FString::Printf(TEXT("the switch reaches the materials: at %s the term shades at least 1%% of the lit ground (%.2f%%)"),
-                Case.Slug, 100.0 * Coverage), Coverage >= 0.01);
-        }
-    }
-    if (Shadows)
-    {
-        Shadows->Set(ShadowsWere, ECVF_SetByCode);
-    }
-    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/LandingFrame") / Tag;
-    IFileManager::Get().MakeDirectory(*Dir, true);
-    FFileHelper::SaveStringToFile(Report, *(Dir / TEXT("report.txt")));
-    return true;
-}
-
-#endif
-```
-
-- [ ] **Step 9: The gate tool, test first.** Create `Tools/test_landing_frame_gate.py`:
-
-```python
-"""Tools/landing_frame_gate.py: the cast shadow's cost is each case's frame
-with the term against the same case before the term existed, and the gate
-decides only when the noise lets it.
-
-    python3 Tools/test_landing_frame_gate.py
-"""
-import os
-import tempfile
-import unittest
-
-import landing_frame_gate as gate
-
-CASES = ("50km", "1.5m", "50km_dusk10", "1.5m_dusk10", "1.5m_dusk3", "200km_dusk10")
-
-
-def run(directory, on, off=None, spread=0.05, skip=()):
-    os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, "report.txt"), "w") as f:
-        for case in CASES:
-            if case in skip:
-                continue
-            f.write("case %s sun 10.00 on_ms %.3f off_ms %.3f spread_ms %.3f coverage 0.0000 "
-                    "frame_crc_on 0 frame_crc_off 0 tiles 700\nground: ...\n" % (case, on, off if off else on, spread))
-
-
-class GateTest(unittest.TestCase):
-    def verdict(self, **after):
-        with tempfile.TemporaryDirectory() as root:
-            run(os.path.join(root, "base"), 10.0)
-            run(os.path.join(root, "after"), **after)
-            return gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0)
-
-    def test_under_budget_is_go(self):
-        self.assertEqual(self.verdict(on=10.5, off=10.3), 0)
-
-    def test_over_budget_is_no_go(self):
-        self.assertEqual(self.verdict(on=16.0, off=10.4), 1)
-
-    def test_on_minus_off_is_not_the_gate(self):
-        # The switch's own frame is dearer than the baseline: on - off looks free.
-        self.assertEqual(self.verdict(on=11.5, off=11.4), 1)
-
-    def test_too_close_to_call(self):
-        self.assertEqual(self.verdict(on=10.95, off=10.0, spread=0.1), 2)
-
-    def test_a_missing_case_is_undecided(self):
-        self.assertEqual(self.verdict(on=10.2, skip=("1.5m_dusk3",)), 2)
-
-
-if __name__ == "__main__":
-    unittest.main()
-```
-
-Create `Tools/landing_frame_gate.py`:
-
-```python
-"""The cast shadow's GPU gate: for each Eyes.LandingFrame case, the frame with
-the term (on_ms) against the same case in a run taken before the term existed
-(the baseline's on_ms). On minus off is printed beside it and is not the gate:
-with ds.Sky.Shadows 0 the pixel still runs the larger shader. Exit 0 GO,
-1 NO-GO, 2 undecided (a case missing, or a cost within 2x its spread of the
-budget: repeat the run).
-
-    python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows [1.0]
-"""
-import os
-import sys
-
-
-def read(directory):
-    cases = {}
-    with open(os.path.join(directory, "report.txt")) as f:
-        for line in f:
-            fields = line.split()
-            if len(fields) < 2 or fields[0] != "case":
-                continue
-            cases[fields[1]] = {k: v for k, v in zip(fields[2::2], fields[3::2])}
-    return cases
-
-
-def main(baseline_dir, after_dir, budget=1.0):
-    base, after = read(baseline_dir), read(after_dir)
-    states = set()
-    missing = False
-    print("%-14s %7s %9s %9s %9s %9s %8s" % ("case", "sun", "baseline", "on", "cost", "on-off", "spread"))
-    for name in sorted(set(base) | set(after)):
-        if name not in base or name not in after:
-            print("%-14s missing from the %s" % (name, "baseline" if name not in base else "run"))
-            missing = True
-            continue
-        was, now = base[name], after[name]
-        cost = float(now["on_ms"]) - float(was["on_ms"])
-        spread = max(float(now["spread_ms"]), float(was["spread_ms"]))
-        close = abs(cost - budget) < 2.0 * spread
-        over = cost > budget and not close
-        print("%-14s %7s %9s %9s %+9.3f %+9.3f %8.3f%s" % (
-            name, now["sun"], was["on_ms"], now["on_ms"], cost, float(now["on_ms"]) - float(now["off_ms"]), spread,
-            "  TOO CLOSE TO CALL" if close else ("  OVER" if over else "")))
-        states.add("over" if over else ("close" if close else "fits"))
-    # One case clearly over is NO-GO whatever the rest; otherwise any doubt is UNDECIDED.
-    verdict = 1 if "over" in states else (2 if "close" in states or missing else 0)
-    print({0: "GO", 1: "NO-GO", 2: "UNDECIDED"}[verdict])
-    return verdict
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 1.0))
-```
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_landing_frame_gate.py`
-
-Expected: 5 tests OK. One case clearly over the budget is NO-GO whatever the others say; otherwise any case too close to call, or missing, is UNDECIDED: repeat the run.
-
-- [ ] **Step 10: Take the frames and the baseline before the term.**
-
-Run:
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
-EYES_TAG=shadows-before Tools/eyes.sh Eyes.ReliefLook && cat Saved/Eyes/ReliefLook/shadows-before/report.txt && \
-EYES_TAG=baseline Tools/eyes.sh Eyes.LandingFrame && grep '^case' Saved/Eyes/LandingFrame/baseline/report.txt && \
-EYES_TAG=baseline-2 Tools/eyes.sh Eyes.LandingFrame && python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/baseline-2
-```
-
-Expected:
-- `Eyes.ReliefLook`: `passed: 1`, 24 PNGs, and 12 `frame` lines, each with coverage 0.0000 and `alias_off` equal to `alias_on`, because the variable does not exist yet. Each line's `off_crc` should equal its `on_crc`; if one does not, the capture is **not deterministic** (TSR or TAA jitter, film grain) -- that is a fact about the capture, not a moved view, and Step 7's tolerance is what later runs are held to. Report it. The three `orbit` lines' `off_mean` are within 0.5 of the ruling's "after" numbers on main's spec: 17.3 (III), 2.0 (IV) and 4.5 (V). That is the same view T2's frames were taken from. A larger gap means the view moved, so stop and find out why before going on.
-- `Eyes.LandingFrame`: `passed: 1` (nothing about the frame is asserted), six `case` lines, each with its sun's elevation. The `50km` and `1.5m` lines are the old two cases and should sit near the spec's 10.4 and 19.4 ms. Note where the start's sun stands: if it is above 34 + 1.7 degrees or below -(34 + 1.7) on IV, those two cases exit and will cost nothing, which is why the dusk cases exist.
-- The baseline against a second baseline: every `cost` within about its spread of 0, and a verdict of GO. That is the noise floor the gate reads against; if the costs of an unchanged shader wander by more than 0.3 ms, raise the rounds from three to five before trusting any gate.
-
-- [ ] **Step 11: Commit.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Sky/ShipSky.h Source/DeepSpace/Sky/ShipSky.cpp \
-  Source/DeepSpace/Tests/ShipSkyTest.cpp Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp \
-  Tools/relief_look_compare.py Tools/test_relief_look_compare.py Tools/landing_frame_gate.py Tools/test_landing_frame_gate.py && \
-git commit -qm "test(sky): the frames and the timing baseline before the cast shadow
-- Eyes.ReliefLook takes the ground and a 3-degree sun beside the dusk goto,
-  with brightness, coverage, CRCs and a 2x aliasing measure
-- Eyes.LandingFrame times six cases ABBA with medians and each case's sun,
-  and reports the frame against 16.6 ms rather than asserting it (the spec
-  hands that budget to profiling)
-- Goto dusk takes the star's elevation (DeepSpace.Sky.GotoDuskElevation)
-
-The frames are in Saved/Eyes/ReliefLook/shadows-before, the baseline in
-Saved/Eyes/LandingFrame/baseline.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
-
-- [ ] **Step 12: Prove the new test.**
-
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Out = (Aside * FMath::Cos(DuskElevation)' 'Out = (Aside * FMath::Cos(DuskSunElevation)' 'DeepSpace.Sky.GotoDuskElevation$'; ./build.sh`
-
-Expected: `KILLED`. At 3 and 25 degrees the zenith is no longer the one asked for. `Eyes.LandingFrame`'s one assertion, the switch, is proven in Task 4 once the switch exists.
-
----
-
-## Task 1b: THE SPIKE -- time the march before building the rest
-
-**Owner:** T. **Depends on:** Task 1 (the baseline), and Task 0's third answer being "spike it first". Nothing here is committed: the spike answers one question, whether a per-pixel march can fit 1.0 ms, before the C++ mirror and the contract tests are written for it.
-
-- [ ] **Step 1: The march and the materials, only.** On a throwaway branch from the track (`git switch -c spike/cast-shadows`), apply:
-  - Task 2 Steps 3 and 4 (the shims and the cast shadow in `WorldRelief.ush`), exactly as written there.
-  - Task 3 Step 4's JSON, whole (the parameters, the material lists, the `shadow` block and `shadow_samples`; the test that holds it to the header is not run in the spike), and Task 3 Step 6 (`setup_sky_materials.py`).
-  
-  No C++ changes: nothing writes `SunRadius` or `Shadows`, so both materials run on their defaults (`DEFAULT_SUN_RADIUS`, strength 1: every pixel marches under the Sun's 0.27 degrees, which costs what IV's 1.7 degrees does to within the exits).
-
-- [ ] **Step 2: Author and time it at N 12.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
-. Tools/ue_lock.sh && ue_locked ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
-    -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" -unattended -nopause -nosplash -NoLiveCoding; \
-EYES_TAG=spike-12 Tools/eyes.sh Eyes.LandingFrame; grep -c "error X\|Shader compile failed\|Failed to compile" Saved/Logs/DeepSpace.log; \
-python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/spike-12
-```
-
-Expected: 0 shader-compile errors (a Custom-node HLSL error shows here first: `./build.sh` proves only the C++ half), and a cost per case. Planning's count says NO-GO by several ms.
-
-- [ ] **Step 3: If NO-GO, at 8 and then 6.** Set `"shadow_samples"` to 8, re-author, `EYES_TAG=spike-8`, gate; then 6.
-
-- [ ] **Step 4: If still NO-GO at 6, try the coarse-band early exit before giving up on the per-pixel march.** March the coarse bands first (the continent-scale bands 0..k-1, k about 6), and bound what the finer ones can add: with `B_k = sum over the omitted bands of their weight / frequency` (the GPU's own form of `FWorldRelief::DetailOmittedBound` for those bands), the finer bands can lift a sample's height by at most `PeakR x B_k / S_max`, since the cap's slope is at most 1. A sample whose coarse `(Above + PeakR x B_k / S_max) / Along` is still under `tan(Theta - r)` cannot touch the disc, and needs none of its finer bands; a pixel whose every sample is so bounded is lit without reading them. Time it the same way. If this passes at some N, the plan's Task 2 takes the early exit into `WR_SunVisible` (with a `.SunDisc` case that it changes no visibility beyond the float floor) and Task 4 confirms it.
-
-- [ ] **Step 5: The verdict, and throw the spike away.** Record the gate's tables (N 12, 8, 6, and the early exit if tried) in the plan's Task 4 verdict line format (below), then:
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git checkout -- . && git switch feat/landing-b-t && git branch -D spike/cast-shadows && git status --short
-```
-
-Expected: a clean tree on `feat/landing-b-t` (the re-authored `Content/Materials/Sky` assets are restored with the rest).
-
-  - **GO at some N:** go on to Task 2 with that N as `shadow_samples`, and the early exit if it was needed.
-  - **NO-GO:** go to Task 4b. Tasks 2-6 are not started.
-
-**Spike verdict (2026-09-28, track T, RTX 4070 Ti SUPER at 4K):** `NO-GO -- at N = 6 the worst case is 1.5m_dusk10 at +11.71 ms (spread 0.55); early exit tried: +13.07 ms (k = 6 coarse bands, the finer ones bounded by SimplexValueBound x weight / frequency -- looser than the saving)`. Tried: `N 12: worst +26.99 ms (1.5m_dusk10), N 8: worst +17.07 ms (1.5m_dusk10), N 6: worst +11.71 ms (1.5m_dusk10), N 6 + early exit: worst +13.07 ms (1.5m_dusk10)`. Per case at N 12 / 8 / 6: 50km_dusk10 +11.14 / +6.96 / +5.12, 200km_dusk10 +10.60 / +5.97 / +3.78, 1.5m_dusk3 +14.13 / +10.29 / +8.54, 1.5m_dusk10 +26.99 / +17.07 / +11.71; the start's two cases (sun 62.6 degrees, above the exit) +0.1 to +0.5, within their spread. Baseline (before the term): 50km 10.63, 1.5m 18.87, 50km_dusk10 9.39, 1.5m_dusk3 15.66, 200km_dusk10 12.87, 1.5m_dusk10 16.07 ms; a second baseline read every cost within 0.2 ms of zero. Nothing was committed from the spike. Task 0 was not answered before it ran; Task 4b goes to the developer.
-
-**Found while taking the baseline** (Task 1, as committed): the ground frames are not deterministic between two captures of a still scene -- the far tiles' skirts and seams flicker frame to frame (the near ground is identical) -- so `coverage` with no term at all reads 1-10% at the ground and up to 100% on the near-black 3-degree frames, and **Task 4's switch assertion (at least 1% at `1.5m_dusk3`) would pass with no switch**: the baselines read 6.3% and 6.5% there, and the spike's runs, which write no `Shadows`, read 21% (N 12), 89% (N 8), 69% (N 6) and 51% (N 6 with the early exit) -- no threshold on that measure tells a working switch from a missing one. (This line first said "6-21%", the baselines' figure and N 12's alone.) A GPU pipeline still compiling after `FinishAllCompilation` drew III's ground red in the first pass (fixed: both tests settle in wall-clock time). And `1.5m_dusk10`, taken straight after `50km_dusk10`, drew every frame slower than the last (150 ms to 1.4 s) and slowed the cases after it; taken last it is 16 ms. Neither is diagnosed.
-
-**Out of order (recorded after review):** Task 1 and the spike ran before Task 0 was answered. Task 0 says not to start Task 1b until its three questions are answered, and Task 1 depends on its first; none of the three is recorded anywhere (the spec's *Cast shadows* bullet has no sub-bullet). The spike's NO-GO stands on its own numbers -- at N 6 the worst case is +11.71 ms against 1.0, a NO-GO under any answer to question 3 but (c), relaxing the allowance by more than ten times -- and nothing from it was committed. But the before frames were taken at the plan's own proposed elevations (10 and 3 degrees), not a ruled one, and questions 1 (the dusk elevation) and 2 (whether craters cast) are still open. **All three go to the developer with Task 4b's options**, in one form, and the answers are written where Task 0 says.
+**Found while taking the baseline** (Task 1, as committed): the ground frames are not deterministic between two captures of a still scene -- the far tiles' skirts and seams flicker frame to frame (the near ground is identical) -- so `coverage` with no term at all reads 1-10% at the ground and up to 100% on the near-black 3-degree frames. The spike's runs, which write no `Shadows`, read 21% (N 12), 89% (N 8), 69% (N 6) and 51% (N 6 with the early exit). No threshold on that measure tells a working switch from a missing one, hence the held-pixel rule below. A GPU pipeline still compiling after `FinishAllCompilation` drew III's ground red in the first pass (fixed: both tests settle in wall-clock time). And `1.5m_dusk10`, taken straight after `50km_dusk10`, drew every frame slower than the last (150 ms to 1.4 s) and slowed the cases after it; taken last it is 16 ms. Neither is diagnosed.
 
 **Amended after review (2026-09-28): the measures, re-taken.** A review of Task 1 found every rendered measure it built reading noise. Fixed on the track, and the before runs re-taken with the fixed tests (`Saved/Eyes/ReliefLook/shadows-before`, `-2`; `Saved/Eyes/LandingFrame/baseline`, `-2`; the first versions kept as `*-v1`):
 
@@ -1090,102 +140,231 @@ Expected: a clean tree on `feat/landing-b-t` (the re-authored `Content/Materials
 - **The gate reads the medians' error.** 2x the per-frame IQR was wider than the 1.0 ms budget, so a free term was never GO: the first baselines, costs -0.18..+0.15 ms, read UNDECIDED. The band is now twice the combined standard error of the two medians (sigma robustly from the raw `times_on`), floored at 0.2 ms, the most two quiet baselines differed by; empty or missing reports are UNDECIDED. The first baselines against each other now read GO; the spike at N 6 still NO-GO. A run disturbed by other load on the machine (transients of 50-200 ms over several rounds) reads UNDECIDED, as it should: re-run it quiet.
 - **LandingFrame:** one untimed round before the ABBA rounds (the first timed frame was 3-5 ms slow, always in the off slot); `agl_m` over the ground itself (the 1.5 m cases read 2.96 m and 2.62 m: the ground's hard stop lifts the gear off the slope, which the datum-relative figure hid); `switch present|absent` on every line and a warning when `ds.Sky.Shadows` is missing. **The switch's proof** is a separate 1080p capture at the read exposure (5 stops at `1.5m_dusk3`), read on held pixels: at least 1% of the frame lit and held, and at least **10%** of that taken under half. With no switch it reads 0.5-2.3% there (`switch_cov`; 0.5-2.3% in the quiet baselines), against planning's 40-60% for the term.
 
+**The first plan's Task 0** was never answered, because the spike ran first. Its first question, the dusk elevation, is answered by this plan's done-when: the frames are taken at the dusk goto's 10 degrees and at 3. Its second, whether craters cast, is answered by the design: the march reads `FWorldRelief::Height`, craters included. Its third, the per-pixel budget, is answered by the ruling. This plan's own questions are Task 0 below.
+
 ---
 
-## Task 2: `WR_SunVisible` in the shared file, and its C++ mirror
+## Execution: tree, order, ownership
 
-**Owner:** T. **Depends on:** Task 1 (its frames and baseline are taken) and Task 1b's GO, whose N is `shadow_samples` here (12 below; substitute the spike's N in the header and the JSON, and the early exit if the spike needed it).
+Track T owns this work. From the spec's *Parallel tracks*, T owns `TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `SkyProjection.*`, `ShipSky.*`, `setup_sky_materials.py`, the contract, and `Surface/WorldRelief.*` in slice (b). For this work T also takes:
 
-**Files:**
-- Modify: `Shaders/Private/WorldRelief.ush`. Add six shims and `WR_LOOP` to each half (after line 57 in C++, after line 72 in HLSL), and the cast shadow at the end of the file.
-- Modify: `Source/DeepSpace/Surface/WorldRelief.h` (`FSunVisibility`; `WorldReliefNoise::{SimplexValue, SimplexValueF32, SimplexF32, PeakCap, ShadowHeight, DiscAbove, SunVisibleF64, SunVisibleF32, FShadowConstants, ShadowConstants}`; `WorldReliefShading::SunVisible`)
-- Modify: `Source/DeepSpace/Surface/WorldRelief.cpp`
-- Modify: `Source/DeepSpace/Sky/SkyMaterialContract.h` (`ShadowSamples` only, so the tests have one count)
-- Create: `Source/DeepSpace/Tests/WorldReliefShadowTest.cpp`, containing `DeepSpace.Surface.WorldRelief.ShadowHeight`, `.ShadowGradientMax`, `.SunDisc`, `.ShadowAgainstTruth` and `.ShadowCost`
+- the new `Surface/SunShadow.*` and `Surface/SunShadowMap.*`, and `TerrainTileComponent.*`;
+- `Tests/SkyTestWorld.h` (the `EShadows` switch);
+- `Tests/Eyes/LandingFrameEyesTest.cpp`, which the orchestrator wrote in Task 39 (Z);
+- a paragraph of CLAUDE.md, and the spec's measured line.
 
-**Interfaces:**
-- Consumes: the shared file's `WR_Rand3DPCG16`, `WR_GradientDirection`, `WR_SplitOffset`, `WR_FloorDiv3`, `WR_DETAIL_FREQUENCY`, `WR_DETAIL_WEIGHT`, `WR_DETAIL_INDEX`, `WR_SIMPLEX_SCALE`, `WR_DETAIL_BANDS`. From C++, `FWorldRelief::{SMaxMeasured, PeakCapKnee, PeakCap, Height, SlopeScale}`, `WorldReliefNoise::{Simplex, FaceF64, Bands}`.
-- Produces, in the shared file: `WR_SunVisibility {Visible, Horizon, Evaluations}` and `WR_SunVisibility WR_SunVisible(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL LX, WR_REAL LY, WR_REAL LZ, WR_REAL Footprint, WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL ReliefScale, WR_REAL SunRadius, WR_REAL Samples)`. Also `WR_ShadowHeight`, `WR_DetailHeight`, `WR_SimplexValueAt`, `WR_PeakCap`, `WR_DiscAbove`, and the constants `WR_SHADOW_FOOTPRINT_FACTOR` (2.0), `WR_S_MAX`, `WR_PEAK_CAP_KNEE`, `WR_SHADOW_GRADIENT_MAX` (21.3), `WR_SHADOW_GRADIENT_TYPICAL` (3.5), `WR_SUN_RADIUS_MAX` (0.5) and `WR_PI`.
-- **Names:** the march's result is *sun visibility* throughout -- `WR_SunVisible` returning `WR_SunVisibility`, mirrored by `FSunVisibility` and `SunVisibleF64`/`F32`/`WorldReliefShading::SunVisible` -- and its cost is `Evaluations` (band evaluations, not to be read as a band count like `WR_DETAIL_BANDS`). The player-facing switch is *the cast shadows*: `ds.Sky.Shadows`, the materials' `Shadows` parameter, its node pin `Strength`, and `ShipSky::ShadowStrength`. `Shadow*` names in the file (`WR_ShadowHeight`, `WR_SHADOW_*`) are the march's inputs.
-- Produces, in C++:
+The work runs in `/home/matt/Development/deepspace/.worktrees/landing-b-t` on `feat/landing-b-t`, which has merged `feat/landing-b` and main (`923ae4b`). The orchestrator merges the track into `feat/landing-b` when Task 10 lands, and nothing on the track is merged into main by an agent. The review range for this work is `923ae4b..feat/landing-b-t`.
 
-```cpp
-struct FSunVisibility { double Visible = 1.0; double Horizon = -UE_DOUBLE_HALF_PI; int32 Evaluations = 0; };
-FSunVisibility WorldReliefNoise::SunVisibleF64(const FVector3d& D, const FVector3d& L, double FootprintD, const FVector3d& Offset,
-                                               double ReliefScale, double SunRadius, int32 Samples);
-FSunVisibility WorldReliefNoise::SunVisibleF32(const FVector3f& D, const FVector3f& L, float FootprintD, const FVector3f& Offset,
-                                               float ReliefScale, float SunRadius, int32 Samples);
-FSunVisibility WorldReliefShading::SunVisible(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& L,
-                                              double SunRadius, double FootprintRadius, int32 Samples);
-double WorldReliefNoise::ShadowHeight(const FVector3d& D, double FootprintD, const FVector3d& Offset, double PeakR);
-double WorldReliefNoise::DiscAbove(double X);
-double WorldReliefNoise::PeakCap(double X);
-double WorldReliefNoise::SimplexValue(const FVector3d& V);
-float WorldReliefNoise::SimplexValueF32(const FVector3f& V);
-float WorldReliefNoise::SimplexF32(const FVector3f& V);
-struct WorldReliefNoise::FShadowConstants { double SMax, PeakCapKnee, GradientMax, GradientTypical, SunRadiusMax, FootprintFactor; };
-WorldReliefNoise::FShadowConstants WorldReliefNoise::ShadowConstants();
+```
+Task 0  STOP: the developer rules on the map's resolution, the tiles' cost and the bake's budgets   -- Tasks 2-5 may run meanwhile
+Task 2  SunShadow: the pure horizon march, its exits, its schedule; known values
+Task 3  the sky's light, one function: SkyProjection::LightDirection, StarAngularRadius, SunLightOf
+Task 4  the tiles carry the shadow: TerrainTile::Build, UV0, AWorldGround's light and switches
+Task 5  SunShadowMap: the orbit's map, pure -- the bake, the levels, the lookup in the shared file
+Task 6  the materials, the contract, and the sky's bakes at system load                          -- needs Task 0's answers
+Task 7  THE COST, measured and budgeted: Eyes.ShadowBakeCost                                     -- against Task 0's budgets
+Task 7b (only if a budget is over) a stop-and-report point
+Task 8  parity: the map on the GPU (Eyes.WorldReliefParity), the handover at dusk (Eyes.HandoverParity)
+Task 9  the frame must not rise: Eyes.LandingFrame against the baseline, --not-rise; the switch proven by pixels
+Task 10 the frames after, the numbers, the docs, the suite's time
 ```
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/WorldReliefShadowTest.cpp`:
+Task 2 comes first, and Tasks 3 and 5 need only it (all three are pure). Task 4 needs 2 and 3, Task 6 needs 3, 4 and 5, and Task 7 needs 6. They are committed one task at a time, in the order above, on the one branch.
+
+**First, in the tree:**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git status --short && git log --oneline -1 && ls Saved/Eyes/ReliefLook/shadows-before/report.txt Saved/Eyes/LandingFrame/baseline/report.txt
+```
+
+Expected: a clean tree at `923ae4b` (or later), and both before reports present. **If either before report is missing**, take it again from the tree as it stands now, before Task 6 changes a shader: `EYES_TAG=shadows-before Tools/eyes.sh Eyes.ReliefLook` and `EYES_TAG=baseline Tools/eyes.sh Eyes.LandingFrame`. The assets are unchanged since Task 1, so these are still the before frames.
+
+---
+
+## Task 0: STOP -- three questions for the developer
+
+**Owner:** the orchestrator. **Depends on:** nothing. This is the spec approval gate, not an executable task. Put these to the developer in one form (`AskUserQuestion`), with the numbers. Tasks 2-5 are pure and may run meanwhile. Task 6 (the materials) does not start before the answers, and Task 7 holds the cost to the budgets they set.
+
+1. **The orbit's map cannot be finer than a pixel where the proxy draws.** The proxy draws from 50 km up, and a texel under a 4K pixel there would take about 274,000 columns (*Measured while planning*). Each option below states its texel on IV, the height above which that texel is under a pixel, the bake per world on one thread, and GPU memory per world:
+   - (a) **4096 columns** (recommended): texel 8.8 km on IV (13.6 on III, 8.3 on V); finer than the screen while the world is under 35 degrees across, which includes the ~18-degree opening frame; soft shadows at 8.8 km below that, a 67-pixel texel at 200 km. The bake takes about 8-15 s a world and 12 MB.
+   - (b) 8192 columns: texel 4.4 km, finer than the screen under 55 degrees; about 30-60 s a world and 47 MB.
+   - (c) 2048 columns: texel 17.5 km; about 2-4 s a world and 3 MB.
+   - (d) A second, local map around the ship, re-baked as it moves. It is the only way to a texel under a pixel below a few thousand km, but it is not "baked when the system loads" and it has a per-frame decision in it: a new ruling.
+
+   `ds.Sky.ShadowMapWidth` (a power of two, 256-8192) is read at each system load, so a playtest can try another width without a rebuild.
+2. **The tiles' cost.** The shadow at 12 samples costs about 8x a tile's heights at dusk (48-60 ms a tile against 5-7 ms). The cold cut at 1.5 m would take about 27 s to be resident instead of about 3 s. Coarse tiles come first, and a missing tile's parent is drawn, so there is never a hole, only a later sharp ground. Options:
+   - (a) **Accept it** (recommended): the ruled design, every vertex, 12 samples. Budget: the cold cut within 30 s and a tile at most 10x.
+   - (b) Also raise `ds.Terrain.BuildTasks` from 2 to 3 (the machine's cap): about 18 s.
+   - (c) Mark every other vertex and interpolate: about 4x cheaper, about 9 s, with shadow detail at two vertex spacings (24-48 px at 4K). This is a coarsening, and so a ruling.
+   - (d) 8 samples: about 5x. At 5 degrees this fails the march's quality bound (mean |dv| 0.07-0.14 against 0.10), so it is not offered alone.
+
+   At noon on IV the day exit makes the shadow cost almost nothing. The cost is at dusk.
+3. **The bake's budgets**, as Task 7 will hold them (recommended defaults):
+   - the cold cut at 1.5 m over IV at a 10-degree dusk resident within **30 s** on 2 tasks;
+   - a tile's median build with the shadow at most **10x** without;
+   - a world's map at most **15 s** on one thread and **16 MB** (level 0 and its mips);
+   - the resident cut's kept vertex shadows at most **8 MB** of CPU memory;
+   - `Eyes.LandingFrame` **not rising** in any case.
+
+   Also for the developer's information, not a question: the day exit rests on a *sampled* steepest slope with a 1.5 margin, as the marched plan's did. A slope steeper than any sample would show as a lit speck on it under a high sun.
+
+Write the answers into the spec (on the track) as a sub-bullet of the ruling "Cast shadows are baked, not marched", and amend this plan where they change it: `SunShadowMap::DefaultWidth` in Task 5, the budget constants in Task 7, and `ds.Terrain.BuildTasks` or the vertex stride in Task 4. Until the answers come, Tasks 2-5 proceed on the recommended defaults: 4096 columns, every vertex, 12 samples.
+
+---
+
+## Task 2: `SunShadow` -- the pure horizon march
+
+**Owner:** T. **Depends on:** nothing.
+
+**Files:**
+- Create: `Source/DeepSpace/Surface/SunShadow.h`, `Source/DeepSpace/Surface/SunShadow.cpp`
+- Create: `Source/DeepSpace/Tests/SunShadowTest.cpp` (`DeepSpace.Surface.SunShadow.KnownValues`, `.Exits`, `.Schedule`, `.AgainstProfile`, `.SteepestSlope`)
+
+**Interfaces:**
+- Consumes: `IGroundField` (`Surface/GroundField.h`: `RadiusCm`, `Height`, `MaxHeightCm`, `MinHeightCm`, `MaxSlope`), `FReliefGround`, `FWorldRelief::{SlopeScale, DetailSum, CraterSum, GetDetailFrequencies}`, `FWorldReliefParams`, `GroundFixtures::FixtureParams` (`Tests/GroundFixtures.h`).
+- Produces:
+
+```cpp
+namespace SunShadow
+{
+    struct FSunLight { FVector3d Direction; double AngularRadius; bool IsSet() const; };
+    struct FSunVisibility { double Visible; double Horizon; int32 Reads; };
+    inline constexpr double SunRadiusMax = 0.5;
+    inline constexpr double NearestCm = 250.0;
+    inline constexpr double FootprintFactor = 2.0;
+    inline constexpr int32 DefaultSamples = 12;
+    inline constexpr double DetailGradientSampled = 16.72;
+    inline constexpr double CraterGradientSampled = 2.30;
+    inline constexpr double SteepestMargin = 1.5;
+    double DiscAbove(double X);
+    double Elevation(double RadiusCm, double HereCm, double ThereCm, double Arc);
+    double MarchEnd(double RadiusCm, double HereCm, double PeakCm, double Lower);
+    double NightDip(double RadiusCm, double HereCm, double LowestCm);
+    FSunVisibility Visible(const IGroundField& Ground, const FVector3d& D, const FSunLight& Sun, double FootprintCm,
+                           double SteepestSlope, int32 Samples = DefaultSamples, TOptional<double> HereCm = {});
+    FSunVisibility AlongProfile(double RadiusCm, double PeakCm, double LowestCm, double SteepestSlope,
+                                TConstArrayView<double> Heights, double Step, double SunElevation, double SunRadius);
+    double SteepestSlope(const FWorldReliefParams& Params);
+}
+```
+
+- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowTest.cpp`:
 
 ```cpp
 #include "Math/RandomStream.h"
 #include "Misc/AutomationTest.h"
-#include "Sky/SkyMaterialContract.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
 #include "Surface/WorldRelief.h"
+#include "Tests/GroundFixtures.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldReliefShadowHeightTest, "DeepSpace.Surface.WorldRelief.ShadowHeight",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowKnownValuesTest, "DeepSpace.Surface.SunShadow.KnownValues",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldReliefShadowGradientMaxTest, "DeepSpace.Surface.WorldRelief.ShadowGradientMax",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowExitsTest, "DeepSpace.Surface.SunShadow.Exits",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldReliefSunDiscTest, "DeepSpace.Surface.WorldRelief.SunDisc",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowScheduleTest, "DeepSpace.Surface.SunShadow.Schedule",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldReliefShadowAgainstTruthTest, "DeepSpace.Surface.WorldRelief.ShadowAgainstTruth",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowAgainstProfileTest, "DeepSpace.Surface.SunShadow.AgainstProfile",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldReliefShadowCostTest, "DeepSpace.Surface.WorldRelief.ShadowCost",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowSteepestSlopeTest, "DeepSpace.Surface.SunShadow.SteepestSlope",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace WorldReliefShadowTestLocal
+namespace SunShadowTestLocal
 {
-    /** Baemsekai IV's radius and relief (Saved/procgen_corpus.tsv: 0.896805
-     *  Earth radii, 5.47511 km), and its star's angular radius from there
-     *  (0.16 solar radii seen from 0.0256 AU). The seed offsets are drawn:
-     *  the noise is the same everywhere, so any offset is fair ground. */
-    constexpr double FourthRadiusCm = 0.896805 * 6.3781e8;
-    constexpr double FourthPeakCm = 5.47511e5;
-    constexpr double FourthSunRadius = 0.02903;
-    /** Baemsekai V's: 0.843852 Earth radii, 6.12194 km, the star 0.97
-     *  degrees in radius. */
-    constexpr double FifthRadiusCm = 0.843852 * 6.3781e8;
-    constexpr double FifthPeakCm = 6.12194e5;
-    constexpr double FifthSunRadius = 0.01700;
-    /** The pixel footprint from 200 km, radius units: about 110 m a pixel
-     *  on IV at 1920 across 60 degrees, times filter_pixels. */
-    constexpr double OrbitFootprint = 4.0e-5;
-    /** The sample count the materials use: the contract's own, one module,
-     *  so there is no third copy. DeepSpace.Sky.MaterialContract holds the
-     *  JSON to the header. */
-    constexpr int32 Samples = SkyMaterial::ShadowSamples;
-    /** The patch centre and east of the parity probe, an orthonormal pair. */
-    const FVector3d Centre(0.6, -0.48, 0.64);
-    const FVector3d East(0.8, 0.36, -0.48);
+    using namespace SunShadow;
 
-    FWorldReliefParams Ground(double RadiusCm, double PeakCm, const FVector3d& Offset)
+    /** Ground that is a plane tilted K (rise over run) up toward Up, as far
+     *  as a sphere allows: Height(D) = K R (D . Up). Where D is square to Up
+     *  its slope along the ground is K exactly, and nowhere more. */
+    class FTiltedGround final : public IGroundField
     {
-        FWorldReliefParams Params;
-        Params.SeedOffset = Offset;
-        Params.RadiusCm = RadiusCm;
-        Params.PeakCm = PeakCm;
-        Params.Cratering = 0.0;
-        Params.Ground = EGround::Solid;
-        return Params;
+    public:
+        FTiltedGround(double InRadiusCm, double InK, const FVector3d& InUp) : R(InRadiusCm), K(InK), Up(InUp) {}
+        virtual double RadiusCm() const override { return R; }
+        virtual double Height(const FVector3d& D, double) const override { return K * R * FVector3d::DotProduct(D, Up); }
+        virtual double HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm) const override
+        {
+            Grad = Up * (K * R);
+            return Height(D, FootprintCm);
+        }
+        virtual double OmittedBoundCm(double) const override { return 0.0; }
+        virtual double MaxHeightCm() const override { return K * R; }
+        virtual double MinHeightCm() const override { return -K * R; }
+        virtual double MaxSlope() const override { return K; }
+
+    private:
+        double R;
+        double K;
+        FVector3d Up;
+    };
+
+    /** A smooth sphere, its heights bounded +-BoundCm: ground with nothing
+     *  on it. A bound of 0 is no ground at all, an ocean's or a giant's. */
+    class FSmoothGround final : public IGroundField
+    {
+    public:
+        FSmoothGround(double InRadiusCm, double InBoundCm) : R(InRadiusCm), Bound(InBoundCm) {}
+        virtual double RadiusCm() const override { return R; }
+        virtual double Height(const FVector3d&, double) const override { return 0.0; }
+        virtual double HeightAndGradient(const FVector3d&, FVector3d& Grad, double) const override
+        {
+            Grad = FVector3d::ZeroVector;
+            return 0.0;
+        }
+        virtual double OmittedBoundCm(double) const override { return 0.0; }
+        virtual double MaxHeightCm() const override { return Bound; }
+        virtual double MinHeightCm() const override { return -Bound; }
+        virtual double MaxSlope() const override { return 0.0; }
+
+    private:
+        double R;
+        double Bound;
+    };
+
+    /** Every height asked of Inner, in order. */
+    class FRecordingGround final : public IGroundField
+    {
+    public:
+        struct FRead
+        {
+            FVector3d D;
+            double FootprintCm;
+        };
+        mutable TArray<FRead> Reads;
+
+        explicit FRecordingGround(const IGroundField& InInner) : Inner(InInner) {}
+        virtual double RadiusCm() const override { return Inner.RadiusCm(); }
+        virtual double Height(const FVector3d& D, double FootprintCm) const override
+        {
+            Reads.Add({ D, FootprintCm });
+            return Inner.Height(D, FootprintCm);
+        }
+        virtual double HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm) const override
+        {
+            return Inner.HeightAndGradient(D, Grad, FootprintCm);
+        }
+        virtual double OmittedBoundCm(double FootprintCm) const override { return Inner.OmittedBoundCm(FootprintCm); }
+        virtual double MaxHeightCm() const override { return Inner.MaxHeightCm(); }
+        virtual double MinHeightCm() const override { return Inner.MinHeightCm(); }
+        virtual double MaxSlope() const override { return Inner.MaxSlope(); }
+
+    private:
+        const IGroundField& Inner;
+    };
+
+    /** The star Elevation rad above D's level, toward Toward's part along it. */
+    FSunLight LightAt(const FVector3d& D, const FVector3d& Toward, double Elevation, double AngularRadius)
+    {
+        const FVector3d Level = (Toward - D * FVector3d::DotProduct(Toward, D)).GetSafeNormal();
+        FSunLight Sun;
+        Sun.Direction = (D * FMath::Sin(Elevation) + Level * FMath::Cos(Elevation)).GetSafeNormal();
+        Sun.AngularRadius = AngularRadius;
+        return Sun;
     }
 
-    /** A seed offset as the sky's are: three multiples of 1/256 under 256,
-     *  drawn X then Y then Z. */
+    /** A seed offset as the sky's are: three multiples of 1/256 under 256. */
     FVector3d OffsetFrom(FRandomStream& Stream)
     {
         const int32 X = Stream.RandRange(0, 65535);
@@ -1194,280 +373,264 @@ namespace WorldReliefShadowTestLocal
         return FVector3d(X, Y, Z) / 256.0;
     }
 
-    /** The star Elevation rad above D's horizon, toward Toward's part along it. */
-    FVector3d LightAt(const FVector3d& D, const FVector3d& Toward, double Elevation)
+    /** The truth the geometric march approximates: the heights at every
+     *  Step = Footprint / R toward the star out to the march's end, read at
+     *  the footprint, and AlongProfile over them -- the orbit map's own
+     *  schedule. */
+    FSunVisibility Dense(const IGroundField& Ground, const FVector3d& D, const FSunLight& Sun, double FootprintCm, double Steepest)
     {
-        const FVector3d Level = (Toward - D * FVector3d::DotProduct(Toward, D)).GetSafeNormal();
-        return (D * FMath::Sin(Elevation) + Level * FMath::Cos(Elevation)).GetSafeNormal();
-    }
-
-    /** The steepest horizon the march can find on this ground, rad. */
-    double Steepest(const FWorldReliefParams& Params)
-    {
-        return FMath::Atan(FWorldRelief(Params).SlopeScale() * WorldReliefNoise::ShadowConstants().GradientMax);
-    }
-
-    /** The truth the march approximates: the same heights at the pixel's own
-     *  footprint, a step an eighth of the finest band that footprint keeps,
-     *  out to the same end, under the same disc. */
-    double Truth(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& L, double SunRadius, double Footprint)
-    {
-        const double PeakR = Params.PeakCm / Params.RadiusCm;
-        const double SinT = FVector3d::DotProduct(L, D);
-        const FVector3d Along = (L - D * SinT).GetSafeNormal();
-        const double Theta = FMath::Asin(SinT);
-        const double Here = WorldReliefNoise::ShadowHeight(D, Footprint, Params.SeedOffset, PeakR);
-        const double Lower = FMath::Tan(Theta - SunRadius);
-        const double End = FMath::Sqrt(Lower * Lower + 2.0 * FMath::Max(0.0, PeakR - Here)) - Lower;
-        double Finest = WorldReliefNoise::Bands().DetailFrequencies[0];
-        for (const double Frequency : WorldReliefNoise::Bands().DetailFrequencies)
+        const double R = Ground.RadiusCm();
+        const double SinT = FVector3d::DotProduct(Sun.Direction, D);
+        const FVector3d Level = Sun.Direction - D * SinT;
+        const FVector3d Toward = Level.GetSafeNormal();
+        const double Theta = FMath::Atan2(SinT, Level.Size());
+        const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunRadiusMax);
+        const double Here = Ground.Height(D, FootprintCm);
+        const double End = MarchEnd(R, Here, Ground.MaxHeightCm(), Theta - Radius);
+        const double Step = FootprintCm / R;
+        TArray<double> Heights = { Here };
+        for (int32 K = 1; K * Step <= End; ++K)
         {
-            Finest = Footprint * Frequency < 1.0 ? Frequency : Finest;
+            const double Arc = K * Step;
+            Heights.Add(Ground.Height(D * FMath::Cos(Arc) + Toward * FMath::Sin(Arc), FootprintCm));
         }
-        const double Step = 1.0 / (8.0 * Finest);
-        double Highest = -1.0e9;
-        for (double S = Step; S <= End + Step; S += Step)
-        {
-            const FVector3d P = (D + Along * S).GetSafeNormal();
-            const double There = WorldReliefNoise::ShadowHeight(P, Footprint, Params.SeedOffset, PeakR);
-            Highest = FMath::Max(Highest, (There - Here - 0.5 * S * S) / S);
-        }
-        return WorldReliefNoise::DiscAbove((FMath::Atan(Highest) - Theta) / SunRadius);
+        return AlongProfile(R, Ground.MaxHeightCm(), Ground.MinHeightCm(), Steepest, Heights, Step, Theta, Sun.AngularRadius);
     }
 }
 
-bool FWorldReliefShadowHeightTest::RunTest(const FString& Parameters)
+bool FSunShadowKnownValuesTest::RunTest(const FString& Parameters)
 {
-    using namespace WorldReliefShadowTestLocal;
-    const WorldReliefNoise::FShadowConstants Constants = WorldReliefNoise::ShadowConstants();
-    TestEqual(TEXT("the file's S_max is FWorldRelief's measured maximum"), Constants.SMax, FWorldRelief::SMaxMeasured);
-    TestEqual(TEXT("and its cap's knee is FWorldRelief's"), Constants.PeakCapKnee, FWorldRelief::PeakCapKnee);
-    TestEqual(TEXT("a sample's footprint is twice its spacing"), Constants.FootprintFactor, 2.0);
-
-    // The cap is FWorldRelief's, value for value, above the knee too.
-    double WorstCap = 0.0;
-    for (int32 Step = -300; Step <= 300; ++Step)
-    {
-        const double X = Step / 200.0;
-        WorstCap = FMath::Max(WorstCap, FMath::Abs(WorldReliefNoise::PeakCap(X) - FWorldRelief::PeakCap(X)));
-    }
-    TestTrue(FString::Printf(TEXT("WR_PeakCap is FWorldRelief::PeakCap from -1.5 to 1.5 (%.2e)"), WorstCap), WorstCap <= 1.0e-15);
-
-    // The value alone is the simplex's value, in double and in float.
-    FRandomStream Stream(20260928);
-    double WorstDouble = 0.0;
-    double WorstFloat = 0.0;
-    for (int32 Sample = 0; Sample < 20000; ++Sample)
-    {
-        const FVector3d V(Stream.FRandRange(-3000.0, 3000.0), Stream.FRandRange(-3000.0, 3000.0), Stream.FRandRange(-3000.0, 3000.0));
-        FVector3d Gradient;
-        WorstDouble = FMath::Max(WorstDouble, FMath::Abs(WorldReliefNoise::SimplexValue(V) - WorldReliefNoise::Simplex(V, Gradient)));
-        const FVector3f F(V);
-        WorstFloat = FMath::Max(WorstFloat, static_cast<double>(FMath::Abs(WorldReliefNoise::SimplexValueF32(F) - WorldReliefNoise::SimplexF32(F))));
-    }
-    TestTrue(FString::Printf(TEXT("WR_SimplexValueAt is WR_SimplexAt's value in double (%.2e)"), WorstDouble), WorstDouble <= 1.0e-14);
-    TestTrue(FString::Printf(TEXT("and in float (%.2e)"), WorstFloat), WorstFloat <= 1.0e-6);
-
-    // The march's height is the ground's -- craters aside, and wherever the
-    // C++'s finer bands have faded -- at every footprint.
-    const FWorldReliefParams Params = Ground(FourthRadiusCm, FourthPeakCm, OffsetFrom(Stream));
-    const FWorldRelief Relief(Params);
-    const double PeakR = Params.PeakCm / Params.RadiusCm;
-    for (const double Footprint : { 1.0 / 12.0, 1.0 / 96.0, 1.0 / 768.0, 1.0 / 3072.0, 1.0 / 12288.0, 1.0 / 49152.0, 1.0 / 98304.0 })
-    {
-        double Worst = 0.0;
-        for (int32 Sample = 0; Sample < 4000; ++Sample)
-        {
-            const FVector3d D(Stream.GetUnitVector());
-            const double Mine = WorldReliefNoise::ShadowHeight(D, Footprint, Params.SeedOffset, PeakR) * Params.RadiusCm;
-            Worst = FMath::Max(Worst, FMath::Abs(Mine - Relief.Height(D, Footprint * Params.RadiusCm)));
-        }
-        TestTrue(FString::Printf(TEXT("WR_ShadowHeight is FWorldRelief::Height at footprint 1/%.0f, to 1e-3 cm (%.2e cm)"), 1.0 / Footprint, Worst),
-            Worst <= 1.0e-3);
-    }
-    return true;
-}
-
-bool FWorldReliefShadowGradientMaxTest::RunTest(const FString& Parameters)
-{
-    // WR_SHADOW_GRADIENT_MAX's recipe: 256 worlds' offsets and 1,024
-    // directions each, from one FRandomStream(20260928); the twelve GPU
-    // bands' |grad S| along the ground (FaceF64's DetailSlope at footprint 0).
-    // Planning measured 14.19 with another generator; the constant is 1.5 x.
-    // A SAMPLED maximum, not a proof: a steeper spot would make the upper
-    // exit wrong there (a lit speck). So this also logs the steepest slope
-    // the march itself can read -- Here at the pixel's footprint against
-    // There one step away at the sample's -- and the median, which is
-    // WR_SHADOW_GRADIENT_TYPICAL's.
-    FRandomStream Stream(20260928);
-    double Measured = 0.0;
-    TArray<double> Slopes;
-    Slopes.Reserve(256 * 1024);
-    double Read = 0.0;
-    for (int32 World = 0; World < 256; ++World)
-    {
-        const FVector3d Offset = WorldReliefShadowTestLocal::OffsetFrom(Stream);
-        for (int32 Sample = 0; Sample < 1024; ++Sample)
-        {
-            const FVector3d D(Stream.GetUnitVector());
-            const FVector3d G = WorldReliefNoise::FaceF64(D, 0.0, Offset, 1.0).DetailSlope;
-            const double Along = (G - D * FVector3d::DotProduct(G, D)).Size();
-            Measured = FMath::Max(Measured, Along);
-            Slopes.Add(Along);
-            if (Sample % 16 == 0)
-            {
-                // The march's own finite difference, in S units (PeakR = S_max
-                // and no cap reached, so height / S_max is S): the first
-                // sample at the orbit's footprint, read at its footprint.
-                const FVector3d Level = FVector3d(Stream.GetUnitVector()).Cross(D).GetSafeNormal();
-                const double Footprint = WorldReliefShadowTestLocal::OrbitFootprint;
-                const double SMax = FWorldRelief::SMaxMeasured;
-                const double Here = WorldReliefNoise::ShadowHeight(D, Footprint, Offset, SMax);
-                const double There = WorldReliefNoise::ShadowHeight((D + Level * Footprint).GetSafeNormal(), 2.0 * Footprint, Offset, SMax);
-                Read = FMath::Max(Read, FMath::Abs(There - Here) / Footprint / SMax);
-            }
-        }
-    }
-    Slopes.Sort();
-    const double Median = Slopes[Slopes.Num() / 2];
-    const WorldReliefNoise::FShadowConstants Constants = WorldReliefNoise::ShadowConstants();
-    AddInfo(FString::Printf(TEXT("|grad S| along the ground: steepest %.3f, median %.3f; the steepest the march reads between two footprints %.3f"),
-        Measured, Median, Read));
-    TestTrue(FString::Printf(TEXT("WR_SHADOW_GRADIENT_MAX (%.2f) is 1.4 to 1.7 times the steepest of 262,144 samples (%.3f): the exit never cuts a horizon and still spares the day side"),
-        Constants.GradientMax, Measured), Constants.GradientMax >= 1.4 * Measured && Constants.GradientMax <= 1.7 * Measured);
-    TestTrue(FString::Printf(TEXT("and it is over the steepest slope the march reads between footprints (%.3f)"), Read), Constants.GradientMax > Read);
-    TestTrue(FString::Printf(TEXT("WR_SHADOW_GRADIENT_TYPICAL (%.2f) is the median within 15%% (%.3f)"), Constants.GradientTypical, Median),
-        FMath::Abs(Constants.GradientTypical - Median) <= 0.15 * Median);
-    return true;
-}
-
-bool FWorldReliefSunDiscTest::RunTest(const FString& Parameters)
-{
-    using namespace WorldReliefShadowTestLocal;
+    using namespace SunShadowTestLocal;
     // The disc above a straight horizon.
-    TestTrue(TEXT("a horizon a radius below the disc's centre leaves it whole"), WorldReliefNoise::DiscAbove(-1.0) == 1.0);
-    TestTrue(TEXT("one at its centre leaves half"), FMath::IsNearlyEqual(WorldReliefNoise::DiscAbove(0.0), 0.5, 1e-15));
-    TestTrue(TEXT("one a radius above hides it"), WorldReliefNoise::DiscAbove(1.0) == 0.0);
-    TestTrue(TEXT("and past either edge it stays there"), WorldReliefNoise::DiscAbove(-7.0) == 1.0 && WorldReliefNoise::DiscAbove(7.0) == 0.0);
-    double Before = 2.0;
-    for (int32 Step = -10; Step <= 10; ++Step)
+    TestTrue(TEXT("a horizon a radius under the disc's centre leaves it whole"), DiscAbove(-1.0) == 1.0);
+    TestTrue(TEXT("one through its centre leaves half"), FMath::IsNearlyEqual(DiscAbove(0.0), 0.5, 1e-15));
+    TestTrue(TEXT("one a radius over it hides it"), DiscAbove(1.0) == 0.0);
+    TestTrue(TEXT("and past either edge it stays there"), DiscAbove(-7.0) == 1.0 && DiscAbove(7.0) == 0.0);
+    // (acos x - x sqrt(1 - x^2)) / pi. The + form is symmetric and falling
+    // too, and agrees at -1, 0 and 1; it gives 0.4712 at 0.5.
+    TestTrue(FString::Printf(TEXT("half a radius over the centre leaves 0.195501 (%.12f)"), DiscAbove(0.5)),
+        FMath::IsNearlyEqual(DiscAbove(0.5), 0.19550110947788538, 1e-12));
+    TestTrue(FString::Printf(TEXT("half a radius under it, 0.804499 (%.12f)"), DiscAbove(-0.5)),
+        FMath::IsNearlyEqual(DiscAbove(-0.5), 0.8044988905221148, 1e-12));
+    TestTrue(FString::Printf(TEXT("a fifth over it, 0.373530 (%.12f)"), DiscAbove(0.2)),
+        FMath::IsNearlyEqual(DiscAbove(0.2), 0.373530039052331, 1e-12));
+
+    // The elevation: the triangle of the two points and the centre, exactly.
+    TestTrue(FString::Printf(TEXT("level ground dips away by half the arc (%.15f, %.15f)"), Elevation(1.0e8, 0.0, 0.0, 0.01), Elevation(1.0e8, 0.0, 0.0, 0.3)),
+        FMath::IsNearlyEqual(Elevation(1.0e8, 0.0, 0.0, 0.01), -0.005, 1e-15) && FMath::IsNearlyEqual(Elevation(1.0e8, 0.0, 0.0, 0.3), -0.15, 1e-15));
+    TestTrue(FString::Printf(TEXT("1 km up, 10 km off, over a 1,000 km world stands 0.0946183 rad up (%.15f)"), Elevation(1.0e8, 0.0, 1.0e5, 0.01)),
+        FMath::IsNearlyEqual(Elevation(1.0e8, 0.0, 1.0e5, 0.01), 0.0946183473562076, 1e-13));
+
+    // The march's end, acos(rho cos L) - L: here rho is cos 0.1.
+    const double R = 1.0e8;
+    const double Peak = R * (1.0 / FMath::Cos(0.1) - 1.0);
+    TestTrue(FString::Printf(TEXT("with the sun's edge on the level the march ends 0.1 rad off (%.15f)"), MarchEnd(R, 0.0, Peak, 0.0)),
+        FMath::IsNearlyEqual(MarchEnd(R, 0.0, Peak, 0.0), 0.1, 1e-12));
+    TestTrue(FString::Printf(TEXT("with it 0.05 under, 0.161766 rad off (%.15f)"), MarchEnd(R, 0.0, Peak, -0.05)),
+        FMath::IsNearlyEqual(MarchEnd(R, 0.0, Peak, -0.05), 0.16176609378183154, 1e-12));
+    TestTrue(TEXT("and there the highest ground stands exactly at the sun's lower edge"),
+        FMath::IsNearlyEqual(Elevation(R, 0.0, Peak, MarchEnd(R, 0.0, Peak, -0.05)), -0.05, 1e-12));
+    TestTrue(TEXT("from the peak itself, with the edge up, there is nothing to look for"), FMath::Abs(MarchEnd(R, Peak, Peak, 0.3)) <= 1e-12);
+
+    // The night's dip, to the lowest ground's tangent.
+    TestTrue(FString::Printf(TEXT("1 km over a 1,000 km world whose lowest ground is 1 km down dips 0.0632245 rad (%.15f)"), NightDip(1.0e8, 1.0e5, -1.0e5)),
+        FMath::IsNearlyEqual(NightDip(1.0e8, 1.0e5, -1.0e5), 0.06322448399238306, 1e-13));
+    TestTrue(TEXT("and none from the lowest ground itself"), NightDip(1.0e8, -1.0e5, -1.0e5) == 0.0);
+
+    // A plane tilted 5 degrees up toward the star: the horizon is the slope's
+    // own, atan K, to the first sample's curve (under 1e-6 rad).
+    const double Radius = 0.03;
+    const FVector3d D(1.0, 0.0, 0.0);
+    const FVector3d Up(0.0, 1.0, 0.0);
+    const FTiltedGround Tilted(6.0e8, FMath::Tan(FMath::DegreesToRadians(5.0)), Up);
+    const double Slope = FMath::Atan(Tilted.MaxSlope());
+    struct FCase { double Over; double Seen; };
+    for (const FCase& Case : { FCase{ 0.5, 0.8044988905221148 }, FCase{ 0.0, 0.5 }, FCase{ -0.5, 0.19550110947788538 } })
     {
-        const double X = Step / 10.0;
-        const double Share = WorldReliefNoise::DiscAbove(X);
-        TestTrue(FString::Printf(TEXT("symmetric at %.1f"), X), FMath::IsNearlyEqual(Share, 1.0 - WorldReliefNoise::DiscAbove(-X), 1e-12));
-        TestTrue(FString::Printf(TEXT("and falling at %.1f"), X), Share < Before);
-        Before = Share;
+        const double Theta = Slope + Case.Over * Radius;
+        const FSunVisibility Seen = Visible(Tilted, D, LightAt(D, Up, Theta, Radius), 100.0, Tilted.MaxSlope());
+        TestTrue(FString::Printf(TEXT("uphill, the sun's centre %.1f radii over the slope shows %.6f of it (%.8f)"), Case.Over, Case.Seen, Seen.Visible),
+            FMath::Abs(Seen.Visible - Case.Seen) <= 1.0e-4);
+        TestTrue(FString::Printf(TEXT("its horizon is the slope's, atan K (%.3e off)"), Seen.Horizon - Slope), FMath::Abs(Seen.Horizon - Slope) <= 1.0e-6);
+        TestTrue(TEXT("and what it sees is the disc above that horizon"), FMath::IsNearlyEqual(Seen.Visible, DiscAbove((Seen.Horizon - Theta) / Radius), 1e-12));
     }
-    // Known values: symmetry and falling cannot tell (acos x - x sqrt(1 - x^2))
-    // from (acos x + x sqrt(1 - x^2)) -- the + form is symmetric and falling
-    // too, and agrees at -1, 0 and 1 -- but it gives 0.4712 at 0.5.
-    TestTrue(FString::Printf(TEXT("a horizon half a radius above the centre leaves 0.195501 (%.6f)"), WorldReliefNoise::DiscAbove(0.5)),
-        FMath::IsNearlyEqual(WorldReliefNoise::DiscAbove(0.5), 0.19550110947788538, 1e-12));
-    TestTrue(FString::Printf(TEXT("and half a radius below, 0.804499 (%.6f)"), WorldReliefNoise::DiscAbove(-0.5)),
-        FMath::IsNearlyEqual(WorldReliefNoise::DiscAbove(-0.5), 0.80449889052211480, 1e-12));
+    const FSunVisibility Downhill = Visible(Tilted, D, LightAt(D, -Up, Slope, Radius), 100.0, Tilted.MaxSlope());
+    TestTrue(FString::Printf(TEXT("downhill, the same sun is whole (%.8f)"), Downhill.Visible), Downhill.Visible == 1.0);
 
-    const FVector3d D = Centre.GetSafeNormal();
-    const FWorldReliefParams Fourth = Ground(FourthRadiusCm, FourthPeakCm, FVector3d(12.5, 200.25, 77.0));
-    const double R = FourthSunRadius;
-    const double Cut = Steepest(Fourth) + R;
-    const auto At = [&](const FWorldReliefParams& Params, double Elevation)
-    {
-        return WorldReliefShading::SunVisible(Params, D, LightAt(D, East, Elevation), R, OrbitFootprint, Samples);
-    };
-
-    // The exits meet the march with no step.
-    const FSunVisibility Over = At(Fourth, Cut + 1.0e-3);
-    TestTrue(TEXT("above the steepest ground the disc is whole, unmarched"), Over.Visible == 1.0 && Over.Evaluations == 0);
-    const FSunVisibility JustUnder = At(Fourth, Cut - 0.5 * R);
-    TestTrue(FString::Printf(TEXT("between the steepest slope and it plus the sun's radius the march runs (%d bands)"), JustUnder.Evaluations),
-        JustUnder.Evaluations > 0);
-    TestTrue(FString::Printf(TEXT("and finds the disc whole there too (%.6f)"), JustUnder.Visible), JustUnder.Visible >= 0.999);
-    const FSunVisibility Under = At(Fourth, -Cut - 1.0e-3);
-    TestTrue(TEXT("below the steepest ground's negative the disc is hidden, unmarched"), Under.Visible == 0.0 && Under.Evaluations == 0);
-    const FSunVisibility JustOver = At(Fourth, -Cut + 0.5 * R);
-    TestTrue(FString::Printf(TEXT("and just inside it the march runs (%d bands) and finds it hidden (%.6f)"), JustOver.Evaluations, JustOver.Visible),
-        JustOver.Evaluations > 0 && JustOver.Visible <= 1.0e-3);
-
-    // The sun at the zenith and at the nadir: no azimuth to march along.
-    const FSunVisibility Zenith = WorldReliefShading::SunVisible(Fourth, D, D, R, OrbitFootprint, Samples);
-    TestTrue(TEXT("the sun overhead is whole and finite"), Zenith.Visible == 1.0 && FMath::IsFinite(Zenith.Horizon));
-    const FSunVisibility Nadir = WorldReliefShading::SunVisible(Fourth, D, -D, R, OrbitFootprint, Samples);
-    TestTrue(FString::Printf(TEXT("the sun straight below is hidden and finite (%.6f)"), Nadir.Visible),
-        Nadir.Visible == 0.0 && FMath::IsFinite(Nadir.Horizon));
-
-    // No ground: an ocean or a giant casts nothing.
-    FWorldReliefParams Sea = Fourth;
-    Sea.Ground = EGround::None;
-    const FSunVisibility Wet = At(Sea, FMath::DegreesToRadians(2.0));
-    TestTrue(TEXT("a world with no ground casts no shadow and marches nothing"), Wet.Visible == 1.0 && Wet.Evaluations == 0);
-
-    // A world with 1 cm of relief: the only horizon is the sphere's.
-    const FWorldReliefParams Smooth = Ground(FourthRadiusCm, 1.0, FVector3d(12.5, 200.25, 77.0));
-    TestTrue(TEXT("on smooth ground the sun two radii up is whole"), At(Smooth, 2.0 * R).Visible >= 0.999);
-    TestTrue(TEXT("two radii down it is hidden"), At(Smooth, -2.0 * R).Visible <= 0.001);
-    const FSunVisibility Level = At(Smooth, 0.0);
-    TestTrue(FString::Printf(TEXT("its centre on the level shows half (%.4f), finite"), Level.Visible),
-        FMath::IsFinite(Level.Visible) && FMath::Abs(Level.Visible - 0.5) <= 0.01);
-    double Rising = -1.0;
-    for (int32 Step = -10; Step <= 10; ++Step)
-    {
-        const double Visible = At(Smooth, Step * 0.2 * R).Visible;
-        TestTrue(FString::Printf(TEXT("and it rises with the sun (%.2f r: %.4f)"), Step * 0.2, Visible), Visible >= Rising);
-        Rising = Visible;
-    }
-
-    // A star seen from inside its radius: ShipSky::SunAngularRadius gives
-    // pi/2, and tan(theta - pi/2) would wrap past -pi/2 and end the march at
-    // once, showing the whole disc. Clamped to WR_SUN_RADIUS_MAX (0.5), a
-    // centre 0.1 rad under the level shows DiscAbove(0.2) of it, about 0.37.
-    const FSunVisibility Huge = WorldReliefShading::SunVisible(Smooth, D, LightAt(D, East, -0.1), UE_DOUBLE_HALF_PI, OrbitFootprint, Samples);
-    TestTrue(FString::Printf(TEXT("a sun of radius pi/2 under the level is clamped, finite, 0.3-0.45 seen (%.4f)"), Huge.Visible),
-        FMath::IsFinite(Huge.Visible) && Huge.Visible >= 0.3 && Huge.Visible <= 0.45);
+    // A profile: a wall 64.5 m high three steps (3 km) off over a 1,000 km
+    // world, the sun 0.02 rad up and 0.01 in radius: the wall's top is all
+    // but on the sun's centre.
+    const TArray<double> Wall = { 0.0, 0.0, 0.0, 6450.0, 0.0, 0.0, 0.0, 0.0 };
+    const FSunVisibility Profiled = AlongProfile(1.0e8, 1.0e4, -1.0e4, 1.0e3, Wall, 0.001, 0.02, 0.01);
+    TestTrue(FString::Printf(TEXT("the wall is the horizon, 0.0199960 rad (%.15f)"), Profiled.Horizon),
+        FMath::IsNearlyEqual(Profiled.Horizon, 0.019995978977504523, 1e-13));
+    TestTrue(FString::Printf(TEXT("and leaves 0.500256 of the sun (%.12f)"), Profiled.Visible),
+        FMath::IsNearlyEqual(Profiled.Visible, 0.5002559862356774, 1e-12));
+    TestEqual(TEXT("past it nothing 100 m high could rise over the wall: four steps read"), Profiled.Reads, 4);
     return true;
 }
 
-bool FWorldReliefShadowAgainstTruthTest::RunTest(const FString& Parameters)
+bool FSunShadowExitsTest::RunTest(const FString& Parameters)
 {
-    using namespace WorldReliefShadowTestLocal;
-    // Planning's measure, in the engine: at the orbit's footprint the march
-    // shades 0.79-0.91 of what the truth shades at 5 and 2 degrees, never more,
-    // mean |dv| 0.06 at 5 and 0.10 at 2; the footprint rule's fade is the
-    // price of never aliasing. Held with room: the shadowed share within
-    // 0.6-1.05 of the truth's, the penumbra's within 0.5-2, mean |dv| under
-    // 0.12 at 5 degrees and 0.16 at 2.
-    struct FCase { const TCHAR* Name; double RadiusCm; double PeakCm; double SunRadius; double Degrees; double MeanGap; };
+    using namespace SunShadowTestLocal;
+    const double Radius = 0.03;
+    const FVector3d D(1.0, 0.0, 0.0);
+    const FVector3d East(0.0, 1.0, 0.0);
+
+    // Smooth ground, 1 cm of relief: the only horizon is the sphere's own.
+    const FSmoothGround Smooth(6.0e8, 1.0);
+    const FSunVisibility Level = Visible(Smooth, D, LightAt(D, East, 0.0, Radius), 100.0, Smooth.MaxSlope());
+    TestTrue(FString::Printf(TEXT("its centre on the level, half the sun shows (%.8f), finite"), Level.Visible),
+        FMath::IsFinite(Level.Visible) && FMath::Abs(Level.Visible - 0.5) <= 1.0e-5);
+    TestTrue(FString::Printf(TEXT("and the bound ends the march: nothing on smooth ground rises past the first sample (%d reads)"), Level.Reads),
+        Level.Reads > 1 && Level.Reads < 1 + DefaultSamples);
+    const FSunVisibility Up = Visible(Smooth, D, LightAt(D, East, 2.0 * Radius, Radius), 100.0, Smooth.MaxSlope());
+    TestTrue(TEXT("two radii up it is whole, by the day's exit, unread"), Up.Visible == 1.0 && Up.Reads == 0);
+    const FSunVisibility Down = Visible(Smooth, D, LightAt(D, East, -2.0 * Radius, Radius), 100.0, Smooth.MaxSlope());
+    TestTrue(TEXT("two radii down it is hidden, by the night's, after its own height"), Down.Visible == 0.0 && Down.Reads == 1);
+    double Rising = -1.0;
+    for (int32 Step = -6; Step <= 6; ++Step)
+    {
+        const double Seen = Visible(Smooth, D, LightAt(D, East, Step * 0.25 * Radius, Radius), 100.0, Smooth.MaxSlope()).Visible;
+        TestTrue(FString::Printf(TEXT("and it rises with the sun (%.2f radii: %.6f)"), Step * 0.25, Seen), Seen >= Rising);
+        Rising = Seen;
+    }
+
+    // The star overhead and underfoot: no azimuth to march along.
+    const FSunLight Zenith{ D, Radius };
+    const FSunVisibility Overhead = Visible(Smooth, D, Zenith, 100.0, Smooth.MaxSlope());
+    TestTrue(TEXT("the star overhead is whole, finite"), Overhead.Visible == 1.0 && FMath::IsFinite(Overhead.Horizon));
+    const FSunLight Nadir{ -D, Radius };
+    const FSunVisibility Underfoot = Visible(Smooth, D, Nadir, 100.0, Smooth.MaxSlope());
+    TestTrue(TEXT("the star underfoot is hidden, finite"), Underfoot.Visible == 0.0 && FMath::IsFinite(Underfoot.Horizon));
+
+    // A star seen from inside its radius: pi/2, clamped to SunRadiusMax, so
+    // a centre 0.1 rad under the level shows DiscAbove(0.2) of it.
+    const FSunVisibility Huge = Visible(Smooth, D, LightAt(D, East, -0.1, UE_DOUBLE_HALF_PI), 100.0, Smooth.MaxSlope());
+    TestTrue(FString::Printf(TEXT("a pi/2 star 0.1 rad down is clamped to 0.5 rad and shows 0.373530 (%.8f)"), Huge.Visible),
+        FMath::Abs(Huge.Visible - 0.373530039052331) <= 1.0e-5);
+
+    // No ground, and no star: nothing is cast and nothing is read.
+    const FSmoothGround Sea(6.0e8, 0.0);
+    for (const double Degrees : { 2.0, -30.0 })
+    {
+        const FSunVisibility Wet = Visible(Sea, D, LightAt(D, East, FMath::DegreesToRadians(Degrees), Radius), 100.0, Sea.MaxSlope());
+        TestTrue(FString::Printf(TEXT("a world with no ground casts nothing at %.0f degrees"), Degrees), Wet.Visible == 1.0 && Wet.Reads == 0);
+    }
+    const FSunVisibility Dark = Visible(Smooth, D, FSunLight(), 100.0, Smooth.MaxSlope());
+    TestTrue(TEXT("without a star nothing is cast"), Dark.Visible == 1.0 && Dark.Reads == 0);
+
+    // The real ground's exits meet its march with no step: just over the
+    // day's the disc is whole unread, just under it the march finds it
+    // whole; just under the night's it is hidden unread, just over it the
+    // march finds it hidden.
+    const FWorldReliefParams Params = GroundFixtures::FixtureParams();
+    const FReliefGround Real(Params);
+    const double Steep = SteepestSlope(Params);
+    const double Day = FMath::Atan(Steep) + Radius;
+    FRandomStream Stream(20260928);
+    for (int32 Sample = 0; Sample < 24; ++Sample)
+    {
+        const FVector3d Here(Stream.GetUnitVector());
+        const FVector3d Toward(Stream.GetUnitVector());
+        const FSunVisibility Over = Visible(Real, Here, LightAt(Here, Toward, Day + 1.0e-6, Radius), 1.0e4, Steep);
+        const FSunVisibility Under = Visible(Real, Here, LightAt(Here, Toward, Day - 0.5 * Radius, Radius), 1.0e4, Steep);
+        TestTrue(TEXT("over the day's exit the disc is whole, unread"), Over.Visible == 1.0 && Over.Reads == 0);
+        TestTrue(FString::Printf(TEXT("under it the march runs and finds it whole (%.6f, %d reads)"), Under.Visible, Under.Reads),
+            Under.Reads > 0 && Under.Visible >= 0.999);
+        const double Dip = NightDip(Real.RadiusCm(), Real.Height(Here, 1.0e4), Real.MinHeightCm());
+        const FSunVisibility Below = Visible(Real, Here, LightAt(Here, Toward, -Dip - Radius - 1.0e-6, Radius), 1.0e4, Steep);
+        const FSunVisibility Above = Visible(Real, Here, LightAt(Here, Toward, -Dip - Radius + 1.0e-6, Radius), 1.0e4, Steep);
+        TestTrue(TEXT("under the night's exit the disc is hidden, only the point's height read"), Below.Visible == 0.0 && Below.Reads == 1);
+        TestTrue(FString::Printf(TEXT("over it the march runs and finds it hidden (%.6f, %d reads)"), Above.Visible, Above.Reads),
+            Above.Reads > 1 && Above.Visible <= 1.0e-3);
+    }
+    return true;
+}
+
+bool FSunShadowScheduleTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowTestLocal;
+    // Downhill on the tilted plane nothing hides the sun and nothing ends
+    // the march early, so every sample is read: the point's own height at the
+    // footprint, then the geometric series from Nearest to MarchEnd, each read
+    // at twice the gap ahead of it.
+    const double R = 6.0e8;
+    const double Footprint = 3.0e3;
+    const FVector3d D(1.0, 0.0, 0.0);
+    const FVector3d Up(0.0, 1.0, 0.0);
+    const FTiltedGround Tilted(R, FMath::Tan(FMath::DegreesToRadians(5.0)), Up);
+    const FRecordingGround Recorded(Tilted);
+    const FSunLight Sun = LightAt(D, -Up, 0.0, 0.03);
+    const FSunVisibility Seen = Visible(Recorded, D, Sun, Footprint, Tilted.MaxSlope(), 12);
+    if (!TestEqual(TEXT("the point's own height, then twelve samples"), Recorded.Reads.Num(), 13))
+    {
+        return false;
+    }
+    TestEqual(TEXT("and the result counts them"), Seen.Reads, 13);
+    TestTrue(TEXT("the first read is the point, at its footprint"), Recorded.Reads[0].D.Equals(D, 1e-15) && Recorded.Reads[0].FootprintCm == Footprint);
+    const double End = MarchEnd(R, 0.0, Tilted.MaxHeightCm(), -0.03);
+    const double Nearest = Footprint / R;
+    const double Growth = FMath::Pow(End / Nearest, 1.0 / 11.0);
+    for (int32 Sample = 0; Sample < 12; ++Sample)
+    {
+        const double Along = Nearest * FMath::Pow(Growth, Sample);
+        const FVector3d Want = D * FMath::Cos(Along) - Up * FMath::Sin(Along);
+        const double WantFootprint = FMath::Max(Footprint, FootprintFactor * Along * (Growth - 1.0) * R);
+        const FRecordingGround::FRead& Read = Recorded.Reads[Sample + 1];
+        TestTrue(FString::Printf(TEXT("sample %d lies %.3e rad toward the sun (%.3e off)"), Sample, Along, (Read.D - Want).Size()),
+            (Read.D - Want).Size() <= 1e-12);
+        TestTrue(FString::Printf(TEXT("and is read at twice the gap ahead, %.6g cm (%.6g)"), WantFootprint, Read.FootprintCm),
+            FMath::IsNearlyEqual(Read.FootprintCm, WantFootprint, 1e-9 * WantFootprint));
+    }
+    return true;
+}
+
+bool FSunShadowAgainstProfileTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowTestLocal;
+    // The tiles' geometric march against the map's dense one at the same
+    // footprint (300 m, a tile's spacing near 30 km up). Planning measured,
+    // at 12 samples: the shaded share 0.79-1.03 of the dense one's; mean
+    // |dv| 0.04-0.07 at 5 degrees and 0.10-0.14 at 2; at 8 samples 0.07-0.14
+    // at 5 -- over this test's bound, so 8 is a quality NO-GO, never a looser
+    // bound. Held: the shaded share 0.6-1.2 of the truth's, the penumbra 0.5-2,
+    // mean |dv| under 0.10 at 5 degrees and 0.18 at 2.
+    FWorldReliefParams Fourth = GroundFixtures::FixtureParams();
+    FWorldReliefParams Fifth = GroundFixtures::FixtureParams();
+    Fifth.RadiusCm = 0.843852 * 6.3781e8;
+    Fifth.PeakCm = 6.12194e5;
+    Fifth.Cratering = 0.15;
+    struct FCase { const TCHAR* Name; const FWorldReliefParams* Params; double SunRadius; double Degrees; double MeanGap; };
     const FCase Cases[] = {
-        { TEXT("Baemsekai IV, 5 degrees"), FourthRadiusCm, FourthPeakCm, FourthSunRadius, 5.0, 0.12 },
-        { TEXT("Baemsekai IV, 2 degrees"), FourthRadiusCm, FourthPeakCm, FourthSunRadius, 2.0, 0.16 },
-        { TEXT("Baemsekai V, 5 degrees"), FifthRadiusCm, FifthPeakCm, FifthSunRadius, 5.0, 0.12 },
-        { TEXT("Baemsekai V, 2 degrees"), FifthRadiusCm, FifthPeakCm, FifthSunRadius, 2.0, 0.16 },
+        { TEXT("IV-like, 5 degrees"), &Fourth, 0.02903, 5.0, 0.10 },
+        { TEXT("IV-like, 2 degrees"), &Fourth, 0.02903, 2.0, 0.18 },
+        { TEXT("V-like, 5 degrees"), &Fifth, 0.01700, 5.0, 0.10 },
+        { TEXT("V-like, 2 degrees"), &Fifth, 0.01700, 2.0, 0.18 },
     };
+    constexpr double Footprint = 3.0e4;
+    constexpr int32 Count = 100;
     FRandomStream Stream(20260929);
     for (const FCase& Case : Cases)
     {
-        constexpr int32 Count = 200;
         int32 MarchShaded = 0;
         int32 TruthShaded = 0;
         int32 MarchPenumbra = 0;
         int32 TruthPenumbra = 0;
         double Gap = 0.0;
-        double GapAt[3] = { 0.0, 0.0, 0.0 };
+        double GapAt[2] = { 0.0, 0.0 };
         for (int32 Sample = 0; Sample < Count; ++Sample)
         {
-            const FWorldReliefParams Params = Ground(Case.RadiusCm, Case.PeakCm, OffsetFrom(Stream));
+            FWorldReliefParams Params = *Case.Params;
+            Params.SeedOffset = OffsetFrom(Stream);
+            const FReliefGround Ground(Params);
+            const double Steep = SteepestSlope(Params);
             const FVector3d D(Stream.GetUnitVector());
-            const FVector3d L = LightAt(D, FVector3d(Stream.GetUnitVector()), FMath::DegreesToRadians(Case.Degrees));
-            const double March = WorldReliefShading::SunVisible(Params, D, L, Case.SunRadius, OrbitFootprint, Samples).Visible;
-            for (int32 Other = 0; Other < 3; ++Other)
-            {
-                // The gate's other counts, reported per angle (not asserted:
-                // a count that fails this case's bound at the contract's N is
-                // a quality NO-GO for that count, never a looser bound).
-                const int32 N = Other == 0 ? 12 : (Other == 1 ? 8 : 6);
-                GapAt[Other] += FMath::Abs(WorldReliefShading::SunVisible(Params, D, L, Case.SunRadius, OrbitFootprint, N).Visible
-                    - WorldReliefShadowTestLocal::Truth(Params, D, L, Case.SunRadius, OrbitFootprint));
-            }
-            const double Truth = WorldReliefShadowTestLocal::Truth(Params, D, L, Case.SunRadius, OrbitFootprint);
+            const FSunLight Sun = LightAt(D, FVector3d(Stream.GetUnitVector()), FMath::DegreesToRadians(Case.Degrees), Case.SunRadius);
+            const double Truth = Dense(Ground, D, Sun, Footprint, Steep).Visible;
+            const double March = Visible(Ground, D, Sun, Footprint, Steep).Visible;
+            GapAt[0] += FMath::Abs(Visible(Ground, D, Sun, Footprint, Steep, 8).Visible - Truth);
+            GapAt[1] += FMath::Abs(Visible(Ground, D, Sun, Footprint, Steep, 16).Visible - Truth);
             MarchShaded += March < 0.5 ? 1 : 0;
             TruthShaded += Truth < 0.5 ? 1 : 0;
             MarchPenumbra += March > 0.01 && March < 0.99 ? 1 : 0;
@@ -1476,49 +639,71 @@ bool FWorldReliefShadowAgainstTruthTest::RunTest(const FString& Parameters)
         }
         const double Ratio = TruthShaded > 0 ? static_cast<double>(MarchShaded) / TruthShaded : 0.0;
         const double PenumbraRatio = TruthPenumbra > 0 ? static_cast<double>(MarchPenumbra) / TruthPenumbra : 0.0;
-        AddInfo(FString::Printf(TEXT("%s: shaded %d against the truth's %d (%.2f), penumbra %d against %d, mean |dv| %.3f"),
-            Case.Name, MarchShaded, TruthShaded, Ratio, MarchPenumbra, TruthPenumbra, Gap / Count));
-        AddInfo(FString::Printf(TEXT("%s: mean |dv| at N 12 %.3f, N 8 %.3f, N 6 %.3f"), Case.Name,
-            GapAt[0] / Count, GapAt[1] / Count, GapAt[2] / Count));
-        TestTrue(FString::Printf(TEXT("%s: the march shades 0.6 to 1.05 of the truth's ground (%.2f)"), Case.Name, Ratio),
-            TruthShaded >= 10 && Ratio >= 0.6 && Ratio <= 1.05);
-        TestTrue(FString::Printf(TEXT("%s: its penumbra is the sun's, 0.5 to 2 of the truth's (%.2f)"), Case.Name, PenumbraRatio),
+        AddInfo(FString::Printf(TEXT("%s: shaded %d against the dense march's %d (%.2f), penumbra %d against %d, mean |dv| %.3f at %d samples, %.3f at 8, %.3f at 16"),
+            Case.Name, MarchShaded, TruthShaded, Ratio, MarchPenumbra, TruthPenumbra, Gap / Count, DefaultSamples, GapAt[0] / Count, GapAt[1] / Count));
+        TestTrue(FString::Printf(TEXT("%s: the march shades 0.6 to 1.2 of the dense march's ground (%.2f of %d)"), Case.Name, Ratio, TruthShaded),
+            TruthShaded >= 10 && Ratio >= 0.6 && Ratio <= 1.2);
+        TestTrue(FString::Printf(TEXT("%s: its penumbra is the sun's, 0.5 to 2 of the dense one's (%.2f)"), Case.Name, PenumbraRatio),
             PenumbraRatio >= 0.5 && PenumbraRatio <= 2.0);
         TestTrue(FString::Printf(TEXT("%s: mean |dv| under %.2f (%.3f)"), Case.Name, Case.MeanGap, Gap / Count), Gap / Count <= Case.MeanGap);
     }
     return true;
 }
 
-bool FWorldReliefShadowCostTest::RunTest(const FString& Parameters)
+bool FSunShadowSteepestSlopeTest::RunTest(const FString& Parameters)
 {
-    using namespace WorldReliefShadowTestLocal;
-    // What a marching pixel costs, in band evaluations, on Baemsekai IV
-    // under a 10-degree sun from 200 km. The budget gate is priced in these,
-    // so they are printed, and pinned at 4 to 9.2 a sample. The ceiling's
-    // own arithmetic: the pixel keeps 11 bands at the orbit's footprint, so
-    // the most the march can read at N samples is 11 + 11 N (143 at 12), and
-    // the footprint rule taken out comes to about 121-143 after the exits --
-    // over 9.2 x 12 = 110, but not by much, so the mutant's count is printed.
-    // (The first draft's "187 with the rule taken out" cannot be this text.)
-    FRandomStream Stream(20260930);
-    double Evaluations = 0.0;
-    double Marching = 0.0;
-    constexpr int32 Count = 300;
-    for (int32 Sample = 0; Sample < Count; ++Sample)
+    using namespace SunShadowTestLocal;
+    // The day exit's slopes, re-measured: 128 worlds' offsets and 1,024
+    // directions each, from FRandomStream(20260928), of |grad| along the
+    // ground at footprint 0 -- the detail bands on a world with twenty of
+    // them (8e9 cm: a world needs 6.3e9 cm of radius for a twentieth band and
+    // 1.26e10 for a twenty-first, and no rocky world is within a factor of five
+    // of either), and all six crater bands. Planning measured 16.72 and 2.30
+    // with another generator. The constants times the margin must be 1.3 to
+    // 1.8 times what this run measures: steeper than anything sampled, and
+    // not so steep the day side stops exiting.
+    FWorldReliefParams Big;
+    Big.RadiusCm = 8.0e9;
+    Big.PeakCm = 1.0e5;
+    Big.Cratering = 1.0;
+    Big.Ground = EGround::Solid;
+    TestEqual(TEXT("the sampled world carries twenty detail bands"), FWorldRelief(Big).GetDetailFrequencies().Num(), 20);
+    FRandomStream Stream(20260928);
+    double Detail = 0.0;
+    double Craters = 0.0;
+    for (int32 World = 0; World < 128; ++World)
     {
-        const FWorldReliefParams Params = Ground(FourthRadiusCm, FourthPeakCm, OffsetFrom(Stream));
-        const FVector3d D(Stream.GetUnitVector());
-        const FVector3d L = LightAt(D, FVector3d(Stream.GetUnitVector()), FMath::DegreesToRadians(10.0));
-        const int32 Cost = WorldReliefShading::SunVisible(Params, D, L, FourthSunRadius, OrbitFootprint, Samples).Evaluations;
-        Evaluations += Cost;
-        Marching += Cost > 0 ? 1.0 : 0.0;
+        Big.SeedOffset = OffsetFrom(Stream);
+        const FWorldRelief Relief(Big);
+        for (int32 Sample = 0; Sample < 1024; ++Sample)
+        {
+            const FVector3d D(Stream.GetUnitVector());
+            FVector3d G;
+            Relief.DetailSum(D, 0.0, &G);
+            Detail = FMath::Max(Detail, (G - D * FVector3d::DotProduct(G, D)).Size());
+            Relief.CraterSum(D, 0.0, &G);
+            Craters = FMath::Max(Craters, (G - D * FVector3d::DotProduct(G, D)).Size());
+        }
     }
-    const double PerPixel = Evaluations / Count;
-    AddInfo(FString::Printf(TEXT("a pixel at a 10-degree sun from 200 km reads %.1f band evaluations at %d samples (%.0f%% of pixels march)"),
-        PerPixel, Samples, 100.0 * Marching / Count));
-    TestTrue(FString::Printf(TEXT("a marching pixel reads 4 to 9.2 bands a sample (%.1f at %d samples)"), PerPixel, Samples),
-        PerPixel >= 4.0 * Samples && PerPixel <= 9.2 * Samples);
-    TestTrue(FString::Printf(TEXT("and never more than the text can read, 11 + 11 N (%.1f)"), PerPixel), PerPixel <= 11.0 + 11.0 * Samples);
+    AddInfo(FString::Printf(TEXT("steepest |grad S| along the ground: detail %.3f, craters %.3f"), Detail, Craters));
+    TestTrue(FString::Printf(TEXT("the detail's margin, %.2f, is 1.3 to 1.8 times the steepest sampled (%.3f)"), SteepestMargin * DetailGradientSampled, Detail),
+        SteepestMargin * DetailGradientSampled >= 1.3 * Detail && SteepestMargin * DetailGradientSampled <= 1.8 * Detail);
+    TestTrue(FString::Printf(TEXT("the craters', %.2f, likewise (%.3f)"), SteepestMargin * CraterGradientSampled, Craters),
+        SteepestMargin * CraterGradientSampled >= 1.3 * Craters && SteepestMargin * CraterGradientSampled <= 1.8 * Craters);
+    // And the real ground's slope never passes it: the fixture's steepest
+    // finite difference between two footprints' heights.
+    const FWorldReliefParams Params = GroundFixtures::FixtureParams();
+    const FReliefGround Real(Params);
+    double Read = 0.0;
+    for (int32 Sample = 0; Sample < 2048; ++Sample)
+    {
+        const FVector3d D(Stream.GetUnitVector());
+        const FVector3d Along = FVector3d(Stream.GetUnitVector()).Cross(D).GetSafeNormal();
+        constexpr double Gap = 1.0e4;
+        const FVector3d There = (D + Along * (Gap / Real.RadiusCm())).GetSafeNormal();
+        Read = FMath::Max(Read, FMath::Abs(Real.Height(There, 2.0 * Gap) - Real.Height(D, Gap)) / Gap);
+    }
+    TestTrue(FString::Printf(TEXT("the fixture's steepest read slope (%.4f) is under the exit's (%.4f)"), Read, SteepestSlope(Params)), Read < SteepestSlope(Params));
     return true;
 }
 
@@ -1529,1091 +714,1001 @@ bool FWorldReliefShadowCostTest::RunTest(const FString& Parameters)
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
-Expected: the build fails. `FSunVisibility`, `WorldReliefNoise::ShadowConstants` and the rest are undeclared.
+Expected: the build fails, because `Surface/SunShadow.h` does not exist.
 
-- [ ] **Step 3: The shims.** In `Shaders/Private/WorldRelief.ush`, add these to the C++ half, after `WR_step`'s line:
+- [ ] **Step 3: The header.** Create `Source/DeepSpace/Surface/SunShadow.h`:
 
 ```cpp
-inline WR_REAL WR_abs(WR_REAL X) { return X < WR_REAL(0.0) ? -X : X; }
-inline WR_REAL WR_tanh(WR_REAL X) { return std::tanh(X); }
-inline WR_REAL WR_atan(WR_REAL X) { return std::atan(X); }
-inline WR_REAL WR_tan(WR_REAL X) { return std::tan(X); }
-inline WR_REAL WR_acos(WR_REAL X) { return std::acos(X); }
-inline WR_REAL WR_pow(WR_REAL X, WR_REAL Y) { return std::pow(X, Y); }
-#define WR_LOOP
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Containers/ArrayView.h"
+#include "Surface/WorldReliefParams.h"
+
+class IGroundField;
+
+/**
+ * The cast shadow (the developer's ruling on slice (b)'s build, 2026-09-28:
+ * baked, not marched): how much of its star a point of the ground sees past
+ * the ground toward it. Pure: no UObject, no world, no CVar.
+ *
+ * Worlds do not spin and nothing orbits in this slice, so the star stands
+ * still over every surface and the shadow is a fixed function of where the
+ * point is. It is computed where the ground is built -- a tile's vertices,
+ * off the game thread (TerrainTile::Build) -- and once a world for the
+ * orbit (SunShadowMap), and never per pixel.
+ *
+ * The horizon toward the star is the highest elevation, above the point's
+ * own level, of the ground along the great circle toward the star's
+ * azimuth, from the exact triangle of the point, the ground and the world's
+ * centre. The star is a disc of its own angular radius, and what shows is
+ * the share of the disc above that horizon: DiscAbove((horizon - elevation)
+ * / radius). A shadow is as dark as the night side: there is no fill light.
+ *
+ * Two exits skip the march. The night's is a proof: no horizon is lower
+ * than the dip to the lowest ground the world can have. The day's is a
+ * measurement with a margin: above atan(SteepestSlope) plus the star's
+ * radius nothing can rise over the disc (SteepestSlope's comment). Inside
+ * the march two exits are exact: the disc already hidden, and no ground from
+ * there on -- none above the peak, all of it curving away -- able to rise
+ * over what is found.
+ */
+namespace SunShadow
+{
+    /** The star as a surface sees it: the unit direction from the body's
+     *  centre to the star, in the body's axes (the universe's: worlds do not
+     *  spin) -- the sky's own light, SkyProjection::LightDirection -- and its
+     *  angular radius, rad. A zero direction is no star, and casts nothing. */
+    struct FSunLight
+    {
+        FVector3d Direction = FVector3d::ZeroVector;
+        double AngularRadius = 0.0;
+
+        bool IsSet() const { return !Direction.IsNearlyZero(); }
+    };
+
+    struct FSunVisibility
+    {
+        /** The star's disc seen past the ground, 0..1. */
+        double Visible = 1.0;
+
+        /** The highest horizon found, rad above the level; -pi/2 where none
+         *  was read. */
+        double Horizon = -UE_DOUBLE_HALF_PI;
+
+        /** Heights read: the cost. */
+        int32 Reads = 0;
+    };
+
+    /** A star seen from inside its own radius is pi/2 in radius, where the
+     *  share of a disc stops meaning anything: clamped here. */
+    inline constexpr double SunRadiusMax = 0.5;
+
+    /** Nothing in the ground is finer than FWorldRelief::BandLimitCm (5 m),
+     *  so the first sample is never nearer than half of it. */
+    inline constexpr double NearestCm = 250.0;
+
+    /** Each sample reads the heights at this many times the gap ahead of it:
+     *  the face's own fade (filter_pixels), so no band is read at under two
+     *  samples a cycle along the march. */
+    inline constexpr double FootprintFactor = 2.0;
+
+    /** How many samples a tile's vertex marches (ds.Terrain.ShadowSamples):
+     *  planning measured 12 at mean |dv| 0.04-0.07 from the dense march at 5
+     *  degrees, and 8 at 0.07-0.14 (DeepSpace.Surface.SunShadow.AgainstProfile). */
+    inline constexpr int32 DefaultSamples = 12;
+
+    /** The steepest |grad S| along the ground of twenty detail bands, and of
+     *  all six crater bands, at footprint 0, over 131,072 samples (the plan's
+     *  harness; DeepSpace.Surface.SunShadow.SteepestSlope re-measures it). A
+     *  sample, not a proof: FWorldRelief::MaxSlope is the proof, and it is
+     *  six times this, which would leave no day side to exit. */
+    inline constexpr double DetailGradientSampled = 16.72;
+    inline constexpr double CraterGradientSampled = 2.30;
+    inline constexpr double SteepestMargin = 1.5;
+
+    /** The share of a disc above a straight horizon X of its radii above
+     *  the disc's centre: 1 at X <= -1, 0.5 at 0, 0 at X >= 1. */
+    DEEPSPACE_API double DiscAbove(double X);
+
+    /** The elevation, rad above the level at the point, of ground ThereCm
+     *  above the datum at arc Arc (rad) along a great circle, seen from
+     *  HereCm above it, over a datum of RadiusCm. Exact. */
+    DEEPSPACE_API double Elevation(double RadiusCm, double HereCm, double ThereCm, double Arc);
+
+    /** How far along the ground (rad) the march must look: where ground at
+     *  PeakCm, the highest the world can have, falls under Lower (rad above
+     *  the level) as the sphere curves away. acos(rho cos Lower) - Lower,
+     *  rho = (R + Here) / (R + Peak); 0 where nothing can rise over Lower. */
+    DEEPSPACE_API double MarchEnd(double RadiusCm, double HereCm, double PeakCm, double Lower);
+
+    /** How far below the level (rad) the lowest ground the world can have,
+     *  LowestCm, is at its tangent from HereCm. No horizon is lower, so a
+     *  star whose upper edge is under -NightDip is hidden: a proof. */
+    DEEPSPACE_API double NightDip(double RadiusCm, double HereCm, double LowestCm);
+
+    /**
+     * The shadow at D, a tile vertex's: DefaultSamples geometric samples from
+     * Nearest (the footprint, or NearestCm) to MarchEnd, each read at
+     * FootprintFactor times the gap ahead of it. SteepestSlope is the
+     * day exit's, rise over run: SteepestSlope(Params) below for the real
+     * ground, Ground.MaxSlope() for a proof. HereCm, if given, is D's own
+     * height at the footprint, already read.
+     */
+    DEEPSPACE_API FSunVisibility Visible(const IGroundField& Ground, const FVector3d& D, const FSunLight& Sun, double FootprintCm,
+                                         double SteepestSlope, int32 Samples = DefaultSamples, TOptional<double> HereCm = {});
+
+    /**
+     * The same horizon over a profile already read, the orbit map's: Heights[0]
+     * is the point's own, Heights[k] the ground at arc k x Step (rad) toward the
+     * star, all at one footprint; SunElevation the star's centre above the
+     * level. Every sample out to MarchEnd is one, so nothing lies between
+     * them and nothing is read twice. Reads counts the profile entries
+     * past the point that were read.
+     */
+    DEEPSPACE_API FSunVisibility AlongProfile(double RadiusCm, double PeakCm, double LowestCm, double SteepestSlope,
+                                              TConstArrayView<double> Heights, double Step, double SunElevation, double SunRadius);
+
+    /** The real ground's steepest slope, rise over run, for the day exit:
+     *  SlopeScale x SteepestMargin x (DetailGradientSampled + Cratering x
+     *  CraterGradientSampled). PeakCap's slope is at most 1, so the capped
+     *  height is never steeper than its sum. 0 on a world with no ground. */
+    DEEPSPACE_API double SteepestSlope(const FWorldReliefParams& Params);
+}
 ```
 
-Add these to the HLSL half, after `#define WR_step(Edge, X) step(Edge, X)`:
+- [ ] **Step 4: The march.** Create `Source/DeepSpace/Surface/SunShadow.cpp`:
 
-```hlsl
-#define WR_abs(X) abs(X)
-#define WR_tanh(X) tanh(X)
-#define WR_atan(X) atan(X)
-#define WR_tan(X) tan(X)
-#define WR_acos(X) acos(X)
-#define WR_pow(X, Y) pow(X, Y)
-// A loop the compiler must keep a loop: its trip count is a parameter, and it breaks.
-#define WR_LOOP [loop]
-```
+```cpp
+#include "Surface/SunShadow.h"
 
-- [ ] **Step 4: The cast shadow.** Append this to the end of `Shaders/Private/WorldRelief.ush`, after `WR_GroundNormal`:
+#include "Surface/GroundField.h"
+#include "Surface/WorldRelief.h"
 
-```hlsl
-// -- Cast shadows (the developer's ruling on slice (b)'s build, 2026-09-28) --
-// How much of the star's disc a point of the ground sees past the ground
-// toward it: a march through the height function toward the sun, used by
-// M_SkyBody and M_SkyGround alike, in the orbit and on the ground, so the
-// 50 km handover keeps it. Held to the C++ by Eyes.WorldReliefParity.
-//
-// The height it reads is the GPU's twelve detail bands of FWorldRelief::
-// Height over the radius (WR_ShadowHeight). Left out: the craters, and the
-// C++-only finer octaves (1/98304 down to 5 m), both of which Height feeds
-// into the cap. So on the ground, features from 5 m to the finest band's
-// 116 m cast nothing. Craters stay out for the budget: a crater band is 27
-// cells of hashes, which cannot be paid twelve times over. (One crater's
-// wall is under 2 degrees on physical relief, but up to four kernels
-// overlap, so a wall can reach about 6: the developer's ruling, Task 0.)
-//
-// The march: Samples samples (the contract's shadow_samples) along the
-// ground toward the sun's azimuth, geometric from the pixel (never nearer
-// than half the finest band's wavelength) to where the sun's lower edge
-// clears the highest peak the world can have (PeakCm) over the curving
-// ground. Each sample reads the bands at WR_SHADOW_FOOTPRINT_FACTOR times
-// the gap AHEAD of it, Along x (Growth - 1), the face's own fade --
-// filter_pixels' rule -- so no band is read at under two samples a cycle
-// toward the next sample, and the march never aliases along its length.
-// Each is measured against the pixel's own height at the pixel's footprint.
-//
-// The shadow's softness is the sun's size, widened to the pixel: each
-// sample's horizon hides a disc of radius max(r, PixelSlope x Footprint /
-// Along) -- the star's own, or how far one pixel of motion moves that
-// sample's horizon angle (the pixel's own height moves by about the ground's
-// slope times the footprint, seen from Along away). Without it a horizon a
-// few pixels off switches inside one pixel of motion (slope/2, ~0.05 rad,
-// against a 2r ~0.058 rad penumbra) and crawls. The visibility is the least
-// share any sample leaves. PixelSlope is ReliefScale x
-// WR_SHADOW_GRADIENT_TYPICAL, the median |grad S|.
-// r is clamped to WR_SUN_RADIUS_MAX: from inside a star it reaches pi/2,
-// where tan(theta - r) would wrap past -pi/2.
-static const WR_REAL WR_SHADOW_FOOTPRINT_FACTOR = WR_REAL(2.0);
-static const WR_REAL WR_S_MAX = WR_REAL(0.029932993600784347);  // FWorldRelief::SMaxMeasured
-static const WR_REAL WR_PEAK_CAP_KNEE = WR_REAL(0.8);            // FWorldRelief::PeakCapKnee
-// The steepest |grad S| of the twelve bands along the ground, 1.5 x the
-// 14.19 of 262,144 samples: atan(ReliefScale x this) is taken as the
-// steepest horizon the march can find. It is a SAMPLED maximum, not a
-// proof: a steeper spot makes the upper exit wrong there, and would show as
-// a lit speck. DeepSpace.Surface.WorldRelief.ShadowGradientMax measures it,
-// and the steepest finite-difference slope of the heights the march reads.
-static const WR_REAL WR_SHADOW_GRADIENT_MAX = WR_REAL(21.3);
-static const WR_REAL WR_SUN_RADIUS_MAX = WR_REAL(0.5);
-// The median |grad S| of the same 262,144 samples: planning's median slopes
-// (1.6, 5.7 and 6.7 degrees on III, IV and V) put it near 3.5.
-// DeepSpace.Surface.WorldRelief.ShadowGradientMax measures it and holds this
-// within 15%.
-static const WR_REAL WR_SHADOW_GRADIENT_TYPICAL = WR_REAL(3.5);
-static const WR_REAL WR_PI = WR_REAL(3.14159265358979323846);
-
-// FWorldRelief::PeakCap, value only.
-WR_REAL WR_PeakCap(WR_REAL X)
+double SunShadow::DiscAbove(double X)
 {
-    const WR_REAL Magnitude = WR_abs(X);
-    if (Magnitude <= WR_PEAK_CAP_KNEE)
+    const double C = FMath::Clamp(X, -1.0, 1.0);
+    return (FMath::Acos(C) - C * FMath::Sqrt(FMath::Max(0.0, 1.0 - C * C))) / UE_DOUBLE_PI;
+}
+
+double SunShadow::Elevation(double RadiusCm, double HereCm, double ThereCm, double Arc)
+{
+    // (R + There) cos a - (R + Here), without cancelling two numbers near R:
+    // (There - Here) - 2 (R + There) sin^2(a / 2).
+    const double Half = FMath::Sin(0.5 * Arc);
+    return FMath::Atan2((ThereCm - HereCm) - 2.0 * (RadiusCm + ThereCm) * Half * Half, (RadiusCm + ThereCm) * FMath::Sin(Arc));
+}
+
+double SunShadow::MarchEnd(double RadiusCm, double HereCm, double PeakCm, double Lower)
+{
+    if (Lower >= UE_DOUBLE_HALF_PI)
     {
-        return X;
+        return 0.0;
     }
-    const WR_REAL Room = WR_REAL(1.0) - WR_PEAK_CAP_KNEE;
-    const WR_REAL Capped = WR_min(WR_REAL(1.0), WR_PEAK_CAP_KNEE + Room * WR_tanh((Magnitude - WR_PEAK_CAP_KNEE) / Room));
-    return X < WR_REAL(0.0) ? -Capped : Capped;
+    const double Rho = (RadiusCm + HereCm) / (RadiusCm + PeakCm);
+    return FMath::Max(0.0, FMath::Acos(FMath::Clamp(Rho * FMath::Cos(Lower), -1.0, 1.0)) - Lower);
 }
 
-// WR_SimplexCorner's value alone, operation for operation.
-WR_REAL WR_SimplexCornerValue(WR_REAL VX, WR_REAL VY, WR_REAL VZ, WR_REAL TX, WR_REAL TY, WR_REAL TZ,
-                              int HX, int HY, int HZ)
+double SunShadow::NightDip(double RadiusCm, double HereCm, double LowestCm)
 {
-    const WR_REAL FX = VX - TX;
-    const WR_REAL FY = VY - TY;
-    const WR_REAL FZ = VZ - TZ;
-    const WR_Vec3 G = WR_GradientDirection(WR_Rand3DPCG16(
-        int(WR_floor(WR_REAL(6.0) * TX + WR_REAL(0.5))) + HX,
-        int(WR_floor(WR_REAL(6.0) * TY + WR_REAL(0.5))) + HY,
-        int(WR_floor(WR_REAL(6.0) * TZ + WR_REAL(0.5))) + HZ).X);
-    const WR_REAL GF = G.X * FX + G.Y * FY + G.Z * FZ;
-    const WR_REAL D2 = FX * FX + FY * FY + FZ * FZ;
-    const WR_REAL S = WR_saturate(WR_REAL(2.0) * D2);
-    const WR_REAL Smooth = WR_SIMPLEX_SCALE + S * (WR_REAL(-3.0) * WR_SIMPLEX_SCALE + S * (WR_REAL(3.0) * WR_SIMPLEX_SCALE - S * WR_SIMPLEX_SCALE));
-    return Smooth * GF;
+    return HereCm > LowestCm ? FMath::Acos(FMath::Clamp((RadiusCm + LowestCm) / (RadiusCm + HereCm), -1.0, 1.0)) : 0.0;
 }
 
-// WR_SimplexAt's value alone: the same corners, in the same order.
-WR_REAL WR_SimplexValueAt(WR_REAL VX, WR_REAL VY, WR_REAL VZ, int ShiftX, int ShiftY, int ShiftZ)
+SunShadow::FSunVisibility SunShadow::Visible(const IGroundField& Ground, const FVector3d& D, const FSunLight& Sun, double FootprintCm,
+                                             double SteepestSlope, int32 Samples, TOptional<double> HereCm)
 {
-    const WR_REAL TX = WR_floor(VX + VX / WR_REAL(3.0) + VY / WR_REAL(3.0) + VZ / WR_REAL(3.0));
-    const WR_REAL TY = WR_floor(VY + VX / WR_REAL(3.0) + VY / WR_REAL(3.0) + VZ / WR_REAL(3.0));
-    const WR_REAL TZ = WR_floor(VZ + VX / WR_REAL(3.0) + VY / WR_REAL(3.0) + VZ / WR_REAL(3.0));
-    const WR_REAL BX = TX - TX / WR_REAL(6.0) - TY / WR_REAL(6.0) - TZ / WR_REAL(6.0);
-    const WR_REAL BY = TY - TX / WR_REAL(6.0) - TY / WR_REAL(6.0) - TZ / WR_REAL(6.0);
-    const WR_REAL BZ = TZ - TX / WR_REAL(6.0) - TY / WR_REAL(6.0) - TZ / WR_REAL(6.0);
-    const WR_REAL FX = VX - BX;
-    const WR_REAL FY = VY - BY;
-    const WR_REAL FZ = VZ - BZ;
-    const WR_REAL GX = WR_step(FY, FX);
-    const WR_REAL GY = WR_step(FZ, FY);
-    const WR_REAL GZ = WR_step(FX, FZ);
-    const WR_REAL HX = WR_REAL(1.0) - GZ;
-    const WR_REAL HY = WR_REAL(1.0) - GX;
-    const WR_REAL HZ = WR_REAL(1.0) - GY;
-    const WR_REAL A1X = WR_min(GX, HX) - WR_REAL(1.0 / 6.0);
-    const WR_REAL A1Y = WR_min(GY, HY) - WR_REAL(1.0 / 6.0);
-    const WR_REAL A1Z = WR_min(GZ, HZ) - WR_REAL(1.0 / 6.0);
-    const WR_REAL A2X = WR_max(GX, HX) - WR_REAL(1.0 / 3.0);
-    const WR_REAL A2Y = WR_max(GY, HY) - WR_REAL(1.0 / 3.0);
-    const WR_REAL A2Z = WR_max(GZ, HZ) - WR_REAL(1.0 / 3.0);
-    WR_REAL Value = WR_REAL(0.0);
-    Value += WR_SimplexCornerValue(VX, VY, VZ, BX, BY, BZ, ShiftX, ShiftY, ShiftZ);
-    Value += WR_SimplexCornerValue(VX, VY, VZ, BX + A1X, BY + A1Y, BZ + A1Z, ShiftX, ShiftY, ShiftZ);
-    Value += WR_SimplexCornerValue(VX, VY, VZ, BX + A2X, BY + A2Y, BZ + A2Z, ShiftX, ShiftY, ShiftZ);
-    Value += WR_SimplexCornerValue(VX, VY, VZ, BX + WR_REAL(0.5), BY + WR_REAL(0.5), BZ + WR_REAL(0.5), ShiftX, ShiftY, ShiftZ);
-    return Value;
-}
-
-// One detail band's height, unfaded, radius units: WR_DetailBand's value at
-// no footprint, times the band's weight, over its frequency.
-WR_REAL WR_DetailHeight(WR_REAL DX, WR_REAL DY, WR_REAL DZ, int Band, WR_REAL OX, WR_REAL OY, WR_REAL OZ)
-{
-    const WR_REAL F = WR_DETAIL_FREQUENCY[Band];
-    const WR_Offset O = WR_SplitOffset(OX, OY, OZ, WR_DETAIL_INDEX[Band]);
-    const int Sum = O.IX + O.IY + O.IZ;
-    const int Q = WR_FloorDiv3(Sum);
-    const WR_REAL Left = WR_REAL(Sum - 3 * Q) / WR_REAL(6.0);
-    const WR_REAL Value = WR_SimplexValueAt(DX * F + O.FX + Left, DY * F + O.FY + Left, DZ * F + O.FZ + Left,
-                                            6 * O.IX + 3 * Q - Sum, 6 * O.IY + 3 * Q - Sum, 6 * O.IZ + 3 * Q - Sum);
-    return Value * WR_DETAIL_WEIGHT[Band] / F;
-}
-
-// The height the march reads at D, radius units above the datum, at a
-// footprint (radius units): PeakR x PeakCap(S / S_max), S the twelve bands
-// each faded by saturate(1 - footprint x frequency). PeakR is PeakCm / R.
-WR_REAL WR_ShadowHeight(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint, WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL PeakR)
-{
-    WR_REAL S = WR_REAL(0.0);
-    for (int Band = 0; Band < WR_DETAIL_BANDS; ++Band)
+    FSunVisibility Out;
+    const double R = Ground.RadiusCm();
+    const double Peak = Ground.MaxHeightCm();
+    if (!Sun.IsSet() || !(R > 0.0) || !(Peak > Ground.MinHeightCm()))
     {
-        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - Footprint * WR_DETAIL_FREQUENCY[Band]);
-        if (Fade > WR_REAL(0.0))
-        {
-            S += Fade * WR_DetailHeight(DX, DY, DZ, Band, OX, OY, OZ);
-        }
+        // No star, or no ground to cast with: an ocean's, a giant's.
+        return Out;
     }
-    return PeakR * WR_PeakCap(S / WR_S_MAX);
-}
-
-// The share of a disc above a straight horizon X of its radii above the
-// disc's centre: 1 at X = -1, 0.5 at 0, 0 at 1.
-WR_REAL WR_DiscAbove(WR_REAL X)
-{
-    const WR_REAL C = WR_min(WR_REAL(1.0), WR_max(WR_REAL(-1.0), X));
-    return (WR_acos(C) - C * WR_sqrt(WR_max(WR_REAL(0.0), WR_REAL(1.0) - C * C))) / WR_PI;
-}
-
-struct WR_SunVisibility
-{
-    WR_REAL Visible;       // the star's disc seen past the ground, 0..1
-    WR_REAL Horizon;       // the highest horizon the samples found, rad above level; -pi/2 when none
-    WR_REAL Evaluations;   // how many band evaluations it took: the cost the budget pays
-};
-
-// D the unit direction to the point in the body's axes; L the unit direction
-// to the star in the same axes; Footprint the pixel's, radius units;
-// ReliefScale FWorldRelief::SlopeScale (PeakCm / (R x S_max)), 0 where there
-// is no ground; SunRadius the star's angular radius, rad; Samples how many
-// samples the march takes (SkyMaterial::ShadowSamples).
-WR_SunVisibility WR_SunVisible(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL LX, WR_REAL LY, WR_REAL LZ, WR_REAL Footprint,
-                               WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL ReliefScale, WR_REAL SunRadius, WR_REAL Samples)
-{
-    WR_SunVisibility Out;
-    Out.Visible = WR_REAL(1.0);
-    Out.Horizon = -WR_PI / WR_REAL(2.0);
-    Out.Evaluations = WR_REAL(0.0);
-    const WR_REAL PeakR = ReliefScale * WR_S_MAX;
-    if (!(PeakR > WR_REAL(0.0)))
+    const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunRadiusMax);
+    const FVector3d L = Sun.Direction.GetSafeNormal();
+    const double SinT = FVector3d::DotProduct(L, D);
+    const FVector3d Level = L - D * SinT;
+    const double CosT = Level.Size();
+    const double Theta = FMath::Atan2(SinT, CosT);
+    // The day: over the steepest ground there is, the disc is whole.
+    const double DayExit = FMath::Atan(SteepestSlope) + Radius;
+    if (Theta >= DayExit)
     {
         return Out;
     }
-    const WR_REAL Radius = WR_max(WR_min(SunRadius, WR_SUN_RADIUS_MAX), WR_REAL(1.0e-6));
-    // The sun's elevation above the level ground, and its azimuth along it.
-    const WR_REAL SinT = LX * DX + LY * DY + LZ * DZ;
-    const WR_REAL TX = LX - SinT * DX;
-    const WR_REAL TY = LY - SinT * DY;
-    const WR_REAL TZ = LZ - SinT * DZ;
-    const WR_REAL CosT = WR_sqrt(TX * TX + TY * TY + TZ * TZ);
-    const WR_REAL Theta = WR_atan(SinT / WR_max(CosT, WR_REAL(1.0e-6)));
-    // No horizon the march can find is steeper than the steepest ground, nor
-    // lower than its negative: below the one the disc is hidden (and no
-    // slope faces it: the lambert is 0 there) -- the nadir included, so this
-    // exit is first -- and above the other, or at the zenith, it is whole.
-    const WR_REAL Steepest = WR_atan(ReliefScale * WR_SHADOW_GRADIENT_MAX);
-    if (Theta + Radius <= -Steepest)
+    const double Here = HereCm.IsSet() ? HereCm.GetValue() : Ground.Height(D, FootprintCm);
+    Out.Reads = HereCm.IsSet() ? 0 : 1;
+    // The night: under every horizon the ground can make, the disc is hidden.
+    if (Theta + Radius <= -NightDip(R, Here, Ground.MinHeightCm()))
     {
-        Out.Visible = WR_REAL(0.0);
+        Out.Visible = 0.0;
         return Out;
     }
-    if (Theta - Radius >= Steepest || (CosT < WR_REAL(1.0e-6) && SinT > WR_REAL(0.0)))
+    if (CosT < 1.0e-12)
     {
+        // The star straight up, under a steepest slope past vertical: no
+        // azimuth, and nothing above.
         return Out;
     }
-    const WR_REAL UX = TX / CosT;
-    const WR_REAL UY = TY / CosT;
-    const WR_REAL UZ = TZ / CosT;
-    // The pixel's own height, every band its footprint keeps.
-    WR_REAL S = WR_REAL(0.0);
-    for (int Band = 0; Band < WR_DETAIL_BANDS; ++Band)
-    {
-        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - Footprint * WR_DETAIL_FREQUENCY[Band]);
-        if (Fade > WR_REAL(0.0))
-        {
-            S += Fade * WR_DetailHeight(DX, DY, DZ, Band, OX, OY, OZ);
-            Out.Evaluations += WR_REAL(1.0);
-        }
-    }
-    const WR_REAL Here = PeakR * WR_PeakCap(S / WR_S_MAX);
-    // The end: where the sun's lower edge, rising at tan(theta - r) with the
-    // ground curving away as s^2 / 2, clears the highest peak.
-    const WR_REAL Lower = WR_tan(Theta - Radius);
-    const WR_REAL Rise = WR_max(WR_REAL(0.0), PeakR - Here);
-    const WR_REAL End = WR_sqrt(Lower * Lower + WR_REAL(2.0) * Rise) - Lower;
-    const WR_REAL Nearest = WR_max(Footprint, WR_REAL(0.5) / WR_DETAIL_FREQUENCY[WR_DETAIL_BANDS - 1]);
+    const FVector3d Toward = Level / CosT;
+    const double End = MarchEnd(R, Here, Peak, Theta - Radius);
+    const double Nearest = FMath::Max(FootprintCm, NearestCm) / R;
     if (!(End > Nearest))
     {
         return Out;
     }
-    const int Count = int(WR_max(Samples, WR_REAL(2.0)) + WR_REAL(0.5));
-    const WR_REAL Growth = WR_pow(End / Nearest, WR_REAL(1.0) / WR_REAL(Count - 1));
-    const WR_REAL PixelSlope = ReliefScale * WR_SHADOW_GRADIENT_TYPICAL;
-    WR_REAL Along = Nearest;
-    WR_REAL Highest = WR_REAL(-1.0e9);
-    WR_LOOP for (int Sample = 0; Sample < Count; ++Sample)
+    const int32 Count = FMath::Max(Samples, 2);
+    const double Growth = FMath::Pow(End / Nearest, 1.0 / (Count - 1));
+    double Along = Nearest;
+    for (int32 Sample = 0; Sample < Count; ++Sample)
     {
-        // This sample's disc: the star's, or one pixel's motion of its horizon.
-        const WR_REAL Disc = WR_max(Radius, PixelSlope * Footprint / Along);
-        // Two exact exits: the disc already hidden; or no ground from here
-        // on -- none above PeakCm, all of it curving away, under the bound
-        // B -- able to leave less of any later disc than is already seen.
-        // A later disc is no wider than this one and no narrower than the
-        // star's, so the least it can leave is at this Disc when B is under
-        // the sun's centre and at the star's own Radius when it is over.
-        const WR_REAL Bound = WR_atan((PeakR - Here - WR_REAL(0.5) * Along * Along) / Along);
-        if (Out.Visible <= WR_REAL(0.0) ||
-            WR_DiscAbove((Bound - Theta) / (Bound < Theta ? Disc : Radius)) >= Out.Visible)
+        // No ground from here on -- none above the peak, all of it curving
+        // away -- can rise over what is already found.
+        if (Elevation(R, Here, Peak, Along) <= Out.Horizon)
         {
             break;
         }
-        const WR_REAL Seen = WR_max(Footprint, WR_SHADOW_FOOTPRINT_FACTOR * Along * (Growth - WR_REAL(1.0)));
-        const WR_REAL PX = DX + UX * Along;
-        const WR_REAL PY = DY + UY * Along;
-        const WR_REAL PZ = DZ + UZ * Along;
-        const WR_REAL PL = WR_sqrt(PX * PX + PY * PY + PZ * PZ);
-        WR_REAL There = WR_REAL(0.0);
-        for (int Band = 0; Band < WR_DETAIL_BANDS; ++Band)
+        const double SeenCm = FMath::Max(FootprintCm, FootprintFactor * Along * (Growth - 1.0) * R);
+        const FVector3d There = D * FMath::Cos(Along) + Toward * FMath::Sin(Along);
+        Out.Horizon = FMath::Max(Out.Horizon, Elevation(R, Here, Ground.Height(There, SeenCm), Along));
+        ++Out.Reads;
+        // The disc is already hidden.
+        if (Out.Horizon >= Theta + Radius)
         {
-            const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - Seen * WR_DETAIL_FREQUENCY[Band]);
-            if (Fade > WR_REAL(0.0))
-            {
-                There += Fade * WR_DetailHeight(PX / PL, PY / PL, PZ / PL, Band, OX, OY, OZ);
-                Out.Evaluations += WR_REAL(1.0);
-            }
+            break;
         }
-        const WR_REAL Above = PeakR * WR_PeakCap(There / WR_S_MAX) - Here - WR_REAL(0.5) * Along * Along;
-        const WR_REAL Horizon = WR_atan(Above / Along);
-        Highest = WR_max(Highest, Above / Along);
-        Out.Visible = WR_min(Out.Visible, WR_DiscAbove((Horizon - Theta) / Disc));
         Along *= Growth;
     }
-    Out.Horizon = WR_atan(Highest);
+    Out.Visible = DiscAbove((Out.Horizon - Theta) / Radius);
     return Out;
 }
-```
 
-- [ ] **Step 5: The C++ mirror.** First the sample count, which the tests read from the contract (Task 3 adds the rest of the contract's shadow names). In `Source/DeepSpace/Sky/SkyMaterialContract.h`, after `WorldReliefOutputs()`, add:
-
-```cpp
-    /** How many samples the cast shadow's march takes: the JSON's
-     *  shadow_samples (Task 3), which the materials are authored with. The
-     *  spike (Task 1b) chose it; Task 4 confirms it. */
-    inline constexpr int32 ShadowSamples = 12;
-```
-
-In `Source/DeepSpace/Surface/WorldRelief.h`, add this after `struct FFaceTerms`:
-
-```cpp
-/** How much of its star a point of the ground sees past the ground: the
- *  cast shadow, WR_SunVisible (the developer's ruling on slice (b)'s
- *  build). Visible 0..1; the highest horizon the march found, rad above the
- *  level (-pi/2 where it found none or never marched); and how many band
- *  evaluations it took -- the cost the GPU pays per pixel. */
-struct FSunVisibility
+SunShadow::FSunVisibility SunShadow::AlongProfile(double RadiusCm, double PeakCm, double LowestCm, double SteepestSlope,
+                                                  TConstArrayView<double> Heights, double Step, double SunElevation, double SunRadius)
 {
-    double Visible = 1.0;
-    double Horizon = -UE_DOUBLE_HALF_PI;
-    int32 Evaluations = 0;
-};
-```
-
-In `namespace WorldReliefNoise`, before `struct FBands`, add:
-
-```cpp
-    /** The simplex's value alone, as the march reads it (WR_SimplexValueAt),
-     *  in double and in float; and WR_SimplexAt's value in float, which it
-     *  must equal. */
-    DEEPSPACE_API double SimplexValue(const FVector3d& V);
-    DEEPSPACE_API float SimplexValueF32(const FVector3f& V);
-    DEEPSPACE_API float SimplexF32(const FVector3f& V);
-
-    /** WR_PeakCap: FWorldRelief::PeakCap's value, from the shared file. */
-    DEEPSPACE_API double PeakCap(double X);
-
-    /** WR_ShadowHeight: the height the march reads, radius units above the
-     *  datum -- the twelve detail bands at a footprint (D units), no
-     *  craters -- for PeakR = PeakCm / R. */
-    DEEPSPACE_API double ShadowHeight(const FVector3d& D, double FootprintD, const FVector3d& Offset, double PeakR);
-
-    /** WR_DiscAbove: the share of a disc above a straight horizon X of its
-     *  radii above its centre. */
-    DEEPSPACE_API double DiscAbove(double X);
-
-    /** WR_SunVisible in double, and in float -- the GPU's operations in the
-     *  GPU's precision, the parity test's floor. L is the unit direction to
-     *  the star in the body's axes, ReliefScale FWorldRelief::SlopeScale. */
-    DEEPSPACE_API FSunVisibility SunVisibleF64(const FVector3d& D, const FVector3d& L, double FootprintD, const FVector3d& Offset,
-                                               double ReliefScale, double SunRadius, int32 Samples);
-    DEEPSPACE_API FSunVisibility SunVisibleF32(const FVector3f& D, const FVector3f& L, float FootprintD, const FVector3f& Offset,
-                                               float ReliefScale, float SunRadius, int32 Samples);
-
-    /** The march's constants, as the shared file has them. */
-    struct FShadowConstants
+    FSunVisibility Out;
+    if (Heights.Num() == 0 || !(RadiusCm > 0.0) || !(PeakCm > LowestCm) || !(Step > 0.0))
     {
-        double SMax = 0.0;
-        double PeakCapKnee = 0.0;
-        double GradientMax = 0.0;
-        double GradientTypical = 0.0;
-        double SunRadiusMax = 0.0;
-        double FootprintFactor = 0.0;
-    };
-    DEEPSPACE_API FShadowConstants ShadowConstants();
-```
-
-In `namespace WorldReliefShading`, add:
-
-```cpp
-    /** Both materials' cast shadow at D: WR_SunVisible for the light L (unit,
-     *  body axes), the star's angular radius (rad), the pixel's footprint
-     *  (radius units) and the march's sample count, at FWorldRelief's
-     *  SlopeScale -- 0, no shadow, on a world with no ground. */
-    DEEPSPACE_API FSunVisibility SunVisible(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& L,
-                                            double SunRadius, double FootprintRadius, int32 Samples);
-```
-
-In `Source/DeepSpace/Surface/WorldRelief.cpp`, add to `namespace WorldReliefLocal`:
-
-```cpp
-    template <typename TShadow>
-    FSunVisibility ToSunVisibility(const TShadow& Shadow)
-    {
-        FSunVisibility Out;
-        Out.Visible = Shadow.Visible;
-        Out.Horizon = Shadow.Horizon;
-        Out.Evaluations = FMath::RoundToInt32(static_cast<double>(Shadow.Evaluations));
         return Out;
     }
-```
-
-After `WorldReliefNoise::FaceF32`, add:
-
-```cpp
-double WorldReliefNoise::SimplexValue(const FVector3d& V)
-{
-    return WorldReliefF64::WR_SimplexValueAt(V.X, V.Y, V.Z, 0, 0, 0);
-}
-
-float WorldReliefNoise::SimplexValueF32(const FVector3f& V)
-{
-    return WorldReliefF32::WR_SimplexValueAt(V.X, V.Y, V.Z, 0, 0, 0);
-}
-
-float WorldReliefNoise::SimplexF32(const FVector3f& V)
-{
-    return WorldReliefF32::WR_Simplex(V.X, V.Y, V.Z).Value;
-}
-
-double WorldReliefNoise::PeakCap(double X)
-{
-    return WorldReliefF64::WR_PeakCap(X);
-}
-
-double WorldReliefNoise::ShadowHeight(const FVector3d& D, double FootprintD, const FVector3d& Offset, double PeakR)
-{
-    return WorldReliefF64::WR_ShadowHeight(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, PeakR);
-}
-
-double WorldReliefNoise::DiscAbove(double X)
-{
-    return WorldReliefF64::WR_DiscAbove(X);
-}
-
-FSunVisibility WorldReliefNoise::SunVisibleF64(const FVector3d& D, const FVector3d& L, double FootprintD, const FVector3d& Offset,
-                                               double ReliefScale, double SunRadius, int32 Samples)
-{
-    return WorldReliefLocal::ToSunVisibility(WorldReliefF64::WR_SunVisible(D.X, D.Y, D.Z, L.X, L.Y, L.Z, FootprintD,
-        Offset.X, Offset.Y, Offset.Z, ReliefScale, SunRadius, static_cast<double>(Samples)));
-}
-
-FSunVisibility WorldReliefNoise::SunVisibleF32(const FVector3f& D, const FVector3f& L, float FootprintD, const FVector3f& Offset,
-                                               float ReliefScale, float SunRadius, int32 Samples)
-{
-    return WorldReliefLocal::ToSunVisibility(WorldReliefF32::WR_SunVisible(D.X, D.Y, D.Z, L.X, L.Y, L.Z, FootprintD,
-        Offset.X, Offset.Y, Offset.Z, ReliefScale, SunRadius, static_cast<float>(Samples)));
-}
-
-WorldReliefNoise::FShadowConstants WorldReliefNoise::ShadowConstants()
-{
-    FShadowConstants Out;
-    Out.SMax = WorldReliefF64::WR_S_MAX;
-    Out.PeakCapKnee = WorldReliefF64::WR_PEAK_CAP_KNEE;
-    Out.GradientMax = WorldReliefF64::WR_SHADOW_GRADIENT_MAX;
-    Out.GradientTypical = WorldReliefF64::WR_SHADOW_GRADIENT_TYPICAL;
-    Out.SunRadiusMax = WorldReliefF64::WR_SUN_RADIUS_MAX;
-    Out.FootprintFactor = WorldReliefF64::WR_SHADOW_FOOTPRINT_FACTOR;
+    const double Radius = FMath::Clamp(SunRadius, 1.0e-6, SunRadiusMax);
+    const double Theta = SunElevation;
+    if (Theta - Radius >= FMath::Atan(SteepestSlope))
+    {
+        return Out;
+    }
+    const double Here = Heights[0];
+    if (Theta + Radius <= -NightDip(RadiusCm, Here, LowestCm))
+    {
+        Out.Visible = 0.0;
+        return Out;
+    }
+    const double End = MarchEnd(RadiusCm, Here, PeakCm, Theta - Radius);
+    for (int32 K = 1; K < Heights.Num() && K * Step <= End; ++K)
+    {
+        const double Arc = K * Step;
+        if (Elevation(RadiusCm, Here, PeakCm, Arc) <= Out.Horizon)
+        {
+            break;
+        }
+        Out.Horizon = FMath::Max(Out.Horizon, Elevation(RadiusCm, Here, Heights[K], Arc));
+        ++Out.Reads;
+        if (Out.Horizon >= Theta + Radius)
+        {
+            break;
+        }
+    }
+    Out.Visible = DiscAbove((Out.Horizon - Theta) / Radius);
     return Out;
 }
+
+double SunShadow::SteepestSlope(const FWorldReliefParams& Params)
+{
+    return FWorldRelief(Params).SlopeScale() * SteepestMargin
+        * (DetailGradientSampled + FMath::Max(Params.Cratering, 0.0) * CraterGradientSampled);
+}
+```
+
+- [ ] **Step 5: Run them to see them pass.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.SunShadow`
+
+Expected: all five PASS. Copy these into the task report:
+- `.AgainstProfile`'s four info lines: the ratios, and mean |dv| at 12, 8 and 16 samples.
+- `.SteepestSlope`'s measured slopes.
+
+A ratio under 0.6, or a 5-degree mean |dv| over 0.10 at 12 samples, means the march is not what planning measured. Stop and report the numbers, and do not loosen the bound. A measured detail slope outside 13.9-19.3 (and so a margin outside 1.3-1.8) means the constant's claim is off: stop and report it, and do not re-tune it without the rule.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Surface/SunShadow.h Source/DeepSpace/Surface/SunShadow.cpp Source/DeepSpace/Tests/SunShadowTest.cpp && \
+git commit -qm "feat(surface): SunShadow -- the cast shadow's horizon march, pure, for the bake
+
+The highest horizon toward the star along the great circle, by the exact
+triangle; the star's own disc above it; the night's exit a proof (the dip to
+the lowest ground), the day's a sampled steepest slope with a 1.5 margin;
+geometric samples for a tile's vertices (Visible), every texel ahead for the
+orbit's map (AlongProfile). DeepSpace.Surface.SunShadow.KnownValues, .Exits,
+.Schedule, .AgainstProfile, .SteepestSlope.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 7: Prove them.** Run each mutation after the commit, then `./build.sh`:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'return (FMath::Acos(C) - C * FMath::Sqrt' 'return (FMath::Acos(C) + C * FMath::Sqrt' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp '(ThereCm - HereCm) - 2.0 * (RadiusCm + ThereCm)' '(ThereCm - HereCm) - (RadiusCm + ThereCm)' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'Rho * FMath::Cos(Lower), -1.0, 1.0)) - Lower)' 'Rho * FMath::Cos(Lower), -1.0, 1.0)) + Lower)' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp '(RadiusCm + LowestCm) / (RadiusCm + HereCm)' '(RadiusCm + HereCm) / (RadiusCm + LowestCm)' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'D * FMath::Cos(Along) + Toward * FMath::Sin(Along)' 'D * FMath::Cos(Along) - Toward * FMath::Sin(Along)' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'const double DayExit = FMath::Atan(SteepestSlope) + Radius;' 'const double DayExit = FMath::Atan(SteepestSlope);' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunRadiusMax);' 'const double Radius = Sun.AngularRadius;' 'DeepSpace.Surface.SunShadow.Exits$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp 'FMath::Max(FootprintCm, FootprintFactor * Along * (Growth - 1.0) * R)' 'FMath::Max(FootprintCm, Along * (Growth - 1.0) * R)' 'DeepSpace.Surface.SunShadow.Schedule$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp '        if (Elevation(R, Here, Peak, Along) <= Out.Horizon)' '        if (false && Elevation(R, Here, Peak, Along) <= Out.Horizon)' 'DeepSpace.Surface.SunShadow.Exits$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.cpp '        const double Arc = K * Step;' '        const double Arc = (K + 1) * Step;' 'DeepSpace.Surface.SunShadow.KnownValues$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadow.h 'inline constexpr double SteepestMargin = 1.5;' 'inline constexpr double SteepestMargin = 1.0;' 'DeepSpace.Surface.SunShadow.SteepestSlope$'; \
+./build.sh
+```
+
+Expected: eleven `KILLED`. What kills each:
+- The `+` disc is symmetric and falling and agrees at -1, 0 and 1. It is killed by the known value at 0.5 (0.4712 against 0.195501).
+- The halved curvature misses the flat sphere's -a/2.
+- The `+ Lower` end misses 0.1 and 0.161766.
+- The inverted dip is an arccos over 1, clamped to 0, against 0.0632245.
+- The march that turns away from the sun reads the plane downhill: the uphill sun is whole, not 0.8045.
+- The day exit without `r` returns whole at half a radius under the slope's edge.
+- The unclamped radius shows DiscAbove(0.064), 0.459, for the pi/2 sun.
+- The footprint read at once the gap misses the schedule.
+- The march without its bound reads all 13 heights on smooth ground.
+- The profile shifted a step reads the wall at 4 km.
+- The margin at 1.0 falls under 1.3 times the measured slope.
+
+The two tests' own per-sample checks are proven by these mutants too, since each is killed by an exact value, not by a trend.
+
+---
+
+## Task 3: the sky's light, one function
+
+**Owner:** T. **Depends on:** Task 2 (`SunShadow::FSunLight`).
+
+**Files:**
+- Modify: `Source/DeepSpace/Sky/SkyProjection.h`, `Source/DeepSpace/Sky/SkyProjection.cpp`
+- Create: `Source/DeepSpace/Tests/SunLightTest.cpp` (`DeepSpace.Sky.SunLightIsTheSkys`)
+
+**Interfaces:**
+- Consumes: `FSkySystem`, `FSkyBody`, `SkyProjection::Project`, `SkyTestFixtures::System`, `SkyTestFixtures::Opening`.
+- Produces: `FVector SkyProjection::LightDirection(const FSkyBody& Body, const FSkyBody& Star)`, `double SkyProjection::StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star)`, `SunShadow::FSunLight SkyProjection::SunLightOf(const FSkySystem& System, int32 Body)`. `Project` writes `FSkyBodyView::LightDirection` through `LightDirection`, so the shadow's light and the shading's are one function.
+
+- [ ] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/SunLightTest.cpp`:
+
+```cpp
+#include "Misc/AutomationTest.h"
+#include "Sky/SkyProjection.h"
+#include "Surface/SunShadow.h"
+#include "Tests/SkyTestFixtures.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunLightIsTheSkysTest, "DeepSpace.Sky.SunLightIsTheSkys",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * The cast shadow is cast by the light the sky shades with (the cast-shadow
+ * plan's constraint): SunLightOf's direction is Project's LightDirection bit
+ * for bit -- the body's centre toward its star, universe axes -- and its
+ * radius the star's, asin(R_star / d). Worked out here from the fixture's
+ * positions too, so a mutant moving both at once is still caught.
+ */
+bool FSunLightIsTheSkysTest::RunTest(const FString& Parameters)
+{
+    const FSkySystem System = SkyTestFixtures::System();
+    const FSkyFrame Frame = SkyProjection::Project(System, SkyTestFixtures::Opening(), FSkyViewParams());
+    const FSkyBody& Star = System.Bodies[SkyTestFixtures::StarIndex];
+    int32 Lit = 0;
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+    {
+        const FSkyBody& Body = System.Bodies[Index];
+        const SunShadow::FSunLight Sun = SkyProjection::SunLightOf(System, Index);
+        if (Body.Kind == ESkyBodyKind::Star)
+        {
+            TestFalse(TEXT("the star casts on nothing of its own"), Sun.IsSet());
+            continue;
+        }
+        ++Lit;
+        const FVector3d Want = FVector3d(Star.Position - Body.Position).GetSafeNormal();
+        TestTrue(FString::Printf(TEXT("%s: the shadow's light is the sky's, bit for bit"), *Body.Id.ToString()),
+            Sun.Direction == FVector3d(Frame.Bodies[Index].LightDirection));
+        TestTrue(FString::Printf(TEXT("%s: from the body's centre toward its star"), *Body.Id.ToString()),
+            FVector3d::DotProduct(Sun.Direction, Want) > 1.0 - 1e-12);
+        const double Distance = FVector3d(Star.Position - Body.Position).Size();
+        TestTrue(FString::Printf(TEXT("%s: the star's own radius, asin(R / d) (%.9f)"), *Body.Id.ToString(), Sun.AngularRadius),
+            FMath::IsNearlyEqual(Sun.AngularRadius, FMath::Asin(Star.Radius / Distance), 1e-15));
+    }
+    TestTrue(TEXT("the fixture has lit bodies"), Lit > 0);
+    TestFalse(TEXT("an index the system does not have casts nothing"), SkyProjection::SunLightOf(System, 99).IsSet());
+    return true;
+}
+
+#endif
+```
+
+- [ ] **Step 2: Run it to see it fail.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
+
+Expected: the build fails, because `SkyProjection::SunLightOf` is undeclared.
+
+- [ ] **Step 3: The functions.** In `Source/DeepSpace/Sky/SkyProjection.h`, add `#include "Surface/SunShadow.h"` after the existing includes. In `namespace SkyProjection`, after `Project`, add:
+
+```cpp
+    /** The one light a world is lit and shadowed by: the unit direction from
+     *  its centre to its star, universe axes -- FSkyBodyView::LightDirection,
+     *  and the cast shadow's (SunShadow::FSunLight). Zero if they coincide. */
+    DEEPSPACE_API FVector LightDirection(const FSkyBody& Body, const FSkyBody& Star);
+
+    /** The star's angular radius from the body's centre, rad: asin(R / d),
+     *  or pi/2 from inside it. */
+    DEEPSPACE_API double StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star);
+
+    /** The light the cast shadow of body Body is baked under: its star's
+     *  LightDirection and StarAngularRadius. Unset for a star, for an index
+     *  the system does not have, and in a system with no star. */
+    DEEPSPACE_API SunShadow::FSunLight SunLightOf(const FSkySystem& System, int32 Body);
+```
+
+In `Source/DeepSpace/Sky/SkyProjection.cpp`, in `Project`'s planet branch, replace
+
+```cpp
+            const FVector ToStar = Star->Position - Body.Position;
+            const double StarDistance = ToStar.Size();
+            View.LightDirection = StarDistance > 0.0 ? ToStar / StarDistance : FVector::ZeroVector;
+```
+
+with
+
+```cpp
+            const double StarDistance = (Star->Position - Body.Position).Size();
+            View.LightDirection = LightDirection(Body, *Star);
 ```
 
 At the end of the file, add:
 
 ```cpp
-FSunVisibility WorldReliefShading::SunVisible(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& L,
-                                              double SunRadius, double FootprintRadius, int32 Samples)
+FVector SkyProjection::LightDirection(const FSkyBody& Body, const FSkyBody& Star)
 {
-    return WorldReliefNoise::SunVisibleF64(D, L, FootprintRadius, Params.SeedOffset, FWorldRelief(Params).SlopeScale(), SunRadius, Samples);
+    const FVector ToStar = Star.Position - Body.Position;
+    const double Distance = ToStar.Size();
+    return Distance > 0.0 ? ToStar / Distance : FVector::ZeroVector;
+}
+
+double SkyProjection::StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star)
+{
+    const double Distance = (Star.Position - Body.Position).Size();
+    return Distance > Star.Radius ? FMath::Asin(Star.Radius / Distance) : 0.5 * UE_DOUBLE_PI;
+}
+
+SunShadow::FSunLight SkyProjection::SunLightOf(const FSkySystem& System, int32 Body)
+{
+    SunShadow::FSunLight Sun;
+    const int32 Star = FindStar(System);
+    if (Star == INDEX_NONE || !System.Bodies.IsValidIndex(Body) || System.Bodies[Body].Kind == ESkyBodyKind::Star)
+    {
+        return Sun;
+    }
+    Sun.Direction = LightDirection(System.Bodies[Body], System.Bodies[Star]);
+    Sun.AngularRadius = StarAngularRadius(System.Bodies[Body], System.Bodies[Star]);
+    return Sun;
 }
 ```
 
-- [ ] **Step 6: Run them to see them pass.**
+(`FindStar` is the file's own, in its anonymous namespace, above `Project`.)
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.WorldRelief && ./test.sh DeepSpace.Surface.ShaderMapping`
+- [ ] **Step 4: Run it to see it pass, and the sky's tests beside it.**
 
-Expected: every `DeepSpace.Surface.WorldRelief.*` passes, the five new ones included, and so do `.KnownValues` and `.OffsetSplit`: the file's old functions are untouched. **This is the re-measure of Findings 2 and 3** (see *Corrections after review*: the first draft's harness was not this text, and the fade now uses the gap ahead). Copy into the task report, per angle: `.ShadowAgainstTruth`'s ratios and mean |dv| at N 12, 8 and 6, and `.ShadowCost`'s evaluations a pixel. Planning's 0.79-0.91 ratios were measured with the gap behind; the gap ahead fades more, so lower ratios are expected, and a ratio under 0.6 fails the test -- stop and report, do not loosen. If `.ShadowGradientMax` reports a steepest value outside 12.5-15.2, or a median more than 15% from 3.5, or a finite-difference slope at or over 21.3, the constants' claims are off: stop and report the measured values, and do not re-tune without the rule.
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Sky.SunLightIsTheSkys && ./test.sh DeepSpace.Sky`
 
-- [ ] **Step 7: Commit.**
+Expected: PASS, and every `DeepSpace.Sky.*` test still passes. `Project` computes the same light through the one function.
+
+- [ ] **Step 5: Commit.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Shaders/Private/WorldRelief.ush Source/DeepSpace/Surface/WorldRelief.h \
-  Source/DeepSpace/Surface/WorldRelief.cpp Source/DeepSpace/Tests/WorldReliefShadowTest.cpp Source/DeepSpace/Sky/SkyMaterialContract.h && \
-git commit -qm "feat(surface): WR_SunVisible -- the cast shadow marched through the height function toward the sun, and its C++ mirror
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Sky/SkyProjection.h Source/DeepSpace/Sky/SkyProjection.cpp Source/DeepSpace/Tests/SunLightTest.cpp && \
+git commit -qm "feat(sky): the cast shadow's light is the sky's -- SkyProjection::LightDirection, StarAngularRadius, SunLightOf
 
-The GPU's twelve detail bands of Height, no craters or finer octaves;
-geometric samples from the pixel to where the sun's lower edge clears
-PeakCm over the curving ground; each sample faded at twice the gap ahead,
-so it never aliases along the march; the star's own disc for softness,
-widened near the pixel to one pixel's motion; exact exits past the
-steepest ground, the nadir hidden, the star's radius clamped. DeepSpace.Surface.WorldRelief.
-ShadowHeight, .ShadowGradientMax, .SunDisc, .ShadowAgainstTruth, .ShadowCost.
+Project writes FSkyBodyView::LightDirection through the same function the
+tiles and the maps bake under. DeepSpace.Sky.SunLightIsTheSkys.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 8: Prove them.** Each mutation is run after the commit, followed by `./build.sh`:
+- [ ] **Step 6: Prove it.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'WR_SHADOW_FOOTPRINT_FACTOR = WR_REAL(2.0);' 'WR_SHADOW_FOOTPRINT_FACTOR = WR_REAL(0.0);' 'DeepSpace.Surface.WorldRelief.ShadowCost$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'if (Theta - Radius >= Steepest ||' 'if (Theta >= Steepest ||' 'DeepSpace.Surface.WorldRelief.SunDisc$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush '(CosT < WR_REAL(1.0e-6) && SinT > WR_REAL(0.0))' '(CosT < WR_REAL(1.0e-6))' 'DeepSpace.Surface.WorldRelief.SunDisc$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'return (WR_acos(C) - C * WR_sqrt' 'return (WR_acos(C) + C * WR_sqrt' 'DeepSpace.Surface.WorldRelief.SunDisc$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL Radius = WR_max(WR_min(SunRadius, WR_SUN_RADIUS_MAX), WR_REAL(1.0e-6));' 'const WR_REAL Radius = SunRadius;' 'DeepSpace.Surface.WorldRelief.SunDisc$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'return X < WR_REAL(0.0) ? -Capped : Capped;' 'return X < WR_REAL(0.0) ? -Magnitude : Magnitude;' 'DeepSpace.Surface.WorldRelief.ShadowHeight$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush '    return Smooth * GF;' '    return Smooth * GF * WR_REAL(1.0001);' 'DeepSpace.Surface.WorldRelief.ShadowHeight$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'WR_SHADOW_GRADIENT_MAX = WR_REAL(21.3);' 'WR_SHADOW_GRADIENT_MAX = WR_REAL(14.0);' 'DeepSpace.Surface.WorldRelief.ShadowGradientMax$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'WR_SHADOW_GRADIENT_TYPICAL = WR_REAL(3.5);' 'WR_SHADOW_GRADIENT_TYPICAL = WR_REAL(7.0);' 'DeepSpace.Surface.WorldRelief.ShadowGradientMax$'; \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL PX = DX + UX * Along;' 'const WR_REAL PX = DX - UX * Along;' 'DeepSpace.Surface.WorldRelief.ShadowAgainstTruth$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/SkyProjection.cpp 'return Distance > 0.0 ? ToStar / Distance : FVector::ZeroVector;' 'return Distance > 0.0 ? -ToStar / Distance : FVector::ZeroVector;' 'DeepSpace.Sky.SunLightIsTheSkys$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/SkyProjection.cpp '    Sun.AngularRadius = StarAngularRadius(System.Bodies[Body], System.Bodies[Star]);' '    Sun.AngularRadius = 2.0 * StarAngularRadius(System.Bodies[Body], System.Bodies[Star]);' 'DeepSpace.Sky.SunLightIsTheSkys$'; \
 ./build.sh
 ```
 
-Expected: ten `KILLED`.
-- The factor-0 mutant reads every kept band at every sample, 121-143 evaluations after the exits, over the 9.2-a-sample cap of 110 but narrowly: copy its printed count into the task report.
-- The exit without `r` skips the march where it must run (`JustUnder` marches nothing).
-- The zenith exit without `SinT > 0` catches the nadir too and shows a whole disc there.
-- The `+` disc is still symmetric and still falling, and agrees at -1, 0 and 1; it is killed by the known value at 0.5 (0.4712 against 0.195501).
-- The unclamped radius wraps `tan(Theta - r)` for the pi/2 sun and shows the whole disc.
-- The uncapped height misses `FWorldRelief::PeakCap` past the knee.
-- The scaled corner breaks the value's equality. (`    return Smooth * GF;` is unique in the file: the old corner function has `N.Value += Smooth * GF;`.)
-- The 14.0 gradient falls under 1.4 x the measured maximum; the 7.0 typical is off the median.
-- The march that turns away from the sun in X leaves the truth.
-
-Not proven by a headless mutant: the pixel widening of each sample's disc (`WR_max(Radius, PixelSlope * Footprint / Along)`). Its job is temporal -- an edge that does not switch inside a pixel of motion -- and it is judged by Task 6's 2x-supersampled aliasing measure, shadows on against off.
-
-A mutant that drops the curvature from the sample's `Above` (`- WR_REAL(0.5) * Along * Along`) was measured while planning to be equivalent at these scales. The shadowed share changed by at most 0.3 points: the drop is at most 0.8 degrees at the march's far end, where the horizon is rarely found. It is not claimed as proven, and it stays in because it is the geometry.
+Expected: two `KILLED`. The flipped light moves Project and SunLightOf together, and is caught by the direction worked out from the positions. The doubled radius misses asin(R / d).
 
 ---
 
-## Task 3: the materials, the contract, and the sky's parameters
+## Task 4: the tiles carry the shadow
 
-**Owner:** T. **Depends on:** Task 2.
+**Owner:** T. **Depends on:** Tasks 2 and 3.
 
 **Files:**
-- Modify: `Tools/sky_material_contract.json`. Add the parameters `sun_radius`, `shadows` and `probe_light`. Add `sun_radius` and `shadows` to `M_SkyBody`'s and `M_SkyGround`'s lists. Add a new material `M_SkyShadowProbe`, a new block `shadow` and a new constant `shadow_samples`.
-- Modify: `Source/DeepSpace/Sky/SkyMaterialContract.h`. Add `SunRadius`, `Shadows`, `ProbeLight`, `ShadowProbePath`, `ShadowEntry`, `ShadowInputs()`, `ShadowStrengthPin` (`ShadowSamples` is Task 2's), `ShadowProbeScalars()` and `ShadowProbeVectors()`, and extend `BodyScalars()` and `GroundScalars()`.
-- Modify: `Tools/setup_sky_materials.py`. Add `SHADOW`, `SHADOW_CODE`, `SHADOW_PROBE_CODE`, `DEFAULT_SUN_RADIUS`, `cast_shadow()` and `shadow_probe()`; wire the shadow into `sky_body()` and `sky_ground()`; call it from `main()`.
-- Modify: `Source/DeepSpace/Sky/ShipSky.h` and `.cpp`. Add `ShipSky::SunAngularRadius` and `ShipSky::ShadowStrength`, and the CVar `ds.Sky.Shadows`. `DrawBodies` writes both parameters, and `CopyBodyLook` copies them.
-- Modify: `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`. Add roles, `M_SkyShadowProbe`, and a `CheckSharedRelief` that finds its node by the entry. Add `CheckShadow`, and the shadow block and constant in `CheckSharedTables`.
-- Create: `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp` (`DeepSpace.Sky.ShadowParameters`)
+- Modify: `Source/DeepSpace/Surface/TerrainTile.h`, `Source/DeepSpace/Surface/TerrainTile.cpp`. Add `FTileBuild::SunVisible` and `ShadowSeconds`, and `TerrainTile::FTileShadow`, `Build(..., Shadow)` and `UV0Of`.
+- Modify: `Source/DeepSpace/Surface/TerrainTileComponent.cpp`: UV0 carries the shadow.
+- Modify: `Source/DeepSpace/Surface/WorldGround.h`, `Source/DeepSpace/Surface/WorldGround.cpp`. Add the light each tile is built under, `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`, the rebuild when any of them changes, and a line in `Describe`.
+- Modify: `Source/DeepSpace/Tests/SkyTestWorld.h`. Add `EShadows`: test worlds build without the shadow unless asked.
+- Create: `Source/DeepSpace/Tests/TileSunShadowTest.cpp` (`DeepSpace.Surface.TileSunShadow`, `DeepSpace.Surface.GroundShadowLight`)
 
 **Interfaces:**
-- Consumes: `WR_SunVisible` (Task 2); `setup_sky_materials.py`'s `custom_node`, `seed_offset`, `to_body`, `probe_direction` and `mask`; `ShipSky::CopyBodyLook`.
+- Consumes: `SunShadow::{FSunLight, Visible, SteepestSlope, DefaultSamples}` (Task 2); `SkyProjection::SunLightOf` (Task 3); `TerrainQuadtree::{KeyAt, CentreDirection, Face}`; `ShipGround::FromRelief`; `GroundFixtures::FixtureParams`; `SkyTestWorld::{FSkyWorld, FScopedCVar}`; `LocalSystem::Here`.
 - Produces:
 
 ```cpp
-namespace SkyMaterial {
-    inline const FName SunRadius, Shadows, ProbeLight, ShadowStrengthPin;
-    inline const TCHAR* const ShadowProbePath, ShadowEntry;   // "WR_SunVisible"
-    // ShadowSamples: Task 2 added it; Task 3 consumes it.
-    inline constexpr int32 ShadowSamples = 12;
-    inline TArray<FName> ShadowProbeScalars(), ShadowProbeVectors();
+struct FTileBuild { /* ... */ TArray<float> SunVisible; double ShadowSeconds; };
+namespace TerrainTile
+{
+    struct FTileShadow { SunShadow::FSunLight Sun; double SteepestSlope = 0.0; int32 Samples = SunShadow::DefaultSamples; };
+    FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow());
+    FVector2f UV0Of(const FTileBuild& Tile, int32 Vertex);
 }
-namespace ShipSky {
-    DEEPSPACE_API double SunAngularRadius(const FSkySystem& System, int32 Body);
-    DEEPSPACE_API float ShadowStrength();
-}
+const TerrainTile::FTileShadow& AWorldGround::GetTileShadow() const;
+namespace SkyTestWorld { enum class EShadows : uint8 { Off, On }; }
+SkyTestWorld::FSkyWorld::FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8, EShadows Shadows = EShadows::Off);
 ```
 
-  It also produces the CVar `ds.Sky.Shadows` (float, default 1).
+The CVars are read by name in tests as `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`. `ds.Sky.ShadowMaps` and `ds.Sky.ShadowMapWidth` are Task 6's CVars. `FSkyWorld` sets `ds.Sky.ShadowMaps` only if it exists, so this task does not wait on Task 6.
 
-- [ ] **Step 1: Write the failing tests.**
-
-Create `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp`:
+- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/TileSunShadowTest.cpp`:
 
 ```cpp
 #include "HAL/IConsoleManager.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Sky/LocalSystem.h"
-#include "Sky/ShipSky.h"
-#include "Sky/SkyMaterialContract.h"
+#include "Sky/SkyProjection.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/TerrainQuadtree.h"
+#include "Surface/TerrainTile.h"
 #include "Surface/WorldGround.h"
-#include "Tests/SkyTestFixtures.h"
+#include "Tests/GroundFixtures.h"
 #include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipSkyShadowParametersTest, "DeepSpace.Sky.ShadowParameters",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTileSunShadowTest, "DeepSpace.Surface.TileSunShadow",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundShadowLightTest, "DeepSpace.Surface.GroundShadowLight",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace ShipSkyShadowTestLocal
+namespace TileSunShadowLocal
 {
-    float ScalarOf(UPrimitiveComponent* Component, FName Name)
+    /** The star Elevation rad above D's level, toward Toward's part along it. */
+    SunShadow::FSunLight LightAt(const FVector3d& D, const FVector3d& Toward, double Elevation, double AngularRadius)
     {
-        UMaterialInstanceDynamic* Instance = Component ? Cast<UMaterialInstanceDynamic>(Component->GetMaterial(0)) : nullptr;
-        return Instance ? Instance->K2_GetScalarParameterValue(Name) : -1.0f;
+        const FVector3d Level = (Toward - D * FVector3d::DotProduct(Toward, D)).GetSafeNormal();
+        SunShadow::FSunLight Sun;
+        Sun.Direction = (D * FMath::Sin(Elevation) + Level * FMath::Cos(Elevation)).GetSafeNormal();
+        Sun.AngularRadius = AngularRadius;
+        return Sun;
     }
 }
 
 /**
- * The cast shadow's two parameters as the sky writes them: SunRadius, the
- * star's angular radius from each world, and Shadows, ds.Sky.Shadows
- * clamped, on every world's proxy and copied into the ground's look.
+ * A tile's vertices carry the cast shadow (the ruling: computed while the
+ * tile is built, off the game thread, from the height function): every grid
+ * vertex's SunVisible is SunShadow::Visible at its own direction and height,
+ * at the tile's spacing -- to the float it is stored in -- the skirt's
+ * vertices carry their grid vertex's, and UV0.x is what reaches the mesh.
+ * The shadow never moves the ground. Without a light every vertex is whole.
+ * The tile is Baemsekai IV-like at level 6 (4.4 km vertices, 141 km across)
+ * under a 2-degree sun, where planning measured half the ground shaded: a
+ * tile that fixture changes leave uniform is moved, never the bound.
  */
-bool FShipSkyShadowParametersTest::RunTest(const FString& Parameters)
+bool FTileSunShadowTest::RunTest(const FString& Parameters)
 {
-    using namespace ShipSkyShadowTestLocal;
+    const FWorldReliefParams Params = GroundFixtures::FixtureParams();
+    const FGroundFieldRef Field = ShipGround::FromRelief(Params);
+    const FTileKey Key = TerrainQuadtree::KeyAt(FVector3d(0.6, -0.48, 0.64).GetSafeNormal(), 6);
+    const FVector3d Centre = TerrainQuadtree::CentreDirection(Key);
+    TerrainTile::FTileShadow Shadow;
+    Shadow.Sun = TileSunShadowLocal::LightAt(Centre, TerrainQuadtree::Face(Key.Face).U, FMath::DegreesToRadians(2.0), 0.029);
+    Shadow.SteepestSlope = SunShadow::SteepestSlope(Params);
+    const FTileBuild Lit = TerrainTile::Build(*Field, Key);
+    const FTileBuild Cast = TerrainTile::Build(*Field, Key, Shadow);
 
-    // -- The star's angular radius, pure --------------------------------------
-    const FSkySystem Fixture = SkyTestFixtures::System();
-    const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
-    const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
-    const double Expected = FMath::Asin(Star.Radius / (Star.Position - Home.Position).Size());
-    TestTrue(FString::Printf(TEXT("a world sees its star asin(R / d) in radius (%.6f against %.6f)"),
-        ShipSky::SunAngularRadius(Fixture, SkyTestFixtures::HomeIndex), Expected),
-        FMath::IsNearlyEqual(ShipSky::SunAngularRadius(Fixture, SkyTestFixtures::HomeIndex), Expected, 1e-12));
-    TestEqual(TEXT("a star has no sun"), ShipSky::SunAngularRadius(Fixture, SkyTestFixtures::StarIndex), 0.0);
-    TestEqual(TEXT("nor has a body that is not there"), ShipSky::SunAngularRadius(Fixture, 99), 0.0);
-    FSkySystem Inside = Fixture;
-    Inside.Bodies[SkyTestFixtures::HomeIndex].Position = Star.Position + FVector(0.5 * Star.Radius, 0.0, 0.0);
-    TestEqual(TEXT("from inside its star's radius the star fills half the sky, finite"),
-        ShipSky::SunAngularRadius(Inside, SkyTestFixtures::HomeIndex), UE_DOUBLE_HALF_PI);
+    // The shadow never moves the ground.
+    TestTrue(TEXT("the same positions"), Lit.Positions == Cast.Positions);
+    TestTrue(TEXT("the same normals"), Lit.Normals == Cast.Normals);
+    TestTrue(TEXT("the same heights"), Lit.Heights == Cast.Heights);
 
-    // -- ds.Sky.Shadows, clamped ----------------------------------------------
-    IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
-    if (!TestNotNull(TEXT("ds.Sky.Shadows exists"), Shadows))
+    // Every grid vertex is SunShadow::Visible at its own height and the tile's spacing.
+    if (!TestEqual(TEXT("one shadow a grid vertex"), Cast.SunVisible.Num(), TerrainTile::GridVerts))
     {
         return false;
     }
-    const float Was = Shadows->GetFloat();
-    for (const TPair<float, float>& Case : TArray<TPair<float, float>>{ { 7.0f, 1.0f }, { -1.0f, 0.0f }, { 0.5f, 0.5f }, { 1.0f, 1.0f } })
+    int32 Wrong = 0;
+    int32 Shaded = 0;
+    int32 Whole = 0;
+    for (int32 V = 0; V < TerrainTile::GridVerts; ++V)
     {
-        Shadows->Set(Case.Key, ECVF_SetByCode);
-        TestEqual(FString::Printf(TEXT("ds.Sky.Shadows %.1f draws %.1f"), Case.Key, Case.Value), ShipSky::ShadowStrength(), Case.Value);
+        const float Want = static_cast<float>(SunShadow::Visible(*Field, Cast.Directions[V], Shadow.Sun, Cast.SpacingCm,
+            Shadow.SteepestSlope, Shadow.Samples, Cast.Heights[V]).Visible);
+        Wrong += Cast.SunVisible[V] == Want ? 0 : 1;
+        Shaded += Cast.SunVisible[V] < 0.5f ? 1 : 0;
+        Whole += Cast.SunVisible[V] > 0.5f ? 1 : 0;
+        TestEqual(TEXT("UV0.x is the vertex's shadow"), TerrainTile::UV0Of(Cast, V).X, Cast.SunVisible[V]);
+    }
+    TestEqual(TEXT("every grid vertex carries SunShadow::Visible at its height and the tile's spacing"), Wrong, 0);
+    AddInfo(FString::Printf(TEXT("level 6 under a 2-degree sun: %d of %d vertices under half, %d over"), Shaded, TerrainTile::GridVerts, Whole));
+    TestTrue(TEXT("and the tile is not uniform: some ground shaded, some lit"), Shaded > 0 && Whole > 0);
+    for (int32 S = 0; S < TerrainTile::SkirtVerts; ++S)
+    {
+        const int32 V = TerrainTile::GridVerts + S;
+        TestEqual(TEXT("a skirt vertex carries its grid vertex's shadow"), TerrainTile::UV0Of(Cast, V).X, TerrainTile::UV0Of(Cast, TerrainTile::GridOf(V)).X);
     }
 
-    // -- Live: every world's proxy, and the ground's copy ---------------------
+    // Without a light, whole.
+    bool bAllWhole = Lit.SunVisible.Num() == TerrainTile::GridVerts;
+    for (const float Seen : Lit.SunVisible)
     {
-        SkyTestWorld::FSkyWorld Test(TEXT("ShadowParametersWorld"));
-        Test.BeginPlay();
-        // 0.5: a parameter the material lacks reads back 0, so 0 would pass by accident.
-        Shadows->Set(0.5f, ECVF_SetByCode);
-        Test.Step(1.0f / 60.0f);
-        const FSkySystem Here = LocalSystem::Here(Test.World);
-        for (int32 Index = 0; Index < Here.Bodies.Num(); ++Index)
-        {
-            if (Here.Bodies[Index].Kind == ESkyBodyKind::Star)
-            {
-                continue;
-            }
-            UStaticMeshComponent* Proxy = Test.Sky->GetProxy(Index);
-            const float Want = static_cast<float>(ShipSky::SunAngularRadius(Here, Index));
-            TestTrue(FString::Printf(TEXT("%s's proxy carries its star's radius (%.6f against %.6f)"), *Here.Bodies[Index].Id.ToString(),
-                ScalarOf(Proxy, SkyMaterial::SunRadius), Want), Want > 0.0f && FMath::IsNearlyEqual(ScalarOf(Proxy, SkyMaterial::SunRadius), Want, 1e-6f * Want));
-            TestEqual(FString::Printf(TEXT("%s's proxy carries the shadows' strength"), *Here.Bodies[Index].Id.ToString()), ScalarOf(Proxy, SkyMaterial::Shadows), 0.5f);
-        }
-        // Below 50 km over Baemsekai IV the ground draws the body, in its look.
-        const FSkyBody& Fourth = Here.Bodies[4];
-        const FVector Up = (Test.Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal();
-        Test.Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + 2.0e6), FRotationMatrix::MakeFromX(-Up).ToQuat());
+        bAllWhole = bAllWhole && Seen == 1.0f;
+    }
+    TestTrue(TEXT("a tile built without a light has every vertex whole"), bAllWhole);
+    TestEqual(TEXT("and UV0.y is unused"), TerrainTile::UV0Of(Cast, 7).Y, 0.0f);
+    return true;
+}
+
+/**
+ * AWorldGround builds its tiles under the sky's own light for the world
+ * under the ship (SkyProjection::SunLightOf), the real ground's steepest
+ * slope and ds.Terrain.ShadowSamples, and rebuilds when ds.Terrain.Shadows
+ * changes. 800 km over Baemsekai IV only the prefetch chain is wanted, so the
+ * test builds a handful of tiles.
+ */
+bool FGroundShadowLightTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    FSkyWorld Test(TEXT("GroundShadowLightWorld"), 8, EShadows::On);
+    Test.BeginPlay();
+    const FSkySystem Here = LocalSystem::Here(Test.World);
+    if (!TestTrue(TEXT("the start system has a fourth body"), Here.Bodies.IsValidIndex(4)))
+    {
+        return false;
+    }
+    const FSkyBody& Fourth = Here.Bodies[4];
+    const FVector Out = (Test.Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal();
+    Test.Ship->PlaceShip(Fourth.Position + Out * (Fourth.Radius + 8.0e7), FRotationMatrix::MakeFromX(-Out).ToQuat());
+    Test.Step(1.0f / 60.0f);
+    Test.Ground->FlushBuildsForTest();
+    Test.Step(1.0f / 60.0f);
+
+    const TerrainTile::FTileShadow& Shadow = Test.Ground->GetTileShadow();
+    const SunShadow::FSunLight Sky = SkyProjection::SunLightOf(Here, 4);
+    TestTrue(TEXT("the tiles are built under the sky's own light for this world"),
+        Shadow.Sun.Direction == Sky.Direction && Shadow.Sun.AngularRadius == Sky.AngularRadius);
+    TestEqual(TEXT("with the real ground's steepest slope"), Shadow.SteepestSlope, SunShadow::SteepestSlope(Fourth.Relief));
+    TestEqual(TEXT("and ds.Terrain.ShadowSamples' samples"), Shadow.Samples, SunShadow::DefaultSamples);
+
+    const FTileKey Key = TerrainQuadtree::KeyAt(FVector3d(Out), 8);
+    const FTileBuild* Resident = Test.Ground->GetResidentTile(Key);
+    if (!TestNotNull(TEXT("the level-8 tile under the ship is resident"), Resident))
+    {
+        return false;
+    }
+    const FGroundFieldRef Field = ShipGround::FromRelief(Fourth.Relief);
+    TestTrue(TEXT("and carries the shadow a fresh build under that light does"),
+        Resident->SunVisible == TerrainTile::Build(*Field, Key, Shadow).SunVisible);
+
+    {
+        // Off: the ground starts again, and every vertex is whole.
+        FScopedCVar Off(TEXT("ds.Terrain.Shadows"), 0.0f);
         Test.Step(1.0f / 60.0f);
         Test.Ground->FlushBuildsForTest();
         Test.Step(1.0f / 60.0f);
-        UMaterialInstanceDynamic* Look = Test.Ground->GetGroundMaterialInstance();
-        if (TestTrue(TEXT("the ground has Baemsekai IV"), Test.Ground->IsDrawingBody() && Look))
+        TestFalse(TEXT("with ds.Terrain.Shadows 0 the ground builds under no light"), Test.Ground->GetTileShadow().Sun.IsSet());
+        const FTileBuild* Rebuilt = Test.Ground->GetResidentTile(Key);
+        bool bWhole = Rebuilt != nullptr;
+        for (int32 V = 0; bWhole && V < Rebuilt->SunVisible.Num(); ++V)
         {
-            TestEqual(TEXT("and its star's radius"), Look->K2_GetScalarParameterValue(SkyMaterial::SunRadius),
-                ScalarOf(Test.Sky->GetProxy(4), SkyMaterial::SunRadius));
-            TestEqual(TEXT("and the shadows' strength"), Look->K2_GetScalarParameterValue(SkyMaterial::Shadows), 0.5f);
+            bWhole = Rebuilt->SunVisible[V] == 1.0f;
         }
+        TestTrue(TEXT("and the rebuilt tile is whole everywhere"), bWhole);
     }
-    Shadows->Set(Was, ECVF_SetByCode);
     return true;
 }
 
 #endif
 ```
 
-In `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`, make the following changes. First, add the include `#include "Materials/MaterialExpressionTransform.h"`. Then add three roles to `Roles()`:
-
-```cpp
-            { TEXT("sun_radius"), SkyMaterial::SunRadius, TEXT("scalar") },
-            { TEXT("shadows"), SkyMaterial::Shadows, TEXT("scalar") },
-            { TEXT("probe_light"), SkyMaterial::ProbeLight, TEXT("vector") },
-```
-
-In `CheckSharedRelief`, count only the node that calls the entry, since `M_SkyBody` and `M_SkyGround` now hold more Custom nodes. Replace the collecting `if` and the count check:
-
-```cpp
-            if (const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get()))
-            {
-                if (Custom->Code.Contains(FString(SkyMaterial::WorldReliefEntry) + TEXT("(")))
-                {
-                    Customs.Add(Custom);
-                }
-            }
-```
-
-```cpp
-        if (!Test.TestEqual(FString::Printf(TEXT("%s calls the shared file's %s from one Custom node"), *Asset, SkyMaterial::WorldReliefEntry),
-                            Customs.Num(), 1))
-```
-
-After `CheckSharedRelief`, add:
-
-```cpp
-    enum class EShadowHost : uint8 { Body, Ground, Probe };
-
-    bool HasParameter(const TSet<const UMaterialExpression*>& Nodes, FName Name)
-    {
-        for (const UMaterialExpression* Node : Nodes)
-        {
-            const UMaterialExpressionParameter* Parameter = Cast<UMaterialExpressionParameter>(Node);
-            if (Parameter && Parameter->ParameterName == Name)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** The cast shadow as a material reaches it (the developer's ruling on
-     *  slice (b)'s build): one Custom node that includes WorldRelief.ush and
-     *  calls WR_SunVisible, its pins the header's, fed what the face is fed
-     *  -- its D the shared terms' own Direction, its seed the world's -- with
-     *  the world's light turned into the body's axes on the proxy and into
-     *  the tile's on the ground, the star's radius, the contract's sample
-     *  count, and on the proxy a ReliefScale that Banding takes out (a
-     *  giant's billow is not ground). The emissive reads it. */
-    void CheckShadow(FAutomationTestBase& Test, const UMaterial& Material, const UMaterialExpressionCustom* Shared, EShadowHost Host)
-    {
-        const FString Asset = Material.GetName();
-        TArray<const UMaterialExpressionCustom*> Calls;
-        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
-        {
-            const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get());
-            if (Custom && Custom->Code.Contains(FString(SkyMaterial::ShadowEntry) + TEXT("(")))
-            {
-                Calls.Add(Custom);
-            }
-        }
-        if (!Test.TestEqual(FString::Printf(TEXT("%s calls %s from one Custom node"), *Asset, SkyMaterial::ShadowEntry), Calls.Num(), 1))
-        {
-            return;
-        }
-        const UMaterialExpressionCustom* Node = Calls[0];
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow includes %s, and only it"), *Asset, SkyMaterial::WorldReliefInclude),
-            Node->IncludeFilePaths.Num() == 1 && Node->IncludeFilePaths[0] == SkyMaterial::WorldReliefInclude);
-        TArray<FName> Want = SkyMaterial::ShadowInputs();
-        if (Host != EShadowHost::Probe)
-        {
-            Want.Add(SkyMaterial::ShadowStrengthPin);
-        }
-        TArray<FName> Pins;
-        for (const FCustomInput& Input : Node->Inputs)
-        {
-            Pins.Add(Input.InputName);
-            Test.TestNotNull(FString::Printf(TEXT("%s's shadow's %s is wired"), *Asset, *Input.InputName.ToString()), Input.Input.Expression);
-        }
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow's pins are the header's, in order"), *Asset), Pins == Want);
-        const auto Pin = [Node](FName Name) -> const UMaterialExpression*
-        {
-            for (const FCustomInput& Input : Node->Inputs)
-            {
-                if (Input.InputName == Name)
-                {
-                    return Input.Input.Expression;
-                }
-            }
-            return nullptr;
-        };
-        if (Shared)
-        {
-            const UMaterialExpression* Direction = nullptr;
-            for (const FCustomInput& Input : Shared->Inputs)
-            {
-                Direction = Input.InputName == FName(TEXT("Direction")) ? Input.Input.Expression.Get() : Direction;
-            }
-            Test.TestTrue(FString::Printf(TEXT("%s's shadow is marched from the face's own D"), *Asset), Direction && Pin(TEXT("D")) == Direction);
-        }
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow reads the world's seed"), *Asset), HasParameter(Upstream(Pin(TEXT("SeedOffset"))), SkyMaterial::SurfaceSeed));
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow reads its star's radius"), *Asset), HasParameter(Upstream(Pin(TEXT("SunRadius"))), SkyMaterial::SunRadius));
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow reads the ground's slope scale"), *Asset), HasParameter(Upstream(Pin(TEXT("ReliefScale"))), SkyMaterial::ReliefScale));
-        const UMaterialExpressionConstant* Samples = Cast<UMaterialExpressionConstant>(Pin(TEXT("Samples")));
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow takes the contract's %d samples"), *Asset, SkyMaterial::ShadowSamples),
-            Samples && FMath::IsNearlyEqual(Samples->R, static_cast<float>(SkyMaterial::ShadowSamples)));
-        if (Host == EShadowHost::Probe)
-        {
-            Test.TestTrue(TEXT("the probe's light is ProbeLight, in body axes"), HasParameter(Upstream(Pin(TEXT("L"))), SkyMaterial::ProbeLight));
-            return;
-        }
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow is drawn as Shadows says"), *Asset), HasParameter(Upstream(Pin(TEXT("Strength"))), SkyMaterial::Shadows));
-        const TSet<const UMaterialExpression*> Light = Upstream(Pin(TEXT("L")));
-        Test.TestTrue(FString::Printf(TEXT("%s's shadow is toward the world's light"), *Asset), HasParameter(Light, SkyMaterial::LightDirection));
-        if (Host == EShadowHost::Body)
-        {
-            Test.TestTrue(TEXT("M_SkyBody turns the light into the body's axes for it"), HasParameter(Light, SkyMaterial::BodyAxisX));
-            Test.TestTrue(TEXT("and takes a giant's billow out of its ReliefScale by Banding"),
-                HasParameter(Upstream(Pin(TEXT("ReliefScale"))), SkyMaterial::Banding));
-        }
-        else
-        {
-            bool bToLocal = false;
-            for (const UMaterialExpression* Found : Light)
-            {
-                const UMaterialExpressionTransform* Transform = Cast<UMaterialExpressionTransform>(Found);
-                bToLocal |= Transform && Transform->TransformSourceType == TRANSFORMSOURCE_World && Transform->TransformType == TRANSFORM_Local;
-            }
-            Test.TestTrue(TEXT("M_SkyGround turns the light into the tile's axes, the universe's, for it"), bToLocal);
-        }
-        const FExpressionInput* Emissive = Material.GetExpressionInputForProperty(MP_EmissiveColor);
-        Test.TestTrue(FString::Printf(TEXT("%s's emissive reads the shadow"), *Asset), Emissive && Upstream(Emissive->Expression).Contains(Node));
-    }
-```
-
-In `CheckSurfaceFace`, right after `const UMaterialExpressionCustom* Shared = CheckSharedRelief(Test, Material); if (!Shared) { return; }`, add:
-
-```cpp
-        CheckShadow(Test, Material, Shared, EShadowHost::Body);
-```
-
-In `CheckSharedTables`, at its end, add:
-
-```cpp
-        const TSharedPtr<FJsonObject> Shadow = Contract->GetObjectField(TEXT("shadow"));
-        Test.TestEqual(TEXT("the JSON's shadow entry is the header's"), Shadow->GetStringField(TEXT("entry")), FString(SkyMaterial::ShadowEntry));
-        TArray<FName> ShadowPins;
-        for (const TSharedPtr<FJsonValue>& Value : Shadow->GetArrayField(TEXT("inputs")))
-        {
-            ShadowPins.Add(FName(*Value->AsString()));
-        }
-        Test.TestTrue(TEXT("and its pins"), ShadowPins == SkyMaterial::ShadowInputs());
-        const TSharedPtr<FJsonObject> Constants = Contract->GetObjectField(TEXT("constants"));
-        Test.TestEqual(TEXT("the march's sample count is the header's"),
-            static_cast<int32>(Constants->GetNumberField(TEXT("shadow_samples"))), SkyMaterial::ShadowSamples);
-        Test.TestEqual(TEXT("and a sample's footprint is filter_pixels times its spacing, the face's own rule"),
-            WorldReliefNoise::ShadowConstants().FootprintFactor, Constants->GetNumberField(TEXT("filter_pixels")));
-```
-
-In `RunTest`, add to `Materials` the new entry:
-
-```cpp
-        { TEXT("M_SkyShadowProbe"), SkyMaterial::ShadowProbePath, SkyMaterial::ShadowProbeScalars(), SkyMaterial::ShadowProbeVectors() },
-```
-
-Beside the `M_SkyReliefProbe` branch in the loop, add:
-
-```cpp
-        if (Material->GetFName() == TEXT("M_SkyGround"))
-        {
-            CheckShadow(*this, *Material, CheckSharedRelief(*this, *Material), EShadowHost::Ground);
-        }
-        if (Material->GetFName() == TEXT("M_SkyShadowProbe"))
-        {
-            CheckShadow(*this, *Material, nullptr, EShadowHost::Probe);
-        }
-```
-
 - [ ] **Step 2: Run them to see them fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
-Expected: the build fails. `SkyMaterial::SunRadius`, `ShipSky::SunAngularRadius` and the rest are undeclared.
+Expected: the build fails, because `TerrainTile::FTileShadow`, `FTileBuild::SunVisible`, `UV0Of`, `AWorldGround::GetTileShadow` and `SkyTestWorld::EShadows` are undeclared.
 
-- [ ] **Step 3: The header's side of the contract.** In `Source/DeepSpace/Sky/SkyMaterialContract.h`, after `SurfaceSeed`'s line, add:
-
-```cpp
-    inline const FName SunRadius = TEXT("SunRadius");           // scalar: the star's angular radius from the body, rad; ShipSky::SunAngularRadius
-    inline const FName Shadows = TEXT("Shadows");               // scalar: 0..1, how much of the cast shadow is drawn; ds.Sky.Shadows
-```
-
-After the probe's names (`ProbeBias`), add:
+- [ ] **Step 3: The tile.** In `Source/DeepSpace/Surface/TerrainTile.h`, add `#include "Surface/SunShadow.h"` after `#include "Surface/TerrainQuadtree.h"`. In `struct FTileBuild`, after `double SkirtDepthCm = 0.0;`, add:
 
 ```cpp
-    inline const FName ProbeLight = TEXT("ProbeLight");         // vector, the shadow probe's: the light in body axes
-    inline const TCHAR* const ShadowProbePath = TEXT("/Game/Materials/Sky/M_SkyShadowProbe.M_SkyShadowProbe");
+    /** Each grid vertex's share of its star's disc seen past the ground --
+     *  the cast shadow, SunShadow::Visible at the vertex's own height and the
+     *  tile's spacing (the developer's ruling on slice (b)'s build: baked,
+     *  not marched) -- 1 everywhere for a tile built without a light. The
+     *  skirt's vertices carry their grid vertex's (UV0Of). */
+    TArray<float> SunVisible;
+
+    /** How much of BuildSeconds the shadow took. */
+    double ShadowSeconds = 0.0;
 ```
 
-After `WorldReliefOutputs()`, add:
+In `namespace TerrainTile`, replace the `Build` declaration with:
 
 ```cpp
-    // The cast shadow (the developer's ruling on slice (b)'s build): a second
-    // Custom node over the same file, in M_SkyBody and M_SkyGround.
-    inline const TCHAR* const ShadowEntry = TEXT("WR_SunVisible");
-    inline TArray<FName> ShadowInputs() { return { TEXT("D"), TEXT("L"), TEXT("Footprint"), TEXT("SeedOffset"), TEXT("ReliefScale"), TEXT("SunRadius"), TEXT("Samples") }; }
-    /** The materials' node takes one more pin, Shadows' strength: 0 skips the march. */
-    inline const FName ShadowStrengthPin = TEXT("Strength");
-    // ShadowSamples is already here (Task 2): the JSON's shadow_samples.
-```
-
-Replace `BodyScalars()` and `GroundScalars()`, and add the probe's lists:
-
-```cpp
-    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, SunRadius, Shadows }; }
-    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit, SunRadius, Shadows }; }
-    inline TArray<FName> ShadowProbeScalars() { return { ReliefScale, SunRadius, ProbeFootprint }; }
-    inline TArray<FName> ShadowProbeVectors() { return { SurfaceSeed, ProbeLight, ProbeBias }; }
-```
-
-- [ ] **Step 4: The JSON's side.** In `Tools/sky_material_contract.json`:
-  - `"parameters"` gains `"sun_radius": {"name": "SunRadius", "type": "scalar"}`, `"shadows": {"name": "Shadows", "type": "scalar"}` and `"probe_light": {"name": "ProbeLight", "type": "vector"}`.
-  - `"materials"`: `M_SkyBody`'s and `M_SkyGround`'s lists gain `"sun_radius", "shadows"`, and there is a new entry `"M_SkyShadowProbe": {"parameters": ["surface_seed", "relief_scale", "sun_radius", "probe_footprint", "probe_light", "probe_bias"]}`.
-  - A new top-level block, after `"shared_relief"`:
-
-```json
-  "shadow": {
-    "comment": "The cast shadow (the developer's ruling on slice (b)'s build, 2026-09-28): a second Custom node over the same file, in M_SkyBody and M_SkyGround, calling WR_SunVisible. The materials' node adds one pin, Strength (Shadows), which skips the march at 0. SkyMaterialContract.h holds the same entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them.",
-    "entry": "WR_SunVisible",
-    "inputs": ["D", "L", "Footprint", "SeedOffset", "ReliefScale", "SunRadius", "Samples"]
-  },
-```
-
-  - `"constants"` gains `"shadow_samples": 12`.
-
-- [ ] **Step 5: The sky writes them.** In `Source/DeepSpace/Sky/ShipSky.h`, in `namespace ShipSky` beside `ReliefScaleOf`, add:
-
-```cpp
-    /** The star's angular radius seen from a body, rad: asin(R_star /
-     *  distance), the cast shadow's softness (SunRadius, both materials).
-     *  0 for a star or a body that is not there; pi/2 from inside the star. */
-    DEEPSPACE_API double SunAngularRadius(const FSkySystem& System, int32 Body);
-
-    /** ds.Sky.Shadows, clamped to 0..1: both materials' Shadows. */
-    DEEPSPACE_API float ShadowStrength();
-```
-
-In `ShipSky.cpp`, add this to the anonymous namespace of tunables, after `CVarSunLux`:
-
-```cpp
-    /**
-     * The ground's cast shadows (the developer's ruling on slice (b)'s
-     * build): 1 draws them, 0 draws the unshadowed look exactly and skips
-     * the march -- which is how Eyes.LandingFrame times it and
-     * Eyes.ReliefLook takes its before frames. Between, a blend.
-     */
-    TAutoConsoleVariable<float> CVarShadows(
-        TEXT("ds.Sky.Shadows"), 1.0f,
-        TEXT("The ground's cast shadows: 1 drawn, 0 not (and not marched). Clamped to 0..1."));
-```
-
-In `DrawBodies`, after the `Cratering` write, add:
-
-```cpp
-            // The cast shadow: its softness is the star's own disc from here,
-            // and its strength the console's.
-            Instance->SetScalarParameterValue(SkyMaterial::SunRadius, static_cast<float>(ShipSky::SunAngularRadius(System, Index)));
-            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
-```
-
-In `CopyBodyLook`, replace the scalar list:
-
-```cpp
-    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale,
-                              SkyMaterial::Cratering, SkyMaterial::SunRadius, SkyMaterial::Shadows })
-```
-
-After `ShipSky::ReliefScaleOf`, add:
-
-```cpp
-double ShipSky::SunAngularRadius(const FSkySystem& System, int32 Body)
-{
-    if (!System.Bodies.IsValidIndex(Body) || System.Bodies[Body].Kind == ESkyBodyKind::Star)
+    /** The light a tile's shadow is cast by, the day exit's slope and the
+     *  march's samples: AWorldGround's, from SkyProjection::SunLightOf and
+     *  SunShadow::SteepestSlope. An unset light casts nothing. */
+    struct FTileShadow
     {
-        return 0.0;
-    }
-    const FSkyBody* Star = System.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
-    if (!Star)
-    {
-        return 0.0;
-    }
-    const double Distance = (Star->Position - System.Bodies[Body].Position).Size();
-    return Distance > Star->Radius ? FMath::Asin(Star->Radius / Distance) : UE_DOUBLE_HALF_PI;
-}
+        SunShadow::FSunLight Sun;
+        double SteepestSlope = 0.0;
+        int32 Samples = SunShadow::DefaultSamples;
+    };
 
-float ShipSky::ShadowStrength()
+    /** The tile for Key: heights at the tile's own spacing as the footprint,
+     *  so a coarse tile never samples fine bands into vertex noise; normals
+     *  from the analytic gradient of the same band-limited height; and each
+     *  grid vertex's cast shadow under Shadow's light. Pure and thread-safe
+     *  given a thread-safe Ground. */
+    DEEPSPACE_API FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow());
+```
+
+After `UV2Of`'s declaration, add:
+
+```cpp
+    /** UV0: the vertex's cast shadow in x (M_SkyGround's per-vertex shadow),
+     *  0 in y. UV0 was allocated full-precision and unused, so the shadow
+     *  costs the mesh no memory. */
+    DEEPSPACE_API FVector2f UV0Of(const FTileBuild& Tile, int32 Vertex);
+```
+
+In `Source/DeepSpace/Surface/TerrainTile.cpp`, change the definition's signature to:
+
+```cpp
+FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow)
+```
+
+After the grid loop (the `for (int32 J ...)` block that fills heights) and before `// The edges' own interpolation error`, add:
+
+```cpp
+    // The cast shadow at every grid vertex, from its own height at the
+    // tile's spacing: the heights just read are the march's starting point.
+    const double ShadowStart = FPlatformTime::Seconds();
+    Tile.SunVisible.Init(1.0f, GridVerts);
+    if (Shadow.Sun.IsSet())
+    {
+        for (int32 V = 0; V < GridVerts; ++V)
+        {
+            Tile.SunVisible[V] = static_cast<float>(SunShadow::Visible(Ground, Tile.Directions[V], Shadow.Sun, Tile.SpacingCm,
+                Shadow.SteepestSlope, Shadow.Samples, Tile.Heights[V]).Visible);
+        }
+    }
+    Tile.ShadowSeconds = FPlatformTime::Seconds() - ShadowStart;
+```
+
+At the end of the file, add:
+
+```cpp
+FVector2f TerrainTile::UV0Of(const FTileBuild& Tile, int32 Vertex)
 {
-    return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);
+    const int32 G = GridOf(Vertex);
+    return FVector2f(Tile.SunVisible.IsValidIndex(G) ? Tile.SunVisible[G] : 1.0f, 0.0f);
 }
 ```
 
-- [ ] **Step 6: The materials.** In `Tools/setup_sky_materials.py`, after `SHARED = CONTRACT["shared_relief"]`, add:
+- [ ] **Step 4: The mesh.** In `Source/DeepSpace/Surface/TerrainTileComponent.cpp`, replace
 
-```python
-SHADOW = CONTRACT["shadow"]
-
-# The cast shadow's node in M_SkyBody and M_SkyGround: 0 strength skips the
-# march and draws exactly the unshadowed look. HLSL only; the march is the
-# shared file's.
-SHADOW_CODE = (
-    "if (Strength <= 0.0) { return 1.0; }\n"
-    "WR_SunVisibility S = %s(D.x, D.y, D.z, L.x, L.y, L.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, ReliefScale, SunRadius, Samples);\n"
-    "return lerp(1.0, S.Visible, saturate(Strength));\n" % SHADOW["entry"])
-
-# The probe's: visibility, the horizon and the cost, raw.
-SHADOW_PROBE_CODE = (
-    "WR_SunVisibility S = %s(D.x, D.y, D.z, L.x, L.y, L.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, ReliefScale, SunRadius, Samples);\n"
-    "return float3(S.Visible, S.Horizon, S.Evaluations);\n" % SHADOW["entry"])
-
-# SunRadius where nothing writes it (an editor viewport): the Sun from 1 AU.
-DEFAULT_SUN_RADIUS = 0.00465
+```cpp
+                Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, FVector2f::ZeroVector);
 ```
 
-After `custom_node`, add:
+with
 
-```python
-def cast_shadow(g, direction, light, footprint, seed, relief_scale):
-    """How much of its star this point of the ground sees past the ground
-    (WR_SunVisible; the developer's ruling on slice (b)'s build), times
-    Shadows: 1 where Shadows is 0, which skips the march. direction and
-    light are in the body's axes, footprint the face's own."""
-    sun_radius = g.scalar("sun_radius", DEFAULT_SUN_RADIUS)
-    strength = g.scalar("shadows", 1.0)
-    sources = (direction, light, footprint, seed_offset(g, seed), relief_scale, sun_radius,
-               g.constant(CONSTANTS["shadow_samples"]), strength)
-    return custom_node(g, SHADOW_CODE, list(zip(SHADOW["inputs"] + ["Strength"], sources)),
-                       unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+```cpp
+                // UV0.x: the vertex's cast shadow (TerrainTile::UV0Of).
+                Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, TerrainTile::UV0Of(Tile, V));
 ```
 
-In `sky_body()`, directly after `shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))`, add:
+- [ ] **Step 5: The ground's light.** In `Source/DeepSpace/Surface/WorldGround.h`, in the public section after `GetGroundMaterialInstance`, add:
 
-```python
-    # The cast shadow, in the body's axes, from the face's own D and
-    # footprint. A giant's billow is not ground: Banding takes its
-    # ReliefScale out, so it casts nothing.
-    grounded = g.mul(knobs[3], g.unary(unreal.MaterialExpressionOneMinus, knobs[2]))
-    shaded = g.mul(shaded, cast_shadow(g, direction, to_body(g, axes, light), footprint, seed, grounded))
+```cpp
+    /** The light, steepest slope and samples every tile of this ground is
+     *  built under: the sky's own light for the world (SkyProjection::
+     *  SunLightOf), unset while ds.Terrain.Shadows is 0. */
+    const TerrainTile::FTileShadow& GetTileShadow() const { return TileShadow; }
 ```
 
-Also add to its docstring's law, after `shaded = ...`: `shaded  *= lerp(1, WR_SunVisible(D, L in body axes, footprint, ...), Shadows)`.
+After `FWorldReliefParams GroundParams;`, add:
 
-In `sky_ground()`, directly after its `shaded = ...` line, add:
-
-```python
-    # The same shadow: the light turned into the tile's axes -- the
-    # universe's, as D is -- so the handover draws one function.
-    light_local = g.node(unreal.MaterialExpressionTransform,
-                         transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
-                         transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_LOCAL)
-    g.link(light, light_local)
-    shaded = g.mul(shaded, cast_shadow(g, direction, g.unary(unreal.MaterialExpressionNormalize, light_local),
-                                       footprint, seed, relief_scale))
+```cpp
+    TerrainTile::FTileShadow TileShadow;
 ```
 
-Add its line to the docstring too. After `sky_ground_probe`, add:
+In `Source/DeepSpace/Surface/WorldGround.cpp`, add `#include "Sky/SkyProjection.h"` and `#include "Surface/SunShadow.h"` with the other includes. In the anonymous namespace, after `CVarShow`, add:
 
-```python
-def shadow_probe():
-    """Eyes.WorldReliefParity's shadow case: WR_SunVisible over the probe
-    patch (probe_direction) for ProbeLight in body axes, at ProbeFootprint,
-    untonemapped.
+```cpp
+    TAutoConsoleVariable<int32> CVarShadows(
+        TEXT("ds.Terrain.Shadows"), 1,
+        TEXT("1: every tile's vertices carry the cast shadow, computed as the tile is built, off the game thread; 0 builds them without it. Changing it rebuilds the ground."),
+        ECVF_Default);
 
-        pixel = ProbeBias.rgb + (visible, horizon, bands)"""
-    asset = "M_SkyShadowProbe"
-    material = fresh_material(asset)
-    # The horizon is signed, and the template clamps emissive at 0 unless told otherwise.
-    material.set_editor_property("allow_negative_emissive_color", True)
-    g = Graph(material)
-    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
-    relief_scale = g.scalar("relief_scale", 0.0)
-    sun_radius = g.scalar("sun_radius", DEFAULT_SUN_RADIUS)
-    footprint = g.scalar("probe_footprint", 0.0)
-    light = g.vector("probe_light", (0.0, 0.0, 1.0, 0.0))
-    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
-    direction = probe_direction(g)
-    sources = (direction, mask(g, light, "rgb"), footprint, seed_offset(g, seed), relief_scale, sun_radius,
-               g.constant(CONSTANTS["shadow_samples"]))
-    out = custom_node(g, SHADOW_PROBE_CODE, list(zip(SHADOW["inputs"], sources)), unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    g.emissive(g.add(out, mask(g, bias, "rgb")))
-    finish(material, asset)
+    TAutoConsoleVariable<int32> CVarShadowSamples(
+        TEXT("ds.Terrain.ShadowSamples"), SunShadow::DefaultSamples,
+        TEXT("How many samples each vertex's march toward the sun takes (2-64). Changing it rebuilds the ground."),
+        ECVF_Default);
+
+    /** What this frame's tiles are built under: the sky's light for the
+     *  world, its ground's steepest slope, the samples; nothing when off. */
+    TerrainTile::FTileShadow ShadowFor(const FSkySystem& System, int32 Index)
+    {
+        TerrainTile::FTileShadow Shadow;
+        if (CVarShadows.GetValueOnGameThread() != 0)
+        {
+            Shadow.Sun = SkyProjection::SunLightOf(System, Index);
+            Shadow.SteepestSlope = SunShadow::SteepestSlope(System.Bodies[Index].Relief);
+            Shadow.Samples = FMath::Clamp(CVarShadowSamples.GetValueOnGameThread(), 2, 64);
+        }
+        return Shadow;
+    }
+
+    bool SameShadow(const TerrainTile::FTileShadow& A, const TerrainTile::FTileShadow& B)
+    {
+        return A.Sun.Direction == B.Sun.Direction && A.Sun.AngularRadius == B.Sun.AngularRadius
+            && A.SteepestSlope == B.SteepestSlope && A.Samples == B.Samples;
+    }
 ```
 
-In `main()`, after `sky_ground_probe()`, add `shadow_probe()`.
+In `SyncTo`, replace the nearest-world loop and the restart that follows it, from `const FSkyBody* Near = nullptr;` through the closing brace of the `if (Near->Id != Body || ...)` block, with:
 
-- [ ] **Step 7: Build, author, and run them to see them pass.**
-
-Run:
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
-. Tools/ue_lock.sh && ue_locked ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
-    -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" -unattended -nopause -nosplash -NoLiveCoding; \
-tail -12 Saved/setup_sky_materials.txt && \
-./test.sh DeepSpace.Sky.MaterialContract && ./test.sh DeepSpace.Sky.ShadowParameters && ./test.sh DeepSpace.Sky && ./test.sh DeepSpace.Surface
+```cpp
+    const FSkyBody* Near = nullptr;
+    int32 NearIndex = INDEX_NONE;
+    double NearAltitude = TNumericLimits<double>::Max();
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+    {
+        const FSkyBody& Candidate = System.Bodies[Index];
+        if (Candidate.Ground == EGround::Solid)
+        {
+            const double Altitude = ShipAt.DistanceTo(Candidate.Position) - Candidate.Radius;
+            if (Altitude < NearAltitude)
+            {
+                NearAltitude = Altitude;
+                Near = &Candidate;
+                NearIndex = Index;
+            }
+        }
+    }
+    if (!Near || NearAltitude > TerrainQuadtree::PrefetchAltitudeCm)
+    {
+        Release();
+        return;
+    }
+    // A new world, this one reloaded with new priors, or its tiles' shadow
+    // switched, resampled or lit otherwise: start again.
+    const TerrainTile::FTileShadow Shadow = ShadowFor(System, NearIndex);
+    if (Near->Id != Body || !Ground.IsValid() || !SameRelief(Near->Relief, GroundParams) || !SameShadow(Shadow, TileShadow))
+    {
+        Release();
+        Body = Near->Id;
+        GroundParams = Near->Relief;
+        Ground = ShipGround::FromRelief(Near->Relief);
+        TileShadow = Shadow;
+    }
 ```
 
-Expected: the report ends `ok` and lists `M_SkyShadowProbe`. Every test passes. A Custom-node HLSL error is invisible here, because under the commandlet the translator runs and no shader compiles. The spike's first render (Task 1b) caught it for the spike's text; Task 4's first render catches it for this one.
+In `Launch`, replace
+
+```cpp
+        const FGroundFieldRef Field = Ground;
+        InFlight.Add(FPending{ Key, UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Field, Key]() { return TerrainTile::Build(*Field, Key); }, UE::Tasks::ETaskPriority::BackgroundNormal) });
+```
+
+with
+
+```cpp
+        const FGroundFieldRef Field = Ground;
+        const TerrainTile::FTileShadow Shadow = TileShadow;
+        InFlight.Add(FPending{ Key, UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Field, Key, Shadow]() { return TerrainTile::Build(*Field, Key, Shadow); }, UE::Tasks::ETaskPriority::BackgroundNormal) });
+```
+
+In `Describe`, after the first `FString Out = FString::Printf(...)` line (the world, the morph, the counts) and before the per-level loop, add:
+
+```cpp
+    Out += FString::Printf(TEXT("  cast shadow: %s, sun %.3f deg in radius, %d samples, day exit %.1f deg\n"),
+        TileShadow.Sun.IsSet() ? TEXT("on") : TEXT("off"), FMath::RadiansToDegrees(TileShadow.Sun.AngularRadius), TileShadow.Samples,
+        FMath::RadiansToDegrees(FMath::Atan(TileShadow.SteepestSlope)));
+```
+
+- [ ] **Step 6: Test worlds build without the shadow unless asked.** In `Source/DeepSpace/Tests/SkyTestWorld.h`, before `struct FSkyWorld`, add:
+
+```cpp
+    /** Whether a test world casts shadows: every tile's vertices marched and
+     *  every solid world's map baked (the cast-shadow plan). They are the
+     *  costliest thing a test world does and most tests never look at one,
+     *  so they are off unless a test asks, and put back after. */
+    enum class EShadows : uint8
+    {
+        Off,
+        On
+    };
+```
+
+Change the constructor's signature to `explicit FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8, EShadows Shadows = EShadows::Off)`. As its first statement, before `World = UWorld::CreateWorld(...)`, add:
+
+```cpp
+            // Before any actor exists: the ground and the sky read these when
+            // they first build.
+            for (const TCHAR* Switch : { TEXT("ds.Terrain.Shadows"), TEXT("ds.Sky.ShadowMaps") })
+            {
+                if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Switch))
+                {
+                    ShadowSwitchesWere.Add(Variable, Variable->GetString());
+                    Variable->Set(Shadows == EShadows::On ? 1 : 0, ECVF_SetByCode);
+                }
+            }
+```
+
+After the `Sphere` member, add:
+
+```cpp
+        /** The shadow switches as they were before this world set them. */
+        TMap<IConsoleVariable*, FString> ShadowSwitchesWere;
+```
+
+At the end of `~FSkyWorld()`, after `World->DestroyWorld(false);`, add:
+
+```cpp
+            for (const TPair<IConsoleVariable*, FString>& Was : ShadowSwitchesWere)
+            {
+                Was.Key->Set(*Was.Value, ECVF_SetByCode);
+            }
+```
+
+- [ ] **Step 7: Run them to see them pass, and the ground's tests beside them.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.TileSunShadow && ./test.sh DeepSpace.Surface.GroundShadowLight && ./test.sh DeepSpace.Surface`
+
+Expected: both PASS, and every `DeepSpace.Surface.*` test still passes.
+- `.TileComponent` builds its tile without a light: whole, and UV0 (1, 0).
+- `.GroundActor` and the rest build in `FSkyWorld`, now with the shadow off, so they cost what they did.
+- Copy `.TileSunShadow`'s info line into the task report.
+- If that tile turns out uniform, move it to another fixture direction and record which. Do not drop the check.
 
 - [ ] **Step 8: Commit.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Tools/sky_material_contract.json Tools/setup_sky_materials.py \
-  Source/DeepSpace/Sky/SkyMaterialContract.h Source/DeepSpace/Sky/ShipSky.h Source/DeepSpace/Sky/ShipSky.cpp \
-  Source/DeepSpace/Tests/SkyMaterialContractTest.cpp Source/DeepSpace/Tests/ShipSkyShadowTest.cpp Content/Materials/Sky && \
-git commit -qm "feat(sky): M_SkyBody and M_SkyGround cast shadows through WR_SunVisible; SunRadius, Shadows, ds.Sky.Shadows
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Surface/TerrainTile.h Source/DeepSpace/Surface/TerrainTile.cpp \
+  Source/DeepSpace/Surface/TerrainTileComponent.cpp Source/DeepSpace/Surface/WorldGround.h Source/DeepSpace/Surface/WorldGround.cpp \
+  Source/DeepSpace/Tests/SkyTestWorld.h Source/DeepSpace/Tests/TileSunShadowTest.cpp && \
+git commit -qm "feat(terrain): every tile's vertices carry the cast shadow, computed as the tile is built
 
-The same function, D, footprint and light on the proxy and on the tiles, so
-the handover keeps it; a giant's billow casts nothing; 0 skips the march.
-M_SkyShadowProbe for the parity test. The contract on three sides.
+TerrainTile::Build marches SunShadow::Visible at each grid vertex's own
+height and the tile's spacing under the sky's own light (SunLightOf); the
+skirts copy theirs; UV0.x carries it (full precision, already allocated).
+AWorldGround rebuilds when the light, ds.Terrain.Shadows or
+ds.Terrain.ShadowSamples changes. Test worlds build without the shadow unless
+asked (SkyTestWorld::EShadows). DeepSpace.Surface.TileSunShadow,
+.GroundShadowLight.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2622,131 +1717,2201 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Source/DeepSpace/Sky/SkyMaterialContract.h 'ShadowSamples = 12;' 'ShadowSamples = 13;' 'DeepSpace.Sky.MaterialContract$'; \
-Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'SkyMaterial::Shadows, 1.0f);' 'DeepSpace.Sky.ShadowParameters$'; \
-Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'FMath::Asin(Star->Radius / Distance)' 'FMath::Asin(System.Bodies[Body].Radius / Distance)' 'DeepSpace.Sky.ShadowParameters$'; \
-Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Cratering, SkyMaterial::SunRadius, SkyMaterial::Shadows })' 'SkyMaterial::Cratering, SkyMaterial::SunRadius })' 'DeepSpace.Sky.ShadowParameters$'; \
-Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);' 'return CVarShadows.GetValueOnGameThread();' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'SunShadow::Visible(Ground, Tile.Directions[V], Shadow.Sun, Tile.SpacingCm,' 'SunShadow::Visible(Ground, Tile.Directions[V], Shadow.Sun, 2.0 * Tile.SpacingCm,' 'DeepSpace.Surface.TileSunShadow$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'return FVector2f(Tile.SunVisible.IsValidIndex(G) ? Tile.SunVisible[G] : 1.0f, 0.0f);' 'return FVector2f(Tile.SunVisible.IsValidIndex(Vertex) ? Tile.SunVisible[Vertex] : 1.0f, 0.0f);' 'DeepSpace.Surface.TileSunShadow$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/WorldGround.cpp '            Shadow.Sun = SkyProjection::SunLightOf(System, Index);' '            Shadow.Sun = SkyProjection::SunLightOf(System, Index - 1);' 'DeepSpace.Surface.GroundShadowLight$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/WorldGround.cpp '!SameShadow(Shadow, TileShadow))' '!SameShadow(Shadow, Shadow))' 'DeepSpace.Surface.GroundShadowLight$'; \
 ./build.sh
 ```
 
-Expected: five `KILLED`.
-
-`CheckShadow`'s wiring checks are asserted of authored assets, which `mutate.sh` does not rebuild, so they are proven by hand, once. In `setup_sky_materials.py`, in `sky_body()`, replace `to_body(g, axes, light)` in the `cast_shadow` call by `light`. Re-author as in Step 7 and run `./test.sh DeepSpace.Sky.MaterialContract`. Expected: FAIL, "M_SkyBody turns the light into the body's axes for it". Then `git checkout Tools/setup_sky_materials.py`, re-author, and run the test again. Expected: PASS. The re-authored assets will **not** be byte-identical to the commit: `fresh_material` makes new expression GUIDs every time. Expect `git status --short Content/Materials/Sky` to be dirty, check the test passes on them, and commit them with the message "chore(sky): re-authored after the wiring proof".
+Expected: four `KILLED`.
+- The shadow marched at twice the tile's spacing is not the one at its spacing.
+- The skirt that reads its own index is out of range, and so whole.
+- The light of the body before is another world's.
+- The ground that never restarts keeps its shadowed tiles with the switch at 0.
 
 ---
 
-## Task 4: THE GATE, confirmed -- `Eyes.LandingFrame` against the baseline; the switch proven by pixels
+## Task 5: `SunShadowMap` -- the orbit's map, pure
 
-**Owner:** T (this task only, holding `LandingFrameEyesTest.cpp` as Task 1 left it). **Depends on:** Task 3.
+**Owner:** T. **Depends on:** Task 2.
 
 **Files:**
-- Modify, only if the confirmation lowers the count: `Tools/sky_material_contract.json` (`shadow_samples`) and `Source/DeepSpace/Sky/SkyMaterialContract.h` (`ShadowSamples`). The tests read the header's (Task 2), so there is no third copy.
-- Modify: `Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp` -- the verdict line in its header comment, nothing else.
+- Modify: `Shaders/Private/WorldRelief.ush`. Add three shims to each half, and the map's lookup at the end of the file.
+- Modify: `Source/DeepSpace/Surface/WorldRelief.h`, `Source/DeepSpace/Surface/WorldRelief.cpp`. Add `WorldReliefNoise::{FShadowCoord, FShadowTaps, ShadowMapCoordF64, ShadowMapCoordF32, ShadowTapsF64, ShadowTapsF32, BilinearF64, BilinearF32, LerpF64, LerpF32}`.
+- Create: `Source/DeepSpace/Surface/SunShadowMap.h`, `Source/DeepSpace/Surface/SunShadowMap.cpp`
+- Create: `Source/DeepSpace/Tests/SunShadowMapTest.cpp` (`DeepSpace.Surface.SunShadowMap.Shape`, `.TexelsAreTheProfile`, `.NightBelowTheMap`, `.Lookup`, `.Mips`)
 
 **Interfaces:**
-- Consumes: `Eyes.LandingFrame` and `Tools/landing_frame_gate.py` (Task 1), the baseline in `Saved/Eyes/LandingFrame/baseline` (Task 1), the spike's N (Task 1b), `ds.Sky.Shadows` (Task 3).
-- Produces: `Saved/Eyes/LandingFrame/shadows/report.txt`, the gate's table, and the verdict `GO at N = <n>` or `NO-GO`.
+- Consumes: `SunShadow::{FSunLight, AlongProfile, MarchEnd, NightDip, SteepestSlope, Visible, SunRadiusMax}` (Task 2); `IGroundField`, `FReliefGround`; `GroundFixtures::FixtureParams`.
+- Produces:
 
-**The rule, decided now:** each case's frame with the term, minus the same case in Task 1's baseline (before the term existed), is at most **1.0 ms**, at the spike's N or lower, in all six cases. On minus off is reported beside it and is not the gate. The whole frame is reported, not gated: it was over 16.6 ms before the term, and the spec's profiling owns it. A gate too close to call (`landing_frame_gate.py` exit 2) is repeated, never read either way. Nothing above 12 samples is tried: 24 gains about 2 points for twice the cost.
+```cpp
+struct FSunShadowMap
+{
+    int32 Width; int32 Rows; double PsiLo; double Step;
+    FVector3d FrameX, FrameY, FrameZ;
+    TArray<TArray<uint16>> Levels;
+    int32 WidthAt(int32 Level) const; int32 RowsAt(int32 Level) const; int32 LevelCount() const;
+    uint16 Texel(int32 Level, int32 X, int32 Y) const; int64 Bytes() const;
+};
+namespace SunShadowMap
+{
+    inline constexpr int32 DefaultWidth = 4096;
+    FSunShadowMap Shape(const IGroundField& Ground, const SunShadow::FSunLight& Sun, int32 Width);
+    FVector3d TexelDirection(const FSunShadowMap& Map, int32 Column, int32 Row);
+    uint16 Quantise(double Visible);
+    FSunShadowMap Bake(const IGroundField& Ground, const SunShadow::FSunLight& Sun, double SteepestSlope, int32 Width,
+                       const std::atomic<bool>* Cancel = nullptr);
+    void BuildLevels(FSunShadowMap& Map);
+    double Sample(const FSunShadowMap& Map, const FVector3d& D, double Footprint);
+    float SampleF32(const FSunShadowMap& Map, const FVector3f& D, float Footprint);
+}
+```
 
-- [ ] **Step 1: Run it at the spike's N.**
+In the shared file: `WR_ShadowCoord WR_ShadowMapCoord(DX, DY, DZ, XX, XY, XZ, ZX, ZY, ZZ, PsiLo, Step, Footprint, Levels)`, `WR_ShadowTaps WR_ShadowTapsAt(U, V, Width, Rows, Level)`, `WR_REAL WR_Bilinear(A, B, C, D, FX, FY)`, `WR_PI`.
+
+- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowMapTest.cpp`:
+
+```cpp
+#include "Math/RandomStream.h"
+#include "Misc/AutomationTest.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/SunShadowMap.h"
+#include "Surface/WorldRelief.h"
+#include "Tests/GroundFixtures.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowMapShapeTest, "DeepSpace.Surface.SunShadowMap.Shape",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowMapTexelsTest, "DeepSpace.Surface.SunShadowMap.TexelsAreTheProfile",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowMapNightTest, "DeepSpace.Surface.SunShadowMap.NightBelowTheMap",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowMapLookupTest, "DeepSpace.Surface.SunShadowMap.Lookup",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunShadowMapMipsTest, "DeepSpace.Surface.SunShadowMap.Mips",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace SunShadowMapTestLocal
+{
+    /** Baemsekai IV-like ground under a star 1.66 degrees in radius, from an
+     *  oblique direction. */
+    SunShadow::FSunLight Light()
+    {
+        SunShadow::FSunLight Sun;
+        Sun.Direction = FVector3d(0.3, 0.4, FMath::Sqrt(0.75)).GetSafeNormal();
+        Sun.AngularRadius = 0.02903;
+        return Sun;
+    }
+
+    /** A hand-made map, 16 columns by 4 rows, every row's centre under pi/2,
+     *  its frame the body's axes; each texel 1000 + 3000 x column + 700 x row. */
+    FSunShadowMap Hand()
+    {
+        FSunShadowMap Map;
+        Map.Width = 16;
+        Map.Rows = 4;
+        Map.PsiLo = -0.1;
+        Map.Step = 2.0 * UE_DOUBLE_PI / 16.0;
+        Map.Levels.SetNum(1);
+        for (int32 Row = 0; Row < Map.Rows; ++Row)
+        {
+            for (int32 Column = 0; Column < Map.Width; ++Column)
+            {
+                Map.Levels[0].Add(static_cast<uint16>(1000 + 3000 * Column + 700 * Row));
+            }
+        }
+        SunShadowMap::BuildLevels(Map);
+        return Map;
+    }
+
+    /** The direction at azimuth Phi and elevation Psi in the map's frame. */
+    FVector3d At(const FSunShadowMap& Map, double Phi, double Psi)
+    {
+        return (Map.FrameX * FMath::Cos(Phi) + Map.FrameY * FMath::Sin(Phi)) * FMath::Cos(Psi) + Map.FrameZ * FMath::Sin(Psi);
+    }
+}
+
+bool FSunShadowMapShapeTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowMapTestLocal;
+    const FReliefGround Ground(GroundFixtures::FixtureParams());
+    const SunShadow::FSunLight Sun = Light();
+    const FSunShadowMap Map = SunShadowMap::Shape(Ground, Sun, 64);
+    const double R = Ground.RadiusCm();
+    TestEqual(TEXT("64 columns"), Map.Width, 64);
+    TestTrue(TEXT("each 2 pi / 64 of azimuth"), FMath::IsNearlyEqual(Map.Step, 2.0 * UE_DOUBLE_PI / 64.0, 1e-15));
+    const double PsiLo = -(SunShadow::NightDip(R, Ground.MaxHeightCm(), Ground.MinHeightCm()) + Sun.AngularRadius);
+    TestTrue(FString::Printf(TEXT("the lowest row is where even the peak's view of the lowest ground clears the star's top (%.6f)"), Map.PsiLo),
+        FMath::IsNearlyEqual(Map.PsiLo, PsiLo, 1e-15));
+    TestEqual(TEXT("and the rows reach the point under the star"), Map.Rows, FMath::CeilToInt32((0.5 * UE_DOUBLE_PI - PsiLo) / Map.Step));
+    TestTrue(TEXT("Z is the light"), Map.FrameZ.Equals(Sun.Direction.GetSafeNormal(), 1e-15));
+    TestTrue(TEXT("the frame is orthonormal and right-handed"),
+        FMath::IsNearlyEqual(Map.FrameX.Size(), 1.0, 1e-15) && FMath::Abs(FVector3d::DotProduct(Map.FrameX, Map.FrameZ)) <= 1e-15
+        && FVector3d::CrossProduct(Map.FrameX, Map.FrameY).Equals(Map.FrameZ, 1e-15));
+    for (int32 Row = 0; Row < Map.Rows; ++Row)
+    {
+        const double Psi = Map.PsiLo + (Row + 0.5) * Map.Step;
+        if (Psi > 0.5 * UE_DOUBLE_PI)
+        {
+            continue;   // the last row's centre may lie just past the pole, where no lookup lands on it
+        }
+        for (int32 Column = 0; Column < Map.Width; ++Column)
+        {
+            const FVector3d D = SunShadowMap::TexelDirection(Map, Column, Row);
+            const double Phi = FMath::Atan2(FVector3d::DotProduct(D, Map.FrameY), FVector3d::DotProduct(D, Map.FrameX));
+            TestTrue(TEXT("a texel's elevation is its row's centre"), FMath::IsNearlyEqual(FMath::Asin(FVector3d::DotProduct(D, Map.FrameZ)), Psi, 1e-12));
+            TestTrue(TEXT("and its azimuth its column's"), FMath::IsNearlyEqual(Phi, -UE_DOUBLE_PI + (Column + 0.5) * Map.Step, 1e-12));
+        }
+    }
+    TestEqual(TEXT("no star, no map"), SunShadowMap::Shape(Ground, SunShadow::FSunLight(), 64).Width, 0);
+    return true;
+}
+
+bool FSunShadowMapTexelsTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowMapTestLocal;
+    // Every texel is AlongProfile over its column's heights ahead of it, read
+    // once each at the step, quantised: worked out again here, column by
+    // column, and held equal to the bit.
+    const FWorldReliefParams Params = GroundFixtures::FixtureParams();
+    const FReliefGround Ground(Params);
+    const SunShadow::FSunLight Sun = Light();
+    const double Steep = SunShadow::SteepestSlope(Params);
+    const FSunShadowMap Map = SunShadowMap::Bake(Ground, Sun, Steep, 128);
+    if (!TestEqual(TEXT("level 0 holds every texel"), Map.LevelCount() > 0 ? Map.Levels[0].Num() : 0, Map.Width * Map.Rows))
+    {
+        return false;
+    }
+    const double R = Ground.RadiusCm();
+    int32 Wrong = 0;
+    int32 Shaded = 0;
+    for (int32 Column = 0; Column < Map.Width; Column += 7)
+    {
+        TArray<double> Heights;
+        for (int32 Row = 0; Row < Map.Rows; ++Row)
+        {
+            Heights.Add(Ground.Height(SunShadowMap::TexelDirection(Map, Column, Row), Map.Step * R));
+        }
+        for (int32 Row = 0; Row < Map.Rows; ++Row)
+        {
+            const double Psi = Map.PsiLo + (Row + 0.5) * Map.Step;
+            const uint16 Want = SunShadowMap::Quantise(SunShadow::AlongProfile(R, Ground.MaxHeightCm(), Ground.MinHeightCm(), Steep,
+                MakeArrayView(Heights.GetData() + Row, Map.Rows - Row), Map.Step, Psi, Sun.AngularRadius).Visible);
+            Wrong += Map.Texel(0, Column, Row) == Want ? 0 : 1;
+            Shaded += Want < 32768 ? 1 : 0;
+        }
+    }
+    TestEqual(TEXT("every texel is its column's profile, quantised"), Wrong, 0);
+    AddInfo(FString::Printf(TEXT("128 columns x %d rows; of the columns checked, %d texels under half"), Map.Rows, Shaded));
+    TestEqual(TEXT("a whole texel is 65535"), static_cast<int32>(SunShadowMap::Quantise(1.0)), 65535);
+    TestEqual(TEXT("a dark one 0"), static_cast<int32>(SunShadowMap::Quantise(0.0)), 0);
+    std::atomic<bool> Stop(true);
+    TestEqual(TEXT("a cancelled bake stops and returns nothing"), SunShadowMap::Bake(Ground, Sun, Steep, 128, &Stop).LevelCount(), 0);
+    return true;
+}
+
+bool FSunShadowMapNightTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowMapTestLocal;
+    // The rows the map leaves out are dark for every point of the world,
+    // whatever its height: the march itself says so at every footprint.
+    const FWorldReliefParams Params = GroundFixtures::FixtureParams();
+    const FReliefGround Ground(Params);
+    const SunShadow::FSunLight Sun = Light();
+    const FSunShadowMap Shape = SunShadowMap::Shape(Ground, Sun, 256);
+    const double Steep = SunShadow::SteepestSlope(Params);
+    FRandomStream Stream(20260930);
+    int32 Lit = 0;
+    for (int32 Sample = 0; Sample < 300; ++Sample)
+    {
+        const FVector3d D(Stream.GetUnitVector());
+        const FVector3d Toward(Stream.GetUnitVector());
+        const FVector3d Level = (Toward - D * FVector3d::DotProduct(Toward, D)).GetSafeNormal();
+        const double Psi = Shape.PsiLo - 1.0e-6 - 0.02 * Stream.GetFraction();
+        SunShadow::FSunLight Under = Sun;
+        Under.Direction = D * FMath::Sin(Psi) + Level * FMath::Cos(Psi);
+        for (const double Footprint : { 0.0, 1.0e4, Shape.Step * Ground.RadiusCm() })
+        {
+            Lit += SunShadow::Visible(Ground, D, Under, Footprint, Steep).Visible > 0.0 ? 1 : 0;
+        }
+    }
+    TestEqual(TEXT("under the map's lowest row no point sees any of its star"), Lit, 0);
+    return true;
+}
+
+bool FSunShadowMapLookupTest::RunTest(const FString& Parameters)
+{
+    using namespace SunShadowMapTestLocal;
+    const FSunShadowMap Map = Hand();
+    const auto Value = [&](int32 Level, int32 X, int32 Y) { return Map.Texel(Level, X, Y) / 65535.0; };
+    // At every texel's centre, with a footprint finer than a texel, the lookup is the texel.
+    for (int32 Row = 0; Row < Map.Rows; ++Row)
+    {
+        for (int32 Column = 0; Column < Map.Width; ++Column)
+        {
+            const FVector3d D = SunShadowMap::TexelDirection(Map, Column, Row);
+            TestTrue(FString::Printf(TEXT("the texel at %d, %d, in double"), Column, Row),
+                FMath::IsNearlyEqual(SunShadowMap::Sample(Map, D, 1.0e-9), Value(0, Column, Row), 1e-9));
+            TestTrue(FString::Printf(TEXT("and in float, %d, %d"), Column, Row),
+                FMath::IsNearlyEqual(static_cast<double>(SunShadowMap::SampleF32(Map, FVector3f(D), 1.0e-9f)), Value(0, Column, Row), 2e-6));
+        }
+    }
+    // The seam: azimuth +-pi lies between the last column and the first, from either side.
+    const double RowOne = Map.PsiLo + 1.5 * Map.Step;
+    const double Before = SunShadowMap::Sample(Map, At(Map, UE_DOUBLE_PI - 1.0e-7, RowOne), 1.0e-9);
+    const double After = SunShadowMap::Sample(Map, At(Map, -UE_DOUBLE_PI + 1.0e-7, RowOne), 1.0e-9);
+    const double Between = 0.5 * (Value(0, 15, 1) + Value(0, 0, 1));
+    TestTrue(FString::Printf(TEXT("just short of +pi the lookup is the last and first columns' mean (%.8f, %.8f)"), Before, Between),
+        FMath::IsNearlyEqual(Before, Between, 1e-5));
+    TestTrue(FString::Printf(TEXT("and just past -pi it is the same (%.8f)"), After), FMath::IsNearlyEqual(After, Between, 1e-5));
+    // Rows clamp: under the lowest, the lowest; over the highest, the highest.
+    const double Column3 = -UE_DOUBLE_PI + 3.5 * Map.Step;
+    TestTrue(TEXT("under the lowest row the lowest row"), FMath::IsNearlyEqual(SunShadowMap::Sample(Map, At(Map, Column3, -0.3), 1.0e-9), Value(0, 3, 0), 1e-9));
+    TestTrue(TEXT("over the highest the highest"), FMath::IsNearlyEqual(SunShadowMap::Sample(Map, At(Map, Column3, 1.45), 1.0e-9), Value(0, 3, 3), 1e-9));
+    // The level: a footprint twice a texel at the terminator reads level 1.
+    const double RowZero = Map.PsiLo + 0.5 * Map.Step;
+    const FVector3d Coarse = SunShadowMap::TexelDirection(Map, 2, 0);
+    const WorldReliefNoise::FShadowCoord Two = WorldReliefNoise::ShadowMapCoordF64(Coarse, Map.FrameX, Map.FrameZ, Map.PsiLo, Map.Step,
+        2.0 * Map.Step * FMath::Cos(RowZero), Map.LevelCount());
+    TestTrue(FString::Printf(TEXT("a footprint of two texels is level 1 (%d, blend %.9f)"), Two.Level0, Two.Blend),
+        (Two.Level0 == 1 && Two.Blend <= 1e-9) || (Two.Level0 == 0 && Two.Blend >= 1.0 - 1e-9));
+    // At level 1 texel (0, 0) covers level 0's columns 0-1, so column 2's centre is 0.75 of the way from it to (1, 0).
+    const double LevelOne = WorldReliefNoise::LerpF64(Value(1, 0, 0), Value(1, 1, 0), 0.75);
+    TestTrue(FString::Printf(TEXT("and reads level 1's texels there (%.8f against %.8f)"), SunShadowMap::Sample(Map, Coarse, 2.0 * Map.Step * FMath::Cos(RowZero)), LevelOne),
+        FMath::IsNearlyEqual(SunShadowMap::Sample(Map, Coarse, 2.0 * Map.Step * FMath::Cos(RowZero)), LevelOne, 1e-6));
+    // Toward the point under the star a texel narrows as cos(psi), so the same footprint reads coarser.
+    const WorldReliefNoise::FShadowCoord High = WorldReliefNoise::ShadowMapCoordF64(At(Map, Column3, 1.27), Map.FrameX, Map.FrameZ,
+        Map.PsiLo, Map.Step, Map.Step, Map.LevelCount());
+    TestTrue(FString::Printf(TEXT("one texel's footprint at 1.27 rad up is level log2(1 / cos) = 1.76 (%d + %.3f)"), High.Level0, High.Blend),
+        High.Level0 == 1 && FMath::IsNearlyEqual(High.Blend, FMath::Log2(1.0 / FMath::Cos(1.27)) - 1.0, 1e-9));
+    // Float against double, anywhere.
+    FRandomStream Stream(20261001);
+    double Widest = 0.0;
+    for (int32 Sample = 0; Sample < 400; ++Sample)
+    {
+        const FVector3d D(Stream.GetUnitVector());
+        const double Footprint = FMath::Pow(10.0, Stream.FRandRange(-4.0, -0.3));
+        Widest = FMath::Max(Widest, FMath::Abs(SunShadowMap::Sample(Map, D, Footprint) - SunShadowMap::SampleF32(Map, FVector3f(D), static_cast<float>(Footprint))));
+    }
+    TestTrue(FString::Printf(TEXT("the float lookup is the double's to 1e-5 (%.2e)"), Widest), Widest <= 1.0e-5);
+    TestTrue(TEXT("an empty map is whole"), SunShadowMap::Sample(FSunShadowMap(), FVector3d::UnitZ(), 1.0e-3) == 1.0);
+    return true;
+}
+
+bool FSunShadowMapMipsTest::RunTest(const FString& Parameters)
+{
+    // Four by three: level 1 is two by one, each the mean of its two by two
+    // (rounded); level 2 is one by one, from level 1's two, its row repeated.
+    FSunShadowMap Map;
+    Map.Width = 4;
+    Map.Rows = 3;
+    Map.Levels.SetNum(1);
+    Map.Levels[0] = { 0, 6, 8, 12, 100, 104, 108, 112, 60000, 60000, 60000, 60000 };
+    SunShadowMap::BuildLevels(Map);
+    TestEqual(TEXT("three levels, as the GPU counts a 4 x 3 texture's mips"), Map.LevelCount(), 3);
+    TestEqual(TEXT("level 1 is 2 x 1"), Map.WidthAt(1) * 10 + Map.RowsAt(1), 21);
+    TestTrue(TEXT("its texels are the rounded means of rows 0 and 1 (row 2 falls away, as the GPU's floor does)"),
+        Map.Levels.Num() == 3 && Map.Levels[1] == TArray<uint16>({ 53, 60 }));
+    TestTrue(TEXT("level 2 is their mean"), Map.Levels.Num() == 3 && Map.Levels[2] == TArray<uint16>({ 57 }));
+    TestEqual(TEXT("and the bytes are every level's"), Map.Bytes(), static_cast<int64>((12 + 2 + 1) * sizeof(uint16)));
+    return true;
+}
+
+#endif
+```
+
+The known means: level 1 (0, 0) is `(0 + 6 + 100 + 104 + 2) / 4 = 53` and (1, 0) is `(8 + 12 + 108 + 112 + 2) / 4 = 60`. Level 2 is `(53 + 60 + 53 + 60 + 2) / 4 = 57`. The first sum, 210, is chosen so that rounding matters: unrounded it is 52.
+
+- [ ] **Step 2: Run them to see them fail.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
+
+Expected: the build fails, because `Surface/SunShadowMap.h` does not exist.
+
+- [ ] **Step 3: The shims and the lookup, in the shared file.** In `Shaders/Private/WorldRelief.ush`'s C++ half, after `WR_step`'s line, add:
+
+```cpp
+inline WR_REAL WR_asin(WR_REAL X) { return std::asin(X); }
+inline WR_REAL WR_atan2(WR_REAL Y, WR_REAL X) { return std::atan2(Y, X); }
+inline WR_REAL WR_log2(WR_REAL X) { return std::log2(X); }
+```
+
+In its HLSL half, after `#define WR_step(Edge, X) step(Edge, X)`, add:
+
+```hlsl
+#define WR_asin(X) asin(X)
+#define WR_atan2(Y, X) atan2(Y, X)
+#define WR_log2(X) log2(X)
+```
+
+At the end of the file, after `WR_GroundNormal`, append:
+
+```hlsl
+// -- The cast shadow's map (the developer's ruling on slice (b)'s build,
+// 2026-09-28: baked, not marched) --------------------------------------------
+// The orbit reads each solid world's shadow from one texture, baked in C++
+// when the system loads (SunShadowMap::Bake). It is an equirectangular map in
+// the star's own frame -- Z the light, as the sky lights the world, X and Y
+// square to it -- its columns the azimuth about the light from -pi, its rows
+// the star's elevation from PsiLo, the lowest at which any point of the world
+// can see any of it, up to the point under the star. Each texel is Step
+// square at the terminator, where the shadows are. M_SkyBody and M_SkyGround
+// read it through these three functions and eight texel loads, and
+// SunShadowMap::Sample is their C++ mirror.
+static const WR_REAL WR_PI = WR_REAL(3.14159265358979323846);
+
+struct WR_ShadowCoord
+{
+    WR_REAL U;       // the column coordinate, texel centres at whole numbers
+    WR_REAL V;       // the row coordinate, the same
+    int Level0;      // the finer of the two levels read
+    int Level1;      // the coarser
+    WR_REAL Blend;   // how far toward Level1
+};
+
+// D in the body's axes; the frame's X and Z; PsiLo and Step, rad; Footprint
+// the pixel's, D units; Levels the map's.
+WR_ShadowCoord WR_ShadowMapCoord(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL XX, WR_REAL XY, WR_REAL XZ,
+                                 WR_REAL ZX, WR_REAL ZY, WR_REAL ZZ, WR_REAL PsiLo, WR_REAL Step, WR_REAL Footprint, int Levels)
+{
+    const WR_REAL YX = ZY * XZ - ZZ * XY;
+    const WR_REAL YY = ZZ * XX - ZX * XZ;
+    const WR_REAL YZ = ZX * XY - ZY * XX;
+    const WR_REAL S = WR_min(WR_REAL(1.0), WR_max(WR_REAL(-1.0), DX * ZX + DY * ZY + DZ * ZZ));
+    const WR_REAL Psi = WR_asin(S);
+    const WR_REAL Phi = WR_atan2(DX * YX + DY * YY + DZ * YZ, DX * XX + DY * XY + DZ * XZ);
+    WR_ShadowCoord Out;
+    Out.U = (Phi + WR_PI) / Step - WR_REAL(0.5);
+    Out.V = (Psi - PsiLo) / Step - WR_REAL(0.5);
+    // The pixel's footprint in texels along a texel's narrower side: along
+    // the rows a texel is Step cos(psi) across, so toward the point under
+    // the star the map is read coarser; a map coarser than the pixel is read
+    // at its finest.
+    const WR_REAL Across = Step * WR_max(WR_sqrt(WR_max(WR_REAL(0.0), WR_REAL(1.0) - S * S)), WR_REAL(1.0e-4));
+    const WR_REAL Level = WR_min(WR_log2(WR_max(Footprint / Across, WR_REAL(1.0))), WR_REAL(Levels - 1));
+    Out.Level0 = int(WR_floor(Level));
+    Out.Level1 = Out.Level0 + 1 < Levels ? Out.Level0 + 1 : Levels - 1;
+    Out.Blend = Level - WR_floor(Level);
+    return Out;
+}
+
+struct WR_ShadowTaps
+{
+    int X0;
+    int X1;
+    int Y0;
+    int Y1;
+    WR_REAL FX;
+    WR_REAL FY;
+};
+
+// The four texels around (U, V) at Level of a map Width x Rows at level 0:
+// columns wrap, rows clamp, and a level's texel is level 0's halved per
+// level about the texel centres, the GPU's own mip sizes (Width >> Level).
+WR_ShadowTaps WR_ShadowTapsAt(WR_REAL U, WR_REAL V, int Width, int Rows, int Level)
+{
+    const int W = (Width >> Level) > 1 ? (Width >> Level) : 1;
+    const int H = (Rows >> Level) > 1 ? (Rows >> Level) : 1;
+    const WR_REAL Scale = WR_REAL(1 << Level);
+    const WR_REAL UL = (U + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL VL = (V + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL FloorU = WR_floor(UL);
+    const WR_REAL FloorV = WR_floor(VL);
+    const int X = int(FloorU);
+    const int Y = int(FloorV);
+    WR_ShadowTaps Out;
+    // X lies in [-1, W - 1]: one wrap either way is all it can need.
+    Out.X0 = X < 0 ? X + W : (X >= W ? X - W : X);
+    Out.X1 = X + 1 < 0 ? X + 1 + W : (X + 1 >= W ? X + 1 - W : X + 1);
+    Out.Y0 = Y < 0 ? 0 : (Y > H - 1 ? H - 1 : Y);
+    Out.Y1 = Y + 1 < 0 ? 0 : (Y + 1 > H - 1 ? H - 1 : Y + 1);
+    Out.FX = UL - FloorU;
+    Out.FY = VL - FloorV;
+    return Out;
+}
+
+WR_REAL WR_Bilinear(WR_REAL A, WR_REAL B, WR_REAL C, WR_REAL D, WR_REAL FX, WR_REAL FY)
+{
+    return WR_Lerp(WR_Lerp(A, B, FX), WR_Lerp(C, D, FX), FY);
+}
+```
+
+- [ ] **Step 4: The C++ reach into it.** In `Source/DeepSpace/Surface/WorldRelief.h`, in `namespace WorldReliefNoise` before `struct FBands`, add:
+
+```cpp
+    /** The cast shadow's map lookup, from the shared file (WR_ShadowMapCoord,
+     *  WR_ShadowTapsAt, WR_Bilinear, WR_Lerp), in double and in float: the GPU's
+     *  operations in the GPU's precision, for SunShadowMap::Sample and the
+     *  parity test. */
+    struct FShadowCoord
+    {
+        double U = 0.0;
+        double V = 0.0;
+        int32 Level0 = 0;
+        int32 Level1 = 0;
+        double Blend = 0.0;
+    };
+    struct FShadowTaps
+    {
+        int32 X0 = 0;
+        int32 X1 = 0;
+        int32 Y0 = 0;
+        int32 Y1 = 0;
+        double FX = 0.0;
+        double FY = 0.0;
+    };
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo, double Step,
+                                                 double Footprint, int32 Levels);
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo, float Step,
+                                                 float Footprint, int32 Levels);
+    DEEPSPACE_API FShadowTaps ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API FShadowTaps ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API double BilinearF64(double A, double B, double C, double D, double FX, double FY);
+    DEEPSPACE_API float BilinearF32(float A, float B, float C, float D, float FX, float FY);
+    DEEPSPACE_API double LerpF64(double A, double B, double T);
+    DEEPSPACE_API float LerpF32(float A, float B, float T);
+```
+
+In `Source/DeepSpace/Surface/WorldRelief.cpp`, in `namespace WorldReliefLocal`, add:
+
+```cpp
+    template <typename TCoord>
+    WorldReliefNoise::FShadowCoord ToShadowCoord(const TCoord& C)
+    {
+        WorldReliefNoise::FShadowCoord Out;
+        Out.U = C.U;
+        Out.V = C.V;
+        Out.Level0 = C.Level0;
+        Out.Level1 = C.Level1;
+        Out.Blend = C.Blend;
+        return Out;
+    }
+
+    template <typename TTaps>
+    WorldReliefNoise::FShadowTaps ToShadowTaps(const TTaps& T)
+    {
+        WorldReliefNoise::FShadowTaps Out;
+        Out.X0 = T.X0;
+        Out.X1 = T.X1;
+        Out.Y0 = T.Y0;
+        Out.Y1 = T.Y1;
+        Out.FX = T.FX;
+        Out.FY = T.FY;
+        return Out;
+    }
+```
+
+After `WorldReliefNoise::FaceF32`, add:
+
+```cpp
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo,
+                                                                   double Step, double Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF64::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo,
+                                                                   float Step, float Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF32::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF64::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF32::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+double WorldReliefNoise::BilinearF64(double A, double B, double C, double D, double FX, double FY)
+{
+    return WorldReliefF64::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+float WorldReliefNoise::BilinearF32(float A, float B, float C, float D, float FX, float FY)
+{
+    return WorldReliefF32::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+double WorldReliefNoise::LerpF64(double A, double B, double T)
+{
+    return WorldReliefF64::WR_Lerp(A, B, T);
+}
+
+float WorldReliefNoise::LerpF32(float A, float B, float T)
+{
+    return WorldReliefF32::WR_Lerp(A, B, T);
+}
+```
+
+- [ ] **Step 5: The map.** Create `Source/DeepSpace/Surface/SunShadowMap.h`:
+
+```cpp
+#pragma once
+
+#include <atomic>
+
+#include "CoreMinimal.h"
+#include "Surface/SunShadow.h"
+
+class IGroundField;
+
+/**
+ * A solid world's cast shadow for the orbit (the developer's ruling on
+ * slice (b)'s build: the orbital proxy reads a per-world shadow texture
+ * baked in C++ when the system loads). Pure data.
+ *
+ * Equirectangular in the star's own frame: FrameZ is the light
+ * (SkyProjection::LightDirection), FrameX and FrameY square to it. Column c
+ * is the azimuth -pi + (c + 0.5) Step about the light, row r the star's
+ * elevation PsiLo + (r + 0.5) Step above the datum's level. Each texel is
+ * Step square at the terminator, where the shadows are, and narrows toward
+ * the point under the star, where the disc is whole. Under PsiLo no point of
+ * the world, however high, sees any of the star, so the night side is not
+ * stored. Levels[0] is row-major, Width x Rows, each texel
+ * Quantise(visibility); level L + 1 is level L halved (BuildLevels), at the
+ * GPU's own mip sizes.
+ */
+struct DEEPSPACE_API FSunShadowMap
+{
+    int32 Width = 0;
+    int32 Rows = 0;
+    double PsiLo = 0.0;
+    double Step = 0.0;
+    FVector3d FrameX = FVector3d::UnitX();
+    FVector3d FrameY = FVector3d::UnitY();
+    FVector3d FrameZ = FVector3d::UnitZ();
+    TArray<TArray<uint16>> Levels;
+
+    int32 WidthAt(int32 Level) const { return FMath::Max(1, Width >> Level); }
+    int32 RowsAt(int32 Level) const { return FMath::Max(1, Rows >> Level); }
+    int32 LevelCount() const { return Levels.Num(); }
+    uint16 Texel(int32 Level, int32 X, int32 Y) const { return Levels[Level][Y * WidthAt(Level) + X]; }
+    int64 Bytes() const;
+};
+
+namespace SunShadowMap
+{
+    /** Columns a world's map is baked with unless ds.Sky.ShadowMapWidth says
+     *  otherwise: 8.8 km texels on Baemsekai IV, finer than a 4K pixel while
+     *  the world is under 35 degrees across (the cast-shadow plan, Task 0). */
+    inline constexpr int32 DefaultWidth = 4096;
+
+    /** The map's frame, rows and step for Ground under Sun, and no texels;
+     *  Width 0 where there is no star or no ground. */
+    DEEPSPACE_API FSunShadowMap Shape(const IGroundField& Ground, const SunShadow::FSunLight& Sun, int32 Width);
+
+    /** The unit direction, body axes, at the centre of texel (Column, Row). */
+    DEEPSPACE_API FVector3d TexelDirection(const FSunShadowMap& Map, int32 Column, int32 Row);
+
+    /** 0..1 as the 16 bits a texel holds. */
+    DEEPSPACE_API uint16 Quantise(double Visible);
+
+    /** Every texel: each column's heights read once, at the step times R as
+     *  the footprint, then each row's AlongProfile over the rows ahead of it
+     *  to the march's end. Rows over the day exit are whole and read nothing,
+     *  and rows under the night exit are dark. Cancel, if given, is polled
+     *  once a column; set, the bake stops and returns a map with no levels.
+     *  Then BuildLevels. */
+    DEEPSPACE_API FSunShadowMap Bake(const IGroundField& Ground, const SunShadow::FSunLight& Sun, double SteepestSlope, int32 Width,
+                                     const std::atomic<bool>* Cancel = nullptr);
+
+    /** Level L + 1 from level L until one texel is left: each texel the
+     *  rounded mean of its two by two, the columns and rows past the last
+     *  taken from the last, as the GPU sizes a mip (Width >> L). */
+    DEEPSPACE_API void BuildLevels(FSunShadowMap& Map);
+
+    /** What M_SkyBody and M_SkyGround read at D (body axes) for a pixel of
+     *  this footprint (D units): the shared file's lookup and eight texel
+     *  loads, trilinear, in double and in float. 1 for a map with no levels. */
+    DEEPSPACE_API double Sample(const FSunShadowMap& Map, const FVector3d& D, double Footprint);
+    DEEPSPACE_API float SampleF32(const FSunShadowMap& Map, const FVector3f& D, float Footprint);
+}
+```
+
+Create `Source/DeepSpace/Surface/SunShadowMap.cpp`:
+
+```cpp
+#include "Surface/SunShadowMap.h"
+
+#include "Surface/GroundField.h"
+#include "Surface/WorldRelief.h"
+
+int64 FSunShadowMap::Bytes() const
+{
+    int64 Total = 0;
+    for (const TArray<uint16>& Level : Levels)
+    {
+        Total += static_cast<int64>(Level.Num()) * sizeof(uint16);
+    }
+    return Total;
+}
+
+FSunShadowMap SunShadowMap::Shape(const IGroundField& Ground, const SunShadow::FSunLight& Sun, int32 Width)
+{
+    FSunShadowMap Map;
+    if (!Sun.IsSet() || Width < 2 || !(Ground.RadiusCm() > 0.0) || !(Ground.MaxHeightCm() > Ground.MinHeightCm()))
+    {
+        return Map;
+    }
+    Map.Width = Width;
+    Map.Step = 2.0 * UE_DOUBLE_PI / Width;
+    Map.FrameZ = Sun.Direction.GetSafeNormal();
+    const FVector3d Seed = FMath::Abs(Map.FrameZ.Z) < 0.9 ? FVector3d::UnitZ() : FVector3d::UnitX();
+    Map.FrameX = FVector3d::CrossProduct(Seed, Map.FrameZ).GetSafeNormal();
+    Map.FrameY = FVector3d::CrossProduct(Map.FrameZ, Map.FrameX);
+    const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunShadow::SunRadiusMax);
+    Map.PsiLo = -(SunShadow::NightDip(Ground.RadiusCm(), Ground.MaxHeightCm(), Ground.MinHeightCm()) + Radius);
+    Map.Rows = FMath::CeilToInt32((0.5 * UE_DOUBLE_PI - Map.PsiLo) / Map.Step);
+    return Map;
+}
+
+FVector3d SunShadowMap::TexelDirection(const FSunShadowMap& Map, int32 Column, int32 Row)
+{
+    const double Azimuth = -UE_DOUBLE_PI + (Column + 0.5) * Map.Step;
+    const double Elevation = Map.PsiLo + (Row + 0.5) * Map.Step;
+    return (Map.FrameX * FMath::Cos(Azimuth) + Map.FrameY * FMath::Sin(Azimuth)) * FMath::Cos(Elevation) + Map.FrameZ * FMath::Sin(Elevation);
+}
+
+uint16 SunShadowMap::Quantise(double Visible)
+{
+    return static_cast<uint16>(FMath::Clamp(FMath::RoundToInt32(Visible * 65535.0), 0, 65535));
+}
+
+FSunShadowMap SunShadowMap::Bake(const IGroundField& Ground, const SunShadow::FSunLight& Sun, double SteepestSlope, int32 Width,
+                                 const std::atomic<bool>* Cancel)
+{
+    FSunShadowMap Map = Shape(Ground, Sun, Width);
+    if (Map.Width == 0)
+    {
+        return Map;
+    }
+    const double R = Ground.RadiusCm();
+    const double Peak = Ground.MaxHeightCm();
+    const double Lowest = Ground.MinHeightCm();
+    const double FootprintCm = Map.Step * R;
+    const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunShadow::SunRadiusMax);
+    const double DayExit = FMath::Atan(SteepestSlope) + Radius;
+    Map.Levels.SetNum(1);
+    Map.Levels[0].SetNumUninitialized(Map.Width * Map.Rows);
+    TArray<double> Heights;
+    Heights.SetNumUninitialized(Map.Rows);
+    TBitArray<> Read;
+    for (int32 Column = 0; Column < Map.Width; ++Column)
+    {
+        if (Cancel && Cancel->load(std::memory_order_relaxed))
+        {
+            return FSunShadowMap();
+        }
+        Read.Init(false, Map.Rows);
+        const auto HeightAt = [&](int32 Row)
+        {
+            if (!Read[Row])
+            {
+                Heights[Row] = Ground.Height(TexelDirection(Map, Column, Row), FootprintCm);
+                Read[Row] = true;
+            }
+            return Heights[Row];
+        };
+        for (int32 Row = 0; Row < Map.Rows; ++Row)
+        {
+            const double Psi = Map.PsiLo + (Row + 0.5) * Map.Step;
+            uint16& Texel = Map.Levels[0][Row * Map.Width + Column];
+            if (Psi >= DayExit)
+            {
+                Texel = 65535;
+                continue;
+            }
+            const double Here = HeightAt(Row);
+            if (Psi + Radius <= -SunShadow::NightDip(R, Here, Lowest))
+            {
+                Texel = 0;
+                continue;
+            }
+            // The rows ahead the march can reach: every one whose arc is
+            // within MarchEnd, as AlongProfile counts them.
+            const double End = SunShadow::MarchEnd(R, Here, Peak, Psi - Radius);
+            int32 Count = 1;
+            while (Row + Count < Map.Rows && Count * Map.Step <= End)
+            {
+                HeightAt(Row + Count);
+                ++Count;
+            }
+            Texel = Quantise(SunShadow::AlongProfile(R, Peak, Lowest, SteepestSlope, MakeArrayView(Heights.GetData() + Row, Count),
+                Map.Step, Psi, Sun.AngularRadius).Visible);
+        }
+    }
+    BuildLevels(Map);
+    return Map;
+}
+
+void SunShadowMap::BuildLevels(FSunShadowMap& Map)
+{
+    if (Map.Levels.Num() == 0)
+    {
+        return;
+    }
+    Map.Levels.SetNum(1);
+    for (int32 Level = 0; Map.WidthAt(Level) > 1 || Map.RowsAt(Level) > 1; ++Level)
+    {
+        const int32 W = Map.WidthAt(Level);
+        const int32 H = Map.RowsAt(Level);
+        const int32 NextW = Map.WidthAt(Level + 1);
+        const int32 NextH = Map.RowsAt(Level + 1);
+        TArray<uint16> Next;
+        Next.SetNumUninitialized(NextW * NextH);
+        const TArray<uint16>& Here = Map.Levels[Level];
+        for (int32 Y = 0; Y < NextH; ++Y)
+        {
+            const int32 Y0 = FMath::Min(2 * Y, H - 1);
+            const int32 Y1 = FMath::Min(2 * Y + 1, H - 1);
+            for (int32 X = 0; X < NextW; ++X)
+            {
+                const int32 X0 = FMath::Min(2 * X, W - 1);
+                const int32 X1 = FMath::Min(2 * X + 1, W - 1);
+                const uint32 Sum = static_cast<uint32>(Here[Y0 * W + X0]) + Here[Y0 * W + X1] + Here[Y1 * W + X0] + Here[Y1 * W + X1];
+                Next[Y * NextW + X] = static_cast<uint16>((Sum + 2) / 4);
+            }
+        }
+        Map.Levels.Add(MoveTemp(Next));
+    }
+}
+
+double SunShadowMap::Sample(const FSunShadowMap& Map, const FVector3d& D, double Footprint)
+{
+    if (Map.LevelCount() == 0)
+    {
+        return 1.0;
+    }
+    const WorldReliefNoise::FShadowCoord C = WorldReliefNoise::ShadowMapCoordF64(D, Map.FrameX, Map.FrameZ, Map.PsiLo, Map.Step, Footprint, Map.LevelCount());
+    double Seen[2];
+    for (int32 Pick = 0; Pick < 2; ++Pick)
+    {
+        const int32 Level = Pick == 0 ? C.Level0 : C.Level1;
+        const WorldReliefNoise::FShadowTaps T = WorldReliefNoise::ShadowTapsF64(C.U, C.V, Map.Width, Map.Rows, Level);
+        const auto At = [&](int32 X, int32 Y) { return Map.Texel(Level, X, Y) / 65535.0; };
+        Seen[Pick] = WorldReliefNoise::BilinearF64(At(T.X0, T.Y0), At(T.X1, T.Y0), At(T.X0, T.Y1), At(T.X1, T.Y1), T.FX, T.FY);
+    }
+    return WorldReliefNoise::LerpF64(Seen[0], Seen[1], C.Blend);
+}
+
+float SunShadowMap::SampleF32(const FSunShadowMap& Map, const FVector3f& D, float Footprint)
+{
+    if (Map.LevelCount() == 0)
+    {
+        return 1.0f;
+    }
+    const WorldReliefNoise::FShadowCoord C = WorldReliefNoise::ShadowMapCoordF32(D, FVector3f(Map.FrameX), FVector3f(Map.FrameZ),
+        static_cast<float>(Map.PsiLo), static_cast<float>(Map.Step), Footprint, Map.LevelCount());
+    float Seen[2];
+    for (int32 Pick = 0; Pick < 2; ++Pick)
+    {
+        const int32 Level = Pick == 0 ? C.Level0 : C.Level1;
+        const WorldReliefNoise::FShadowTaps T = WorldReliefNoise::ShadowTapsF32(static_cast<float>(C.U), static_cast<float>(C.V), Map.Width, Map.Rows, Level);
+        const auto At = [&](int32 X, int32 Y) { return static_cast<float>(Map.Texel(Level, X, Y)) / 65535.0f; };
+        Seen[Pick] = WorldReliefNoise::BilinearF32(At(T.X0, T.Y0), At(T.X1, T.Y0), At(T.X0, T.Y1), At(T.X1, T.Y1),
+            static_cast<float>(T.FX), static_cast<float>(T.FY));
+    }
+    return WorldReliefNoise::LerpF32(Seen[0], Seen[1], static_cast<float>(C.Blend));
+}
+```
+
+`FShadowCoord` and `FShadowTaps` hold the float build's values as doubles, which represent them exactly, so casting them back to float is lossless.
+
+- [ ] **Step 6: Run them to see them pass, and the shared file's own tests beside them.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.SunShadowMap && ./test.sh DeepSpace.Surface.WorldRelief && ./test.sh DeepSpace.Surface.ShaderMapping`
+
+Expected: all five `.SunShadowMap.*` PASS, and every `DeepSpace.Surface.WorldRelief.*` still passes, because the file's old functions are untouched. Copy `.TexelsAreTheProfile`'s info line into the task report. `./build.sh` proves only the file's C++ half; the HLSL half is proven by Task 8's `Eyes.WorldReliefParity`, once a material includes it.
+
+- [ ] **Step 7: Commit.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Shaders/Private/WorldRelief.ush Source/DeepSpace/Surface/WorldRelief.h Source/DeepSpace/Surface/WorldRelief.cpp \
+  Source/DeepSpace/Surface/SunShadowMap.h Source/DeepSpace/Surface/SunShadowMap.cpp Source/DeepSpace/Tests/SunShadowMapTest.cpp && \
+git commit -qm "feat(surface): SunShadowMap -- each solid world's cast shadow for the orbit, baked from the height function
+
+Equirectangular in the star's own frame, texels square at the terminator,
+the provably dark night side left out; each column's heights read once and
+every texel's horizon over the texels ahead (SunShadow::AlongProfile);
+16-bit, a level per mip at the GPU's sizes; cancellable once a column. The
+lookup is the shared file's (WR_ShadowMapCoord, WR_ShadowTapsAt,
+WR_Bilinear), mirrored in double and float by SunShadowMap::Sample.
+DeepSpace.Surface.SunShadowMap.Shape, .TexelsAreTheProfile,
+.NightBelowTheMap, .Lookup, .Mips.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 8: Prove them.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush '    Out.U = (Phi + WR_PI) / Step - WR_REAL(0.5);' '    Out.U = (Phi + WR_PI) / Step;' 'DeepSpace.Surface.SunShadowMap.Lookup$'; \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush '    Out.X0 = X < 0 ? X + W : (X >= W ? X - W : X);' '    Out.X0 = X < 0 ? 0 : (X >= W ? X - W : X);' 'DeepSpace.Surface.SunShadowMap.Lookup$'; \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL Across = Step * WR_max(WR_sqrt(WR_max(WR_REAL(0.0), WR_REAL(1.0) - S * S)), WR_REAL(1.0e-4));' 'const WR_REAL Across = Step;' 'DeepSpace.Surface.SunShadowMap.Lookup$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'const double Elevation = Map.PsiLo + (Row + 0.5) * Map.Step;' 'const double Elevation = Map.PsiLo + Row * Map.Step;' 'DeepSpace.Surface.SunShadowMap.Shape$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'Ground.MinHeightCm()) + Radius);' 'Ground.MinHeightCm()));' 'DeepSpace.Surface.SunShadowMap.Shape$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp '            while (Row + Count < Map.Rows && Count * Map.Step <= End)' '            while (Row + Count < Map.Rows && Count * Map.Step <= 0.5 * End)' 'DeepSpace.Surface.SunShadowMap.TexelsAreTheProfile$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'Next[Y * NextW + X] = static_cast<uint16>((Sum + 2) / 4);' 'Next[Y * NextW + X] = static_cast<uint16>(Sum / 4);' 'DeepSpace.Surface.SunShadowMap.Mips$'; \
+./build.sh
+```
+
+Expected: seven `KILLED`.
+- The unshifted column reads half a texel off at every centre.
+- The wrap that clamps at column 0 misses the seam's mean.
+- The level that ignores `cos(psi)` reads 1.27 rad up at level 0, not 1.76.
+- The row centred on its edge misses the elevations.
+- `PsiLo` without the star's radius misses its known value.
+- The profile cut to half the march's end misses the texels whose horizon lies further out: the test's own profile reads the whole column.
+- The unrounded mean gives 52, not 53.
+
+`.NightBelowTheMap` has no mutant of its own: what it proves is a consequence of the night exit's proof (Task 2) and `PsiLo`'s formula (`.Shape`), and it is there so that a later change to either cannot leave rows out that are not dark.
+
+---
+
+## Task 6: the materials, the contract, and the sky's bakes at system load
+
+**Owner:** T. **Depends on:** Tasks 3, 4 and 5, and Task 0's answers.
+
+**Files:**
+- Modify: `Tools/sky_material_contract.json`. Add the parameters `shadows`, `shadow_map` (type `texture`), `shadow_frame_x` and `shadow_frame_z`. Add them to `M_SkyBody` and `M_SkyGround`, add a new material `M_SkyShadowProbe`, and add a new block `shadow`.
+- Modify: `Source/DeepSpace/Sky/SkyMaterialContract.h`. Add `Shadows`, `ShadowMap`, `ShadowFrameX`, `ShadowFrameZ`, `ShadowProbePath`, `ShadowDefaultTexturePath`, `ShadowCoordEntry`, `ShadowInputs()`, `*Textures()` and `ShadowProbe*()`, and extend `BodyScalars/Vectors` and `GroundScalars/Vectors`.
+- Modify: `Tools/setup_sky_materials.py`. Add `white_png`, `shadow_default_texture`, `Graph.texture`, `rgba`, `SHADOW_CODE`, `sun_shadow` and `shadow_probe`. Wire the shadow into `sky_body` and `sky_ground`, and check textures in `finish`.
+- Modify: `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`. Add texture roles and names, `CheckShadowNode`, and amend M_SkyBody's "no texture" rule.
+- Modify: `Source/DeepSpace/Sky/ShipSky.h`, `Source/DeepSpace/Sky/ShipSky.cpp`. Add the CVars `ds.Sky.Shadows`, `ds.Sky.ShadowMaps`, `ds.Sky.ShadowMapWidth` and `ds.Sky.ShadowBakeTasks`; the bakes at `RebuildFor`, landed each frame and cancelled on a rebuild and at `EndPlay`; `DrawBodies` writing the map, the frame and the strength; `CopyBodyLook` copying them; and `ShipSky::{ShadowStrength, ShadowBakeOrder, ShadowFrameX, ShadowFrameZ, MakeShadowTexture}`.
+- Create: `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp` (`DeepSpace.Sky.ShadowParameters`)
+- Built by the authoring run: `Content/Materials/Sky/M_SkyBody`, `M_SkyGround`, `M_SkyShadowProbe`, `T_SkyShadowWhite` (LFS)
+
+**Interfaces:**
+- Consumes: `SunShadowMap::{Bake, FSunShadowMap}` (Task 5); `SunShadow::SteepestSlope`; `SkyProjection::SunLightOf` (Task 3); `FReliefGround`; the shared file's `WR_ShadowMapCoord`, `WR_ShadowTapsAt`, `WR_Bilinear`, `WR_Lerp`; `setup_sky_materials.py`'s `custom_node`, `mask`, `probe_direction`, `ground_direction`, `body_direction`, `body_axes`.
+- Produces:
+
+```cpp
+namespace SkyMaterial
+{
+    inline const FName Shadows, ShadowMap, ShadowFrameX, ShadowFrameZ;
+    inline const TCHAR* const ShadowProbePath, ShadowDefaultTexturePath, ShadowCoordEntry;
+    TArray<FName> ShadowInputs();       // Direction, Footprint, FrameX, FrameZ, ShadowMap, Vertex, Morph
+    TArray<FName> BodyTextures(), GroundTextures(), ShadowProbeScalars(), ShadowProbeVectors(), ShadowProbeTextures();
+}
+class AShipSky
+{
+    void FlushShadowBakesForTest();
+    UTexture2D* GetShadowTexture(FName Body) const;
+    const FSunShadowMap* GetShadowMapForTest(FName Body) const;
+    bool bKeepShadowMapsForTest;
+    int32 GetShadowBakesPending() const;
+};
+namespace ShipSky
+{
+    float ShadowStrength();
+    TArray<int32> ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship);
+    FLinearColor ShadowFrameX(const FSunShadowMap& Map);   // X, and PsiLo in w
+    FLinearColor ShadowFrameZ(const FSunShadowMap& Map);   // Z (the light), and Step in w
+    UTexture2D* MakeShadowTexture(const FSunShadowMap& Map, FName Name);
+}
+```
+
+- [ ] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp`:
+
+```cpp
+#include "Components/StaticMeshComponent.h"
+#include "Engine/Texture2D.h"
+#include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/AutomationTest.h"
+#include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
+#include "Sky/SkyMaterialContract.h"
+#include "Sky/SkyProjection.h"
+#include "Surface/SunShadowMap.h"
+#include "Tests/SkyTestWorld.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowParametersTest, "DeepSpace.Sky.ShadowParameters",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * The sky bakes each solid world's cast-shadow map when the system loads and
+ * hands it to the world's material: a 16-bit texture, a mip per level, its
+ * frame the sky's own light (SkyProjection::SunLightOf) and ds.Sky.Shadows
+ * clamped to 0..1 as the strength; the ground's instance gets all of it
+ * through CopyBodyLook. Worlds with no ground get no map. A rebuild mid-bake
+ * cancels and starts again. At 256 columns, so the test bakes in a moment.
+ */
+bool FShadowParametersTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    FScopedCVar Narrow(TEXT("ds.Sky.ShadowMapWidth"), 256.0f);
+    FSkyWorld Test(TEXT("ShadowParametersWorld"), 8, EShadows::On);
+    Test.Sky->bKeepShadowMapsForTest = true;
+    Test.BeginPlay();
+    Test.Step(1.0f / 60.0f);
+    TestTrue(TEXT("the bakes start when the system loads"), Test.Sky->GetShadowBakesPending() > 0);
+    Test.Sky->FlushShadowBakesForTest();
+    Test.Step(1.0f / 60.0f);
+    TestEqual(TEXT("and all land"), Test.Sky->GetShadowBakesPending(), 0);
+
+    const FSkySystem Here = LocalSystem::Here(Test.World);
+    const TArray<int32> Order = ShipSky::ShadowBakeOrder(Here, Test.Ship->GetFlightState().GetUniversePosition());
+    int32 Solid = 0;
+    for (int32 Index = 0; Index < Here.Bodies.Num(); ++Index)
+    {
+        const FSkyBody& Body = Here.Bodies[Index];
+        const bool bSolid = Body.Ground == EGround::Solid && Body.Kind != ESkyBodyKind::Star;
+        Solid += bSolid ? 1 : 0;
+        TestEqual(FString::Printf(TEXT("%s is baked exactly when it has ground"), *Body.Id.ToString()), Order.Contains(Index), bSolid);
+        UTexture2D* Texture = Test.Sky->GetShadowTexture(Body.Id);
+        if (!bSolid)
+        {
+            TestNull(FString::Printf(TEXT("%s has no map"), *Body.Id.ToString()), Texture);
+            continue;
+        }
+        const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Body.Id);
+        if (!TestNotNull(FString::Printf(TEXT("%s has its map"), *Body.Id.ToString()), Texture) || !TestNotNull(TEXT("and kept it"), Map))
+        {
+            continue;
+        }
+        TestTrue(FString::Printf(TEXT("%s: the texture is the map, 256 x %d, G16, a mip per level"), *Body.Id.ToString(), Map->Rows),
+            Texture->GetSizeX() == 256 && Texture->GetSizeY() == Map->Rows && Texture->GetPixelFormat() == PF_G16
+            && Texture->GetNumMips() == Map->LevelCount());
+        TestTrue(TEXT("baked under the sky's own light"), Map->FrameZ.Equals(SkyProjection::SunLightOf(Here, Index).Direction.GetSafeNormal(), 1e-12));
+        UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Index)->GetMaterial(0));
+        if (!TestNotNull(TEXT("the proxy draws a dynamic instance"), Instance))
+        {
+            continue;
+        }
+        TestTrue(TEXT("which reads that texture"), Instance->K2_GetTextureParameterValue(SkyMaterial::ShadowMap) == Texture);
+        TestTrue(TEXT("in the map's frame, PsiLo and Step in w"),
+            Instance->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX).Equals(ShipSky::ShadowFrameX(*Map), 0.0f)
+            && Instance->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ).Equals(ShipSky::ShadowFrameZ(*Map), 0.0f));
+    }
+    TestTrue(TEXT("the start system has solid worlds"), Solid > 0);
+    for (int32 Rank = 1; Rank < Order.Num(); ++Rank)
+    {
+        const FUniversePosition Ship = Test.Ship->GetFlightState().GetUniversePosition();
+        const FSkyBody& Nearer = Here.Bodies[Order[Rank - 1]];
+        const FSkyBody& Farther = Here.Bodies[Order[Rank]];
+        TestTrue(TEXT("the bakes run nearest first"),
+            Ship.DistanceTo(Nearer.Position) - Nearer.Radius <= Ship.DistanceTo(Farther.Position) - Farther.Radius);
+    }
+
+    // The strength: ds.Sky.Shadows, clamped.
+    UMaterialInstanceDynamic* Fourth = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(4)->GetMaterial(0));
+    for (const TPair<float, float>& Case : { TPair<float, float>(7.0f, 1.0f), TPair<float, float>(-1.0f, 0.0f), TPair<float, float>(0.5f, 0.5f) })
+    {
+        FScopedCVar Strength(TEXT("ds.Sky.Shadows"), Case.Key);
+        Test.Step(1.0f / 60.0f);
+        TestEqual(FString::Printf(TEXT("ds.Sky.Shadows %.1f draws %.1f"), Case.Key, Case.Value), ShipSky::ShadowStrength(), Case.Value);
+        TestEqual(TEXT("and the world's material has it"), Fourth->K2_GetScalarParameterValue(SkyMaterial::Shadows), Case.Value);
+    }
+
+    // The ground gets all of it through the look's one copy.
+    UMaterial* GroundMaterial = LoadObject<UMaterial>(nullptr, SkyMaterial::GroundPath);
+    if (TestNotNull(TEXT("M_SkyGround is built"), GroundMaterial))
+    {
+        UMaterialInstanceDynamic* Ground = UMaterialInstanceDynamic::Create(GroundMaterial, Test.World);
+        ShipSky::CopyBodyLook(*Fourth, *Ground);
+        TestTrue(TEXT("the ground reads the world's map"),
+            Ground->K2_GetTextureParameterValue(SkyMaterial::ShadowMap) == Fourth->K2_GetTextureParameterValue(SkyMaterial::ShadowMap));
+        TestTrue(TEXT("in its frame"), Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX).Equals(Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX), 0.0f)
+            && Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ).Equals(Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ), 0.0f));
+        TestEqual(TEXT("at its strength"), Ground->K2_GetScalarParameterValue(SkyMaterial::Shadows), Fourth->K2_GetScalarParameterValue(SkyMaterial::Shadows));
+    }
+
+    // A rebuild mid-bake cancels what was baking and starts again.
+    Test.Sky->RebuildFor(Here);
+    TestTrue(TEXT("a rebuild starts the bakes again"), Test.Sky->GetShadowBakesPending() > 0);
+    Test.Sky->RebuildFor(Here);
+    Test.Sky->FlushShadowBakesForTest();
+    TestNotNull(TEXT("and after a second rebuild mid-bake every map still lands"), Test.Sky->GetShadowTexture(Here.Bodies[Order[0]].Id));
+    {
+        FScopedCVar None(TEXT("ds.Sky.ShadowMaps"), 0.0f);
+        Test.Sky->RebuildFor(Here);
+        TestEqual(TEXT("with ds.Sky.ShadowMaps 0 nothing is baked"), Test.Sky->GetShadowBakesPending(), 0);
+        TestNull(TEXT("and no map is held"), Test.Sky->GetShadowTexture(Here.Bodies[Order[0]].Id));
+    }
+    return true;
+}
+
+#endif
+```
+
+- [ ] **Step 2: Run it to see it fail.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
+
+Expected: the build fails, because `SkyMaterial::ShadowMap`, `AShipSky::FlushShadowBakesForTest`, `ShipSky::ShadowStrength` and the rest are undeclared.
+
+- [ ] **Step 3: The contract's header.** In `Source/DeepSpace/Sky/SkyMaterialContract.h`, after `inline const FName BodyAxisY = ...;`, add:
+
+```cpp
+    // The cast shadow (the developer's ruling on slice (b)'s build: baked,
+    // not marched). M_SkyBody reads the world's map, M_SkyGround the same map
+    // blended into its vertices' shadow by Morph, both through one Custom node
+    // over the shared file's WR_ShadowMapCoord (SunShadowMap::Sample is its
+    // C++ mirror). The strength is ds.Sky.Shadows, lerp(1, shadow, Shadows).
+    inline const FName Shadows = TEXT("Shadows");           // scalar: the cast shadow's strength, 0..1
+    inline const FName ShadowMap = TEXT("ShadowMap");       // texture: the world's map, G16, a mip per level (SunShadowMap)
+    inline const FName ShadowFrameX = TEXT("ShadowFrameX"); // vector: the map's X axis, body axes; w its PsiLo, rad
+    inline const FName ShadowFrameZ = TEXT("ShadowFrameZ"); // vector: its Z axis, the light, body axes; w its Step, rad
+    inline const TCHAR* const ShadowProbePath = TEXT("/Game/Materials/Sky/M_SkyShadowProbe.M_SkyShadowProbe");
+    /** What a world without a baked map reads: a white 16-bit texture, so the
+     *  lookup is 1, no shadow. Authored by setup_sky_materials.py. */
+    inline const TCHAR* const ShadowDefaultTexturePath = TEXT("/Game/Materials/Sky/T_SkyShadowWhite.T_SkyShadowWhite");
+    /** The shadow node's include is WorldReliefInclude; it calls this, and takes these pins, in order. */
+    inline const TCHAR* const ShadowCoordEntry = TEXT("WR_ShadowMapCoord");
+    inline TArray<FName> ShadowInputs() { return { TEXT("Direction"), TEXT("Footprint"), TEXT("FrameX"), TEXT("FrameZ"), TEXT("ShadowMap"), TEXT("Vertex"), TEXT("Morph") }; }
+```
+
+Replace the parameter lists with:
+
+```cpp
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows }; }
+    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY, ShadowFrameX, ShadowFrameZ }; }
+    inline TArray<FName> BodyTextures() { return { ShadowMap }; }
+    inline TArray<FName> StarScalars() { return { Brightness }; }
+    inline TArray<FName> StarVectors() { return { Colour }; }
+    inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
+    inline TArray<FName> ProbeScalars() { return { Banding, ProbeFootprint }; }
+    inline TArray<FName> ProbeVectors() { return { SurfaceSeed, ProbeSelect, ProbeBias }; }
+    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit, Shadows }; }
+    inline TArray<FName> GroundVectors() { return { Colour, LightDirection, SurfaceSeed, TilePivot, ShadowFrameX, ShadowFrameZ }; }
+    inline TArray<FName> GroundTextures() { return { ShadowMap }; }
+    inline TArray<FName> GroundProbeScalars() { return { Cratering, ReliefScale, VertexBandLimit, ProbeFootprint }; }
+    inline TArray<FName> GroundProbeVectors() { return { SurfaceSeed, ProbeBias }; }
+    inline TArray<FName> ShadowProbeScalars() { return { ProbeFootprint }; }
+    inline TArray<FName> ShadowProbeVectors() { return { ShadowFrameX, ShadowFrameZ, ProbeBias }; }
+    inline TArray<FName> ShadowProbeTextures() { return { ShadowMap }; }
+```
+
+Also amend the header comment's M_SkyBody line to list `Shadows`, `ShadowFrameX` and `ShadowFrameZ`, and the texture `ShadowMap`.
+
+- [ ] **Step 4: The contract's JSON.** In `Tools/sky_material_contract.json`, add to `"parameters"`:
+
+```json
+    "shadows":           { "name": "Shadows",         "type": "scalar" },
+    "shadow_map":        { "name": "ShadowMap",       "type": "texture" },
+    "shadow_frame_x":    { "name": "ShadowFrameX",    "type": "vector" },
+    "shadow_frame_z":    { "name": "ShadowFrameZ",    "type": "vector" }
+```
+
+In `"materials"`, append `"shadows", "shadow_map", "shadow_frame_x", "shadow_frame_z"` to `M_SkyBody`'s and `M_SkyGround`'s lists, and add:
+
+```json
+    "M_SkyShadowProbe": { "parameters": ["shadow_map", "shadow_frame_x", "shadow_frame_z", "probe_footprint", "probe_bias"] }
+```
+
+After `"shared_relief"`, add:
+
+```json
+  "shadow": {
+    "comment": "The cast shadow (baked, not marched): M_SkyBody, M_SkyGround and M_SkyShadowProbe each call the world's map through one Custom node over the shared file -- WR_ShadowMapCoord for the texel coordinates and the level, WR_ShadowTapsAt for the four texels at each of two levels, WR_Bilinear and WR_Lerp to blend them, eight Loads of ShadowMap -- and then lerp(map, Vertex, Morph): the body passes Vertex 1 and Morph 0, the ground its UV0.x and its Morph. SkyMaterialContract.h holds the same entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them. default_texture is what a world without a map reads, white.",
+    "entry": "WR_ShadowMapCoord",
+    "inputs": ["Direction", "Footprint", "FrameX", "FrameZ", "ShadowMap", "Vertex", "Morph"],
+    "default_texture": "/Game/Materials/Sky/T_SkyShadowWhite.T_SkyShadowWhite"
+  },
+```
+
+- [ ] **Step 5: The contract's test.** In `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`:
+
+(a) In `Roles()`, append:
+
+```cpp
+            { TEXT("shadows"), SkyMaterial::Shadows, TEXT("scalar") },
+            { TEXT("shadow_map"), SkyMaterial::ShadowMap, TEXT("texture") },
+            { TEXT("shadow_frame_x"), SkyMaterial::ShadowFrameX, TEXT("vector") },
+            { TEXT("shadow_frame_z"), SkyMaterial::ShadowFrameZ, TEXT("vector") },
+```
+
+(b) `JsonNames` gains a fourth parameter, `TSet<FName>& OutTextures`, and its sorting line becomes:
+
+```cpp
+            const FString Type = Parameter->GetStringField(TEXT("type"));
+            (Type == TEXT("scalar") ? OutScalars : (Type == TEXT("texture") ? OutTextures : OutVectors)).Add(Name);
+```
+
+Its caller declares `TSet<FName> JsonTextures;` beside `JsonScalars` and `JsonVectors` and passes it.
+
+(c) `AssetNames` takes the type:
+
+```cpp
+    TSet<FName> AssetNames(const UMaterialInterface* Material, EMaterialParameterType Type)
+    {
+        TArray<FMaterialParameterInfo> Infos;
+        TArray<FGuid> Ids;
+        switch (Type)
+        {
+        case EMaterialParameterType::Scalar: Material->GetAllScalarParameterInfo(Infos, Ids); break;
+        case EMaterialParameterType::Vector: Material->GetAllVectorParameterInfo(Infos, Ids); break;
+        default: Material->GetAllTextureParameterInfo(Infos, Ids); break;
+        }
+        TSet<FName> Names;
+        for (const FMaterialParameterInfo& Info : Infos)
+        {
+            Names.Add(Info.Name);
+        }
+        return Names;
+    }
+```
+
+The two existing calls become `AssetNames(Material, EMaterialParameterType::Scalar)` and `AssetNames(Material, EMaterialParameterType::Vector)`.
+
+(d) `FExpected` gains `TArray<FName> Textures` after `Vectors`. The table becomes:
+
+```cpp
+        { TEXT("M_SkyBody"), SkyMaterial::BodyPath, SkyMaterial::BodyScalars(), SkyMaterial::BodyVectors(), SkyMaterial::BodyTextures() },
+        { TEXT("M_SkyStar"), SkyMaterial::StarPath, SkyMaterial::StarScalars(), SkyMaterial::StarVectors(), {} },
+        { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {}, {} },
+        { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {}, {} },
+        { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors(), {} },
+        { TEXT("M_SkyGround"), SkyMaterial::GroundPath, SkyMaterial::GroundScalars(), SkyMaterial::GroundVectors(), SkyMaterial::GroundTextures() },
+        { TEXT("M_SkyGroundProbe"), SkyMaterial::GroundProbePath, SkyMaterial::GroundProbeScalars(), SkyMaterial::GroundProbeVectors(), {} },
+        { TEXT("M_SkyShadowProbe"), SkyMaterial::ShadowProbePath, SkyMaterial::ShadowProbeScalars(), SkyMaterial::ShadowProbeVectors(), SkyMaterial::ShadowProbeTextures() },
+```
+
+(e) After the vectors' two checks in the loop, add the textures':
+
+```cpp
+        TestTrue(FString::Printf(TEXT("%s: the JSON's textures %s are the header's"), Expected.Asset, *Describe(JsonTextures)),
+            SameSet(JsonTextures, TSet<FName>(Expected.Textures)));
+```
+
+After the asset's vectors check, add:
+
+```cpp
+        const TSet<FName> Textures = AssetNames(Material, EMaterialParameterType::Texture);
+        TestTrue(FString::Printf(TEXT("%s exposes exactly the contract's textures; has %s"), Expected.Asset, *Describe(Textures)),
+            SameSet(Textures, JsonTextures));
+        int32 TextureNodes = 0;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material->GetExpressions())
+        {
+            TextureNodes += Cast<UMaterialExpressionTextureObjectParameter>(Expression) ? 1 : 0;
+        }
+        TestEqual(FString::Printf(TEXT("%s has one node per texture"), Expected.Asset), TextureNodes, JsonTextures.Num());
+```
+
+(f) In `CheckSurfaceFace`, replace
+
+```cpp
+            Test.TestFalse(FString::Printf(TEXT("M_SkyBody samples no texture (%s)"), *Node->GetName()),
+                Cast<UMaterialExpressionTextureBase>(Node) != nullptr);
+```
+
+with
+
+```cpp
+            // The one texture M_SkyBody reads is its cast-shadow map, as an
+            // object, and only the shadow's node takes it (CheckShadowNode);
+            // nothing samples one into the face.
+            const UMaterialExpressionTextureObjectParameter* Object = Cast<UMaterialExpressionTextureObjectParameter>(Node);
+            Test.TestTrue(FString::Printf(TEXT("M_SkyBody reads no texture but its shadow map (%s)"), *Node->GetName()),
+                Cast<UMaterialExpressionTextureBase>(Node) == nullptr || (Object && Object->ParameterName == SkyMaterial::ShadowMap));
+```
+
+(g) Add, before `RunTest`:
+
+```cpp
+    /**
+     * The cast shadow's node, in a material that reads the map: exactly one
+     * Custom node calls WR_ShadowMapCoord, through the shared file's include,
+     * with the contract's pins in order; it alone takes the ShadowMap object;
+     * and the object's default is the white texture, so a world without a map
+     * reads 1.
+     */
+    void CheckShadowNode(FAutomationTestBase& Test, UMaterial& Material, const TSharedPtr<FJsonObject>& Contract)
+    {
+        const TSharedPtr<FJsonObject> Block = Contract->GetObjectField(TEXT("shadow"));
+        Test.TestEqual(TEXT("the JSON's shadow entry is the header's"), Block->GetStringField(TEXT("entry")), FString(SkyMaterial::ShadowCoordEntry));
+        Test.TestEqual(TEXT("and its default texture"), Block->GetStringField(TEXT("default_texture")), FString(SkyMaterial::ShadowDefaultTexturePath));
+        TArray<FName> JsonInputs;
+        for (const TSharedPtr<FJsonValue>& Value : Block->GetArrayField(TEXT("inputs")))
+        {
+            JsonInputs.Add(FName(*Value->AsString()));
+        }
+        Test.TestTrue(TEXT("and its pins"), JsonInputs == SkyMaterial::ShadowInputs());
+        int32 Nodes = 0;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            if (const UMaterialExpressionTextureObjectParameter* Object = Cast<UMaterialExpressionTextureObjectParameter>(Expression))
+            {
+                Test.TestTrue(FString::Printf(TEXT("%s: the map's default is the white texture"), *Material.GetName()),
+                    Object->Texture && Object->Texture->GetPathName() == SkyMaterial::ShadowDefaultTexturePath);
+            }
+            const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression);
+            if (!Custom)
+            {
+                continue;
+            }
+            bool bTakesMap = false;
+            for (const FCustomInput& Input : Custom->Inputs)
+            {
+                bTakesMap = bTakesMap || Cast<UMaterialExpressionTextureObjectParameter>(Input.Input.Expression) != nullptr;
+            }
+            if (!Custom->Code.Contains(SkyMaterial::ShadowCoordEntry))
+            {
+                Test.TestFalse(FString::Printf(TEXT("%s: only the shadow's node takes the map (%s)"), *Material.GetName(), *Custom->GetName()), bTakesMap);
+                continue;
+            }
+            ++Nodes;
+            TArray<FName> Pins;
+            for (const FCustomInput& Input : Custom->Inputs)
+            {
+                Pins.Add(Input.InputName);
+            }
+            Test.TestTrue(FString::Printf(TEXT("%s: the shadow's pins are the contract's"), *Material.GetName()), Pins == SkyMaterial::ShadowInputs());
+            Test.TestTrue(FString::Printf(TEXT("%s: through the shared file"), *Material.GetName()),
+                Custom->IncludeFilePaths.Contains(FString(SkyMaterial::WorldReliefInclude)));
+            Test.TestTrue(FString::Printf(TEXT("%s: and it takes the map"), *Material.GetName()), bTakesMap);
+        }
+        Test.TestEqual(FString::Printf(TEXT("%s has one shadow node"), *Material.GetName()), Nodes, 1);
+    }
+```
+
+In `RunTest`'s per-material checks, add:
+
+```cpp
+        if (Material->GetFName() == TEXT("M_SkyBody") || Material->GetFName() == TEXT("M_SkyGround") || Material->GetFName() == TEXT("M_SkyShadowProbe"))
+        {
+            CheckShadowNode(*this, *const_cast<UMaterial*>(Material), Contract);
+        }
+```
+
+(h) `CheckSharedRelief` holds a material to *one* Custom node, and M_SkyBody now has two: the face's and the shadow's. The shadow's node includes the same file for its map's lookup, and `CheckShadowNode` holds it. So in `CheckSharedRelief`'s loop, replace
+
+```cpp
+            if (const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get()))
+            {
+                Customs.Add(Custom);
+            }
+```
+
+with
+
+```cpp
+            // The cast shadow's node includes the same file for its map's
+            // lookup (CheckShadowNode holds it); the face's is the other.
+            const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get());
+            if (Custom && !Custom->Code.Contains(SkyMaterial::ShadowCoordEntry))
+            {
+                Customs.Add(Custom);
+            }
+```
+
+`CheckSurfaceFace`'s structural checks are unchanged. They are read from the face's node, which the shadow's does not feed, and the shadow multiplies `shaded` after the light's dot products, so the guard, the unit normals and the knobs' paths are as they were. The new parameters (`Shadows`, `ShadowFrameX`, `ShadowFrameZ`) reach the pixel, which its last loop checks.
+
+Add `#include "Materials/MaterialExpressionTextureObjectParameter.h"` with the other material includes.
+
+- [ ] **Step 6: The authoring.** In `Tools/setup_sky_materials.py`:
+
+(a) After `SHARED = CONTRACT["shared_relief"]`, add `SHADOW = CONTRACT["shadow"]`. After `SHARED_CODE`, add:
+
+```python
+# The cast shadow's Custom node (the developer's ruling on slice (b)'s build:
+# baked, not marched): the world's map read at D -- the shared file's
+# coordinates, taps and blends, eight texel loads, trilinear -- then lerp(map,
+# Vertex, Morph). The body passes Vertex 1 and Morph 0; the ground its UV0.x
+# and its Morph, and skips the loads once the relief has grown in. HLSL only:
+# the arithmetic is the shared file's, and SunShadowMap::Sample mirrors it.
+SHADOW_CODE = (
+    "if (Morph >= 1.0) { return Vertex; }\n"
+    "uint MapWidth; uint MapRows; uint MapLevels;\n"
+    "ShadowMap.GetDimensions(0, MapWidth, MapRows, MapLevels);\n"
+    "WR_ShadowCoord C = %s(Direction.x, Direction.y, Direction.z, FrameX.x, FrameX.y, FrameX.z, FrameZ.x, FrameZ.y, FrameZ.z, "
+    "FrameX.w, FrameZ.w, Footprint, int(MapLevels));\n"
+    "WR_ShadowTaps T0 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level0);\n"
+    "WR_ShadowTaps T1 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level1);\n"
+    "float Seen0 = WR_Bilinear(ShadowMap.Load(int3(T0.X0, T0.Y0, C.Level0)).r, ShadowMap.Load(int3(T0.X1, T0.Y0, C.Level0)).r,\n"
+    "                          ShadowMap.Load(int3(T0.X0, T0.Y1, C.Level0)).r, ShadowMap.Load(int3(T0.X1, T0.Y1, C.Level0)).r, T0.FX, T0.FY);\n"
+    "float Seen1 = WR_Bilinear(ShadowMap.Load(int3(T1.X0, T1.Y0, C.Level1)).r, ShadowMap.Load(int3(T1.X1, T1.Y0, C.Level1)).r,\n"
+    "                          ShadowMap.Load(int3(T1.X0, T1.Y1, C.Level1)).r, ShadowMap.Load(int3(T1.X1, T1.Y1, C.Level1)).r, T1.FX, T1.FY);\n"
+    "return WR_Lerp(WR_Lerp(Seen0, Seen1, C.Blend), Vertex, Morph);\n" % SHADOW["entry"])
+```
+
+(b) In `class Graph`, after `vector`, add:
+
+```python
+    def texture(self, role, default):
+        """A texture object parameter: handed to a Custom node whole, which
+        loads its texels itself. Grayscale, as the map and its default are."""
+        expression = self.node(unreal.MaterialExpressionTextureObjectParameter,
+                               parameter_name=name(role), texture=default,
+                               sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_GRAYSCALE)
+        self.parameters[role] = expression
+        return expression
+```
+
+(c) Before `# -- the materials ---`, add:
+
+```python
+def white_png(path, size=4):
+    """A size x size 16-bit grayscale PNG, every sample 65535: the map a world
+    without one reads, so the shadow's lookup is 1."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"\xff\xff" * size for _ in range(size))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 16, 0, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def shadow_default_texture():
+    """T_SkyShadowWhite: imported from white_png, linear, grayscale (G16), no
+    mips -- what the shadow map parameters default to."""
+    path = os.path.join(unreal.Paths.project_saved_dir(), "T_SkyShadowWhite.png")
+    white_png(path)
+    task = unreal.AssetImportTask()
+    task.set_editor_property("filename", path)
+    task.set_editor_property("destination_path", DIRECTORY)
+    task.set_editor_property("destination_name", "T_SkyShadowWhite")
+    task.set_editor_property("replace_existing", True)
+    task.set_editor_property("automated", True)
+    task.set_editor_property("save", False)
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    texture = unreal.EditorAssetLibrary.load_asset(SHADOW["default_texture"])
+    if texture is None:
+        raise RuntimeError("T_SkyShadowWhite did not import")
+    texture.set_editor_property("srgb", False)
+    texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
+    texture.set_editor_property("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
+    texture.set_editor_property("filter", unreal.TextureFilter.TF_NEAREST)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture, only_if_is_dirty=False)
+    log("T_SkyShadowWhite: %s" % texture.get_path_name())
+    return texture
+
+
+def rgba(g, vector):
+    """A vector parameter's four channels: its default output is only the three."""
+    return g.binary(unreal.MaterialExpressionAppendVector, mask(g, vector, "rgb"), mask(g, vector, "r", output_name="A"))
+
+
+def sun_shadow(g, direction, footprint, default_texture, vertex, morph):
+    """The cast shadow at D (body axes) for this footprint: the world's map,
+    blended into the vertex's own by morph (SHADOW_CODE). Makes the map's
+    three parameters -- a material has one shadow node -- and returns the
+    node, its pins in the contract's order."""
+    frame_x = g.vector("shadow_frame_x", (1.0, 0.0, 0.0, -1.5707963))
+    frame_z = g.vector("shadow_frame_z", (0.0, 0.0, 1.0, 1.0))
+    shadow_map = g.texture("shadow_map", default_texture)
+    pins = [("Direction", direction), ("Footprint", footprint), ("FrameX", rgba(g, frame_x)),
+            ("FrameZ", rgba(g, frame_z)), ("ShadowMap", shadow_map), ("Vertex", vertex), ("Morph", morph)]
+    if [pin for pin, _ in pins] != SHADOW["inputs"]:
+        raise RuntimeError("the shadow node's pins are not the contract's: %s" % SHADOW["inputs"])
+    return custom_node(g, SHADOW_CODE, pins, unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+
+
+def cast(g, shaded, shadow, strength):
+    """shaded x lerp(1, shadow, Shadows): 0 draws the unshadowed look."""
+    blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0)
+    g.link(shadow, blend, "B")
+    g.link(strength, blend, "Alpha")
+    return g.mul(shaded, blend)
+```
+
+(d) `sky_body()` and `sky_ground()` gain a `default_texture` argument. In `sky_body`, replace
+
+```python
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    disc = g.mul(shaded, factor)
+```
+
+with
+
+```python
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    shadow = sun_shadow(g, direction, footprint, default_texture, g.constant(1.0), g.constant(0.0))
+    disc = g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)
+```
+
+In `sky_ground`, replace
+
+```python
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    g.emissive(g.mul(g.mul(colour, brightness), g.mul(shaded, factor)))
+```
+
+with
+
+```python
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    # The tile's vertices carry their own shadow in UV0.x (TerrainTile::UV0Of);
+    # the map's is blended into it by the morph that grows the relief in, so at
+    # the handover the ground's shadow is the orbit's exactly.
+    vertex = mask(g, g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "r")
+    shadow = sun_shadow(g, direction, footprint, default_texture, vertex, morph)
+    g.emissive(g.mul(g.mul(colour, brightness), g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)))
+```
+
+and update both docstrings' formulas: `shaded = gain * saturate(N.L) * smoothstep(-w, w, N.L) * lerp(1, shadow, Shadows)`, with `shadow = the map at D` for the body and `lerp(the map at D, UV0.x, Morph)` for the ground.
+
+(e) Add the probe:
+
+```python
+def shadow_probe(default_texture):
+    """Eyes.WorldReliefParity's cast-shadow case: the map's lookup over the
+    probe patch (probe_direction) at ProbeFootprint, untonemapped.
+
+        pixel = ProbeBias.rgb + (the map at D, 0, 0)"""
+    asset = "M_SkyShadowProbe"
+    material = fresh_material(asset)
+    material.set_editor_property("allow_negative_emissive_color", True)
+    g = Graph(material)
+    footprint = g.scalar("probe_footprint", 0.0)
+    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
+    direction = probe_direction(g)
+    shadow = sun_shadow(g, direction, footprint, default_texture, g.constant(1.0), g.constant(0.0))
+    pixel = g.binary(unreal.MaterialExpressionAppendVector,
+                     g.binary(unreal.MaterialExpressionAppendVector, shadow, g.constant(0.0)), g.constant(0.0))
+    g.emissive(g.add(mask(g, bias, "rgb"), pixel))
+    finish(material, asset)
+```
+
+(f) In `finish`, after the vectors' comparison, add:
+
+```python
+    textures = sorted(str(n) for n in MEL.get_texture_parameter_names(material))
+    want_textures = sorted(name(r) for r in expected if CONTRACT["parameters"][r]["type"] == "texture")
+    if textures != want_textures:
+        raise RuntimeError("%s does not match its contract: want textures %s, has %s" % (asset, want_textures, textures))
+```
+
+(g) In `main()`, before `sky_body()`, add `white = shadow_default_texture()`. Then call `sky_body(white)` and `sky_ground(white)`, and after `sky_ground_probe()` add `shadow_probe(white)`.
+
+- [ ] **Step 7: The sky's bakes.** In `Source/DeepSpace/Sky/ShipSky.h`:
+
+(a) Add `#include <atomic>`, `#include "Surface/SunShadowMap.h"` and `#include "Tasks/Task.h"`. Add `class UTexture2D;` with the forward declarations.
+
+(b) In the public section, after `GetNeighbourStars()`, add:
+
+```cpp
+    /** Launch every waiting shadow bake, wait for them all, and upload them:
+     *  for tests, which must see a world's map rather than a frame without. */
+    void FlushShadowBakesForTest();
+
+    /** The body's cast-shadow texture once its bake has landed; null before,
+     *  for a body with no ground, and with ds.Sky.ShadowMaps 0. */
+    UTexture2D* GetShadowTexture(FName Body) const;
+
+    /** The map the texture was made from, kept only while
+     *  bKeepShadowMapsForTest: a map is otherwise dropped once uploaded. */
+    const FSunShadowMap* GetShadowMapForTest(FName Body) const;
+    bool bKeepShadowMapsForTest = false;
+
+    /** Bakes waiting or in flight. */
+    int32 GetShadowBakesPending() const { return ShadowQueue.Num() + ShadowBakes.Num(); }
+```
+
+(c) In the protected section, add `virtual void EndPlay(const EEndPlayReason::Type Reason) override;`.
+
+(d) In the private section, after `FSkyFrame LastFrame;`, add:
+
+```cpp
+    /**
+     * The cast shadow's maps (the developer's ruling on slice (b)'s build:
+     * baked in C++ when the system loads, off the game thread). A cache of
+     * this actor's drawing like the proxies, keyed by the same rebuild: one
+     * bake a solid world, nearest first, at most ds.Sky.ShadowBakeTasks at
+     * once, each polling ShadowCancel once a column, so a rebuild or EndPlay
+     * waits at most a column.
+     */
+    struct FShadowWaiting
+    {
+        FName Body;
+        FWorldReliefParams Relief;
+        SunShadow::FSunLight Sun;
+        double SteepestSlope = 0.0;
+    };
+    struct FShadowBake
+    {
+        FName Body;
+        UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> Task;
+    };
+    struct FShadowFrame
+    {
+        FLinearColor X;
+        FLinearColor Z;
+    };
+    TArray<FShadowWaiting> ShadowQueue;
+    TArray<FShadowBake> ShadowBakes;
+    TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> ShadowCancel;
+
+    UPROPERTY(Transient)
+    TMap<FName, TObjectPtr<UTexture2D>> ShadowTextures;
+
+    TMap<FName, FShadowFrame> ShadowFrames;
+    TMap<FName, TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> KeptShadowMaps;
+
+    void QueueShadowBakes(const FSkySystem& System);
+    void CancelShadowBakes();
+    /** Land what has finished and launch what the cap allows; with bWait,
+     *  wait for those in flight first. */
+    void PumpShadowBakes(bool bWait);
+```
+
+(e) In `namespace ShipSky`, after `CopyBodyLook`, add:
+
+```cpp
+    /** ds.Sky.Shadows, clamped to 0..1: the cast shadow's strength in both
+     *  materials, lerp(1, shadow, strength). 0 draws the unshadowed look. */
+    DEEPSPACE_API float ShadowStrength();
+
+    /** The bodies whose shadow maps are baked -- the solid worlds -- nearest
+     *  to Ship's surface first. */
+    DEEPSPACE_API TArray<int32> ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship);
+
+    /** The map's frame as the materials take it: X with PsiLo in w, and Z,
+     *  the light, with Step in w. */
+    DEEPSPACE_API FLinearColor ShadowFrameX(const FSunShadowMap& Map);
+    DEEPSPACE_API FLinearColor ShadowFrameZ(const FSunShadowMap& Map);
+
+    /** A transient G16 texture of the map, linear, grayscale, each level its
+     *  own mip, never streamed. Null for a map with no levels. */
+    DEEPSPACE_API UTexture2D* MakeShadowTexture(const FSunShadowMap& Map, FName Name);
+```
+
+Also amend `CopyBodyLook`'s comment: "... and the cast shadow's map, frame and strength".
+
+In `Source/DeepSpace/Sky/ShipSky.cpp`:
+
+(f) Add the includes `#include "Engine/Texture2D.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"`, `#include "TextureResource.h"` and `#include "UObject/Package.h"`. With the other CVars, add:
+
+```cpp
+    TAutoConsoleVariable<float> CVarShadows(
+        TEXT("ds.Sky.Shadows"), 1.0f,
+        TEXT("The cast shadow's strength in M_SkyBody and M_SkyGround, 0..1: 0 draws the unshadowed look. Baked, so it costs nothing either way."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowMaps(
+        TEXT("ds.Sky.ShadowMaps"), 1,
+        TEXT("1 bakes each solid world's cast-shadow map when a system loads, off the game thread; 0 bakes none. Read at each load."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowMapWidth(
+        TEXT("ds.Sky.ShadowMapWidth"), SunShadowMap::DefaultWidth,
+        TEXT("Columns of each world's cast-shadow map, a power of two from 256 to 8192 (4096: 8.8 km texels on Baemsekai IV). Read at each load."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowBakeTasks(
+        TEXT("ds.Sky.ShadowBakeTasks"), 2,
+        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads: the machine's cap, never the core count."),
+        ECVF_Default);
+```
+
+(g) At the end of `AShipSky::RebuildFor`, after the proxies are made, add:
+
+```cpp
+    // The cast shadow's maps belong to the system drawn: anything baking for
+    // the last one is cancelled, and this one's solid worlds queue, nearest
+    // first.
+    CancelShadowBakes();
+    ShadowTextures.Reset();
+    ShadowFrames.Reset();
+    KeptShadowMaps.Reset();
+    if (CVarShadowMaps.GetValueOnGameThread() != 0)
+    {
+        QueueShadowBakes(System);
+    }
+```
+
+(h) In `AShipSky::SyncTo`, as its first statement, add `PumpShadowBakes(false);`.
+
+(i) Add the member functions:
+
+```cpp
+void AShipSky::EndPlay(const EEndPlayReason::Type Reason)
+{
+    CancelShadowBakes();
+    Super::EndPlay(Reason);
+}
+
+void AShipSky::QueueShadowBakes(const FSkySystem& System)
+{
+    const UShipSubsystem* Ship = UShipSubsystem::Get(this);
+    const FUniversePosition From = Ship ? Ship->GetFlightState().GetUniversePosition() : FUniversePosition();
+    ShadowCancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+    for (const int32 Index : ShipSky::ShadowBakeOrder(System, From))
+    {
+        const FSkyBody& Body = System.Bodies[Index];
+        ShadowQueue.Add({ Body.Id, Body.Relief, SkyProjection::SunLightOf(System, Index), SunShadow::SteepestSlope(Body.Relief) });
+    }
+}
+
+void AShipSky::CancelShadowBakes()
+{
+    if (ShadowCancel.IsValid())
+    {
+        ShadowCancel->store(true);
+    }
+    for (FShadowBake& Bake : ShadowBakes)
+    {
+        Bake.Task.Wait();
+    }
+    ShadowBakes.Reset();
+    ShadowQueue.Reset();
+}
+
+void AShipSky::PumpShadowBakes(bool bWait)
+{
+    const int32 Cap = FMath::Max(1, CVarShadowBakeTasks.GetValueOnGameThread());
+    const int32 Width = static_cast<int32>(FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::Clamp(CVarShadowMapWidth.GetValueOnGameThread(), 256, 8192))));
+    while (ShadowBakes.Num() < Cap && ShadowQueue.Num() > 0)
+    {
+        const FShadowWaiting Next = ShadowQueue[0];
+        ShadowQueue.RemoveAt(0);
+        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = ShadowCancel;
+        ShadowBakes.Add({ Next.Body, UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Next, Width, Cancel]() -> TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>
+            {
+                const FReliefGround Ground(Next.Relief);
+                return MakeShared<FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Ground, Next.Sun, Next.SteepestSlope, Width, Cancel.Get()));
+            }, UE::Tasks::ETaskPriority::BackgroundNormal) });
+    }
+    for (int32 Index = ShadowBakes.Num() - 1; Index >= 0; --Index)
+    {
+        FShadowBake& Bake = ShadowBakes[Index];
+        if (bWait)
+        {
+            Bake.Task.Wait();
+        }
+        if (!Bake.Task.IsCompleted())
+        {
+            continue;
+        }
+        const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe> Map = Bake.Task.GetResult();
+        if (Map.IsValid() && Map->LevelCount() > 0)
+        {
+            ShadowTextures.Add(Bake.Body, ShipSky::MakeShadowTexture(*Map, Bake.Body));
+            ShadowFrames.Add(Bake.Body, { ShipSky::ShadowFrameX(*Map), ShipSky::ShadowFrameZ(*Map) });
+            if (bKeepShadowMapsForTest)
+            {
+                KeptShadowMaps.Add(Bake.Body, Map);
+            }
+        }
+        ShadowBakes.RemoveAt(Index);
+    }
+}
+
+void AShipSky::FlushShadowBakesForTest()
+{
+    while (GetShadowBakesPending() > 0)
+    {
+        PumpShadowBakes(true);
+    }
+}
+
+UTexture2D* AShipSky::GetShadowTexture(FName Body) const
+{
+    const TObjectPtr<UTexture2D>* Found = ShadowTextures.Find(Body);
+    return Found ? Found->Get() : nullptr;
+}
+
+const FSunShadowMap* AShipSky::GetShadowMapForTest(FName Body) const
+{
+    const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>* Found = KeptShadowMaps.Find(Body);
+    return Found && Found->IsValid() ? Found->Get() : nullptr;
+}
+```
+
+(j) In `DrawBodies`, inside `if (System.Bodies[Index].Kind != ESkyBodyKind::Star)`, after the two `BodyAxis` writes, add:
+
+```cpp
+            // The cast shadow: the strength every frame, the map once baked.
+            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
+            if (const TObjectPtr<UTexture2D>* Map = ShadowTextures.Find(System.Bodies[Index].Id))
+            {
+                const FShadowFrame& ShadowFrame = ShadowFrames.FindChecked(System.Bodies[Index].Id);
+                Instance->SetTextureParameterValue(SkyMaterial::ShadowMap, Map->Get());
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShadowFrame.X);
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShadowFrame.Z);
+            }
+```
+
+(`ShadowFrame`, not `Frame`: `DrawBodies` already has a parameter `Frame`, the `FSkyFrame`.)
+
+(k) Replace `ShipSky::CopyBodyLook`'s body with:
+
+```cpp
+    for (const FName Name : { SkyMaterial::Colour, SkyMaterial::LightDirection, SkyMaterial::SurfaceSeed, SkyMaterial::ShadowFrameX, SkyMaterial::ShadowFrameZ })
+    {
+        To.SetVectorParameterValue(Name, From.K2_GetVectorParameterValue(Name));
+    }
+    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering, SkyMaterial::Shadows })
+    {
+        To.SetScalarParameterValue(Name, From.K2_GetScalarParameterValue(Name));
+    }
+    To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));
+```
+
+(l) Add the pure helpers at the end of the file:
+
+```cpp
+float ShipSky::ShadowStrength()
+{
+    return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);
+}
+
+TArray<int32> ShipSky::ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship)
+{
+    TArray<int32> Order;
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+    {
+        if (System.Bodies[Index].Ground == EGround::Solid && System.Bodies[Index].Kind != ESkyBodyKind::Star)
+        {
+            Order.Add(Index);
+        }
+    }
+    Order.StableSort([&](int32 A, int32 B)
+    {
+        return Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius < Ship.DistanceTo(System.Bodies[B].Position) - System.Bodies[B].Radius;
+    });
+    return Order;
+}
+
+FLinearColor ShipSky::ShadowFrameX(const FSunShadowMap& Map)
+{
+    return FLinearColor(static_cast<float>(Map.FrameX.X), static_cast<float>(Map.FrameX.Y), static_cast<float>(Map.FrameX.Z), static_cast<float>(Map.PsiLo));
+}
+
+FLinearColor ShipSky::ShadowFrameZ(const FSunShadowMap& Map)
+{
+    return FLinearColor(static_cast<float>(Map.FrameZ.X), static_cast<float>(Map.FrameZ.Y), static_cast<float>(Map.FrameZ.Z), static_cast<float>(Map.Step));
+}
+
+UTexture2D* ShipSky::MakeShadowTexture(const FSunShadowMap& Map, FName Name)
+{
+    if (Map.LevelCount() == 0)
+    {
+        return nullptr;
+    }
+    const TArray<uint16>& Finest = Map.Levels[0];
+    const FName Unique = MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(),
+        FName(*(TEXT("ShadowMap_") + Name.ToString().Replace(TEXT(" "), TEXT("_")))));
+    UTexture2D* Texture = UTexture2D::CreateTransient(Map.Width, Map.Rows, PF_G16, Unique,
+        TConstArrayView64<uint8>(reinterpret_cast<const uint8*>(Finest.GetData()), static_cast<int64>(Finest.Num()) * sizeof(uint16)));
+    if (!Texture)
+    {
+        return nullptr;
+    }
+    FTexturePlatformData* Data = Texture->GetPlatformData();
+    for (int32 Level = 1; Level < Map.LevelCount(); ++Level)
+    {
+        const TArray<uint16>& Texels = Map.Levels[Level];
+        FTexture2DMipMap* Mip = new FTexture2DMipMap(Map.WidthAt(Level), Map.RowsAt(Level), 1);
+        Data->Mips.Add(Mip);
+        Mip->BulkData.Lock(LOCK_READ_WRITE);
+        FMemory::Memcpy(Mip->BulkData.Realloc(static_cast<int64>(Texels.Num()) * sizeof(uint16)), Texels.GetData(), Texels.Num() * sizeof(uint16));
+        Mip->BulkData.Unlock();
+    }
+    // Grayscale and linear, as the parameters' default is (SAMPLERTYPE_GRAYSCALE).
+    Texture->CompressionSettings = TC_Grayscale;
+    Texture->SRGB = false;
+    Texture->Filter = TF_Nearest;
+    Texture->NeverStream = true;
+    Texture->UpdateResource();
+    return Texture;
+}
+```
+
+- [ ] **Step 8: Build and author.**
 
 Run:
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
-EYES_TAG=shadows Tools/eyes.sh Eyes.LandingFrame; grep '^case' Saved/Eyes/LandingFrame/shadows/report.txt; \
-grep -c "error X\|Shader compile failed\|Failed to compile" Saved/Logs/DeepSpace.log; \
-python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows
-```
-
-Expected: `passed: 1`, 0 shader-compile errors, six `case` lines each with its sun, and the gate's table. The one assertion, the switch, passes: at `1.5m_dusk3` the term shades at least 10% of the lit ground the two captures without it held still (amended after review; the baseline's no-switch figure is `switch_cov` in its report, 0.5-2.3%). The costs should match the spike's to within the spread (the C++ side adds nothing a pixel pays); a cost well over the spike's means the materials' wiring differs from the spike's, so look there first. If the log shows a compile error for a Custom node, the HLSL half is wrong: fix it in the shared file (both compilers must still take it) and re-run, since `./build.sh` passing proves only the C++ half.
-
-- [ ] **Step 2: If NO-GO, lower the count and re-run.** Set 8, in both places: `"shadow_samples": 8` in the JSON and `ShadowSamples = 8;` in the header. Then:
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
 . Tools/ue_lock.sh && ue_locked ~/UnrealEngine/UE_5.8/Engine/Binaries/Linux/UnrealEditor-Cmd "$PWD/DeepSpace.uproject" \
     -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" -unattended -nopause -nosplash -NoLiveCoding; \
-./test.sh DeepSpace.Sky.MaterialContract && ./test.sh DeepSpace.Surface.WorldRelief && \
-EYES_TAG=shadows-8 Tools/eyes.sh Eyes.LandingFrame; \
-python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-8
+cat Saved/setup_sky_materials.txt | tail -12
 ```
 
-If it is still over, do the same at 6. `.ShadowCost` scales its bounds with `Samples`. `.ShadowAgainstTruth` must still pass at the lowered count: Task 2 Step 6 printed mean |dv| per angle at 8 and 6, and a count whose 5-degree mean |dv| is over 0.12 is a **quality NO-GO** for that count -- the test fails and the bound is not loosened.
+Expected:
+- The report ends `ok` and lists `T_SkyShadowWhite`, then `M_SkyBody`, `M_SkyGround` and `M_SkyShadowProbe`, each with its scalars and vectors.
+- A contract mismatch raises and names it.
+- If the import names a sampler-type mismatch for `T_SkyShadowWhite` (a grayscale sampler over a texture that is not TC_Grayscale), the import did not take the settings. Check the asset's compression, and never switch the sampler type to hide it.
 
-- [ ] **Step 3: The verdict.** Write it into the test's header comment as one line, in the form the parity test keeps its verdicts:
+- [ ] **Step 9: Run the tests.**
 
-`Cast-shadow gate (2026-09-28): GO at N = <n> -- cost over the baseline, ms: 50km +<a>, 1.5m +<b>, 50km_dusk10 +<c>, 1.5m_dusk10 +<d>, 1.5m_dusk3 +<e>, 200km_dusk10 +<f> (spread <s>); on minus off <a'>..<f'>; whole frames <A>..<F> ms (not gated: the spec's profiling); suns <deg> at the start's two cases; tried N = <list, each with its worst cost>`
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./test.sh DeepSpace.Sky.ShadowParameters && ./test.sh DeepSpace.Sky.MaterialContract && ./test.sh DeepSpace.Sky && ./test.sh DeepSpace.Surface`
 
-or `NO-GO -- at N = 6 the worst case is <case> at +<x> ms (spread <s>); <early exit tried: +<y> ms, or not tried>`.
+Expected: all PASS.
+- `.MaterialContract` translates every graph, the three shadow nodes included. **A Custom node's HLSL error does not show here**: the translator passes and no shader compiles under `-nullrhi`. It shows in Task 8's `Eyes.WorldReliefParity`, which is the first thing to run after this commit.
+- If `.ShadowParameters` fails on `GetNumMips` under `-nullrhi`, read the count from `Texture->GetPlatformData()->Mips.Num()` instead, and say so in the test's comment.
 
-"Tried" lists each N the spike and this task ran, as `N 12: worst +<x> ms (<case>)`, one entry per N, comma-separated.
-
-  - **GO:** commit (Step 4) and go on to Task 5.
-  - **NO-GO:** commit the measurement (Step 4) and go to Task 4b. Do not start Task 5.
-
-- [ ] **Step 4: Commit.**
+- [ ] **Step 10: Commit.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp \
-  Tools/sky_material_contract.json Source/DeepSpace/Sky/SkyMaterialContract.h Content/Materials/Sky && \
-git commit -qm "test(eyes): the cast shadow's gate against the baseline -- the verdict
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Tools/sky_material_contract.json Tools/setup_sky_materials.py Source/DeepSpace/Sky/SkyMaterialContract.h \
+  Source/DeepSpace/Tests/SkyMaterialContractTest.cpp Source/DeepSpace/Sky/ShipSky.h Source/DeepSpace/Sky/ShipSky.cpp \
+  Source/DeepSpace/Tests/ShipSkyShadowTest.cpp Content/Materials/Sky && \
+git commit -qm "feat(sky): the orbit and the ground read each world's baked cast shadow
+
+AShipSky bakes every solid world's SunShadowMap when the system loads, off
+the game thread (nearest first, ds.Sky.ShadowBakeTasks at once, cancelled on
+a rebuild and at EndPlay), uploads a G16 texture with a mip a level, and
+hands it, its frame and ds.Sky.Shadows to M_SkyBody; CopyBodyLook carries
+them to M_SkyGround, which blends the map into its vertices' shadow by Morph.
+One Custom node over the shared file's lookup in both, and in the parity
+probe M_SkyShadowProbe. DeepSpace.Sky.ShadowParameters; the contract's
+textures.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 5: Prove the switch's assertion, by pixels.** A budget-constant mutant would prove nothing here: with ABBA medians the on-minus-off sign of a free term is a coin toss, so such a mutant is "killed" about seven runs in eight by noise alone. The assertion that is proven is the switch's: the term reaches the materials and shades the 3-degree ground.
+- [ ] **Step 11: Prove it.**
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'SkyMaterial::Shadows, 1.0f);' Eyes.LandingFrame; ./build.sh`
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);' 'return CVarShadows.GetValueOnGameThread();' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));' '' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius < Ship.DistanceTo' 'Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius > Ship.DistanceTo' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    if (CVarShadowMaps.GetValueOnGameThread() != 0)' '    if (true)' 'DeepSpace.Sky.ShadowParameters$'; \
+./build.sh
+```
 
-Expected: `KILLED`. With the proxy's Shadows pinned at 1, and the ground copying the proxy's, the frames with the switch at 0 and 1 are the same scene, and the held-pixel coverage falls to the baseline's `switch_cov` (0.5-2.3%), under the 10%. (The first version's whole-frame coverage would have let this mutant survive on the flicker alone.) If it SURVIVES, the switch is not what draws the difference: find out before going on.
+Expected: four `KILLED`.
+- The unclamped strength draws 7.
+- The ground that is not handed the map reads the white default.
+- The bakes ordered farthest first break the order.
+- The switch that is never read bakes with `ds.Sky.ShadowMaps` 0.
+
+The material side is proven on the GPU by Tasks 8 and 9, after Task 7 has measured the cost.
 
 ---
+## Task 7: THE COST, measured and budgeted -- `Eyes.ShadowBakeCost`
 
-## Task 4b (only on NO-GO): a stop-and-replan point, not an executable task
-
-Reached from Task 1b (the spike) or Task 4. The per-pixel march does not fit the budget at 6 samples, with the coarse-band early exit tried. If Task 0 already ruled on this (its question 3), apply that ruling; otherwise stop and put this to the developer with the gate's tables at 12, 8 and 6 (and the early exit's):
-
-1. **Bake it** (planning's recommendation if the gate fails). Worlds neither spin nor move, so each world's sun is fixed in its own axes, and the shadow is a fixed function of D. The same `WR_SunVisible` would be drawn by `DrawMaterialToRenderTarget` (the parity probe's own mechanism) into a clipmap centred on the ship: three levels of 512 x 512 texels over about 2, 20 and 200 km. Each level is rebuilt when the ship has moved an eighth of it, and both materials sample it. The frame then pays a few texture reads. The cost is detail finer than a texel (4 m, 40 m and 400 m at the three levels), plus a new component and a D-to-texel mapping per level. Parity would hold the baked texels to the C++ mirror just as the probe does.
-2. **Fewer bands.** March only the coarsest `k` bands. On an earlier variant of the march, planning measured 6 bands at 16 samples shading 0.45 of the truth at 5 degrees on IV, where all twelve shaded 0.72. This stays per pixel, but the term becomes much weaker.
-3. **Relax the budget.** 1.0 ms is the terrain's measured spare, not a ruling. The 16.6 ms frame is the ruling, and the ground was already at 19.4 ms before the term; the spec's profiling work owns that. The developer may give the shadow more once the profiling has found room.
-
-When the ruling comes back, write it into the spec **on main** under the ruling bullet, and re-plan Tasks 2-6 against it.
-
----
-
-## Task 5: parity -- `Eyes.WorldReliefParity`'s shadow leg, and the handover at dusk
-
-**Owner:** T. **Depends on:** Task 4 (GO; `N` settled).
+**Owner:** T. **Depends on:** Task 6 (the sky's bakes) and Task 4 (the tiles'), and Task 0's third answer (the budgets). This measures only; it changes no shader and no game code.
 
 **Files:**
-- Modify: `Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp` -- the shadow leg, its SUMMARY line, and its verdict line in the header
-- Modify: `Source/DeepSpace/Tests/Eyes/HandoverParityEyesTest.cpp` -- the dusk leg
+- Create: `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp` (`Eyes.ShadowBakeCost`)
 
 **Interfaces:**
-- Consumes: `M_SkyShadowProbe`, `SkyMaterial::{ShadowProbePath, ProbeLight, SunRadius, ShadowSamples}` (Task 3); `WorldReliefShading::SunVisible`, `WorldReliefNoise::SunVisibleF32` (Task 2); `ShipSky::SunAngularRadius`; the parity test's `Draw`, `Selecting`, `FGap`, `IsFinite`, `FloorRuleFactor`, `Footprints`, `Side`.
-- Produces: report lines `Baemsekai IV's cast shadow, sun <deg> deg, footprint 1/<n>: ...` and `SUMMARY cast shadow C++-vs-GPU <x>, float-vs-double <y>`.
+- Consumes: `TerrainTile::{Build, FTileShadow}`, `AWorldGround::{GetTileShadow, GetDrawnKeys, GetResidentCount, FlushBuildsForTest}` (Task 4); `SunShadowMap::Bake`, `FSunShadowMap::Bytes` (Task 5); `AShipSky::{FlushShadowBakesForTest, RebuildFor, GetShadowMapForTest, bKeepShadowMapsForTest}` and `ds.Sky.ShadowMapWidth`, `ds.Sky.ShadowBakeTasks` (Task 6); `SkyProjection::SunLightOf` (Task 3); `SunShadow::SteepestSlope`; `ShipSky::GotoPlacement`; `SkyTestWorld::{FSkyWorld, EShadows, PilotEye}`.
+- Produces: `Saved/Eyes/ShadowBakeCost/report.txt`, with lines `cut ...`, `tile ...`, `map ...` and one `budget <name> <measured> <limit> within|OVER` line for each budget.
 
-**The tolerance, decided now:** this is the measured floor as a rule, applied to a term that never had engine nodes. At each footprint and each sun, the GPU is held to the larger of 1e-3 and 1.25 x the file's own float build's distance from double, measured in the same run at the same D. Visibility is continuous in D (the disc's share, the fades and the exits all are), so no sample is left out. The horizon is reported, not held: an exact exit can stop float and double at different samples with the same visibility. The evaluation counts are held the same way, to the float build rather than to double: where float and double break out of the loop at different samples their counts differ, and at 1/3072 and 1/12288 that alone could drop a GPU-vs-double agreement under 98% and read as a port bug. So `Pixel.Z` is compared with `Float.Evaluations`, and the GPU's agreement must be at least the float build's own agreement with double, less 1 point. Planning's float floor: 1.1e-3 to 2.1e-3 at 1/3072, and 5.3e-3 to 1.2e-2 at 1/12288.
+**The budgets, decided now** (Task 0's third question; these are its recommended defaults, and they are replaced here by its answers):
 
-The ground's footprints are held too. The parity table ends at 1/12288 (8e-5), but in play the orbit runs at about 4e-5 and the ground at 1e-7 to 1e-6, where `Nearest` switches to the finest band's half-wavelength and `Here` keeps all twelve bands. The shadow leg adds rows at 1/49152 and 1e-6, held by the same rule to the same run's float build. No other test holds the ground's own march to C++.
+| Budget | Limit | Why |
+|---|---|---|
+| `cold_cut_s`: the cut at 1.5 m over IV at a 10-degree dusk, resident from nothing, with the shadow, on `ds.Terrain.BuildTasks` 2 | 30 s | planning's 27 s estimate at 12 samples; residency never gates motion, and the coarse tiles come first |
+| `tile_ratio`: a tile's median build with the shadow over without, 64 of that cut's keys, 10-degree light | 10 x | planning's 7.7-9.4 x |
+| `world_bake_s`: one world's map on one thread at `ds.Sky.ShadowMapWidth`, the slowest of III, IV and V | 15 s | a world is shadowed well before a ship at the arrival standoff can reach it |
+| `world_map_mb`: one world's map, level 0 and every mip | 16 MB | 4096 columns: planning's 12 MB |
+| `tile_shadow_mb`: the resident cut's kept vertex shadows, CPU | 8 MB | 951 tiles x 1,089 floats = 4.1 MB |
 
-- [ ] **Step 1: The failing leg.** In `WorldReliefParityTest.cpp`, before the two `SUMMARY` lines, add:
+The frame is `Eyes.LandingFrame`'s, in Task 9: it must not rise.
+
+- [ ] **Step 1: The measurement.** Create `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp`:
 
 ```cpp
-    // -- The cast shadow (the developer's ruling on slice (b)'s build) -------
-    // M_SkyShadowProbe draws WR_SunVisible over the same patch for Baemsekai
-    // IV under three suns above the patch's centre, toward its east -- 2
-    // degrees, 10 (the dusk goto's) and 60 (the exit) -- at each footprint of
-    // the table and at the ground's two, 1/49152 and 1e-6; the C++ is
-    // WorldReliefShading::SunVisible at the very D the GPU drew. The patch
-    // spans 0.5 in D, about 28 degrees, so at "2 degrees" the sun runs from
-    // about -12 to +16 across it: the shaded share (about half) is the
-    // spread's, and is reported, not asserted. Held to the
-    // measured floor as a rule: 1e-3, or 1.25 x the file's own float build's
-    // distance from double at that footprint and sun, whichever is larger.
+#include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
+#include "Sky/SkyProjection.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/SunShadowMap.h"
+#include "Surface/TerrainTile.h"
+#include "Surface/WorldGround.h"
+#include "Tests/SkyTestWorld.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+/**
+ * A MEASUREMENT, not a guard: what the baked cast shadow costs (the
+ * cast-shadow plan, Task 6). Named outside DeepSpace. so ./test.sh never runs
+ * it -- it is timed, and a timing belongs behind the lock on a quiet machine
+ * -- and run as the rendered checks are:
+ *
+ *   Tools/eyes.sh Eyes.ShadowBakeCost
+ *
+ * It renders nothing. It measures:
+ *
+ * - The cold cut: the ground at 1.5 m over Baemsekai IV under a 10-degree
+ *   dusk, resident from nothing, without and with the shadow
+ *   (ds.Terrain.Shadows 0 then 1), on the ground's own tasks.
+ * - A tile: 64 of that cut's keys, each built here, on this thread, without
+ *   the shadow and with it under a 3-, 10- and 60-degree sun over the cut's
+ *   centre. Medians and 90th percentiles of BuildSeconds, and their ratio.
+ * - A world's map: Baemsekai III, IV and V, each baked here on one thread at
+ *   ds.Sky.ShadowMapWidth, and the sky's own bakes of every solid world on
+ *   ds.Sky.ShadowBakeTasks, from a rebuild to the last texture.
+ * - Memory: each map's bytes, level 0 and its mips, and the resident cut's
+ *   kept vertex shadows.
+ *
+ * Each budget prints one line, `budget <name> <measured> <limit> within|OVER`;
+ * the plan's rule reads them. Nothing is asserted but that each measure was
+ * taken, because a loaded machine would make a timing assertion a coin toss.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowBakeCostEyesTest, "Eyes.ShadowBakeCost",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace ShadowBakeCostLocal
+{
+    // The budgets: Task 0's answers (the plan's recommended defaults until then).
+    constexpr double ColdCutBudgetSeconds = 30.0;
+    constexpr double TileRatioBudget = 10.0;
+    constexpr double WorldBakeBudgetSeconds = 15.0;
+    constexpr double WorldMapBudgetMB = 16.0;
+    constexpr double TileShadowBudgetMB = 8.0;
+
+    double Percentile(TArray<double> Values, double Share)
+    {
+        if (Values.Num() == 0)
+        {
+            return 0.0;
+        }
+        Values.Sort();
+        return Values[FMath::Clamp(FMath::FloorToInt32(Share * (Values.Num() - 1)), 0, Values.Num() - 1)];
+    }
+
+    FString Budget(const TCHAR* Name, double Measured, double Limit)
+    {
+        return FString::Printf(TEXT("budget %s %.3f %.3f %s"), Name, Measured, Limit, Measured <= Limit ? TEXT("within") : TEXT("OVER"));
+    }
+}
+
+bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShadowBakeCostLocal;
+    FSkyWorld Test(TEXT("ShadowBakeCostWorld"), 8, EShadows::On);
+    Test.Sky->bKeepShadowMapsForTest = true;
+    Test.BeginPlay();
+    Test.Step(1.0f / 60.0f);
+    Test.Sky->FlushShadowBakesForTest();
+    const FSkySystem Here = LocalSystem::Here(Test.World);
+    if (!TestTrue(TEXT("the start system has worlds III, IV and V"), Here.Bodies.IsValidIndex(5)))
+    {
+        return false;
+    }
+    const FSkyBody& Fourth = Here.Bodies[4];
+    const FSkyBody* Star = Here.Bodies.FindByPredicate([](const FSkyBody& Candidate) { return Candidate.Kind == ESkyBodyKind::Star; });
+    const FGroundFieldRef Field = ShipGround::FromRelief(Fourth.Relief);
+    TArray<FString> Report;
+    const auto Line = [&](const FString& Text)
+    {
+        Report.Add(Text);
+        AddInfo(Text);
+    };
+
+    // -- The cold cut ---------------------------------------------------------
+    const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, 0.0, Test.Ship->GetFlightState().GetUniversePosition(),
+                                                                 ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(10.0));
+    if (!TestTrue(TEXT("goto dusk places over Baemsekai IV"), Dusk.IsSet() && Star))
+    {
+        return false;
+    }
+    const FVector Up = (Dusk->Position - Fourth.Position).GetSafeNormal();
+    const FVector Sunward = (Star->Position - Fourth.Position).GetSafeNormal();
+    const FVector Heading = FVector::CrossProduct(Up, Sunward).GetSafeNormal();
+    Test.Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + Field->Height(FVector3d(Up), 0.0) + 150.0),
+                         FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
+    IConsoleVariable* TerrainShadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.Shadows"));
+    IConsoleVariable* BuildTasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.BuildTasks"));
+    if (!TestNotNull(TEXT("ds.Terrain.Shadows exists"), TerrainShadows) || !TestNotNull(TEXT("ds.Terrain.BuildTasks exists"), BuildTasks))
+    {
+        return false;
+    }
+    const auto ColdCut = [&](int32 On)
+    {
+        // The switch restarts the ground (Task 4), so the next flush builds the whole cut.
+        TerrainShadows->Set(On, ECVF_SetByCode);
+        const double Start = FPlatformTime::Seconds();
+        Test.Step(1.0f / 60.0f);
+        Test.Ground->FlushBuildsForTest();
+        return FPlatformTime::Seconds() - Start;
+    };
+    const double CutWithout = ColdCut(0);
+    const double CutWith = ColdCut(1);
+    const int32 Resident = Test.Ground->GetResidentCount();
+    Line(FString::Printf(TEXT("cut 1.5m_dusk10 over Baemsekai IV: %d tiles resident on %d tasks; without the shadow %.2f s, with it %.2f s (x%.2f)"),
+        Resident, BuildTasks->GetInt(), CutWithout, CutWith, CutWith / FMath::Max(CutWithout, 1e-6)));
+    Line(Budget(TEXT("cold_cut_s"), CutWith, ColdCutBudgetSeconds));
+    const double TileShadowMB = Resident * TerrainTile::GridVerts * sizeof(float) / (1024.0 * 1024.0);
+    Line(Budget(TEXT("tile_shadow_mb"), TileShadowMB, TileShadowBudgetMB));
+
+    // -- A tile ---------------------------------------------------------------
+    const TArray<FTileKey> Drawn = Test.Ground->GetDrawnKeys();
+    TArray<FTileKey> Keys;
+    for (int32 Index = 0; Index < Drawn.Num() && Keys.Num() < 64; Index += FMath::Max(1, Drawn.Num() / 64))
+    {
+        Keys.Add(Drawn[Index]);
+    }
+    const TerrainTile::FTileShadow Ruled = Test.Ground->GetTileShadow();
+    const FVector3d Centre = FVector3d(Up);
+    const FVector3d Level = (FVector3d(Sunward) - Centre * FVector3d::DotProduct(FVector3d(Sunward), Centre)).GetSafeNormal();
+    for (const double Degrees : { 10.0, 3.0, 60.0 })
+    {
+        TerrainTile::FTileShadow Shadow = Ruled;
+        const double Elevation = FMath::DegreesToRadians(Degrees);
+        Shadow.Sun.Direction = (Centre * FMath::Sin(Elevation) + Level * FMath::Cos(Elevation)).GetSafeNormal();
+        TArray<double> Without;
+        TArray<double> With;
+        TArray<double> Ratio;
+        for (const FTileKey& Key : Keys)
+        {
+            const double Bare = TerrainTile::Build(*Field, Key).BuildSeconds;
+            const double Cast = TerrainTile::Build(*Field, Key, Shadow).BuildSeconds;
+            Without.Add(Bare);
+            With.Add(Cast);
+            Ratio.Add(Cast / FMath::Max(Bare, 1e-9));
+        }
+        Line(FString::Printf(TEXT("tile sun %.0f: %d keys, without the shadow median %.2f ms p90 %.2f ms, with it median %.2f ms p90 %.2f ms, ratio median x%.2f p90 x%.2f (%d samples)"),
+            Degrees, Keys.Num(), 1e3 * Percentile(Without, 0.5), 1e3 * Percentile(Without, 0.9), 1e3 * Percentile(With, 0.5),
+            1e3 * Percentile(With, 0.9), Percentile(Ratio, 0.5), Percentile(Ratio, 0.9), Shadow.Samples));
+        if (Degrees == 10.0)
+        {
+            Line(Budget(TEXT("tile_ratio"), Percentile(Ratio, 0.5), TileRatioBudget));
+        }
+    }
+
+    // -- A world's map ----------------------------------------------------------
+    IConsoleVariable* Width = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowMapWidth"));
+    const int32 Columns = Width ? Width->GetInt() : SunShadowMap::DefaultWidth;
+    double Slowest = 0.0;
+    double Largest = 0.0;
+    for (const int32 Index : { 3, 4, 5 })
+    {
+        const FSkyBody& Body = Here.Bodies[Index];
+        const FReliefGround Ground(Body.Relief);
+        const double Start = FPlatformTime::Seconds();
+        const FSunShadowMap Map = SunShadowMap::Bake(Ground, SkyProjection::SunLightOf(Here, Index), SunShadow::SteepestSlope(Body.Relief), Columns);
+        const double Seconds = FPlatformTime::Seconds() - Start;
+        const double MB = Map.Bytes() / (1024.0 * 1024.0);
+        Slowest = FMath::Max(Slowest, Seconds);
+        Largest = FMath::Max(Largest, MB);
+        TestTrue(FString::Printf(TEXT("%s's map baked"), *Body.Id.ToString()), Map.LevelCount() > 0);
+        Line(FString::Printf(TEXT("map %s: %d x %d, %d levels, %.2f s on one thread, %.2f MB, psi_lo %.2f deg"),
+            *Body.Id.ToString(), Map.Width, Map.Rows, Map.LevelCount(), Seconds, MB, FMath::RadiansToDegrees(Map.PsiLo)));
+    }
+    Line(Budget(TEXT("world_bake_s"), Slowest, WorldBakeBudgetSeconds));
+    Line(Budget(TEXT("world_map_mb"), Largest, WorldMapBudgetMB));
+    {
+        const double Start = FPlatformTime::Seconds();
+        Test.Sky->RebuildFor(Here);
+        Test.Sky->FlushShadowBakesForTest();
+        int32 Maps = 0;
+        double MB = 0.0;
+        for (const FSkyBody& Body : Here.Bodies)
+        {
+            if (const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Body.Id))
+            {
+                ++Maps;
+                MB += Map->Bytes() / (1024.0 * 1024.0);
+            }
+        }
+        IConsoleVariable* Tasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowBakeTasks"));
+        Line(FString::Printf(TEXT("map the sky's bakes: %d worlds on %d tasks, %.2f s from the rebuild to the last texture, %.2f MB in all"),
+            Maps, Tasks ? Tasks->GetInt() : 0, FPlatformTime::Seconds() - Start, MB));
+    }
+
+    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");
+    IFileManager::Get().MakeDirectory(*Dir, true);
+    FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
+        FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+    return true;
+}
+
+#endif
+```
+
+- [ ] **Step 2: Run it**, on a quiet machine: no other build, test or render running.
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.ShadowBakeCost; cat Saved/Eyes/ShadowBakeCost/report.txt`
+
+Expected: `passed: 1`, and the report's `cut`, three `tile`, three `map`, one sky-bakes line and five `budget` lines. Planning expects:
+- the cold cut at about 3 s without the shadow and about 27 s with it;
+- a tile about 8x at 10 degrees, less at 3 (many vertices exit hidden), about 1x at 60 (the day exit);
+- each map about 8-15 s on one thread and about 12 MB;
+- the sky's five bakes at about (the sum over worlds) / 2 on two tasks.
+
+A number far from its prediction is a finding to report, not a failure.
+
+- [ ] **Step 3: The verdict.**
+  - **Every budget line reads `within`:** write the report's budget lines and the `cut`, `tile sun 10` and `map` lines into this file's header comment, as one line each after `Nothing is asserted...`, headed `Measured (2026-09-28, RTX 4070 Ti SUPER, Ryzen 5 7600X):`. Commit (Step 4), and go on to Task 8.
+  - **Any line reads `OVER`:** commit the measurement (Step 4) and go to Task 7b. Do not start Task 8.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp && \
+git commit -qm "test(eyes): the baked cast shadow's cost -- per tile, per world, and their memory, against their budgets
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+No mutation proves a measurement. The budget lines' `OVER` wording is what Task 7b reads, and a run with `ColdCutBudgetSeconds` set to 0.001 must print `OVER`. Check it once by hand (edit, build, run, restore) and record in the task report that it did.
+
+---
+
+## Task 7b (only if a budget is over): a stop-and-report point, not an executable task
+
+Reached from Task 7. Stop, and put the report's lines to the developer with the options that match the budget that failed. Do not tune past a budget without the ruling.
+
+- **`cold_cut_s` or `tile_ratio` over:** Task 0's second question, with measured numbers now:
+  - `ds.Terrain.BuildTasks` 3;
+  - every other vertex, interpolated (a coarsening: it needs the ruling);
+  - `ds.Terrain.ShadowSamples` 8, which `.AgainstProfile` measured as over its 5-degree bound (a quality NO-GO unless the developer relaxes it);
+  - or a larger budget.
+  - First, profile `FWorldRelief::Height`, whose crater sum is most of a height's cost. `DetailSum` evaluates every band, even one its footprint has faded to 0. Skipping those (`if (FootprintD * Frequencies[Band] >= 1.0) continue;`) changes no value, since the band's scale is exactly 0 there, and saved about 25% of a coarse read in planning's harness. Such a change must keep `DeepSpace.Surface.WorldRelief.KnownValues` and `Eyes.WorldReliefParity` exact, and is proposed with its measurement.
+- **`world_bake_s` over:** a narrower `ds.Sky.ShadowMapWidth` (2048 is about 4x faster), or more bake tasks. Or accept it: a world's map lands this many seconds after the system loads, and until then it draws unshadowed.
+- **`world_map_mb` or `tile_shadow_mb` over:** a narrower width; or 8-bit texels (half the memory, 1/255 steps); or dropping the kept `FTileBuild` copy in `UTerrainTileComponent`, which exists only for proxy recreation.
+
+When the ruling comes back, write it into the spec under the ruling's bullet, amend Task 7's budgets or Tasks 4/5's defaults, re-run Task 7, and go on.
+
+---
+
+## Task 8: parity -- the map on the GPU, and the handover at dusk
+
+**Owner:** T. **Depends on:** Task 7's verdict, GO.
+
+**Files:**
+- Modify: `Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp`: the shadow-map leg, its SUMMARY line, and its verdict line in the header
+- Modify: `Source/DeepSpace/Tests/Eyes/HandoverParityEyesTest.cpp`: the dusk leg
+
+**Interfaces:**
+- Consumes: `M_SkyShadowProbe`, `SkyMaterial::{ShadowProbePath, ShadowMap, ShadowFrameX, ShadowFrameZ, ProbeFootprint}`, `ShipSky::{MakeShadowTexture, ShadowFrameX, ShadowFrameZ}`, `AShipSky::FlushShadowBakesForTest` (Task 6); `SunShadowMap::{Shape, Bake, Sample, SampleF32}` (Task 5); `SkyProjection::SunLightOf` (Task 3); `SunShadow::SteepestSlope`; the parity test's `Draw`, `Selecting`, `EPass`, `FGap`, `IsFinite`, `FloorRuleFactor`, `Side`, `HomeSky`, `Fourth`, `Probe`, `Target`, `Report`.
+- Produces: report lines `Baemsekai IV's shadow map, <place>, footprint <f>: ...`, and `SUMMARY shadow map C++-vs-GPU <x>, float-vs-double <y>`; and a second line in `Saved/Eyes/HandoverParity/report.txt`.
+
+**The tolerance, decided now:** the measured floor as a rule. The texels are the same 16-bit integers on both sides, and the GPU's `Load` of a UNORM16 texel is that integer over 65535. What is left is the lookup's own arithmetic in float: the frame's dot products, `asin`, `atan2`, `log2`, and the taps' weights. So at each footprint and each place the GPU is held to the larger of 1e-3 and 1.25 x the float mirror's (`SampleF32`) distance from double, measured in the same run at the same D. Every pixel is held: the lookup is continuous in D, the seam included, and its only steps are the texels' own values. A FLOAT FLOOR verdict escalates.
+
+**The handover, decided now:** at 49.9 km over IV under a 3-degree dusk, where the map shades part of the ground, the ground's frame must be the orbit's to 1e-3 of its mean with the shadow on. The shadow must reach both frames: each is darker with it than without, by the same share to 1e-3. And the seam's per-pixel p99 gap may grow at most 3x with the shadow on. At 49.9 km the morph is about 3e-5, so the ground's shadow is the map to that.
+
+- [ ] **Step 1: The map's leg.** In `WorldReliefParityTest.cpp`, add the includes `#include "Engine/Texture2D.h"`, `#include "Sky/SkyProjection.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"` and `#include "Surface/SunShadowMap.h"`. Before `Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));`, add:
+
+```cpp
+    // -- The cast shadow's map (the developer's ruling on slice (b)'s build:
+    // baked, not marched) ------------------------------------------------------
+    // M_SkyShadowProbe draws the map's lookup -- the shared file's
+    // WR_ShadowMapCoord, WR_ShadowTapsAt and WR_Bilinear over the texture's own
+    // texels -- over the probe patch. The map is Baemsekai IV's, baked here at
+    // 1,024 columns under two lights 3 degrees over the patch's centre: one
+    // turned so the map's frame puts the centre at azimuth 0 (the patch across
+    // the terminator), one at +-pi (the patch across the map's seam). The C++
+    // is SunShadowMap::Sample at the very D the GPU drew, at five footprints
+    // from far finer than a texel (6.1e-3 rad) to one that reads level 2.
+    // Held by the measured floor as a rule: 1e-3, or 1.25 x the float
+    // mirror's distance from double at that footprint, whichever is larger.
     double WorstShadow = 0.0;
     double WorstShadowFloat = 0.0;
     {
@@ -2756,43 +3921,61 @@ The ground's footprints are held too. The parity table ends at 1/12288 (8e-5), b
             return false;
         }
         UMaterialInstanceDynamic* ShadowProbe = UMaterialInstanceDynamic::Create(ShadowShared, Test.World);
-        const double SunRadius = ShipSky::SunAngularRadius(HomeSky, 4);
-        const double ReliefScale = Ground.SlopeScale();
-        ShadowProbe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs));
-        ShadowProbe->SetScalarParameterValue(SkyMaterial::ReliefScale, static_cast<float>(ReliefScale));
-        ShadowProbe->SetScalarParameterValue(SkyMaterial::SunRadius, static_cast<float>(SunRadius));
         const FLinearColor NoBias(0.0f, 0.0f, 0.0f, 0.0f);
         const TArray<FVector3d> Directions = Draw(Test.World, Target, Probe, Selecting(EPass::Direction), NoBias);
-        // The patch's centre and its east, from the D the probe drew.
-        const int32 Middle = (Side / 2) * Side;
-        const FVector3d Centre = Directions[Middle + Side / 2].GetSafeNormal();
-        const FVector3d Across = Directions[Middle + Side - 1] - Directions[Middle];
-        const FVector3d Level = (Across - Centre * FVector3d::DotProduct(Across, Centre)).GetSafeNormal();
-        for (const double Degrees : { 2.0, 10.0, 60.0 })
+        const FVector3d Centre = Directions[(Side / 2) * Side + Side / 2].GetSafeNormal();
+        const FVector3d East = FVector3d::CrossProduct(FVector3d::UnitZ(), Centre).GetSafeNormal();
+        const FVector3d North = FVector3d::CrossProduct(Centre, East);
+        const FReliefGround Relief(Fourth.Relief);
+        const SunShadow::FSunLight Home = SkyProjection::SunLightOf(HomeSky, 4);
+        const double Steepest = SunShadow::SteepestSlope(Fourth.Relief);
+        struct FPlace
         {
-            const double Elevation = FMath::DegreesToRadians(Degrees);
-            const FVector3d Light = (Centre * FMath::Sin(Elevation) + Level * FMath::Cos(Elevation)).GetSafeNormal();
-            ShadowProbe->SetVectorParameterValue(SkyMaterial::ProbeLight,
-                FLinearColor(static_cast<float>(Light.X), static_cast<float>(Light.Y), static_cast<float>(Light.Z), 0.0f));
-            TArray<double> ShadowFootprints;
-            for (int32 Row = 0; Row < static_cast<int32>(UE_ARRAY_COUNT(Footprints)); ++Row)
+            const TCHAR* Name;
+            double Azimuth;
+        };
+        for (const FPlace& Place : { FPlace{ TEXT("across the terminator"), 0.0 }, FPlace{ TEXT("across the seam"), UE_DOUBLE_PI } })
+        {
+            // Turn the light about the centre until the map's frame puts the
+            // centre at the azimuth asked.
+            SunShadow::FSunLight Sun = Home;
+            double Nearest = TNumericLimits<double>::Max();
+            const double Elevation = FMath::DegreesToRadians(3.0);
+            for (int32 Turn = 0; Turn < 3600; ++Turn)
             {
-                ShadowFootprints.Add(Footprints[Row].Table.Footprint);
+                const double Around = Turn * 2.0 * UE_DOUBLE_PI / 3600.0;
+                SunShadow::FSunLight Trial = Home;
+                Trial.Direction = (Centre * FMath::Sin(Elevation)
+                    + (East * FMath::Cos(Around) + North * FMath::Sin(Around)) * FMath::Cos(Elevation)).GetSafeNormal();
+                const FSunShadowMap Shape = SunShadowMap::Shape(Relief, Trial, 1024);
+                const double Phi = FMath::Atan2(FVector3d::DotProduct(Centre, Shape.FrameY), FVector3d::DotProduct(Centre, Shape.FrameX));
+                const double Off = FMath::Abs(FMath::Fmod(Phi - Place.Azimuth + 3.0 * UE_DOUBLE_PI, 2.0 * UE_DOUBLE_PI) - UE_DOUBLE_PI);
+                if (Off < Nearest)
+                {
+                    Nearest = Off;
+                    Sun = Trial;
+                }
             }
-            // The ground's: the orbit's lowest in play, and the ground's own.
-            ShadowFootprints.Add(1.0 / 49152.0);
-            ShadowFootprints.Add(1.0e-6);
-            for (const double FootprintD : ShadowFootprints)
+            TestTrue(FString::Printf(TEXT("a light puts the patch %s (%.3f deg off)"), Place.Name, FMath::RadiansToDegrees(Nearest)),
+                Nearest < FMath::DegreesToRadians(0.5));
+            const FSunShadowMap Map = SunShadowMap::Bake(Relief, Sun, Steepest, 1024);
+            UTexture2D* Texture = ShipSky::MakeShadowTexture(Map, TEXT("Parity"));
+            if (!TestNotNull(TEXT("the map uploads"), Texture))
+            {
+                return false;
+            }
+            FlushRenderingCommands();
+            ShadowProbe->SetTextureParameterValue(SkyMaterial::ShadowMap, Texture);
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShipSky::ShadowFrameX(Map));
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShipSky::ShadowFrameZ(Map));
+            for (const double FootprintD : { 1.0e-5, 1.0e-4, 1.5e-3, 6.0e-3, 2.4e-2 })
             {
                 const float Footprint = static_cast<float>(FootprintD);
                 ShadowProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
                 const TArray<FVector3d> Drawn = Draw(Test.World, Target, ShadowProbe, NoBias, NoBias);
                 double Gap = 0.0;
                 double FloatGap = 0.0;
-                double HorizonGap = 0.0;
                 int32 NotFinite = 0;
-                int32 BandsAgree = 0;        // the GPU's evaluations against the float build's
-                int32 FloatBandsAgree = 0;   // the float build's against double's
                 int32 Shaded = 0;
                 for (int32 Index = 0; Index < Side * Side; ++Index)
                 {
@@ -2803,60 +3986,53 @@ The ground's footprints are held too. The parity table ends at 1/12288 (8e-5), b
                         ++NotFinite;
                         continue;
                     }
-                    const FSunVisibility Held = WorldReliefShading::SunVisible(Fourth.Relief, D, Light, SunRadius,
-                        static_cast<double>(Footprint), SkyMaterial::ShadowSamples);
-                    const FSunVisibility Float = WorldReliefNoise::SunVisibleF32(FVector3f(D), FVector3f(Light), Footprint,
-                        FVector3f(Fourth.Relief.SeedOffset), static_cast<float>(ReliefScale), static_cast<float>(SunRadius), SkyMaterial::ShadowSamples);
-                    Gap = FGap::Wider(Gap, FMath::Abs(Held.Visible - Pixel.X));
-                    FloatGap = FGap::Wider(FloatGap, FMath::Abs(Held.Visible - Float.Visible));
-                    HorizonGap = FGap::Wider(HorizonGap, FMath::Abs(Held.Horizon - Pixel.Y));
-                    BandsAgree += FMath::RoundToInt32(Pixel.Z) == Float.Evaluations ? 1 : 0;
-                    FloatBandsAgree += Float.Evaluations == Held.Evaluations ? 1 : 0;
-                    Shaded += Held.Visible < 0.5 ? 1 : 0;
+                    const double Held = SunShadowMap::Sample(Map, D, static_cast<double>(Footprint));
+                    const double Float = SunShadowMap::SampleF32(Map, FVector3f(D), Footprint);
+                    Gap = FGap::Wider(Gap, FMath::Abs(Held - Pixel.X));
+                    FloatGap = FGap::Wider(FloatGap, FMath::Abs(Held - Float));
+                    Shaded += Held < 0.5 ? 1 : 0;
                 }
-                const int32 Compared = Side * Side - NotFinite;
                 const double HeldTo = FMath::Max(1.0e-3, FloorRuleFactor * FloatGap);
-                const FString At = FString::Printf(TEXT("Baemsekai IV's cast shadow, sun %.0f deg, footprint 1/%.0f"), Degrees, 1.0 / Footprint);
+                const FString At = FString::Printf(TEXT("Baemsekai IV's shadow map, %s, footprint %.1e"), Place.Name, FootprintD);
                 TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
-                TestTrue(FString::Printf(TEXT("%s: WorldReliefShading::SunVisible computes what the GPU drew, held to %.1e (the float build %.2e from double): %.2e"),
+                TestTrue(FString::Printf(TEXT("%s: SunShadowMap::Sample computes what the GPU drew, held to %.1e (the float mirror %.2e from double): %.2e"),
                     *At, HeldTo, FloatGap, Gap), Gap <= HeldTo);
-                const double GpuAlike = 100.0 * BandsAgree / FMath::Max(Compared, 1);
-                const double FloatAlike = 100.0 * FloatBandsAgree / FMath::Max(Compared, 1);
-                TestTrue(FString::Printf(TEXT("%s: the GPU marched as the float build did, evaluations alike at %.2f%% of pixels, at least the float build's own %.2f%% with double less 1 point"),
-                    *At, GpuAlike, FloatAlike), GpuAlike >= FloatAlike - 1.0);
                 WorstShadow = FMath::Max(WorstShadow, Gap);
                 WorstShadowFloat = FMath::Max(WorstShadowFloat, FloatGap);
-                Report.Add(FString::Printf(TEXT("%s: %d compared, %.1f%% shaded, %d not finite"), *At, Compared, 100.0 * Shaded / FMath::Max(Compared, 1), NotFinite));
-                Report.Add(FString::Printf(TEXT("  visibility C++ vs GPU %.2e, held to %.1e; float build vs double %.2e; horizon %.2e rad (reported); evaluations GPU vs float %.2f%%, float vs double %.2f%%"),
-                    Gap, HeldTo, FloatGap, HorizonGap, GpuAlike, FloatAlike));
+                Report.Add(FString::Printf(TEXT("%s: %d compared, %.1f%% under half, %d not finite"), *At, Side * Side - NotFinite,
+                    100.0 * Shaded / (Side * Side), NotFinite));
+                Report.Add(FString::Printf(TEXT("  shadow map C++ vs GPU %.2e, held to %.1e; float mirror vs double %.2e"), Gap, HeldTo, FloatGap));
             }
         }
     }
-    Report.Add(FString::Printf(TEXT("SUMMARY cast shadow C++-vs-GPU %.2e, float-vs-double %.2e"), WorstShadow, WorstShadowFloat));
+    Report.Add(FString::Printf(TEXT("SUMMARY shadow map C++-vs-GPU %.2e, float-vs-double %.2e"), WorstShadow, WorstShadowFloat));
 ```
-
-  Also add the includes `#include "Sky/ShipSky.h"` (already present) and nothing else. `FSunVisibility` comes with `Surface/WorldRelief.h`.
 
 - [ ] **Step 2: Run it.**
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.WorldReliefParity; grep -A1 "cast shadow" Saved/Eyes/WorldReliefParity/report.txt | head -40`
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.WorldReliefParity; grep -A1 "shadow map" Saved/Eyes/WorldReliefParity/report.txt | head -30; grep -c "error X\|Shader compile failed\|Failed to compile" Saved/Logs/DeepSpace.log`
 
-Expected: PASS, with 21 shadow blocks (three suns, the five table footprints and the ground's two). At 60 degrees every gap is 0 and every evaluation count is 0 (the exit). At 2 degrees the shaded share is about 50% at the fine footprints; planning's 46.9% to 50.1% was on its made offset, and whether it used this same patch is unconfirmed, so the share is reported, not held. The existing legs are unchanged.
-
-The possible verdicts, and what each means:
-
+Expected: PASS, with 0 shader-compile errors and ten shadow-map blocks (two places, five footprints). This is the first run that compiles the shadow's Custom node. **A compile error here is the HLSL half of the shared file, or `SHADOW_CODE`**: fix it there (both compilers must still take the file), re-author the materials, and re-run. The existing legs are unchanged. The possible verdicts:
   - **PASS:** go on.
-  - **Over its allowance at one or two pixels, at 1/3072 or finer only, with the evaluations still alike (the float build's agreement less at most 1 point):** a FLOAT FLOOR verdict. The GPU's float (FMA contraction, `pow` as `exp2(log2)`) sits beyond the C++ float build at a penumbra pixel near the march's first sample. Stop and report the gaps. The tolerance is not loosened.
-  - **Over its allowance broadly, or evaluations alike more than 1 point under the float build's own agreement:** a port bug. The GPU marched a different march. Look first at the light's axes, the footprint, and `Samples` reaching the node.
+  - **Over its allowance at a few pixels of the finest footprint only, the float mirror close to it:** a FLOAT FLOOR verdict (the GPU's `atan2` or `log2` beyond the C++ float build's). Stop and report the gaps; the tolerance is not loosened.
+  - **Over broadly, or at the seam's place only:** a port bug. Look first at the frame's `w` channels (PsiLo and Step reaching the node), the pin order, and the taps' wrap.
 
-- [ ] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"` and `#include "Sky/ShipSky.h"`. Then, before `const FString Dir = ...`, add:
+- [ ] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"` and `#include "Sky/ShipSky.h"` (if absent). Make the world `FSkyWorld Test(TEXT("HandoverParityWorld"), 8, EShadows::On);`, and after `Test.BeginPlay();` add:
+
+```cpp
+    // Every world's cast-shadow map is baked before any frame is judged.
+    Test.Step(1.0f / 60.0f);
+    Test.Sky->FlushShadowBakesForTest();
+```
+
+Then, before `const FString Dir = ...`, add:
 
 ```cpp
     // The cast shadow at the handover (the developer's ruling on slice (b)'s
-    // build): at 49.9 km over Baemsekai IV at a 3-degree dusk, where the
-    // relief shades 40-50% of the ground, the ground's frame is still the
-    // orbit's to 1e-3, and the shadow reaches both: with ds.Sky.Shadows 0 each
-    // is brighter, by the same share.
+    // build): at 49.9 km over Baemsekai IV under a 3-degree dusk the ground's
+    // frame is still the orbit's to 1e-3, and the shadow reaches both -- with
+    // ds.Sky.Shadows 0 each is brighter, by the same share. At 49.9 km the
+    // morph is about 3e-5, so the ground's shadow is the orbit's map to that.
     IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
     if (!TestNotNull(TEXT("ds.Sky.Shadows exists"), Shadows))
     {
@@ -2878,14 +4054,8 @@ The possible verdicts, and what each means:
         }
         return Sum / Count;
     };
-    const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, Index, 4.99e6, Ship->GetFlightState().GetUniversePosition(),
-                                                                 ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(3.0));
-    if (!TestTrue(TEXT("goto dusk places over Baemsekai IV"), Dusk.IsSet()))
-    {
-        return false;
-    }
     // The seam, not the mean: the two meshes can put a pixel in slightly
-    // different places (this test's header), and a shadow edge moves more
+    // different places (this test's header), and a shadow's edge moves more
     // pixels than shading does. So the per-pixel p99 gap is taken with the
     // shadow and without, and the shadow may not grow it past 3x.
     const auto GapP99 = [](const TArray<FLinearColor>& A, const TArray<FLinearColor>& B)
@@ -2903,6 +4073,12 @@ The possible verdicts, and what each means:
         Gaps.Sort();
         return Gaps[FMath::FloorToInt32(0.99 * (Gaps.Num() - 1))];
     };
+    const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, Index, 4.99e6, Ship->GetFlightState().GetUniversePosition(),
+                                                                 ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(3.0));
+    if (!TestTrue(TEXT("goto dusk places over Baemsekai IV"), Dusk.IsSet()))
+    {
+        return false;
+    }
     double Means[2][2] = { { 0.0, 0.0 }, { 0.0, 0.0 } };   // [shadows][ground, orbit]
     double P99[2] = { 0.0, 0.0 };                          // [shadows]
     for (int32 On = 0; On < 2; ++On)
@@ -2942,23 +4118,21 @@ The possible verdicts, and what each means:
         P99[1] <= 3.0 * FMath::Max(P99[0], 1.0e-4));
 ```
 
-  Then make the report file carry both lines: replace `FFileHelper::SaveStringToFile(Line + TEXT("\n"), ...)` with `FFileHelper::SaveStringToFile(Line + TEXT("\n") + DuskLine + TEXT("\n"), ...)`.
+Then make the report carry both lines: replace `FFileHelper::SaveStringToFile(Line + TEXT("\n"), ...)` with `FFileHelper::SaveStringToFile(Line + TEXT("\n") + DuskLine + TEXT("\n"), ...)`.
 
 - [ ] **Step 4: Run it.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.HandoverParity; cat Saved/Eyes/HandoverParity/report.txt`
 
-Expected: PASS, with two lines. The dusk line's shares should be well under 1, and its p99 with the shadow within 3x of without. Planning expects 40-50% of the ground shaded at 3 degrees on IV, so a share of roughly 0.5-0.7 of the light kept, and the two shares within 1e-3.
+Expected: PASS, with two lines. The existing 49.9 km line is unchanged: at the start's sun (62.6 degrees on IV) the day exit leaves the map whole there. On the dusk line both shares are well under 1, within 1e-3 of each other, and the p99 with the shadow is within 3x of without. The shares depend on how much of the central quarter the map shades at 8.8 km texels, 3 degrees up. If a share reads 0.99 or more, the shadow reached neither frame at the handover: look at the ground's copy of the map (`CopyBodyLook`) and at the proxy's `Shadows` before anything else.
 
-- [ ] **Step 5: The verdict line, and commit.** Add this to `WorldReliefParityTest.cpp`'s header, after the T2 line:
+- [ ] **Step 5: The verdict line, and commit.** Add this to `WorldReliefParityTest.cpp`'s header, after the T2 verdict line, filled in from the run:
 
-`* Cast shadow (the developer's ruling on slice (b)'s build, 2026-09-28): PASS -- Baemsekai IV under 2, 10 and 60-degree suns at seven footprints, WorldReliefShading::SunVisible vs the GPU <worst> against the float build's <worst float> from double, at seven footprints down to 1e-6; evaluations alike at <least>% (float vs double <least float>%); SUMMARY <the SUMMARY line, verbatim>`
-
-Fill in the run's numbers. Then:
+`* Cast shadow's map (the developer's ruling on slice (b)'s build, baked, 2026-09-28): PASS -- Baemsekai IV's map at 1,024 columns across the terminator and across the seam, SunShadowMap::Sample vs the GPU <worst> against the float mirror's <worst float> from double, at five footprints to level 2; SUMMARY <the SUMMARY line, verbatim>`
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp Source/DeepSpace/Tests/Eyes/HandoverParityEyesTest.cpp && \
-git commit -qm "test(eyes): the cast shadow held to its C++ mirror on the GPU, and the handover keeps it at dusk
+git commit -qm "test(eyes): the cast shadow's map held to its C++ mirror on the GPU, and the handover keeps it at dusk
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2967,126 +4141,463 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Surface/WorldRelief.cpp 'FWorldRelief(Params).SlopeScale(), SunRadius, Samples);' 'FWorldRelief(Params).SlopeScale(), SunRadius * 0.5, Samples);' Eyes.WorldReliefParity; \
-MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Cratering, SkyMaterial::SunRadius, SkyMaterial::Shadows })' 'SkyMaterial::Cratering, SkyMaterial::SunRadius })' Eyes.HandoverParity; \
+MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp '    return WorldReliefNoise::LerpF64(Seen[0], Seen[1], C.Blend);' '    return WorldReliefNoise::LerpF64(Seen[0], Seen[0], C.Blend);' Eyes.WorldReliefParity; \
+MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));' '' Eyes.HandoverParity; \
 ./build.sh
 ```
 
 Expected: two `KILLED`.
-- The half-radius mirror misses the GPU's penumbra.
-- The ground no longer copies Shadows, so it stays shadowed with the switch at 0 and the shares part.
+- The mirror that never reads the coarser level misses the GPU's trilinear blend at the footprints between levels.
+- The ground that is not handed the map reads the white default: its frame is brighter than the orbit's at dusk, and the shares part.
 
 ---
 
-## Task 6: the frames after, the numbers, the docs
+## Task 9: the frame must not rise -- `Eyes.LandingFrame` against the baseline
 
-**Owner:** T. **Depends on:** Task 5.
+**Owner:** T (holding `LandingFrameEyesTest.cpp` as Task 1 left it). **Depends on:** Task 8.
 
 **Files:**
-- Modify, **on main** (`/home/matt/Development/deepspace`, not the track): `docs/superpowers/specs/2026-09-27-landing-design.md` (the measured lines under *Ruled on slice (b)'s build*'s first bullet, which exists only on main)
-- Modify: `docs/superpowers/plans/2026-09-27-landing-slice-1.md` (*RULINGS AFTER PLANNING*: one line)
-- Modify: `CLAUDE.md`. In *The sky*, add a paragraph after *A world's face and relief are one noise*; in *Where each tunable lives*, add a row.
+- Modify: `Tools/landing_frame_gate.py`, `Tools/test_landing_frame_gate.py`: `--not-rise`
+- Modify: `Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp`. The world casts shadows, the bakes are flushed before any case is timed, the header comment is updated, and its verdict line is added.
 
-- [ ] **Step 1: The frames after.**
+**Interfaces:**
+- Consumes: `Eyes.LandingFrame` and its six cases (Task 1); the baseline in `Saved/Eyes/LandingFrame/baseline`, taken before any shadow existed; `AShipSky::FlushShadowBakesForTest`, `ds.Sky.Shadows` (Task 6); `SkyTestWorld::EShadows` (Task 4).
+- Produces: `python3 Tools/landing_frame_gate.py --not-rise <baseline> <after>`. It exits 0 when no case's cost is over its band (the medians' error, floored at `RUN_TO_RUN_MS`), 1 when one is, and 2 when a case is missing. It also produces `Saved/Eyes/LandingFrame/shadows-baked/report.txt`, and the verdict.
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && EYES_TAG=shadows-after Tools/eyes.sh Eyes.ReliefLook && python3 Tools/relief_look_compare.py Saved/Eyes/ReliefLook/shadows-before Saved/Eyes/ReliefLook/shadows-after`
+**The rule, decided now:** each case's frame with the baked shadow on, minus the same case in Task 1's baseline, may be no more than its band. The band is twice the combined standard error of the two medians, floored at 0.2 ms. With the ten raw times each run takes, it is about 0.6 ms on the measured spread. A case faster than its baseline is GO. The whole frame is reported, not gated. The switch's proof stands as Task 1 built it: at `1.5m_dusk3`, at least 10% of the lit and held pixels taken under half.
 
-Expected: a table of 12 frames, exit 0. Every shadows-off read frame is the frame before the term existed on the pixels both runs held still -- at most 10% moved by more than 1 LSB, the rest within a quarter level of mean luma (amended after review: two runs with nothing changed differ by whole tiles) -- which shows `ds.Sky.Shadows 0` is the old look; an unequal CRC is reported, not failed. A frame marked `ALIASING?` (`alias_on` over 1.5x `alias_off` and by more than max(0.1, 3x the `alias_off2` noise)) is an edge switching inside a pixel, which crawls in motion: report it with the frame. Planning's predictions are listed below (made at 10 degrees before Task 0; use its ruled elevation if it changed the views). A frame far from its prediction is a finding to report, not a failure:
-  - At 10 degrees, orbit: coverage 0% on III, about 0.3% on IV and 1-2% on V.
-  - At 10 degrees, ground: about 2% on IV and 3-5% on V.
-  - At 3 degrees, orbit: under 1% on III, about 35-45% on IV and 40-50% on V.
-  - At 3 degrees, ground: about 40% on IV and 50% on V.
+- [ ] **Step 1: The tool's failing tests.** Append to `Tools/test_landing_frame_gate.py`, before `if __name__ == "__main__":`:
 
-If the comparison prints `OFF FRAME DIFFERS`, the switch is not the old look beyond compiler noise. Find out why and do not go on: the most likely cause is a Custom node that does not return exactly 1.0 at strength 0.
+```python
+class NotRiseTest(unittest.TestCase):
+    """--not-rise: the baked shadow must cost the frame nothing measurable.
+    GO only if no case's cost is over its band -- the medians' error, floored
+    at RUN_TO_RUN_MS -- and a case faster than its baseline is GO too."""
 
-- [ ] **Step 2: Look at the frames.** Open `Saved/Eyes/ReliefLook/shadows-after/world_4_ground_low_read_shadows1.png` and its `read_shadows0` twin (the read frames: at the game's exposure the 3-degree frames are black), then the same pair for `orbit_low`, then both 10-degree pairs.
+    def verdict(self, **after):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0)
+            run(os.path.join(root, "after"), **after)
+            return gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 0.0, not_rise=True)
 
-  Check that the shadows fall away from the sun and lie across the view in the ground frames. Check that no speckle, banding or tile seam appears where the unshadowed frame has none (aliasing would show as noise that the shadows-off frame lacks). Check that the terminator side is darker and never brighter.
+    def test_a_free_bake_is_go(self):
+        self.assertEqual(self.verdict(on=10.0), 0)
 
-  Write a one-line judgement per world into the spec lines below. The developer's own look is carried to the next playtest.
+    def test_a_cost_inside_the_band_is_go(self):
+        # The measured spread's band is about 0.6 ms: 0.3 ms cannot be told from nothing.
+        self.assertEqual(self.verdict(on=10.3), 0)
 
-- [ ] **Step 3: The spec.** (Amended after review: the track now carries the ruling, so make this edit on the track and let the slice carry it to main; the original instruction follows.) In `/home/matt/Development/deepspace` on `main` (the ruling this line sits under is `3945176`/`8741a48`, on main only; the track has neither, and editing its copy would conflict at the merge), under the ruling's first bullet, *Cast shadows*, in `docs/superpowers/specs/2026-09-27-landing-design.md`, add an indented line using the run's numbers, and commit it on main by itself (`docs: landing spec -- cast shadows measured`, with the Co-Authored-By line):
+    def test_faster_is_go(self):
+        self.assertEqual(self.verdict(on=9.0), 0)
 
-```markdown
-  - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): `WR_SunVisible`, <N> samples, the GPU's twelve detail bands of `Height` faded at twice the gap ahead of each sample, no craters and no finer octaves (<Task 0's crater ruling>), the star's own disc widened near the pixel. Cost over the before-baseline, per case: <the six, from Task 4's verdict line>; whole frames <the six> ms, handed to the ground's profiling. Aliasing (2x against 1x) with and without: <worst pair>. Parity: C++ vs GPU <worst> against the float build's <worst float>. Frames at dusk's 10 degrees, mean brightness without -> with (coverage): orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees: orbit ..., ground .... At 10 degrees physical relief shades little (planning: under 3%); the shadows show below about 5 degrees. The developer's look carried to the playtest.
+    def test_a_rise_over_the_band_is_no_go(self):
+        self.assertEqual(self.verdict(on=11.0), 1)
+
+    def test_a_missing_case_is_undecided(self):
+        self.assertEqual(self.verdict(on=10.0, skip=("1.5m_dusk3",)), 2)
+
+    def test_the_command_line_takes_the_flag(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0)
+            run(os.path.join(root, "after"), 11.0)
+            self.assertEqual(gate.cli(["--not-rise", os.path.join(root, "base"), os.path.join(root, "after")]), 1)
+            # Without it the budget is 1 ms, and a cost of 1 ms is too close to call.
+            self.assertEqual(gate.cli([os.path.join(root, "base"), os.path.join(root, "after")]), 2)
 ```
 
-- [ ] **Step 4: The parent plan and CLAUDE.md.** In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_landing_frame_gate.py`
 
-  In `CLAUDE.md`, in *The sky*, after the paragraph that begins "**A world's face and relief are one noise.**", add:
+Expected: the six new tests ERROR. `main` takes no `not_rise`, and there is no `cli`.
 
-```markdown
-**The ground casts shadows**, marched through the same heights toward the
-sun (`WR_SunVisible` in `WorldRelief.ush`; the developer's ruling on slice
-(b)'s build). `M_SkyBody` and `M_SkyGround` call it with the same D,
-footprint and light -- in the body's axes on the proxy, the tile's on the
-ground -- so the 50 km handover keeps it (`Eyes.HandoverParity`). It reads
-the GPU's twelve detail bands of `FWorldRelief::Height` -- craters and the
-finer octaves out -- each sample faded at twice the gap ahead of it (the
-face's own fade, so the march never aliases along its length). So on the
-ground, features from 5 m up to the finest band's 116 m cast nothing, and
-nor do craters (<Task 0's ruling>). Its softness is the star's own disc
-(`ShipSky::SunAngularRadius`, clamped to 0.5 rad), widened near the pixel so
-an edge does not switch inside one pixel of motion, and a shadow is black:
-there is no sky light. Physical relief casts little under the dusk goto's
-10 degrees and a great deal under 5 and below. `ds.Sky.Shadows 0` draws the
-unshadowed look (to 1 LSB) and skips the march. Its GPU cost is gated
-against the frame **before the term existed**, not against the switch
-(`Tools/landing_frame_gate.py` over two `Eyes.LandingFrame` runs, at most
-1 ms, the terrain's spare): at 0 the pixel still runs the larger shader.
-`WR_SHADOW_GRADIENT_MAX`, the upper exit, is a sampled maximum, not a proof. `Eyes.WorldReliefParity` holds it to
-`WorldReliefShading::SunVisible`; the sample count is the contract's
-`shadow_samples`.
+- [ ] **Step 2: The tool.** In `Tools/landing_frame_gate.py`, change `def main(baseline_dir, after_dir, budget=1.0):` to `def main(baseline_dir, after_dir, budget=1.0, not_rise=False):`. Replace
+
+```python
+        close = abs(cost - budget) < band
+        over = cost > budget and not close
 ```
 
-  In *Where each tunable lives*, after the `ds.Sky.SurfaceDetail` row, add:
+with
 
-```markdown
-| `ds.Sky.Shadows` | 1 (0 draws the unshadowed look and skips the march) | `ShipSky.cpp` |
+```python
+        if not_rise:
+            # Nothing may be added: over is a cost the noise cannot explain.
+            close = False
+            over = cost > band
+        else:
+            close = abs(cost - budget) < band
+            over = cost > budget and not close
 ```
 
-  Add `shadow_samples` to the named-constants sentence at the table's foot: "the cast shadow's `shadow_samples` (the contract's JSON and `SkyMaterial::ShadowSamples`, chosen by the budget gate)".
+Replace the file's last two lines with:
 
-- [ ] **Step 5: The whole suite.**
+```python
+def cli(argv):
+    """[--not-rise] <baseline> <after> [budget ms]: --not-rise holds every case to its own band."""
+    not_rise = "--not-rise" in argv
+    args = [a for a in argv if a != "--not-rise"]
+    budget = float(args[2]) if len(args) > 2 else (0.0 if not_rise else 1.0)
+    return main(args[0], args[1], budget, not_rise=not_rise)
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./test.sh DeepSpace && Tools/eyes.sh Eyes.WorldReliefParity && Tools/eyes.sh Eyes.HandoverParity && EYES_TAG=final Tools/eyes.sh Eyes.LandingFrame && python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/final && (cd Tools && python3 test_relief_look_compare.py && python3 test_landing_frame_gate.py)`
 
-Expected: all green, with no dirty-log gate tripped, and the gate GO (exit 0). `Eyes.LandingFrame` asserts only the switch; its whole-frame times over 16.6 ms are reported and belong to the spec's profiling, so they do not make this red.
+if __name__ == "__main__":
+    sys.exit(cli(sys.argv[1:]))
+```
 
-- [ ] **Step 6: Commit.**
+Add to the docstring, after its first paragraph:
+
+```
+With --not-rise (the baked cast shadow, whose ruling is that it costs nothing
+per frame) there is no budget: GO only if no case's cost is over its band, a
+case faster than its baseline included; NO-GO if one is.
+
+    python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
+```
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_landing_frame_gate.py`
+
+Expected: all tests OK, the old eleven and the new six. The old ones still read `main(..., 1.0)` and are unchanged.
+
+- [ ] **Step 3: The test's world.** In `LandingFrameEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("LandingFrameWorld"), 3000, EShadows::On);`, and after `Test.BeginPlay();` add:
+
+```cpp
+    // The cast shadow is baked (the ruling): every world's map before any
+    // case is timed, so no bake shares the machine with a timed frame. The
+    // tiles' shadows are built by each case's own FlushBuildsForTest.
+    Test.Step(1.0f / 60.0f);
+    Test.Sky->FlushShadowBakesForTest();
+```
+
+In the header comment, replace the paragraph that begins "The cast shadow's gate (the cast-shadow plan, Task 1b and Task 4) is priced here." with:
+
+```cpp
+ * The cast shadow is BAKED (the developer's ruling on slice (b)'s build,
+ * 2026-09-28): the tiles' vertices carry it, each world's map is baked when
+ * the system loads, and the ruling is that it costs nothing per frame. So
+ * the gate is that the frame does not rise: each of the six cases -- the two
+ * above under the start's sun, and 50 km, 1.5 m and 200 km under the dusk
+ * goto's 10 degrees and 1.5 m under 3 -- with ds.Sky.Shadows 1, against the
+ * same case in the run with EYES_TAG=baseline, taken before any shadow
+ * existed, read by Tools/landing_frame_gate.py --not-rise against the
+ * medians' own error. Each case is timed with ds.Sky.Shadows 0 and 1 in ABBA
+ * order, five times over after one untimed round; on minus off is reported
+ * beside it, and is about 0 by construction.
+```
+
+and replace its command lines with:
+
+```cpp
+ *   EYES_TAG=baseline      Tools/eyes.sh Eyes.LandingFrame      (before any shadow: Task 1's)
+ *   EYES_TAG=shadows-baked Tools/eyes.sh Eyes.LandingFrame
+ *   python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
+```
+
+- [ ] **Step 4: Run it.**
+
+Run (on a quiet machine):
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add CLAUDE.md docs/superpowers/plans/2026-09-27-landing-slice-1.md && \
-git commit -qm "docs: the ground casts shadows in CLAUDE.md; the parent plan points at the cast-shadow plan
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && \
+EYES_TAG=shadows-baked Tools/eyes.sh Eyes.LandingFrame; grep '^case' Saved/Eyes/LandingFrame/shadows-baked/report.txt; \
+python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
+```
+
+Expected: `passed: 1`, six `case` lines each saying `switch present`, and the gate's table ending `GO`. The switch's proof passes at `1.5m_dusk3`, and the coverage there is the tile's vertex shadow's.
+
+On `NO-GO`, the frame has risen, which the ruling says it must not. Look at the cases that rose:
+- a proxy case (`200km_dusk10`) is the map's eight loads a pixel;
+- a ground case at 50 km (morph near 0) is the map's too;
+- a ground case at 1.5 m is the node's branch, since at morph 1 it loads nothing.
+
+Re-run once, quiet, before reading anything: a disturbed run is noise. If it rises again, stop and report the table with the case. The fallback, to be ruled, is the texture's own hardware trilinear sample in place of the eight loads. That is one fetch, but its filter's 8-bit weights would need Task 8's floor re-measured.
+
+- [ ] **Step 5: The verdict line, and commit.** Write into the test's header comment, after the commands:
+
+`Cast shadow, baked (2026-09-28): GO -- not rising; cost over the before-baseline, ms: 50km <a>, 1.5m <b>, 50km_dusk10 <c>, 1.5m_dusk10 <d>, 1.5m_dusk3 <e>, 200km_dusk10 <f>, each within its band (<bands>); whole frames <A>..<F> ms (not gated: the spec's profiling); the switch at 1.5m_dusk3 took <cov>% of the lit and held pixels`
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Tools/landing_frame_gate.py Tools/test_landing_frame_gate.py Source/DeepSpace/Tests/Eyes/LandingFrameEyesTest.cpp && \
+git commit -qm "test(eyes): the baked cast shadow does not raise the frame -- Eyes.LandingFrame against the baseline, --not-rise
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+- [ ] **Step 6: Prove the switch's assertion, by pixels.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, 1.0f);' Eyes.LandingFrame; ./build.sh`
+
+Expected: `KILLED`. With the proxy's strength pinned at 1, and the ground copying the proxy's, the frames with the switch at 0 and 1 are one scene, and the held-pixel coverage falls to the flicker's (0.5-2.3%), under the 10%. The `--not-rise` rule itself is proven by Step 1's tests: a timing mutant against ABBA medians is killed or not by noise alone.
+
+---
+
+## Task 10: the frames after, the numbers, the docs, the suite's time
+
+**Owner:** T. **Depends on:** Task 9 (GO).
+
+**Files:**
+- Modify: `Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp`: the world casts shadows, and the bakes are flushed
+- Modify: `Tools/relief_look_compare.py`, `Tools/test_relief_look_compare.py`: the brightness on held pixels, before and after
+- Modify: `docs/superpowers/specs/2026-09-27-landing-design.md` (on the track): the measured line under the ruling
+- Modify: `docs/superpowers/plans/2026-09-27-landing-slice-1.md` (*RULINGS AFTER PLANNING*: one line)
+- Modify: `CLAUDE.md`: *Architecture*'s Surface line, *The sky*'s new paragraph, *Landing*'s ground paragraph, and the tunables' rows
+
+**The done-when's frames, decided now:** Baemsekai III, IV and V, from 200 km and at the ground (1.5 m), under the dusk goto's 10 degrees and under 3, each before (Task 1's `shadows-before`) and after (`shadows-after`). All are drawn at the game's exposure plus the view's stated `ReadStops` (the read frames: III/IV/V at 3/3/3 from orbit and 3/4/3 at the ground at 10 degrees; 4/4/4 and 4/5/4 at 3 degrees). Each view reports:
+- the mean brightness, on the pixels both runs held still, before, after with the shadow off, and after with it on;
+- the shadow's coverage on the pixels the run's two captures without it held still;
+- its aliasing against 2x.
+
+- [ ] **Step 1: The comparison's failing tests.** In `Tools/test_relief_look_compare.py`, give `run()` a parameter `on=None` which, when given, also saves `name + "_read_shadows1.png"` from it. Then add to `CompareTest`:
+
+```python
+    def test_held_means_are_read_on_the_pixels_both_runs_held(self):
+        # The term darkens rows 0-3 to 10; one pixel of row 0 flickered in the
+        # run after, so 63 pixels are held in both runs.
+        with tempfile.TemporaryDirectory() as root:
+            on = frame(40)
+            on[:4] = 10
+            again = frame(40)
+            again[0, 0] = 90
+            run(os.path.join(root, "a"))
+            run(os.path.join(root, "b"), again=again, on=on)
+            before, off, lit = compare.held_means(os.path.join(root, "a"), os.path.join(root, "b"), "world_4_orbit")
+            self.assertAlmostEqual(before, 40.0, places=6)
+            self.assertAlmostEqual(off, 40.0, places=6)
+            self.assertAlmostEqual(lit, (31 * 10 + 32 * 40) / 63.0, places=6)
+
+    def test_held_means_without_the_frame_with_the_term(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "a"))
+            run(os.path.join(root, "b"))
+            self.assertIsNone(compare.held_means(os.path.join(root, "a"), os.path.join(root, "b"), "world_4_orbit")[2])
+```
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`
+
+Expected: the two new tests ERROR, because `relief_look_compare` has no `held_means`.
+
+- [ ] **Step 2: The comparison.** In `Tools/relief_look_compare.py`, after `same()`, add:
+
+```python
+def held_means(before_dir, after_dir, name):
+    """(before, after without the term, after with it): each read frame's mean
+    luma over the pixels both runs held still between their own two captures
+    without the term -- the done-when's brightness on still pixels. The last
+    is None if the run after has no frame with the term."""
+    frames = [png(d, name, s) for d in (before_dir, after_dir) for s in ("0", "0b")]
+    if any(f is None for f in frames) or len({f.shape for f in frames}) != 1:
+        return None, None, None
+    was, was_again, now, now_again = frames
+    mask = held(was, was_again) & held(now, now_again)
+    if not mask.any():
+        return None, None, None
+    luma = lambda f: float((f[mask] * WEIGHTS).sum(axis=1).mean())
+    on = png(after_dir, name, "1")
+    return luma(was), luma(now), (luma(on) if on is not None and on.shape == was.shape else None)
+```
+
+In `main`, add three columns to the header (`"held before", "held off", "held on"`) and to each row:
+
+```python
+        before_mean, off_mean, on_mean = held_means(before_dir, after_dir, name)
+        fmt = lambda v: "-" if v is None else "%.2f" % v
+```
+
+printing `fmt(before_mean), fmt(off_mean), fmt(on_mean)` after the `coverage` column. Update the docstring's first sentence to name them.
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`
+
+Expected: all tests OK.
+
+- [ ] **Step 3: The frames test's world.** In `ReliefLookEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("ReliefLookWorld"), 8, EShadows::On);`, and after `Test.BeginPlay();` add:
+
+```cpp
+    // The cast shadow is baked: every world's map before any frame.
+    Test.Step(1.0f / 60.0f);
+    Test.Sky->FlushShadowBakesForTest();
+```
+
+In its header comment, replace "Planning measured (the cast-shadow plan) that physical relief casts on under 3% of the ground at ten degrees and on 40-60% at three" with "Planning measured (the cast-shadow plan) that physical relief casts on under 3% of the ground at ten degrees and on 40-60% at three at a pixel's footprint; the bake's are the tiles' vertices on the ground and the map's 8.8 km texels from orbit, where it measured 15-19% on IV and V at three".
+
+- [ ] **Step 4: The frames after.**
+
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && EYES_TAG=shadows-after Tools/eyes.sh Eyes.ReliefLook && python3 Tools/relief_look_compare.py Saved/Eyes/ReliefLook/shadows-before Saved/Eyes/ReliefLook/shadows-after`
+
+Expected: a table of 12 frames, exit 0. Every shadows-off read frame is the frame before on the pixels both runs held: at most 10% moved by more than 1 LSB, and the rest within a quarter level of mean luma. So `ds.Sky.Shadows 0` is the old look, and an unequal CRC is reported, not failed. A frame marked `ALIASING?` is an edge switching inside a pixel; report it with the frame. Planning's predictions (a frame far from its prediction is a finding to report, not a failure):
+- Orbit, 10 degrees: coverage about 0% on III, IV and V (the map's 8.8 km texels, and a sun that clears nearly every horizon).
+- Orbit, 3 degrees: about 0% on III, and about 15-19% on IV and V.
+- Ground, 10 degrees: about 2-5% on IV and 5-8% on V.
+- Ground, 3 degrees: about 40% on IV and 50% on V.
+
+The held means fall with the coverage: after-on is under after-off by about the shaded share.
+
+If the comparison prints `OFF FRAME DIFFERS`, the switch is not the old look beyond compiler noise, so find out why and do not go on. The likeliest cause is a material that does not multiply by exactly 1 at strength 0: check `cast()`'s lerp.
+
+- [ ] **Step 5: Look at the frames.** Open `Saved/Eyes/ReliefLook/shadows-after/world_4_ground_low_read_shadows1.png` and its `read_shadows0` twin, then the same pair for `orbit_low`, then both 10-degree pairs. Check that:
+- the shadows fall away from the sun, and lie across the view in the ground frames;
+- no speckle, banding or tile seam shows where the unshadowed frame has none, and no shadow steps at a tile's edge (a tile's vertices and its neighbour's are the same directions, so their shadows are the same numbers);
+- the terminator side is darker and never brighter;
+- from orbit the map's shadows are soft at its texel, and never blocky: a blocky edge is the lookup's level or its bilinear taps.
+
+Write a one-line judgement per world into the spec line below. The developer's own look is carried to the next playtest.
+
+- [ ] **Step 6: The spec.** In `docs/superpowers/specs/2026-09-27-landing-design.md`, under the ruling "**Cast shadows are baked, not marched** (2026-09-28)", add an indented line with the runs' numbers:
+
+```markdown
+  - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (<N> samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is <W> columns (<texel> km texels on IV), baked when the system loads. The bake: the cold cut at 1.5 m <cut> s (was <cut0>), a tile <ratio>x its heights at a 10-degree dusk, a world's map <world> s and <MB> MB, the sky's five <sky> s on <tasks> tasks. The frame: not rising (`Eyes.LandingFrame --not-rise`, every case within its band; whole frames <A>..<F> ms, handed to the ground's profiling). Parity: the map C++ vs GPU <worst> against the float mirror's <float>; the handover at a 3-degree dusk ground <g> vs orbit <o> (<share> of the light kept). Frames at the read exposure, mean luma on held pixels before -> after (coverage): at 10 degrees, orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees, orbit ..., ground .... Judged: <one line a world>. The developer's look carried to the playtest.
+```
+
+- [ ] **Step 7: The parent plan and CLAUDE.md.** In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
+
+In `CLAUDE.md`, *Architecture*'s `Source/DeepSpace/Surface/` bullet, after "`AWorldGround`, which streams ... (*The ground*).", add: "`SunShadow.*` (the cast shadow's pure horizon march) and `SunShadowMap.*` (each world's baked map for the orbit) are the shadow (*The sky*)."
+
+In *The sky*, after the paragraph that begins "**A world's face and relief are one noise.**", add:
+
+```markdown
+**The ground casts shadows, baked, never marched per pixel** (the developer's
+ruling on slice (b)'s build: a per-pixel march cost +4 to +27 ms). Worlds do
+not spin, so the star stands still over every surface and the shadow is a
+fixed function of where a point is. `SunShadow` (`Surface/SunShadow.*`, pure)
+finds the highest horizon toward the star along the great circle, by the
+exact triangle, over `FWorldRelief::Height` -- every band and the craters --
+and shows the share of the star's own disc above it
+(`SkyProjection::StarAngularRadius`, clamped to 0.5 rad); a shadow is as dark
+as the night side. Its light is the sky's own, `SkyProjection::LightDirection`.
+Each ground tile computes its vertices' shadow as it is built, off the game
+thread (`TerrainTile::Build`, 12 samples, `ds.Terrain.ShadowSamples`), into
+UV0.x, so a vertex shadow is as sharp as its tile's spacing: 12-24 pixels
+between vertices at 4K on the drawn cut. Each solid world's map for the orbit
+(`SunShadowMap`: equirectangular in the star's frame, 4096 columns,
+`ds.Sky.ShadowMapWidth`, 8.8 km texels on Baemsekai IV, the provably dark
+night side left out, 16 bits and a mip a level) is baked by `AShipSky` when
+the system loads, nearest first, `ds.Sky.ShadowBakeTasks` at once, cancelled
+on a new system; before it lands the world draws unshadowed. It is finer than
+a 4K pixel only while the world is under about 35 degrees across, and softer
+nearer: no per-world texture can be finer than the screen from 50 km. Both
+materials read the map through one Custom node over the shared file's
+`WR_ShadowMapCoord` (`SunShadowMap::Sample` mirrors it, and
+`Eyes.WorldReliefParity` holds them together), and M_SkyGround blends it into
+its vertices' shadow by the same `Morph` that grows the relief in, so at the
+50 km handover the ground's shadow is the orbit's (`Eyes.HandoverParity`, at
+dusk). The night's exit is a proof, the day's a sampled steepest slope with a
+1.5 margin (`SunShadow::SteepestSlope`): a slope steeper than any sample
+would show as a lit speck under a high sun. `ds.Sky.Shadows 0` draws the
+unshadowed look. It costs the frame nothing (`Eyes.LandingFrame`, `--not-rise`
+against the frame before any shadow); what it costs the bake is
+`Eyes.ShadowBakeCost`'s. Test worlds build without it unless asked
+(`SkyTestWorld::EShadows`).
+```
+
+In *Landing*'s paragraph that begins "**The ground** (`AWorldGround`, `hauler_ground`)", after "shaded by `M_SkyGround` exactly as the orbit shades", add: "(each tile's vertices carrying the cast shadow, *The sky*)".
+
+In *Where each tunable lives*, after the `ds.Sky.SurfaceDetail` row, add:
+
+```markdown
+| `ds.Sky.Shadows` | 1 (0 draws the unshadowed look) | `ShipSky.cpp` |
+| `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2; read at each system load | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
+| `ds.Terrain.Shadows`, `.ShadowSamples` | 1, 12; changing either rebuilds the ground | `WorldGround.cpp`, the samples from `SunShadow::DefaultSamples` (`SunShadow.h`) |
+```
+
+Add to the named-constants sentence at the table's foot: "the cast shadow's `SunShadow::SteepestMargin` (1.5) and sampled gradients (`DetailGradientSampled`, `CraterGradientSampled`, re-measured by `DeepSpace.Surface.SunShadow.SteepestSlope`)".
+
+- [ ] **Step 8: The whole suite, and its time.**
+
+Run:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./test.sh DeepSpace && \
+python3 - <<'PY'
+import datetime, re
+lines = open("Saved/Logs/DeepSpace.log", errors="replace").read().splitlines()
+stamp = lambda line: datetime.datetime.strptime(line[1:24], "%Y.%m.%d-%H.%M.%S:%f")
+new = ("DeepSpace.Surface.SunShadow.", "DeepSpace.Surface.SunShadowMap.", "DeepSpace.Surface.TileSunShadow",
+       "DeepSpace.Surface.GroundShadowLight", "DeepSpace.Sky.SunLightIsTheSkys", "DeepSpace.Sky.ShadowParameters")
+started, total = {}, 0.0
+for line in lines:
+    m = re.search(r"Test Started\. Name=\{[^}]*\} Path=\{([^}]*)\}", line)
+    if m:
+        started[m.group(1)] = stamp(line)
+    m = re.search(r"Test Completed\. Result=\{[^}]*\} Name=\{[^}]*\} Path=\{([^}]*)\}", line)
+    if m and m.group(1).startswith(new) and m.group(1) in started:
+        seconds = (stamp(line) - started[m.group(1)]).total_seconds()
+        total += seconds
+        print("%-52s %6.2f s" % (m.group(1), seconds))
+print("this plan's additions to the default suite: %.2f s" % total)
+PY
+```
+
+Expected: all green, with no dirty-log gate tripped. The additions total at most 8 s, with no test over 5 s. If the pattern finds nothing, read one `Test Started` and one `Test Completed` line in the log and fix the pattern, never the budget. Over 8 s, stop and report the per-test times, so the developer chooses what moves out of the default suite. Then run the rendered and timed checks once more, together:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && Tools/eyes.sh Eyes.WorldReliefParity && Tools/eyes.sh Eyes.HandoverParity && \
+EYES_TAG=final Tools/eyes.sh Eyes.LandingFrame && python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/final && \
+(cd Tools && python3 test_relief_look_compare.py && python3 test_landing_frame_gate.py)
+```
+
+Expected: all green, and the gate GO.
+
+- [ ] **Step 9: Commit.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp Tools/relief_look_compare.py Tools/test_relief_look_compare.py \
+  CLAUDE.md docs/superpowers/specs/2026-09-27-landing-design.md docs/superpowers/plans/2026-09-27-landing-slice-1.md && \
+git commit -qm "docs: the ground casts shadows, baked -- measured, framed, and in CLAUDE.md
+
+Eyes.ReliefLook's frames after (III, IV and V from 200 km and at the ground,
+at 10 and 3 degrees, the brightness on held pixels before and after); the
+spec's measured line; the tunables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 10: Prove the comparison's new measure.** `Tools/mutate.sh` builds and runs Unreal tests, so a Python mutant is proven by hand, as Task 1's tools were:
+  - In `held_means`, change `mask = held(was, was_again) & held(now, now_again)` to `mask = held(was, was_again)`.
+  - Run `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`, and see `test_held_means_are_read_on_the_pixels_both_runs_held` fail: 64 pixels, not 63.
+  - Restore it with `git checkout -- Tools/relief_look_compare.py`, and record the check in the task report.
+
 **Done when:**
-- Task 0's three questions are answered and written into the spec on main.
-- `Tools/landing_frame_gate.py` over Task 1's baseline and the final `Eyes.LandingFrame` run is GO: the shadow at most 1.0 ms over the frame before it existed, in each of the six cases, with the switch proven by pixels. The whole frame is reported for the spec's profiling (ruled: "profile first, with the cast shadows in, and fix the real cost"), not held to 16.6 ms here.
-- `Eyes.WorldReliefParity` holds the cast shadow to its C++ mirror at seven footprints, down to the ground's 1e-6, under three suns.
-- `Eyes.HandoverParity` holds the ground to the orbit at a 3-degree dusk with the shadow on -- means to 1e-3 and the per-pixel p99 within 3x of the unshadowed -- and the shadow reaches both.
-- The before/after frames of Baemsekai III, IV and V are in `Saved/Eyes/ReliefLook/shadows-{before,after}`: from 200 km and at the ground, at dusk's 10 degrees and at 3 (or Task 0's elevation). Each has its mean brightness without and with the term, its shadow coverage and its aliasing, recorded in the spec on main, and every shadows-off read frame is its before on the pixels both runs held (at most 10% moved, the rest within a quarter level).
+- Task 0's three questions are answered and written into the spec.
+- `DeepSpace.Surface.SunShadow.*` holds the pure march to its known values, exits, schedule and quality against the dense march, and its sampled slope to the real ground's.
+- `DeepSpace.Surface.TileSunShadow` and `.GroundShadowLight` hold every tile's vertices to that march under the sky's own light. `DeepSpace.Sky.SunLightIsTheSkys` holds that light to the sky's.
+- `DeepSpace.Surface.SunShadowMap.*` holds each world's map to its profile, its dark rows to the proof, and its lookup to its known values. `DeepSpace.Sky.ShadowParameters` holds the sky's bakes and the materials' parameters.
+- `Eyes.WorldReliefParity` holds the map's lookup on the GPU to its C++ mirror at the measured floor, across the terminator and across the seam.
+- `Eyes.HandoverParity` holds the ground to the orbit at a 3-degree dusk with the shadow on.
+- `Eyes.ShadowBakeCost`'s every budget reads `within`, or Task 7b's ruling is recorded.
+- `Eyes.LandingFrame` does not rise in any case (`--not-rise`), and its switch is proven by pixels.
+- The before/after frames of Baemsekai III, IV and V are in `Saved/Eyes/ReliefLook/shadows-{before,after}`: from 200 km and at the ground, at 10 degrees and at 3, at the game's exposure plus the stated read stops. Each has its mean brightness and shadow coverage on still pixels and its aliasing, recorded in the spec. Every shadows-off read frame is its before on the pixels both runs held.
+- The default suite's additions are at most 8 s.
 - The orchestrator merges `feat/landing-b-t` into `feat/landing-b`.
 
 ---
 
 ## Self-review
 
-- **The ruling's parts, each owned:**
-  - The shared file's term: Task 2.
-  - Used by both materials: Task 3.
-  - The C++ mirror and parity: Tasks 2 and 5.
-  - The GPU cost in `Eyes.LandingFrame`: Task 1 (the baseline), Task 1b (the spike) and Task 4 (the confirmation).
-  - The before/after frames: Tasks 1 and 6.
-  - Physical heights, not exaggerated: `.ShadowHeight` holds the march's height to `FWorldRelief::Height`.
-- **The task's design points, each stated:**
-  - Sample count, step growth, bands, footprint rule, softness and parity tolerance: *Measured while planning* (Finding 2), and Tasks 2 and 5.
-  - How it combines: `shaded x lerp(1, visible, Shadows)`, multiplying the slope shading's `gain x saturate(N.L) x smoothstep`, with no fill light. Task 3's `sky_body` and `sky_ground`.
-  - Where it applies: both materials at every altitude. Task 3, and `Eyes.HandoverParity` in Task 5.
-  - The budget: Task 4's rule and gate, against Task 1's baseline; its likely NO-GO put to the developer first (Task 0).
-  - The done-when: Task 6.
-- **Names across tasks:** `WR_SunVisible`'s 13 arguments are the same in the file, in `SunVisibleF64`/`F32`, in `SHADOW_CODE` and in `SkyMaterial::ShadowInputs()` (the first seven pins, plus `Strength` in the materials). `WR_SunVisibility`/`FSunVisibility {Visible, Horizon, Evaluations}` is the same in Tasks 2, 3 (the probe's code) and 5. `ShipSky::SunAngularRadius`, `ShipSky::ShadowStrength` and `ds.Sky.Shadows` are the same in Tasks 3, 4, 5 and 1 (by name lookup). `ShadowSamples` (Task 2, in the header) and `shadow_samples` (Task 3, in the JSON) are the only two copies of the count -- the tests read the header's -- and change together, set by Task 1b and confirmed by Task 4.
-- **No test path is a parent of another.** The new leaves are `DeepSpace.Surface.WorldRelief.{ShadowHeight, ShadowGradientMax, SunDisc, ShadowAgainstTruth, ShadowCost}`, `DeepSpace.Sky.GotoDuskElevation` and `DeepSpace.Sky.ShadowParameters`. Every headless mutation filter is anchored with `$`.
-- **Revised against the critique (2026-09-28):** each of its 25 points was checked against `feat/landing-b` (`1b8234c`), `feat/landing-b-t` (`d64a666`) and main and taken; where the fix differs from the one proposed, the reason is in place (the pixel widening's slope factor, Review Focus 6; the spec edit made on main rather than merging main's docs into the track, since both edit the same spec; the budget mutant replaced by the switch's pixel proof, Task 4 Step 5).
+- **The orchestrator's six points, each owned:**
+  1. The pure shadow function over FWorldRelief, the horizon march toward a fixed sun direction with the sun's angular size for softness, with known-value tests: Task 2 (`SunShadow`, over `IGroundField`, whose real field is `FReliefGround` over `FWorldRelief`), with `.KnownValues`, `.Exits`, `.Schedule`, `.AgainstProfile` and `.SteepestSlope`.
+  2. Tiles compute a per-vertex shadow during their off-game-thread build, carried in a vertex channel, shading in M_SkyGround: Task 4 (`TerrainTile::Build`, `UV0Of`, `AWorldGround`'s tasks) and Task 6 (M_SkyGround's `lerp(map, UV0.x, Morph)`).
+  3. The orbital proxy reads a per-world map at a stated resolution, chosen against the pixel and measured, baked in C++ at system load off the game thread, used by M_SkyBody: Task 5 (`SunShadowMap`, equirectangular, 4096 columns stated with its texel-against-pixel table in *Measured while planning*, the impossibility at 50 km put to the developer in Task 0) and Task 6 (`AShipSky`'s bakes, M_SkyBody). The texel against the pixel is measured again in Task 10's frames, and ruled in Task 0.
+  4. Both agree at the 50 km handover (a parity check under the float-floor rule) and use the sky's sun direction:
+     - The handover is Task 6's Morph blend (the ground's shadow *is* the map at Morph 0) and Task 8's `Eyes.HandoverParity` dusk leg.
+     - The lookup is held on the GPU by Task 8's `Eyes.WorldReliefParity` leg under the float-floor rule.
+     - The sun direction is one function: Task 3's `SunLightIsTheSkys`, Task 4's `GroundShadowLight`, and Task 6's `ShadowParameters` (`FrameZ` against `SunLightOf`).
+  5. The bake's cost per tile and per world, and memory, measured and budgeted; LandingFrame must not rise: Task 7 (`Eyes.ShadowBakeCost`, five budgets, Task 7b on over) and Task 9 (`--not-rise`).
+  6. The done-when's frames: Task 10. III, IV and V, from 200 km and at the ground, at 10 and 3 degrees, at the game's exposure plus the stated read stops, with mean brightness and coverage on still pixels.
+- **What was kept:** Tasks 1 and 1b's code and verdicts, the gate tool (extended, not changed, by `--not-rise`), `Eyes.ReliefLook`'s still-pixel rule (unchanged; the held means added beside it), `Eyes.LandingFrame`'s ABBA rounds and switch proof (unchanged), and the exposure fix (`EyesFrames::Expose`, used as it is).
+- **Names across tasks:**
+  - `SunShadow::FSunLight` / `FSunVisibility` / `Visible` / `AlongProfile` / `SteepestSlope` are Task 2's, used unchanged in Tasks 3-8.
+  - `TerrainTile::FTileShadow` is Task 4's, read by Task 7.
+  - `FSunShadowMap` and `SunShadowMap::*` are Task 5's, used by Tasks 6-8.
+  - `SkyMaterial::{Shadows, ShadowMap, ShadowFrameX, ShadowFrameZ}` are Task 6's, used in Task 8.
+  - `ds.Sky.Shadows` is used by name in Tasks 1, 6, 8 and 9.
+  - `ds.Terrain.Shadows` and `ds.Sky.ShadowMaps` are set by name in `FSkyWorld`, from Task 4 on.
+  - The shared file's `WR_ShadowMapCoord`'s 13 arguments are the same in the file, in `ShadowMapCoordF64/F32` and in `SHADOW_CODE`. The node's pins are `SkyMaterial::ShadowInputs()` and the JSON's `shadow.inputs`, held by `CheckShadowNode` and by `sun_shadow`'s own check.
+- **No test path is a parent of another.** The new leaves are:
+  - `DeepSpace.Surface.SunShadow.{KnownValues, Exits, Schedule, AgainstProfile, SteepestSlope}` and `DeepSpace.Surface.SunShadowMap.{Shape, TexelsAreTheProfile, NightBelowTheMap, Lookup, Mips}`;
+  - `DeepSpace.Surface.TileSunShadow` and `DeepSpace.Surface.GroundShadowLight`, siblings of `DeepSpace.Surface.Tile` and `.GroundActor`, not children;
+  - `DeepSpace.Sky.SunLightIsTheSkys` and `DeepSpace.Sky.ShadowParameters`;
+  - `Eyes.ShadowBakeCost`.
+
+  Every headless mutation filter is anchored with `$`.
+- **Honest limits, stated where they bite:**
+  - The map cannot be finer than the screen from 50 km (Task 0, question 1).
+  - A vertex shadow is as sharp as its tile's spacing (CLAUDE.md's paragraph).
+  - The day exit is a sampled claim (Task 0; `.SteepestSlope`).
+  - A world draws unshadowed until its map lands (Task 7b's `world_bake_s`).
