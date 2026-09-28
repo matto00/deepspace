@@ -6,6 +6,7 @@
 #include "Misc/OutputDevice.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipModuleDataAsset.h"
+#include "Ship/ShipPartCatalogue.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
@@ -972,6 +973,74 @@ TArray<UShipModuleDataAsset*> UShipSubsystem::GetInstalledModules() const
         }
     }
     return Fitted;
+}
+
+TArray<UShipModuleDataAsset*> UShipSubsystem::GetCatalogue() const
+{
+    TArray<UShipModuleDataAsset*> Parts;
+    const UShipPartCatalogue* Catalogue = Cast<UShipPartCatalogue>(CatalogueAsset.TryLoad());
+    if (!Catalogue)
+    {
+        return Parts;
+    }
+    for (const TSoftObjectPtr<UShipModuleDataAsset>& Soft : Catalogue->Parts)
+    {
+        if (UShipModuleDataAsset* Part = Soft.LoadSynchronous())
+        {
+            Parts.Add(Part);
+        }
+    }
+    return Parts;
+}
+
+UShipModuleDataAsset* UShipSubsystem::FindPart(FName PartId) const
+{
+    if (PartId.IsNone())
+    {
+        return nullptr;
+    }
+    for (UShipModuleDataAsset* Part : GetCatalogue())
+    {
+        if (Part->ModuleId == PartId)
+        {
+            return Part;
+        }
+    }
+    return nullptr;
+}
+
+UShipModuleDataAsset* UShipSubsystem::PartFor(FName PartId) const
+{
+    if (const TObjectPtr<UShipModuleDataAsset>* Known = KnownParts.Find(PartId))
+    {
+        return Known->Get();
+    }
+    return FindPart(PartId);
+}
+
+bool UShipSubsystem::FitPartById(FName PartId)
+{
+    UShipModuleDataAsset* Part = PartFor(PartId);
+    if (!Part || !Register(Part))
+    {
+        return false;
+    }
+    const TOptional<EShipBay> Slot = SlotFor(*Part);
+    if (!Slot)
+    {
+        return false;
+    }
+    const int32 Spare = Loadout.Spares.IndexOfByPredicate([PartId](const FShipPartState& State) { return State.PartId == PartId; });
+    if (Spare == INDEX_NONE)
+    {
+        return FitPart(Part);
+    }
+    // A spare is one particular part, fitted as it is (decision 10): it keeps
+    // its own state, and the part it displaces keeps its.
+    const FShipPartState State = Loadout.Spares[Spare];
+    Loadout.Spares.RemoveAt(Spare);
+    FitState(*Slot, State);
+    return true;
 }
 
 const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const

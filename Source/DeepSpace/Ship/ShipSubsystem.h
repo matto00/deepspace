@@ -45,7 +45,7 @@ struct DEEPSPACE_API FHelmInput
  * automatically, globally reachable without a singleton, and unable to
  * accidentally acquire a transform and become a god-actor.
  */
-UCLASS()
+UCLASS(Config = Game)
 class DEEPSPACE_API UShipSubsystem : public UTickableWorldSubsystem
 {
     GENERATED_BODY()
@@ -102,6 +102,22 @@ public:
      *  part is only ever swapped, so there is never a frame without a
      *  reactor (decision 3). */
     bool RemovePart(EShipBay Bay);
+
+    /** The catalogue's part with this id, loaded on first ask through the
+     *  CatalogueAsset ini line (decision 5); null for an id it does not
+     *  hold. Works in a bare world with no game mode and no asset scan. */
+    UShipModuleDataAsset* FindPart(FName PartId) const;
+
+    /** Every part the catalogue holds, in its order. */
+    TArray<UShipModuleDataAsset*> GetCatalogue() const;
+
+    /**
+     * ds.Ship.Install's path (decision 10): the first spare with this id,
+     * fitted as it is, else a new one from the catalogue (FitPart). True with
+     * nothing changed when the bay already holds it and no spare of it is
+     * aboard; false for an id that names no part.
+     */
+    bool FitPartById(FName PartId);
 
     /** The part in Bay; null for an empty bay, which reads the stock part's
      *  ratings and draws nothing. */
@@ -476,6 +492,15 @@ private:
      *  as a catalogue part does, and nothing fitted is ever collected. */
     UPROPERTY()
     TMap<FName, TObjectPtr<UShipModuleDataAsset>> KnownParts;
+
+    /** The catalogue, as DefaultGame.ini names it. Empty by default, on
+     *  purpose: a section that fails to load finds nothing rather than the
+     *  wrong catalogue. */
+    UPROPERTY(Config)
+    FSoftObjectPath CatalogueAsset;
+
+    /** A part this ship already knows by id, else the catalogue's. */
+    UShipModuleDataAsset* PartFor(FName PartId) const;
 
     /** Refuses null, a None bay, no id, and a different asset under a known
      *  id; otherwise remembers Part under its id. */

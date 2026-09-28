@@ -755,4 +755,63 @@ bool FShipPartsNameplatesAreFactsTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsCatalogueResolvesTest, "DeepSpace.Ship.Parts.CatalogueResolves",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/*
+ * Decision 5: in a bare world, with no game mode and no asset-registry
+ * scan, every id in Tools/ship_parts.json resolves through FindPart, and
+ * nothing else does. By id, the first spare with that id is fitted before a
+ * new one is made (decision 10), and the part a bay already holds is left
+ * alone (review focus 2).
+ */
+bool FShipPartsCatalogueResolvesTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    FSkyWorld Test(TEXT("CatalogueResolvesWorld"));
+    UShipSubsystem* Ship = Test.Ship;
+    if (!TestNotNull(TEXT("the world has a ship"), Ship))
+    {
+        return false;
+    }
+    const ShipPartsJson::FCatalogue Catalogue = ShipPartsJson::Read();
+    TArray<FString> JsonIds;
+    for (const ShipPartsJson::FRow& Row : Catalogue.Rows)
+    {
+        JsonIds.Add(Row.Spec.Id.ToString());
+        const UShipModuleDataAsset* Part = Ship->FindPart(Row.Spec.Id);
+        if (TestNotNull(FString::Printf(TEXT("%s resolves"), *Row.Spec.Id.ToString()), Part))
+        {
+            TestEqual(FString::Printf(TEXT("%s is its own asset"), *Row.Spec.Id.ToString()),
+                      FSoftObjectPath(Part).ToString(), ShipPartsJson::ObjectPath(Catalogue, Row.Asset));
+        }
+    }
+    TArray<FString> CatalogueIds;
+    for (const UShipModuleDataAsset* Part : Ship->GetCatalogue())
+    {
+        CatalogueIds.Add(Part->ModuleId.ToString());
+    }
+    TestEqual(TEXT("the catalogue is the JSON's rows, in order, and nothing else"),
+              FString::Join(CatalogueIds, TEXT(",")), FString::Join(JsonIds, TEXT(",")));
+    TestNull(TEXT("an id the JSON does not have does not resolve"), Ship->FindPart(TEXT("Reactor.Nonesuch")));
+    TestNull(TEXT("and neither does no id"), Ship->FindPart(NAME_None));
+
+    TestTrue(TEXT("the twin core fits by id"), Ship->FitPartById(TEXT("Reactor.TwinCore")));
+    TestEqual(TEXT("and the supply is 1800 W"), Ship->GetReactorOutput(), 1800.0f);
+    TestEqual(TEXT("an empty bay displaced nothing"), SpareIds(*Ship), FString());
+    TestFalse(TEXT("an unknown id fits nothing"), Ship->FitPartById(TEXT("Reactor.Nonesuch")));
+    TestTrue(TEXT("and changes nothing"), Ship->GetReactorOutput() == 1800.0f && Ship->GetSpares().IsEmpty());
+
+    TestTrue(TEXT("the twin core by id again is taken"), Ship->FitPartById(TEXT("Reactor.TwinCore")));
+    TestEqual(TEXT("and makes no spare of itself"), SpareIds(*Ship), FString());
+
+    TestTrue(TEXT("the stock reactor by id"), Ship->FitPartById(TEXT("Reactor.Stock")));
+    TestEqual(TEXT("puts the twin core in the spares"), SpareIds(*Ship), FString(TEXT("Reactor.TwinCore")));
+    TestTrue(TEXT("and the twin core by id"), Ship->FitPartById(TEXT("Reactor.TwinCore")));
+    TestEqual(TEXT("comes out of the spares, never conjured anew"), SpareIds(*Ship), FString(TEXT("Reactor.Stock")));
+    TestEqual(TEXT("and runs the ship"), Ship->GetReactorOutput(), 1800.0f);
+    return true;
+}
+
 #endif
