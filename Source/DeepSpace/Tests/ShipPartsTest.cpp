@@ -233,4 +233,102 @@ bool FShipPartsCatalogueRulesTest::RunTest(const FString& Parameters)
     return true;
 }
 
+/*
+ * The catalogue on three sides, as DeepSpace.Sky.MaterialContract holds the
+ * sky (decision 5): Tools/ship_parts.json, the assets the script authored
+ * from it, and FShipRatings::Stock() against the stock rows. A settled
+ * number goes into the JSON and the script is re-run; this fails until both
+ * are done.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsContractTest, "DeepSpace.Ship.Parts.Contract",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShipPartsContractTest::RunTest(const FString& Parameters)
+{
+    const ShipPartsJson::FCatalogue Catalogue = ShipPartsJson::Read();
+    if (!TestTrue(TEXT("the catalogue reads"), Catalogue.Problems.IsEmpty() && Catalogue.Rows.Num() > 0))
+    {
+        return false;
+    }
+
+    // -- the assets are the JSON ------------------------------------------------
+    for (const ShipPartsJson::FRow& Row : Catalogue.Rows)
+    {
+        const FString Id = Row.Spec.Id.ToString();
+        const FString Path = ShipPartsJson::ObjectPath(Catalogue, Row.Asset);
+        const UShipModuleDataAsset* Part = LoadObject<UShipModuleDataAsset>(nullptr, *Path);
+        if (!TestNotNull(FString::Printf(TEXT("%s is authored at %s"), *Id, *Path), Part))
+        {
+            continue;
+        }
+        TestEqual(FString::Printf(TEXT("%s: its id"), *Id), Part->ModuleId, Row.Spec.Id);
+        TestTrue(FString::Printf(TEXT("%s: its bay"), *Id), Part->Bay == Row.Spec.Bay);
+        TestEqual(FString::Printf(TEXT("%s: its draw"), *Id), static_cast<double>(Part->PowerDraw), Row.Spec.Draw);
+        TestEqual(FString::Printf(TEXT("%s: its name"), *Id), Part->DisplayName.ToString(), Row.Name);
+        TestEqual(FString::Printf(TEXT("%s: its words"), *Id), Part->Words.ToString(), Row.Words);
+        TestEqual(FString::Printf(TEXT("%s: as many ratings"), *Id), Part->Ratings.Num(), Row.Spec.Ratings.Num());
+        for (const TPair<EShipRating, double>& Rated : Row.Spec.Ratings)
+        {
+            const double* Held = Part->Ratings.Find(Rated.Key);
+            TestTrue(FString::Printf(TEXT("%s: %s is %g"), *Id, *ShipParts::RatingName(Rated.Key).ToString(), Rated.Value),
+                     Held && *Held == Rated.Value);
+        }
+    }
+
+    // -- the catalogue asset lists exactly them, in the JSON's order -------------
+    const FString CataloguePath = ShipPartsJson::ObjectPath(Catalogue, Catalogue.CatalogueAsset);
+    if (const UShipPartCatalogue* Asset = LoadObject<UShipPartCatalogue>(nullptr, *CataloguePath);
+        TestNotNull(FString::Printf(TEXT("the catalogue is authored at %s"), *CataloguePath), Asset))
+    {
+        TestEqual(TEXT("it lists every row and nothing else"), Asset->Parts.Num(), Catalogue.Rows.Num());
+        for (int32 Index = 0; Index < FMath::Min(Asset->Parts.Num(), Catalogue.Rows.Num()); ++Index)
+        {
+            TestEqual(FString::Printf(TEXT("row %d is %s"), Index, *Catalogue.Rows[Index].Asset),
+                      Asset->Parts[Index].ToSoftObjectPath().ToString(), ShipPartsJson::ObjectPath(Catalogue, Catalogue.Rows[Index].Asset));
+        }
+    }
+
+    // -- the stock rows are FShipRatings::Stock(), every owned rating explicit ---
+    const FShipRatings Stock = FShipRatings::Stock();
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        if (!ShipBay::IsCore(Bay))
+        {
+            continue;
+        }
+        const ShipPartsJson::FRow* Row = Catalogue.Rows.FindByPredicate([Bay](const ShipPartsJson::FRow& Candidate)
+        {
+            return Candidate.Spec.Id == ShipBay::StockPartId(Bay);
+        });
+        if (!TestNotNull(FString::Printf(TEXT("the %s bay has a stock row"), *ShipBay::Name(Bay).ToString()), Row))
+        {
+            continue;
+        }
+        for (const EShipRating Rating : ShipParts::AllRatings())
+        {
+            if (ShipParts::OwnerOf(Rating) != Bay)
+            {
+                continue;
+            }
+            const double* Rated = Row->Spec.Ratings.Find(Rating);
+            TestTrue(FString::Printf(TEXT("%s rates %s as Stock() does (%g)"), *Row->Spec.Id.ToString(),
+                                     *ShipParts::RatingName(Rating).ToString(), Stock.Get(Rating)),
+                     Rated && *Rated == Stock.Get(Rating));
+        }
+    }
+
+    // -- today's three draws, carried over exactly ------------------------------
+    double Draws = 0.0;
+    for (const TCHAR* Id : { TEXT("LifeSupport.Stock"), TEXT("Lights.Stock"), TEXT("Sensors.Stock") })
+    {
+        const ShipPartsJson::FRow* Row = Catalogue.Rows.FindByPredicate([Id](const ShipPartsJson::FRow& Candidate)
+        {
+            return Candidate.Spec.Id == FName(Id);
+        });
+        Draws += Row ? Row->Spec.Draw : 0.0;
+    }
+    TestEqual(TEXT("life support, lights and sensors draw 620 W together, as the hand-made modules did"), Draws, 620.0);
+    return true;
+}
+
 #endif
