@@ -42,6 +42,39 @@ namespace GroundCatchesLocal
 {
     using namespace GroundFixtures;
 
+    /** Flat ground, then a straight ramp up along +X from arc length X0 near
+     *  the +Z pole, of Slope rise over run, flat again at Top: a hill the
+     *  ship can close on horizontally while nothing under its feet rises. */
+    class FRamp final : public IGroundField
+    {
+    public:
+        FRamp(double InRadiusCm, double InX0Cm, double InSlope, double InTopCm)
+            : R(InRadiusCm), X0(InX0Cm), Slope(InSlope), Top(InTopCm)
+        {
+        }
+        virtual double RadiusCm() const override { return R; }
+        virtual double Height(const FVector3d& D, double) const override
+        {
+            return FMath::Clamp(Slope * (R * D.X - X0), 0.0, Top);
+        }
+        virtual double HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm) const override
+        {
+            const double H = Height(D, FootprintCm);
+            Grad = H > 0.0 && H < Top ? FVector3d(Slope * R, 0.0, 0.0) : FVector3d::ZeroVector;
+            return H;
+        }
+        virtual double OmittedBoundCm(double) const override { return 0.0; }
+        virtual double MaxHeightCm() const override { return Top; }
+        virtual double MinHeightCm() const override { return 0.0; }
+        virtual double MaxSlope() const override { return Slope; }
+
+    private:
+        double R;
+        double X0;
+        double Slope;
+        double Top;
+    };
+
     const TArray<double> CruiseSpeeds = { 0.0, 1.0e2, 2.0e4, 2.0e5, 2.0e6, -2.0e4 };
     const TArray<double> VerticalRates = { 0.0, -50.0, -500.0, -2.0e4, 2.0e4 };
     const TArray<double> Chops = { 1.0 / 240.0, 1.0 / 60.0, 1.0 / 20.0, 0.5, 2.0 };
@@ -367,26 +400,28 @@ bool FGroundRayOnceAFrameTest::RunTest(const FString& Parameters)
  * along it. Sinking in the regime, the horizontal ray's origin drops across
  * it, and against rising ground the slope is nearer than the old hit less
  * the distance flown: a frame of 240 substeps must still fly as 240 frames
- * of one, the ship sinking toward a hill with the ground ahead holding it
- * back.
+ * of one, the ship sinking toward a ramp with the ground ahead -- and
+ * nothing under its feet -- holding it back.
  */
 bool FGroundRayAcrossTest::RunTest(const FString& Parameters)
 {
     using namespace GroundCatchesLocal;
     const double Radius = 6.0e8;
-    const FGroundFieldRef Ground = MakeShared<FCrossedSines, ESPMode::ThreadSafe>(FCrossedSines::WithSlope(Radius, 4.0e5, 0.5));
+    // Flat under the ship, a 45 degree ramp 150 m ahead: only the ground
+    // ahead can hold it back, since nothing under its feet rises.
+    const FGroundFieldRef Ground = MakeShared<FRamp, ESPMode::ThreadSafe>(Radius, 1.5e4, 1.0, 5.0e4);
     const FFlightSurface World = SurfaceOver(Ground, 1.02e6 + Ground->MaxHeightCm());
-    // In the trough of both sines, the ground rising ahead along +X.
-    const FVector3d D = FVector3d(-1.0e5 / Radius, -1.0e5 / Radius, 1.0).GetSafeNormal();
+    const FVector3d D(0.0, 0.0, 1.0);
 
     auto Start = [&](FShipFlightState& Flight)
     {
         Flight.SetSurfaces({ World });
         Flight.SetWells({ { World.Centre, ShipFlight::StandardGravityCmS2 * World.Radius * World.Radius, World.Radius } });
-        Flight.SetUniverseTransform(Above(World, D, 3.0e4), Level(D));
+        Flight.SetUniverseTransform(Above(World, D, 5.0e3), Level(D));
+        // Under the skim cap's floor, so only the ground ahead holds it.
         FShipFlightCommand Command;
-        Command.Throttle = ThrottleFor(1.0e4, Flight.GetLimits());
-        Command.Vertical = ShipVerticalLever::LeverOf(-500.0, Flight.GetLimits().VerticalTop);
+        Command.Throttle = ThrottleFor(1.5e3, Flight.GetLimits());
+        Command.Vertical = ShipVerticalLever::LeverOf(-300.0, Flight.GetLimits().VerticalTop);
         Flight.SetCommand(Command);
     };
 
@@ -408,7 +443,7 @@ bool FGroundRayAcrossTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    TestTrue(TEXT("in the regime, sinking"), Fine.IsVerticalLive() && Fine.GetVerticalSpeed() < -100.0);
+    TestTrue(FString::Printf(TEXT("in the regime, sinking (%.2f m/s)"), Fine.GetVerticalSpeed() / 100.0), Fine.IsVerticalLive() && Fine.GetVerticalSpeed() < -50.0);
 
     FShipFlightState Coarse;
     Start(Coarse);
@@ -422,8 +457,8 @@ bool FGroundRayAcrossTest::RunTest(const FString& Parameters)
     {
         Fine.Step(FShipFlightState::FixedStep);
     }
-    AddInfo(FString::Printf(TEXT("from %.2f m/s: fine %.3f m/s, one frame %.3f m/s; %.3f cm apart; %.1f m up"),
-        SpeedBefore / 100.0, Fine.GetSpeed() / 100.0, Coarse.GetSpeed() / 100.0,
+    AddInfo(FString::Printf(TEXT("held %.2f after %.1f s; from %.2f m/s: fine %.3f m/s, one frame %.3f m/s; %.3f cm apart; %.1f m up"),
+        Fine.GetHeldFraction(), Holding * FShipFlightState::FixedStep, SpeedBefore / 100.0, Fine.GetSpeed() / 100.0, Coarse.GetSpeed() / 100.0,
         (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size(), Fine.GetGroundAltitude().Get(0.0) / 100.0));
     TestTrue(TEXT("a frame of 240 substeps flies the speed of 240 frames of one, within 1 cm/s"),
         FMath::Abs(Fine.GetSpeed() - Coarse.GetSpeed()) <= 1.0);
