@@ -1500,15 +1500,15 @@ file has exactly one owner at a time**, across slices that run together.
 
 | Track | Slice | Owns | Waits on |
 |---|---|---|---|
-| **O: optics** | 1 (starts now) | `Shaders/Private/Atmosphere.ush` (a new file beside landing's), `Atmosphere/*` (not `EntryGlow.*`) and its pure tests, `Sky/SkyColour.*` (`ThroughFilter` only; the re-base waits on item 3) and `OneBlackbody` | -- (its shims are copied from landing's `WR_` ones while (a) is unmerged; **O's first commit after landing (a) merges replaces the copies with landing's shared shim header**, and M waits on that commit) |
+| **O: optics** | 1 (starts now) | `Shaders/Private/Atmosphere.ush` (a new file beside landing's), `Atmosphere/*` (not `EntryGlow.*`) and its pure tests, `Sky/SkyColour.*` (`ThroughFilter` only; the re-base waits on item 3) and `OneBlackbody` | -- (its `AT_` shims stay inline in `Atmosphere.ush`: landing (a) made no shared shim header, and `WorldRelief.ush` keeps its `WR_` shims inline; whether to extract one shared subset header is **orbital slice 1's first decision**, and `WorldRelief.ush` is landing track T's through slice (b)) |
 | **G: procgen** | 1 | `Universe/AirFacts.*`, `StarSystem.h`, `StarSystemGenerator.*`, `GenPriors.*`, `DefaultGame.ini`, the corpus files, `AirProcGenTest.cpp`, the fixture table in this spec | landing (a) merged (landing's track P owns these files until then) |
-| **M: materials and sky** | 1 | `Sky/SkySystem.*`, `SkyProjection.*`, `ShipSky.*`, `SkyMaterialContract.h`, `sky_material_contract.json`, `setup_sky_materials.py`, `build_hauler.py` (`place_sky`), `LocalSystemTest.cpp`, `Tests/SkyTestFixtures.h`, `SkyProjectionTest.cpp`, `ShipSkyTest.cpp`, `SkyMaterialContractTest.cpp`, `Tests/Eyes/AtmosphereProbeTest.cpp` | landing (a) merged; O's shim-unification commit; G's `AirFacts.h` (agreed first as a header) |
+| **M: materials and sky** | 1 | `Sky/SkySystem.*`, `SkyProjection.*`, `ShipSky.*`, `SkyMaterialContract.h`, `sky_material_contract.json`, `setup_sky_materials.py`, `build_hauler.py` (`place_sky`), `LocalSystemTest.cpp`, `Tests/SkyTestFixtures.h`, `SkyProjectionTest.cpp`, `ShipSkyTest.cpp`, `SkyMaterialContractTest.cpp`, `Tests/Eyes/AtmosphereProbeTest.cpp` | landing (a) merged; track O merged; the shim decision, orbital slice 1's first; G's `AirFacts.h` (agreed first as a header) |
 | **D: inside the air** | 2 | `ShipSky.*`, **the contract files and `setup_sky_materials.py` (sole owner while D and A overlap)**, `build_hauler.py` (`place_sky`), `ShipSkyTest.cpp`, `ShipCounterFrameTest.cpp`, `Tests/Eyes/AtmosphereCrossingTest.cpp` | slice 1 merged; landing (b) merged |
 | **A: aerial perspective** | 3 | `Tools/sky_air_ground.py` (new), `Tests/Eyes/AtmosphereParityTest.cpp` | slice 1 merged; landing (b) merged; **D's interface commit**: the `MPC_Sky` air block's names in the contract files, and the one-line import of `sky_air_ground.py` into the script that authors `M_SkyGround`, both made by D |
 | **E: entry** | 4 | `Atmosphere/EntryGlow.*`, `Ship/ShipHumVoice.*`, `ShipHumComponent.cpp`, `HumVoiceTest.cpp`; `ShipSky.*`, the contract files and `setup_sky_materials.py` for `M_SkyGlass`, `AT_SheathProfile` in `Atmosphere.ush` (O's file, handed to E for slice 4) and the entry pair | slice 2 merged |
 
 Merge order: O's pure core and tests whenever green (they touch no shared
-file); after landing (a), O's shim unification, G, then M, then slice 1
+file); after landing (a), G, then M (the shim decision first), then slice 1
 merges when its done-when holds; after landing (b), D's interface commit
 first, then D and A in parallel, D merging first; then E.
 
