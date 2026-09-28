@@ -179,11 +179,12 @@ def test_gravity_and_relief_are_typed():
 def test_report_gives_air_by_mix():
     text = C.report(rows())
     assert "Air, by mix (worlds, median surface pressure, median nadir tau at 450 nm)" in text, text
-    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.8 bar 0.34; Gamma II h2/he 0.741 bar 0.5
-    # (a 0.826 g giant's disc under AirFacts: 0.5 / NadirTau450(H2/He, 1 bar, 1 g) x g).
+    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.8 bar 0.34; Gamma II h2/he 0.474 bar 0.32
+    # (a 0.826 g giant's disc under AirFacts: 0.32 / NadirTau450(H2/He, 1 bar, 1 g) x g,
+    # MaxNadirTau450 as atmosphere plan ruling 2 lowered it).
     assert "  nitrogen-oxygen  n=1      median   1.000 bar  tau450 0.277" in text, text
     assert "  carbon-dioxide   n=1      median   0.800 bar  tau450 0.340" in text, text
-    assert "  hydrogen-helium  n=1      median   0.741 bar  tau450 0.500" in text, text
+    assert "  hydrogen-helium  n=1      median   0.474 bar  tau450 0.320" in text, text
 
 
 def test_air_is_typed():
@@ -193,10 +194,10 @@ def test_air_is_typed():
     alpha1 = [r for r in rows() if r["designation"] == "Alpha I"][0]
     assert alpha1["air_mix"] == "none" and near(alpha1["surface_pressure_bar"], 0.0)
     giant = [r for r in rows() if r["designation"] == "Gamma II"][0]
-    assert giant["air_mix"] == "hydrogen-helium" and near(giant["nadir_tau_450"], 0.5)
+    assert giant["air_mix"] == "hydrogen-helium" and near(giant["nadir_tau_450"], 0.32)
     # The row is a worked example of the law, not only reader input: at
-    # 0.826 g and 140 K its disc is 0.741 bar and its scale height 62.4 km.
-    assert near(giant["surface_pressure_bar"], 0.741) and near(giant["scale_height_km"], 62.4)
+    # 0.826 g and 140 K its disc is 0.474 bar and its scale height 62.4 km.
+    assert near(giant["surface_pressure_bar"], 0.474) and near(giant["scale_height_km"], 62.4)
     beta = [r for r in rows() if r["system"] == "Beta"][0]
     assert beta["air_mix"] is None and beta["surface_pressure_bar"] is None
 

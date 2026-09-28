@@ -383,11 +383,12 @@ planet's seed, so drawing them moves no other number of any world (as
 **A giant's "surface" is where its air stops being legible**, not 1 bar.
 Giants are fixed at 11 R_E from 15 to 3,000 M_E, so their gravity runs from
 0.12 g to 25 g, and H2/He carries about 0.56 of tau450 per bar at 1 g: a
-1-bar datum would put a 15 M_E giant under tau450 4.5 at nadir, nine times the
-guarantee, a featureless haze from orbit. Defining the disc at the
+1-bar datum would put a 15 M_E giant under tau450 4.5 at nadir, fourteen times
+the guarantee, a featureless haze from orbit. Defining the disc at the
 guarantee's own depth keeps every airy world, giants included, under one
-rule and one test: a 0.12 g giant's disc is its 0.11 bar level, a Jupiter's
-(318 M_E, 2.6 g) about 2.4 bar, a 3,000 M_E giant's about 22 bar. The
+rule and one test: a 0.12 g giant's disc is its 0.07 bar level, a Jupiter's
+(318 M_E, 2.6 g) about 1.5 bar, a 3,000 M_E giant's about 14 bar (at
+atmosphere plan ruling 2's 0.32; 0.11, 2.4 and 22 bar at the first 0.5). The
 radius stays 11 R_E: the level differs from 1 bar by at most a few scale
 heights, about 1% of the radius on the lightest giants (H near 330 km at
 0.12 g) and far less on the rest, which the drawing cannot show. Belts are then drawn under half an optical depth
@@ -543,17 +544,18 @@ universe.
 
 Ruling 8 says every airy world's surface stays legible from orbit. **The
 cap bounds what a world may have, not what the renderer shows.** A
-guarantee, `GenGuarantees::MaxNadirTau450 = 0.5`: the total extinction
+guarantee, `GenGuarantees::MaxNadirTau450 = 0.32`: the total extinction
 optical depth (Rayleigh plus aerosol, not absorption) straight down at 450
 nm, the bluest channel's centre and the one that hazes first, is at most
-0.5. From the mix, gravity and derivations of decision 2 that gives a
+0.32. (Amended by atmosphere plan ruling 2: at 0.5 every mix at its ceiling
+kept 0.34 of its contrast, not the half this decision requires.) From the mix, gravity and derivations of decision 2 that gives a
 per-world pressure ceiling, `P_max = MaxNadirTau450 / tau450_per_bar`,
 which the smooth ceiling of decision 2 applies. At 1 g, from Earth air's
 Rayleigh 0.216 per bar at 450 nm (0.097 x (550/450)^4) and decision 5's
-aerosols: N2/O2 0.216 + 0.061 = 0.277 per bar, so about 1.8 bar; CO2
+aerosols: N2/O2 0.216 + 0.061 = 0.277 per bar, so about 1.15 bar; CO2
 0.216 x 2.4 x (28.97/44) + 0.08 x (550/450)^0.3 = 0.341 + 0.085 = 0.426
-per bar, so about 1.17 bar; H2/He 0.216 x 0.2 x (28.97/2.3) + 0.012 =
-0.556 per bar, so about 0.9 bar. The pure test computes these from
+per bar, so about 0.75 bar; H2/He 0.216 x 0.2 x (28.97/2.3) + 0.012 =
+0.556 per bar, so about 0.58 bar. The pure test computes these from
 `AirFacts`, never from this prose. A heavier world holds more, since the
 same pressure is less column under stronger gravity. Giants have no
 ceiling to bend under: their disc is *defined* at this depth (decision 2).
@@ -1154,11 +1156,11 @@ together):
 
 | Role | World | Sector, slot, orbit index | Mix | Pressure (bar) | Gravity (g) | tau450 | Mass (M_E) | Star (K) | Distance (ly) |
 |---|---|---|---|---|---|---|---|---|---|
-| R | Gelaes III | (-2, -1, 0), slot 0, orbit index 2 | nitrogen-oxygen | 1.393 | 0.984 | 0.393 | 0.96 | 3673 | 6.97 |
-| G | Sova V | (0, -2, 1), slot 0, orbit index 4 | nitrogen-oxygen | 0.5235 | 0.813 | 0.179 | 0.62 | 5306 | 5.31 |
-| C | Baemsekai V | (-1, -1, 0), slot 0, orbit index 4 | carbon-dioxide | 0.6639 | 0.766 | 0.370 | 0.55 | 2566 | 0.00 |
+| R | Gelaes III | (-2, -1, 0), slot 0, orbit index 2 | nitrogen-oxygen | 1.068 | 0.984 | 0.301 | 0.96 | 3673 | 6.97 |
+| G | Sova V | (0, -2, 1), slot 0, orbit index 4 | nitrogen-oxygen | 0.5134 | 0.813 | 0.175 | 0.62 | 5306 | 5.31 |
+| C | Baemsekai V | (-1, -1, 0), slot 0, orbit index 4 | carbon-dioxide | 0.5285 | 0.766 | 0.295 | 0.55 | 2566 | 0.00 |
 | N | Baemsekai I | (-1, -1, 0), slot 0, orbit index 0 | none | 0 | 0.548 | 0.000 | 0.26 | 2566 | 0.00 |
-| J | Krothmertas VII | (-2, -5, 1), slot 0, orbit index 6 | hydrogen-helium | 0.6273 | 0.699 | 0.500 | 84.63 | 4765 | 19.83 |
+| J | Krothmertas VII | (-2, -5, 1), slot 0, orbit index 6 | hydrogen-helium | 0.4015 | 0.699 | 0.320 | 84.63 | 4765 | 19.83 |
 | E | as R | | | | | | | | |
 
 To look (for R at orbit index n): `ds.Sky.Goto n 40000` (the opening
@@ -1364,7 +1366,8 @@ sign-off (ruling 1).
   pure `AirFacts`: retention (Earth keeps N2/O2 and loses H2/He; the
   0.3 M_E, 320 K case; the 10 M_E, 200 K case); the scale heights; the
   ceilings at 1 g and their linearity in gravity and retention; a giant's
-  disc (a 15 M_E giant about 0.11 bar, a Jupiter about 2.4); the smooth
+  disc (a 15 M_E giant about 0.07 bar, a Jupiter about 1.5, at ruling 2's
+  0.32); the smooth
   ceiling's shape; decision 5's table, every constant of every mix,
   pinned where it is defined.
 - **Procgen (`DeepSpace.Universe.Air`)** **[1]**: Barren and Ice airless;
