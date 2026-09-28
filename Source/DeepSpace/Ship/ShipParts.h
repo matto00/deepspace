@@ -262,4 +262,34 @@ namespace ShipParts
     /** The entry for Bay, found by name; null if State has none. */
     DEEPSPACE_API FShipBayState* FindBay(FShipLoadoutState& State, EShipBay Bay);
     DEEPSPACE_API const FShipBayState* FindBay(const FShipLoadoutState& State, EShipBay Bay);
+
+    /** One axis a bay's parts are compared on (decision 7's table): the
+     *  draw, or one of its ratings. Every watt figure is more open when
+     *  lower; every capability when higher. */
+    struct FAxis
+    {
+        bool bDraw = false;
+        EShipRating Rating = EShipRating::ReactorWatts;
+        bool bHigherIsOpen = true;
+    };
+
+    /** Bay's axes: the draw in every core bay, and its ratings. None for an
+     *  aux slot, whose parts rate nothing. */
+    DEEPSPACE_API TArray<FAxis> AxesOf(EShipBay Bay);
+
+    /** Part's value on Axis, signed so that more open is always larger; a
+     *  rating the part lacks reads stock. */
+    DEEPSPACE_API double Openness(const FShipPartSpec& Part, const FAxis& Axis);
+
+    /** What Part asks at rest: its draw, and the want it rates (lights and
+     *  boosters). The engine wants nothing at rest. */
+    DEEPSPACE_API double AtRestWatts(const FShipPartSpec& Part);
+
+    /**
+     * Decision 7 over a catalogue, and decision 8's rules on a part: one
+     * sentence per problem, empty when every rule holds. A design
+     * constraint, not only a test: parts widen what the ship can do; they
+     * never make it need more of anything.
+     */
+    DEEPSPACE_API TArray<FString> Validate(const TArray<FShipPartSpec>& Catalogue);
 }

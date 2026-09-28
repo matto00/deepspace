@@ -221,3 +221,181 @@ const FShipBayState* ShipParts::FindBay(const FShipLoadoutState& State, EShipBay
     return Wanted.IsNone() ? nullptr
         : State.Bays.FindByPredicate([Wanted](const FShipBayState& Entry) { return Entry.Bay == Wanted; });
 }
+
+TArray<ShipParts::FAxis> ShipParts::AxesOf(EShipBay Bay)
+{
+    const auto Rated = [](EShipRating Rating, bool bHigherIsOpen)
+    {
+        FAxis Axis;
+        Axis.Rating = Rating;
+        Axis.bHigherIsOpen = bHigherIsOpen;
+        return Axis;
+    };
+    FAxis Draw;
+    Draw.bDraw = true;
+    Draw.bHigherIsOpen = false;
+    switch (Bay)
+    {
+    case EShipBay::Reactor:     return { Rated(EShipRating::ReactorWatts, true), Draw };
+    case EShipBay::Drive:       return { Rated(EShipRating::DriveResponse, true), Rated(EShipRating::ChargeSeconds, false),
+                                         Rated(EShipRating::WindingWant, false), Draw };
+    case EShipBay::Boosters:    return { Rated(EShipRating::LinearAcceleration, true), Rated(EShipRating::BoostersWant, false), Draw };
+    case EShipBay::Lights:      return { Rated(EShipRating::LightsWant, false), Draw };
+    case EShipBay::LifeSupport: return { Draw };
+    case EShipBay::Sensors:     return { Rated(EShipRating::RangeLy, true), Draw };
+    default:                    return {};
+    }
+}
+
+double ShipParts::Openness(const FShipPartSpec& Part, const FAxis& Axis)
+{
+    const double* Rated = Axis.bDraw ? nullptr : Part.Ratings.Find(Axis.Rating);
+    const double Value = Axis.bDraw ? Part.Draw : (Rated ? *Rated : FShipRatings::Stock().Get(Axis.Rating));
+    return Axis.bHigherIsOpen ? Value : -Value;
+}
+
+double ShipParts::AtRestWatts(const FShipPartSpec& Part)
+{
+    FShipRatings Rated = FShipRatings::Stock();
+    Apply(Rated, Part.Ratings);
+    double Watts = Part.Draw;
+    if (Part.Bay == EShipBay::Lights)
+    {
+        Watts += Rated.LightsWant;
+    }
+    if (Part.Bay == EShipBay::Boosters)
+    {
+        Watts += Rated.BoostersWant;
+    }
+    return Watts;
+}
+
+namespace ShipPartsDetail
+{
+    /** A at least as open as B on every axis of Bay and more open on one. */
+    bool Dominates(const FShipPartSpec& A, const FShipPartSpec& B, EShipBay Bay)
+    {
+        bool bMore = false;
+        for (const ShipParts::FAxis& Axis : ShipParts::AxesOf(Bay))
+        {
+            const double OpenA = ShipParts::Openness(A, Axis);
+            const double OpenB = ShipParts::Openness(B, Axis);
+            if (OpenA < OpenB)
+            {
+                return false;
+            }
+            bMore = bMore || OpenA > OpenB;
+        }
+        return bMore;
+    }
+}
+
+TArray<FString> ShipParts::Validate(const TArray<FShipPartSpec>& Catalogue)
+{
+    TArray<FString> Problems;
+    TSet<FName> Seen;
+    for (const FShipPartSpec& Part : Catalogue)
+    {
+        const FString Id = Part.Id.ToString();
+        if (Part.Id.IsNone())
+        {
+            Problems.Add(TEXT("a part has no id"));
+        }
+        else if (Seen.Contains(Part.Id))
+        {
+            Problems.Add(FString::Printf(TEXT("%s: two parts share the id"), *Id));
+        }
+        Seen.Add(Part.Id);
+        if (Part.Bay == EShipBay::None)
+        {
+            Problems.Add(FString::Printf(TEXT("%s: fits no bay"), *Id));
+            continue;
+        }
+        if (Part.Draw < 0.0)
+        {
+            Problems.Add(FString::Printf(TEXT("%s: a negative draw"), *Id));
+        }
+        for (const TPair<EShipRating, double>& Rated : Part.Ratings)
+        {
+            const FString Rating = RatingName(Rated.Key).ToString();
+            if (ShipBay::IsAux(Part.Bay))
+            {
+                Problems.Add(FString::Printf(TEXT("%s: rates %s; aux parts add verbs, never numbers"), *Id, *Rating));
+            }
+            else if (OwnerOf(Rated.Key) != Part.Bay)
+            {
+                Problems.Add(FString::Printf(TEXT("%s: rates %s, which the %s bay owns"), *Id, *Rating,
+                                             *ShipBay::Name(OwnerOf(Rated.Key)).ToString()));
+            }
+        }
+        if (ShipBay::IsAux(Part.Bay) && Part.Draw > 0.0)
+        {
+            Problems.Add(FString::Printf(TEXT("%s: draws %.0f W at rest; an aux part wants nothing until its verb is used"), *Id, Part.Draw));
+        }
+    }
+
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        if (!ShipBay::IsCore(Bay))
+        {
+            continue;
+        }
+        const FShipPartSpec* Stock = Catalogue.FindByPredicate([Bay](const FShipPartSpec& Part)
+        {
+            return Part.Bay == Bay && Part.Id == ShipBay::StockPartId(Bay);
+        });
+        if (!Stock)
+        {
+            Problems.Add(FString::Printf(TEXT("the %s bay has no stock part (%s)"),
+                                         *ShipBay::Name(Bay).ToString(), *ShipBay::StockPartId(Bay).ToString()));
+            continue;
+        }
+        TArray<const FShipPartSpec*> Upgrades;
+        for (const FShipPartSpec& Part : Catalogue)
+        {
+            if (Part.Bay == Bay && &Part != Stock)
+            {
+                Upgrades.Add(&Part);
+            }
+        }
+        for (const FShipPartSpec* Part : Upgrades)
+        {
+            for (const FAxis& Axis : AxesOf(Bay))
+            {
+                if (Openness(*Part, Axis) < Openness(*Stock, Axis))
+                {
+                    Problems.Add(FString::Printf(TEXT("%s: less open than stock on %s"), *Part->Id.ToString(),
+                                                 Axis.bDraw ? TEXT("its draw") : *RatingName(Axis.Rating).ToString()));
+                }
+            }
+            for (const FShipPartSpec* Other : Upgrades)
+            {
+                if (Other != Part && ShipPartsDetail::Dominates(*Part, *Other, Bay))
+                {
+                    Problems.Add(FString::Printf(TEXT("%s dominates %s: a ladder, not a choice"),
+                                                 *Part->Id.ToString(), *Other->Id.ToString()));
+                }
+            }
+        }
+    }
+
+    // Every combination, one part per bay, whole at rest under the stock
+    // reactor: the worst part of each bay together is the worst loadout.
+    double Worst = 0.0;
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        double BayWorst = 0.0;
+        for (const FShipPartSpec& Part : Catalogue)
+        {
+            const bool bFits = ShipBay::IsAux(Bay) ? ShipBay::IsAux(Part.Bay) : Part.Bay == Bay;
+            BayWorst = bFits ? FMath::Max(BayWorst, AtRestWatts(Part)) : BayWorst;
+        }
+        Worst += BayWorst;
+    }
+    if (Worst > StockReactorWatts)
+    {
+        Problems.Add(FString::Printf(TEXT("the heaviest loadout asks %.0f W at rest, over the stock reactor's %.0f W"),
+                                     Worst, StockReactorWatts));
+    }
+    return Problems;
+}
