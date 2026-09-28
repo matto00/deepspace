@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Atmosphere/AtmosphereBins.h"
 #include "Atmosphere/AtmosphereReference.h"
 
 /**
@@ -20,21 +21,23 @@ namespace AtmosphereLaw
 }
 
 /**
- * One world's air as the law takes it: the .ush's AT_Air, in double. Per
- * radius of the body, at the surface, three channels. Scatter is in the
- * star's own colour at unit luminance -- the star is in the coefficients,
- * so the shader never sees a temperature (decision 3); extinction is
- * relative to the star's own light, so a white surface seen through no air
- * stays white. The gas falls by e every GasH radii and the aerosol every
- * AerosolH; the air is drawn to Top radii above the surface. Airless when
- * Top is 0.
+ * One world's air as the law takes it: the .ush's AT_Air, in double, over
+ * AtmosphereBins' Count spectral bins (atmosphere plan ruling 3). Per bin,
+ * per radius of the body at the surface, for unit light in the bin: the
+ * gas's and the aerosol's scattering and extinction, colourless. Fold[b] is
+ * the star's light in bin b in linear sRGB at unit luminance -- the star is
+ * in the fold, so the shader never sees a temperature (decision 3) -- and
+ * the Count folds sum to the star's colour. The gas falls by e every GasH
+ * radii and the aerosol every AerosolH; the air is drawn to Top radii above
+ * the surface. Airless when Top is 0.
  */
 struct FAtmosphereAir
 {
-    FVector3d GasScatter = FVector3d::ZeroVector;
-    FVector3d GasExtinct = FVector3d::ZeroVector;
-    FVector3d AerosolScatter = FVector3d::ZeroVector;
-    FVector3d AerosolExtinct = FVector3d::ZeroVector;
+    AtmosphereBins::FBins GasScatter;
+    AtmosphereBins::FBins GasExtinct;
+    AtmosphereBins::FBins AerosolScatter;
+    AtmosphereBins::FBins AerosolExtinct;
+    FVector3d Fold[AtmosphereBins::Count] = {};
     double GasH = 0.0;
     double AerosolH = 0.0;
     double AerosolG = 0.0;
@@ -46,23 +49,26 @@ struct FAtmosphereAir
 /**
  * One airy world's multiple-scattering table (decision 11): Size x Size
  * texels, row = altitude over the air's depth (0 at the surface), column =
- * the sun's zenith cosine from -1 to 1, each an RGB the GPU will sample as
- * RGBA16F -- which is why the values stored here have already been
- * through a half float. Texels[Row * Size + Column]. Empty until
- * FAtmosphere::Build fills it; an empty table reads as no multiple
- * scattering.
+ * the sun's zenith cosine from -1 to 1, each a value per bin
+ * -- two RGBA16F texels on the GPU, a 64 x 32 texture with bins 0-3 in its
+ * left half and 4-7 in its right, which is why the values stored here have
+ * already been through a half float. Texels[(Row * Size + Column) * Count +
+ * Bin]. Empty until FAtmosphere::Build fills it; an empty table reads as no
+ * multiple scattering.
  */
 struct DEEPSPACE_API FAtmosphereTable
 {
     static constexpr int32 Size = 32;
 
-    TArray<FVector3f> Texels;
+    TArray<float> Texels;
 
-    bool IsEmpty() const { return Texels.Num() != Size * Size; }
+    bool IsEmpty() const { return Texels.Num() != Size * Size * AtmosphereBins::Count; }
+
+    float Texel(int32 Row, int32 Column, int32 Bin) const { return Texels[(Row * Size + Column) * AtmosphereBins::Count + Bin]; }
 
     /** Bilinear between texel centres, clamped at the edges: what the .ush's
      *  hook reads. Zeros when empty. */
-    void Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const;
+    void Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const;
 };
 
 /** How much of the multiple-scattering table Build fills. NoonOnly fills
@@ -94,32 +100,26 @@ class DEEPSPACE_API FAtmosphere
 {
 public:
     /**
-     * The per-channel coefficients from the star's spectrum through the
-     * world's own spectral laws: scatter exact in the optically thin limit,
-     * extinction exact at the nadir column (the aerosol's thin-limit share
-     * on its own profile, the rest on the gas's). The star's temperature is
+     * The per-bin coefficients from the star's spectrum through the world's
+     * own spectral laws, each its wavelengths' average by AtmosphereBins::
+     * Weight -- exact in the optically thin limit, the gas's extinction
+     * carrying the ozone -- and the star's light in each bin as the fold. The star's temperature is
      * clamped as SkyColour::Blackbody clamps it. The multiple-scattering
-     * table is built from the white air through the .ush's own
-     * AT_MultiScatterCell, and stored through half floats.
+     * table is built through the .ush's own AT_MultiScatterCell, and stored
+     * through half floats.
      */
     static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage = EAtmosphereTable::Full);
 
     bool HasAir() const { return !Air.IsAirless(); }
     const FAtmosphereAir& GetAir() const { return Air; }
-
-    /** The same air with the star's colour taken out of its scatter: what
-     *  the multiple-scattering table is built from, so the colour enters
-     *  once, where the table is read. */
-    const FAtmosphereAir& GetWhiteAir() const { return White; }
-
     const FAtmosphereTable& GetTable() const { return Table; }
 
-    /** The star's light in linear sRGB at unit luminance. */
+    /** The star's light in linear sRGB at unit luminance: the sum of the
+     *  air's folds. */
     const FVector3d& GetStarColour() const { return StarColour; }
 
 private:
     FAtmosphereAir Air;
-    FAtmosphereAir White;
     FAtmosphereTable Table;
     FVector3d StarColour = FVector3d::ZeroVector;
 };

@@ -191,6 +191,10 @@ public:
      */
     FVector3d MultiScatterWhite(double Altitude01, double CosSunZenith, int32 Rings = 48, int32 Segments = 24, int32 Steps = 96) const;
 
+    /** The same source per wavelength, before any weighting into channels:
+     *  what the law's table is held to, bin by bin. */
+    AtmosphereReference::FSpectrum MultiScatterSpectrum(double Altitude01, double CosSunZenith, int32 Rings = 48, int32 Segments = 24, int32 Steps = 96) const;
+
 private:
     static constexpr int32 TableAltitudes = 64;
     static constexpr int32 TableCosines = 128;

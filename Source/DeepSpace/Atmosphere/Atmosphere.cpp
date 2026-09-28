@@ -23,6 +23,9 @@ namespace AtmosphereF32
 }
 #undef AT_CPP
 
+static_assert(AtmosphereF64::AT_BINS == AtmosphereBins::Count && AtmosphereF32::AT_BINS == AtmosphereBins::Count,
+    "Atmosphere.ush's AT_BINS is AtmosphereBins::Count");
+
 namespace AtmosphereLocal
 {
     /** FAtmosphereAir as one precision's AT_Air. */
@@ -30,18 +33,16 @@ namespace AtmosphereLocal
     TAir ToAir(const FAtmosphereAir& In)
     {
         TAir A;
-        A.GasScatterR = TReal(In.GasScatter.X);
-        A.GasScatterG = TReal(In.GasScatter.Y);
-        A.GasScatterB = TReal(In.GasScatter.Z);
-        A.GasExtinctR = TReal(In.GasExtinct.X);
-        A.GasExtinctG = TReal(In.GasExtinct.Y);
-        A.GasExtinctB = TReal(In.GasExtinct.Z);
-        A.AerosolScatterR = TReal(In.AerosolScatter.X);
-        A.AerosolScatterG = TReal(In.AerosolScatter.Y);
-        A.AerosolScatterB = TReal(In.AerosolScatter.Z);
-        A.AerosolExtinctR = TReal(In.AerosolExtinct.X);
-        A.AerosolExtinctG = TReal(In.AerosolExtinct.Y);
-        A.AerosolExtinctB = TReal(In.AerosolExtinct.Z);
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            A.GasScatter[K] = TReal(In.GasScatter.Value[K]);
+            A.GasExtinct[K] = TReal(In.GasExtinct.Value[K]);
+            A.AerosolScatter[K] = TReal(In.AerosolScatter.Value[K]);
+            A.AerosolExtinct[K] = TReal(In.AerosolExtinct.Value[K]);
+            A.FoldR[K] = TReal(In.Fold[K].X);
+            A.FoldG[K] = TReal(In.Fold[K].Y);
+            A.FoldB[K] = TReal(In.Fold[K].Z);
+        }
         A.GasH = TReal(In.GasH);
         A.AerosolH = TReal(In.AerosolH);
         A.AerosolG = TReal(In.AerosolG);
@@ -76,13 +77,14 @@ float AtmosphereLaw::LogChapmanF32(float X, float CosZenith)
 }
 
 
-void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const
+void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const
 {
     if (IsEmpty())
     {
-        OutR = 0.0;
-        OutG = 0.0;
-        OutB = 0.0;
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            Out[K] = 0.0;
+        }
         return;
     }
     const double FX = FMath::Clamp((CosSunZenith + 1.0) * 0.5, 0.0, 1.0) * (Size - 1);
@@ -91,14 +93,11 @@ void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double& Ou
     const int32 Y0 = FMath::Min(FMath::FloorToInt32(FY), Size - 2);
     const double TX = FX - X0;
     const double TY = FY - Y0;
-    const FVector3f& C00 = Texels[Y0 * Size + X0];
-    const FVector3f& C01 = Texels[Y0 * Size + X0 + 1];
-    const FVector3f& C10 = Texels[(Y0 + 1) * Size + X0];
-    const FVector3f& C11 = Texels[(Y0 + 1) * Size + X0 + 1];
-    const auto Blend = [TX, TY](double A, double B, double C, double D) { return FMath::Lerp(FMath::Lerp(A, B, TX), FMath::Lerp(C, D, TX), TY); };
-    OutR = Blend(C00.X, C01.X, C10.X, C11.X);
-    OutG = Blend(C00.Y, C01.Y, C10.Y, C11.Y);
-    OutB = Blend(C00.Z, C01.Z, C10.Z, C11.Z);
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+    {
+        Out[K] = FMath::Lerp(FMath::Lerp(Texel(Y0, X0, K), Texel(Y0, X0 + 1, K), TX),
+                             FMath::Lerp(Texel(Y0 + 1, X0, K), Texel(Y0 + 1, X0 + 1, K), TX), TY);
+    }
 }
 
 FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage)
@@ -113,37 +112,31 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
         return Out;
     }
 
-    FSpectrum Through;
+    // Each bin's air is its wavelengths' own, averaged by AtmosphereBins::
+    // Weight: exact in the thin limit. Deep, one number stands for a spread
+    // of depths; the bins are narrow enough that it does (planning note 13).
+    FSpectrum GasExtinct;
     for (int32 I = 0; I < SkyColour::Spectral::Count; ++I)
     {
-        Through.Value[I] = FMath::Exp(-(Spectra.GasScatter.Value[I] + Spectra.GasAbsorb.Value[I] + Spectra.AerosolExtinct.Value[I]));
+        GasExtinct.Value[I] = Spectra.GasScatter.Value[I] + Spectra.GasAbsorb.Value[I];
     }
-    const FVector3d Nadir = ChannelAverage(Star, Through);
-    const FVector3d AerosolTau = ChannelAverage(Star, Spectra.AerosolExtinct);
-    const FVector3d GasScatterColour = Colour(Star, Spectra.GasScatter);
-    const FVector3d AerosolScatterColour = Colour(Star, Spectra.AerosolScatter);
-    const FVector3d GasScatterWhite = ChannelAverage(Star, Spectra.GasScatter);
-    const FVector3d AerosolScatterWhite = ChannelAverage(Star, Spectra.AerosolScatter);
+    const AtmosphereBins::FBins GasScatter = AtmosphereBins::Average(Star, Spectra.GasScatter);
+    const AtmosphereBins::FBins GasTau = AtmosphereBins::Average(Star, GasExtinct);
+    const AtmosphereBins::FBins AerosolScatter = AtmosphereBins::Average(Star, Spectra.AerosolScatter);
+    const AtmosphereBins::FBins AerosolTau = AtmosphereBins::Average(Star, Spectra.AerosolExtinct);
 
     FAtmosphereAir& A = Out.Air;
     A.GasH = Spectra.GasH;
     A.AerosolH = Spectra.AerosolH;
     A.AerosolG = Spectra.AerosolG;
     A.Top = Spectra.Top;
-    for (int32 C = 0; C < 3; ++C)
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
     {
-        const double TotalTau = -FMath::Loge(FMath::Clamp(Nadir[C], 1.0e-6, 1.0));
-        const double Aerosol = FMath::Max(AerosolTau[C], 0.0);
-        A.GasExtinct[C] = FMath::Max(TotalTau - Aerosol, 0.0) / Spectra.GasH;
-        A.AerosolExtinct[C] = Aerosol / Spectra.AerosolH;
-        A.GasScatter[C] = FMath::Max(GasScatterColour[C], 0.0) / Spectra.GasH;
-        A.AerosolScatter[C] = FMath::Max(AerosolScatterColour[C], 0.0) / Spectra.AerosolH;
-    }
-    Out.White = A;
-    for (int32 C = 0; C < 3; ++C)
-    {
-        Out.White.GasScatter[C] = FMath::Max(GasScatterWhite[C], 0.0) / Spectra.GasH;
-        Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
+        A.GasScatter.Value[K] = GasScatter.Value[K] / Spectra.GasH;
+        A.GasExtinct.Value[K] = GasTau.Value[K] / Spectra.GasH;
+        A.AerosolScatter.Value[K] = AerosolScatter.Value[K] / Spectra.AerosolH;
+        A.AerosolExtinct.Value[K] = AerosolTau.Value[K] / Spectra.AerosolH;
+        A.Fold[K] = AtmosphereBins::Fold(Star, K);
     }
 
     if (Coverage != EAtmosphereTable::None)
@@ -153,13 +146,12 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
         // an empty table -- single scattering only -- and stored through
         // half floats, as the GPU's RGBA16F texture will hold it.
         constexpr int32 Size = FAtmosphereTable::Size;
-        const AtmosphereF64::AT_Air WhiteAir = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Out.White);
+        const AtmosphereF64::AT_Air Air64 = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Out.Air);
         const FAtmosphereTable Empty;
-        Out.Table.Texels.SetNumZeroed(Size * Size);
-        // NoonOnly: the two columns either side of the noon sun's cosine,
-        // which every sample of a zenith view under that sun reads.
-        const double NoonCos = AtmosphereLaw::NoonSun().Z;
-        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((NoonCos + 1.0) * 0.5 * (Size - 1)), Size - 2);
+        Out.Table.Texels.SetNumZeroed(Size * Size * AtmosphereBins::Count);
+        // NoonOnly: the two columns either side of the noon sun's, which
+        // every sample of a zenith view under that sun reads.
+        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((AtmosphereLaw::NoonSun().Z + 1.0) * 0.5 * (Size - 1)), Size - 2);
         const int32 FirstColumn = Coverage == EAtmosphereTable::Full ? 0 : NoonColumn;
         const int32 LastColumn = Coverage == EAtmosphereTable::Full ? Size - 1 : NoonColumn + 1;
         for (int32 Row = 0; Row < Size; ++Row)
@@ -168,11 +160,11 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
             {
                 const double Altitude01 = static_cast<double>(Row) / (Size - 1);
                 const double Cos = -1.0 + 2.0 * Column / (Size - 1);
-                const AtmosphereF64::AT_Rgb Cell = AtmosphereF64::AT_MultiScatterCell(WhiteAir, Altitude01, Cos, Empty);
-                Out.Table.Texels[Row * Size + Column] = FVector3f(
-                    FFloat16(static_cast<float>(Cell.R)).GetFloat(),
-                    FFloat16(static_cast<float>(Cell.G)).GetFloat(),
-                    FFloat16(static_cast<float>(Cell.B)).GetFloat());
+                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, Cos, Empty);
+                for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+                {
+                    Out.Table.Texels[(Row * Size + Column) * AtmosphereBins::Count + K] = FFloat16(static_cast<float>(Cell.V[K])).GetFloat();
+                }
             }
         }
     }

@@ -124,4 +124,64 @@ namespace AtmosphereTestFixtures
             {TEXT("H2/He at 0.05 bar"), HydrogenHelium(LowBar)},
             {TEXT("H2/He at its ceiling"), HydrogenHelium(HydrogenHeliumCeilingBar)}};
     }
+
+    /** One ray of decision 1's grid, in one air's radii. */
+    struct FRayCase
+    {
+        FString Name;
+        FVector3d Eye = FVector3d::ZeroVector;
+        FVector3d Direction = FVector3d::ZeroVector;
+        double Length = 1.0e30;
+        FVector3d Sun = FVector3d::ZeroVector;
+    };
+
+    /**
+     * Decision 1's grid for an air of gas scale height GasH and top Top, the
+     * eye on +Z: four eyes (the ground, inside at 2 H, just above the top,
+     * and 7.8 radii out), four views (nadir, zenith, horizon, limb --
+     * outside, the ray grazing 2 H up; inside, 5 degrees above the horizon)
+     * and three suns (noon, the terminator, and backlit -- behind the world
+     * from outside, low ahead from inside). 48 rays, each named
+     * "<eye> eye, <view>, <sun> sun".
+     */
+    inline TArray<FRayCase> Grid(double GasH, double Top)
+    {
+        TArray<FRayCase> Cases;
+        const double Heights[] = {1.0e-3 * GasH, 2.0 * GasH, Top + 2.0 * GasH, 6.8};
+        const TCHAR* const EyeNames[] = {TEXT("ground"), TEXT("inside"), TEXT("above"), TEXT("far")};
+        for (int32 E = 0; E < 4; ++E)
+        {
+            const double R = 1.0 + Heights[E];
+            const bool bInside = Heights[E] < Top;
+            FVector3d Limb;
+            if (bInside)
+            {
+                const double Five = FMath::DegreesToRadians(5.0);
+                Limb = FVector3d(FMath::Cos(Five), 0.0, FMath::Sin(Five));
+            }
+            else
+            {
+                const double SinAngle = (1.0 + 2.0 * GasH) / R;
+                Limb = FVector3d(SinAngle, 0.0, -FMath::Sqrt(1.0 - SinAngle * SinAngle));
+            }
+            const FVector3d Views[] = {FVector3d(0.0, 0.0, -1.0), FVector3d(0.0, 0.0, 1.0), FVector3d(1.0, 0.0, 0.0), Limb};
+            const TCHAR* const ViewNames[] = {TEXT("nadir"), TEXT("zenith"), TEXT("horizon"), TEXT("limb")};
+            const FVector3d Suns[] = {FVector3d(0.0, 0.0, 1.0), FVector3d(0.0, 1.0, 0.0),
+                bInside ? FVector3d(1.0, 0.0, 0.1).GetSafeNormal() : FVector3d(0.0, 0.0, -1.0)};
+            const TCHAR* const SunNames[] = {TEXT("noon"), TEXT("terminator"), TEXT("backlit")};
+            for (int32 V = 0; V < 4; ++V)
+            {
+                for (int32 S = 0; S < 3; ++S)
+                {
+                    FRayCase Case;
+                    Case.Name = FString::Printf(TEXT("%s eye, %s, %s sun"), EyeNames[E], ViewNames[V], SunNames[S]);
+                    Case.Eye = FVector3d(0.0, 0.0, R);
+                    Case.Direction = Views[V];
+                    Case.Sun = Suns[S];
+                    Cases.Add(Case);
+                }
+            }
+        }
+        return Cases;
+    }
 }

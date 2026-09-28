@@ -534,22 +534,31 @@ FVector3d FReferenceAir::SunThrough(const FVector3d& Point, const FVector3d& Sun
     return AtmosphereReference::ChannelAverage(Star, SunExact(R, Cos));
 }
 
-FVector3d FReferenceAir::MultiScatterWhite(double Altitude01, double CosSunZenith, int32 Rings, int32 Segments, int32 StepsPerRay) const
+AtmosphereReference::FSpectrum FReferenceAir::MultiScatterSpectrum(double Altitude01, double CosSunZenith, int32 Rings, int32 Segments, int32 StepsPerRay) const
 {
     using namespace AtmosphereReferenceLocal;
+    FSpectrum Psi;
     if (!Air.bAir)
     {
-        return FVector3d::ZeroVector;
+        return Psi;
     }
     const FVector3d Point(0.0, 0.0, 1.0 + FMath::Clamp(Altitude01, 0.0, 1.0) * Air.Top);
     const FVector3d Sun(std::sqrt(FMath::Max(1.0 - CosSunZenith * CosSunZenith, 0.0)), 0.0, CosSunZenith);
     // The View only weights IntoView*, which this does not read.
     const FSecond Second = SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay);
-    FSpectrum Psi;
     for (int32 I = 0; I < Count; ++I)
     {
         const double F = FMath::Min(Second.Transfer.Value[I], 0.999);
         Psi.Value[I] = UE_DOUBLE_PI * Second.Mean.Value[I] / (1.0 - F);
     }
-    return AtmosphereReference::ChannelAverage(Star, Psi);
+    return Psi;
+}
+
+FVector3d FReferenceAir::MultiScatterWhite(double Altitude01, double CosSunZenith, int32 Rings, int32 Segments, int32 StepsPerRay) const
+{
+    if (!Air.bAir)
+    {
+        return FVector3d::ZeroVector;
+    }
+    return AtmosphereReference::ChannelAverage(Star, MultiScatterSpectrum(Altitude01, CosSunZenith, Rings, Segments, StepsPerRay));
 }
