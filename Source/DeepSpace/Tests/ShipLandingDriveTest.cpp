@@ -97,6 +97,11 @@ bool FLandingDriveUnderFloorTest::RunTest(const FString& Parameters)
 
     // F again, flying under the floor: cruise at once -- there is nothing to
     // spool down from, and no dead stop.
+    // With the nose a little down, as a pilot looking at the ground holds
+    // it: under the floor sphere a nose into it is what makes the drive's
+    // own leaving rule (CruiseCanTakeOver) refuse cruise and spool down.
+    Flight.State.SetUniverseTransform(Flight.State.GetUniversePosition(),
+                                      Flight.State.GetUniverseOrientation() * FQuat(FVector::RightVector, FMath::DegreesToRadians(10.0)));
     const double Before = Flight.State.GetSpeed();
     FShipFlightCommand Leave = Flight.State.GetCommand();
     Leave.bDrive = false;
