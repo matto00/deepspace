@@ -41,8 +41,8 @@ past them, it says so and is on the sign-off list.
 2. **Sky colour is derived and honest**: the star's blackbody
    (`SkyColour::Blackbody`, the one-blackbody rule) x the composition's
    scattering and absorption x the column. **No palette, no floor.** Most
-   skies -- red dwarfs' -- are pale grey-cyan; blue only under G, F and A
-   stars.
+   skies -- red dwarfs' -- are peach; blue only from about 4,000 K, under
+   K, G, F and A stars (as atmosphere plan ruling 1 restates it).
 3. **Our own analytic model everywhere**: a pure C++ optics reference
    (transmittance, in-scatter, Chapman airmass) and an unlit Custom HLSL
    term in `M_SkyBody`, later `M_SkyGround` and the dome; small LUTs built
@@ -487,10 +487,10 @@ already in the coefficients, so the shader never sees a temperature.
 integral (the table illustrates; `.StarColour` pins the bounds stated in
 *Tests*, in linear sRGB with HSV saturation `S = 1 - min/max`):
 
-| Star | Sky at noon under Earth air |
+| Star | Sky at noon under Earth air (straight up, the sun 45 degrees high) |
 |---|---|
-| 2,566 K (home) | pale grey-cyan to off-white, low saturation; a sun far oranger than the sky |
-| 3,000 K | about (1, 1.26, 1.31) relative, a faint cyan |
+| 2,566 K (home) | peach: saturation about 0.72, hue about 26 degrees; a sun oranger still (atmosphere plan ruling 1) |
+| 3,000 K | a paler peach, saturation about 0.49; the greyest sky is near 3,500 K, and blue begins near 4,000 K |
 | 5,772 K (Sun) | Earth's blue |
 | 7,000 K+ (F, A) | deeper, towards violet-blue |
 
@@ -1273,14 +1273,19 @@ sign-off (ruling 1).
     forms it after `RenderableScale`'s rounding (the GPU's float path is
     `Eyes.AtmosphereProbe`'s).
   - **[1, O]** `.StarColour`, in linear sRGB, HSV saturation `S = 1 -
-    min/max` and hue in degrees, of the noon zenith from the ground under
-    Earth air at 1 bar and 1 g: S rises monotonically with the star's
-    temperature from 2,000 to 15,000 K; **S at most 0.25 at 2,566 K**;
-    **S at most 0.12 at 2,000 K** (no floor: near-grey); **under 5,772 K,
-    hue between 200 and 235 degrees and S between 0.40 and 0.85** (Earth's
-    clear zenith). These bounds are the spec's; if the reference lands
-    outside them, the spec is amended with the reason, never the test
-    alone.
+    min/max` and hue in degrees, of the noon zenith from the ground
+    (straight up, the sun 45 degrees high: atmosphere plan ruling 4) under
+    Earth air at 1 bar and 1 g, from 2,000 to 15,000 K: S falls to the
+    greyest sky, between 3,000 and 4,500 K, and rises from it; from 4,000 K
+    up the hue is blue (200-240 degrees); **under 2,566 K a peach sky, S
+    between 0.62 and 0.82 and hue between 15 and 40 degrees**; **under
+    2,000 K, S at least 0.85**; **under 5,772 K, hue between 200 and 235
+    degrees and S between 0.40 and 0.85** (Earth's clear zenith). No
+    palette, no floor, no white balance per star. (Amended by atmosphere
+    plan ruling 1: in the game's linear sRGB with a D65 white, a red
+    dwarf's sky is the star's own orange pulled toward blue by lambda^-4,
+    not the pale grey-cyan first estimated, which read the sky relative to
+    the star's light.)
   - **[1, O]** `.LimbBeyondSilhouette`, `.TerminatorReddens`,
     `.CrescentAtHighPhase`, `.BacklitRing` (ring radiance with the star
     behind exceeds the lit limb's at 90 degrees phase), `.AirlessIsZero`.

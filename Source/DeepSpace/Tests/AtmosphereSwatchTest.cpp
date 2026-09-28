@@ -19,6 +19,8 @@
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereGroundSkySwatchTest, "DeepSpace.Atmosphere.GroundSkySwatch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereStarColourTest, "DeepSpace.Atmosphere.StarColour",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace AtmosphereSwatchTestLocal
 {
@@ -62,6 +64,48 @@ namespace AtmosphereSwatchTestLocal
     {
         const double Radians = FMath::DegreesToRadians(ElevationDeg);
         return FVector3d(std::cos(Radians), 0.0, std::sin(Radians));
+    }
+
+    /** Straight up from the ground under the noon sun (ruling 4). */
+    FVector3d NoonZenith(const FAtmosphere& Air)
+    {
+        const FVector3d Up(0.0, 0.0, 1.0);
+        return AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), Up, Up, AtmosphereLaw::NoEnd, AtmosphereLaw::NoonSun()).InScatter;
+    }
+
+    /** HSV saturation, 1 - min / max, of the colour with its negative
+     *  channels taken as none. */
+    double Saturation(const FVector3d& Colour)
+    {
+        const FVector3d C(FMath::Max(Colour.X, 0.0), FMath::Max(Colour.Y, 0.0), FMath::Max(Colour.Z, 0.0));
+        const double Max = C.GetMax();
+        return Max > 0.0 ? 1.0 - C.GetMin() / Max : 0.0;
+    }
+
+    /** HSV hue, degrees. */
+    double Hue(const FVector3d& Colour)
+    {
+        const FVector3d C(FMath::Max(Colour.X, 0.0), FMath::Max(Colour.Y, 0.0), FMath::Max(Colour.Z, 0.0));
+        const double Max = C.GetMax();
+        const double Delta = Max - C.GetMin();
+        if (Delta <= 0.0)
+        {
+            return 0.0;
+        }
+        double Degrees = 0.0;
+        if (Max == C.X)
+        {
+            Degrees = 60.0 * std::fmod((C.Y - C.Z) / Delta, 6.0);
+        }
+        else if (Max == C.Y)
+        {
+            Degrees = 60.0 * ((C.Z - C.X) / Delta + 2.0);
+        }
+        else
+        {
+            Degrees = 60.0 * ((C.X - C.Y) / Delta + 4.0);
+        }
+        return Degrees < 0.0 ? Degrees + 360.0 : Degrees;
     }
 
     /** One fisheye of Air's sky from the ground under Sun, exposed at the
@@ -126,6 +170,70 @@ bool FAtmosphereGroundSkySwatchTest::RunTest(const FString& Parameters)
         }
     }
     TestEqual(TEXT("every swatch is written"), Written, 2 * All.Num());
+    return true;
+}
+
+bool FAtmosphereStarColourTest::RunTest(const FString& Parameters)
+{
+    using namespace AtmosphereSwatchTestLocal;
+    using namespace AtmosphereTestFixtures;
+    const auto Zenith = [](double Kelvin) { return NoonZenith(FAtmosphere::Build(EarthAir(), Kelvin, EAtmosphereTable::NoonOnly)); };
+
+    // Decision 3's table, pinned as atmosphere plan ruling 1 restates it: no
+    // palette, no floor, no white balance per star. In linear sRGB with a
+    // D65 white a red dwarf's sky is peach, the star's own orange pulled
+    // toward blue by lambda^-4; the sky is greyest near 3,500 K and blue
+    // from 4,000 K up.
+    TArray<double> Saturations;
+    TArray<int32> Kelvins;
+    bool bBlue = true;
+    for (int32 Kelvin = 2000; Kelvin <= 15000; Kelvin += 500)
+    {
+        const FVector3d Sky = Zenith(Kelvin);
+        const double S = Saturation(Sky);
+        AddInfo(FString::Printf(TEXT("%5d K: noon zenith (%.4f, %.4f, %.4f), saturation %.3f, hue %.0f"),
+            Kelvin, Sky.X, Sky.Y, Sky.Z, S, Hue(Sky)));
+        Saturations.Add(S);
+        Kelvins.Add(Kelvin);
+        if (Kelvin >= 4000)
+        {
+            bBlue &= Hue(Sky) >= 200.0 && Hue(Sky) <= 240.0;
+        }
+    }
+    int32 Least = 0;
+    for (int32 I = 1; I < Saturations.Num(); ++I)
+    {
+        Least = Saturations[I] < Saturations[Least] ? I : Least;
+    }
+    bool bFalls = true;
+    bool bRises = true;
+    for (int32 I = 1; I < Saturations.Num(); ++I)
+    {
+        if (I <= Least)
+        {
+            bFalls &= Saturations[I] < Saturations[I - 1];
+        }
+        else
+        {
+            bRises &= Saturations[I] > Saturations[I - 1];
+        }
+    }
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("the greyest sky is between 3,000 and 4,500 K (%d K)"), Kelvins[Least]), Kelvins[Least] >= 3000 && Kelvins[Least] <= 4500);
+    TestTrue(TEXT("saturation falls from 2,000 K to the greyest and rises from it to 15,000 K"), bFalls && bRises);
+    TestTrue(TEXT("from 4,000 K up the sky is blue: hue within 200-240"), bBlue);
+
+    const FVector3d Home = Zenith(HomeStarK);
+    const double Coolest = Saturation(Zenith(2000.0));
+    const FVector3d Sun = Zenith(SunK);
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("under the home star, 2,566 K, a peach sky: saturation %.3f in [0.62, 0.82]"), Saturation(Home)),
+        Saturation(Home) >= 0.62 && Saturation(Home) <= 0.82);
+    TestTrue(FString::Printf(TEXT("and its hue %.1f orange, in [15, 40]"), Hue(Home)), Hue(Home) >= 15.0 && Hue(Home) <= 40.0);
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("under 2,000 K deep orange: saturation %.3f >= 0.85"), Coolest), Coolest >= 0.85);
+    TestTrue(FString::Printf(TEXT("under the Sun, Earth's blue: hue %.1f in [200, 235]"), Hue(Sun)), Hue(Sun) >= 200.0 && Hue(Sun) <= 235.0);
+    TestTrue(FString::Printf(TEXT("and saturation %.3f in [0.40, 0.85]"), Saturation(Sun)), Saturation(Sun) >= 0.40 && Saturation(Sun) <= 0.85);
     return true;
 }
 
