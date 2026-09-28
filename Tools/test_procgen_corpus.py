@@ -17,6 +17,7 @@ bug the code already had. No editor, no corpus run.
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -24,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import procgen_corpus as C
 
 SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procgen_corpus_sample.tsv")
+SKIES_SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procgen_corpus_skies_sample.tsv")
 
 
 def rows():
@@ -179,11 +181,29 @@ def test_gravity_and_relief_are_typed():
 def test_report_gives_air_by_mix():
     text = C.report(rows())
     assert "Air, by mix (worlds, median surface pressure, median nadir tau at 450 nm)" in text, text
-    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.8 bar 0.34; Gamma II h2/he 0.741 bar 0.5
-    # (a 0.826 g giant's disc under AirFacts: 0.5 / NadirTau450(H2/He, 1 bar, 1 g) x g).
+    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.6 bar 0.255; Gamma II h2/he 0.474 bar 0.32
+    # (a 0.826 g giant's disc under AirFacts: 0.32 / NadirTau450(H2/He, 1 bar, 1 g) x g,
+    # MaxNadirTau450 as atmosphere plan ruling 2 lowered it). Gamma I sits under the
+    # 1 g carbon-dioxide ceiling that cap sets, about 0.75 bar: 0.425 of tau a bar.
     assert "  nitrogen-oxygen  n=1      median   1.000 bar  tau450 0.277" in text, text
-    assert "  carbon-dioxide   n=1      median   0.800 bar  tau450 0.340" in text, text
-    assert "  hydrogen-helium  n=1      median   0.741 bar  tau450 0.500" in text, text
+    assert "  carbon-dioxide   n=1      median   0.600 bar  tau450 0.255" in text, text
+    assert "  hydrogen-helium  n=1      median   0.474 bar  tau450 0.320" in text, text
+
+
+def test_every_sample_air_fits_the_nadir_guarantee():
+    # The sample's airs are worked examples of the law, so none may be a
+    # world procgen cannot make: GenGuarantees::MaxNadirTau450, read from the
+    # C++ so a lowered cap fails here rather than leaving a stale row. The
+    # cap once fell from 0.5 to 0.32 and Gamma I's 0.34 outlived it.
+    header = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "Source", "DeepSpace", "Universe", "GenPriors.h")
+    with open(header) as f:
+        found = re.findall(r"MaxNadirTau450\s*=\s*([0-9.]+)", f.read())
+    assert len(found) == 1, found
+    cap = float(found[0])
+    over = [(r["designation"], r["nadir_tau_450"]) for r in rows()
+            if r["air_mix"] not in (None, "none") and r["nadir_tau_450"] > cap + 1e-9]
+    assert not over, "above MaxNadirTau450 %.3f: %s" % (cap, over)
 
 
 def test_air_is_typed():
@@ -193,12 +213,64 @@ def test_air_is_typed():
     alpha1 = [r for r in rows() if r["designation"] == "Alpha I"][0]
     assert alpha1["air_mix"] == "none" and near(alpha1["surface_pressure_bar"], 0.0)
     giant = [r for r in rows() if r["designation"] == "Gamma II"][0]
-    assert giant["air_mix"] == "hydrogen-helium" and near(giant["nadir_tau_450"], 0.5)
+    assert giant["air_mix"] == "hydrogen-helium" and near(giant["nadir_tau_450"], 0.32)
     # The row is a worked example of the law, not only reader input: at
-    # 0.826 g and 140 K its disc is 0.741 bar and its scale height 62.4 km.
-    assert near(giant["surface_pressure_bar"], 0.741) and near(giant["scale_height_km"], 62.4)
+    # 0.826 g and 140 K its disc is 0.474 bar and its scale height 62.4 km.
+    assert near(giant["surface_pressure_bar"], 0.474) and near(giant["scale_height_km"], 62.4)
     beta = [r for r in rows() if r["system"] == "Beta"][0]
     assert beta["air_mix"] is None and beta["surface_pressure_bar"] is None
+
+
+def test_the_skies_sample_is_written_to_the_contract():
+    with open(SKIES_SAMPLE) as f:
+        header = f.readline().rstrip("\n").split("\t")
+    assert header == C.load_contract()["sky_columns"], header
+
+
+def test_skies_are_typed_and_keyed_by_world():
+    skies = C.load_skies(SKIES_SAMPLE)
+    assert len(skies) == 2
+    alpha3 = skies[(0, 0, 0, 0, 2)]
+    assert alpha3["designation"] == "Alpha III"
+    assert all(near(a, b) for a, b in zip(alpha3["sky_zenith_rgb"], (0.21, 0.34, 0.62)))
+    assert near(alpha3["sky_zenith_saturation"], 0.66129)
+    assert near(skies[(0, 1, 0, 1, 0)]["sky_zenith_saturation"], 0.175)
+
+
+def test_report_gives_the_spread_of_skies():
+    text = C.report(rows(), skies=C.load_skies(SKIES_SAMPLE))
+    assert "  2 of 2 temperate worlds have a noon sky" in text, text
+    assert "Noon zenith saturation of temperate worlds' skies (share of those with one)" in text, text
+    # The colour, not only its saturation, by mix (spec decision 2: the
+    # zenith RGB's spread is what the mix weights are judged by).
+    assert "Noon zenith colour of temperate worlds' skies, by mix" in text, text
+    assert "  nitrogen-oxygen  n=1      rgb 0.21,0.34,0.62  hue 221-221 deg  saturation 0.66" in text, text
+    assert "  carbon-dioxide   n=1      rgb 0.40,0.38,0.33  hue  43- 43 deg  saturation 0.17" in text, text
+    assert "  hydrogen-helium  none" in text, text
+    assert "Noon zenith hue of temperate worlds' skies, degrees" in text, text
+
+
+def test_report_without_skies_says_how_to_write_them():
+    text = C.report(rows())
+    assert "No skies: ./test.sh Atmosphere.Full.CorpusSkies writes Saved/procgen_corpus_skies.tsv" in text, text
+
+
+def test_a_skies_file_missing_a_column_is_refused():
+    with open(SKIES_SAMPLE) as f:
+        lines = f.read().splitlines()
+    cut = [line.split("\t") for line in lines]
+    index = cut[0].index("sky_zenith_saturation")
+    trimmed = "\n".join("\t".join(c[:index] + c[index + 1:]) for c in cut) + "\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as f:
+        f.write(trimmed)
+    try:
+        C.load_skies(f.name)
+    except ValueError as e:
+        assert "sky_zenith_saturation" in str(e)
+    else:
+        raise AssertionError("a skies file without sky_zenith_saturation was read")
+    finally:
+        os.unlink(f.name)
 
 
 def main():

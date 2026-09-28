@@ -7800,7 +7800,7 @@ Expected: `KILLED` three times.
 
 Slice 1's done-when asks that `procgen_corpus.py` show "the mixes, pressures and noon zenith colours across the 10,000 nearest systems", and decision 2 says the mix weights "are judged by" the spread of `sky_zenith_rgb`. One noon zenith builds two columns of its world's table, about 50 ms (measured in the plan's harness), and the 10,000 systems hold about 7,800 temperate worlds: six or seven minutes. That cannot go in `DeepSpace.Universe.Corpus`, which every worktree's suite runs behind the one lock (*Global Constraints*). So the skies are a writer of their own:
 - `Atmosphere.Full.CorpusSkies`, outside the `DeepSpace` filter, run by name, writes `Saved/procgen_corpus_skies.tsv`: one row per temperate world of the corpus's 10,000 systems, keyed by sector, slot and orbit index, with its noon zenith (`PlanetAir::NoonZenith`, under the world's own star) and that colour's saturation.
-- `procgen_corpus.py` reads it beside the corpus when it exists, and the report shows the saturation's spread. The skies file has its own columns in the contract, `sky_columns`.
+- `procgen_corpus.py` reads it beside the corpus when it exists, and the report shows the saturation's spread, and the zenith colour by mix (median RGB, hue range, median saturation) with a hue histogram, since saturation alone cannot tell a peach sky from a blue one (review fix). The skies file has its own columns in the contract, `sky_columns`.
 - A giant has no ground to see a sky from, and barren and ice worlds no air, so neither has a row.
 
 **Files:**

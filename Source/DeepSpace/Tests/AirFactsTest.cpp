@@ -59,15 +59,15 @@ bool FAirFactsTest::RunTest(const FString& Parameters)
     const double CO2Ceiling = AirFacts::PressureCeilingBar(EAirMix::CarbonDioxide, 1.0, 1.0);
     const double H2Ceiling = AirFacts::PressureCeilingBar(EAirMix::HydrogenHelium, 1.0, 1.0);
     AddInfo(FString::Printf(TEXT("ceilings at 1 g: N2/O2 %.4f bar, CO2 %.4f, H2/He %.4f"), N2Ceiling, CO2Ceiling, H2Ceiling));
-    TestTrue(TEXT("N2/O2 about 1.8 bar"), Between(N2Ceiling, 1.78, 1.82));
-    TestTrue(TEXT("CO2 about 1.17 bar"), Between(CO2Ceiling, 1.15, 1.19));
-    TestTrue(TEXT("H2/He about 0.9 bar"), Between(H2Ceiling, 0.88, 0.91));
+    TestTrue(TEXT("N2/O2 about 1.15 bar"), Between(N2Ceiling, 1.1392, 1.1648));
+    TestTrue(TEXT("CO2 about 0.75 bar"), Between(CO2Ceiling, 0.736, 0.7616));
+    TestTrue(TEXT("H2/He about 0.58 bar"), Between(H2Ceiling, 0.5632, 0.5824));
     for (const EAirMix Mix : Mixes)
     {
         for (const double G : {0.6, 1.0, 3.0})
         {
             const double Ceiling = AirFacts::PressureCeilingBar(Mix, G, 1.0);
-            TestTrue(FString::Printf(TEXT("%s at %.1f g: straight down at 450 nm the ceiling is the guarantee's 0.5"), AirFacts::Name(Mix), G),
+            TestTrue(FString::Printf(TEXT("%s at %.1f g: straight down at 450 nm the ceiling is the guarantee's 0.32"), AirFacts::Name(Mix), G),
                 FMath::Abs(AirFacts::NadirTau450(Mix, Ceiling, G) - GenGuarantees::MaxNadirTau450) < 1.0e-9);
         }
         TestTrue(FString::Printf(TEXT("%s: a heavier world holds more, the same pressure being less column"), AirFacts::Name(Mix)),
@@ -81,9 +81,9 @@ bool FAirFactsTest::RunTest(const FString& Parameters)
     const double Jupiter = AirFacts::GiantDiscPressureBar(318.0 / 121.0);
     const double Heavy = AirFacts::GiantDiscPressureBar(3000.0 / 121.0);
     AddInfo(FString::Printf(TEXT("giants' discs: 15 M_E %.4f bar, 318 M_E %.3f, 3,000 M_E %.2f"), Light, Jupiter, Heavy));
-    TestTrue(TEXT("a 15 M_E giant's disc is its 0.11 bar level"), Between(Light, 0.10, 0.12));
-    TestTrue(TEXT("a Jupiter's about 2.4 bar"), Between(Jupiter, 2.3, 2.45));
-    TestTrue(TEXT("a 3,000 M_E giant's about 22 bar"), Between(Heavy, 21.0, 23.0));
+    TestTrue(TEXT("a 15 M_E giant's disc is its 0.07 bar level"), Between(Light, 0.064, 0.0768));
+    TestTrue(TEXT("a Jupiter's about 1.54 bar"), Between(Jupiter, 1.472, 1.568));
+    TestTrue(TEXT("a 3,000 M_E giant's about 14 bar"), Between(Heavy, 13.44, 14.72));
 
     // -- The smooth ceiling -------------------------------------------------------------
     TestTrue(TEXT("far under the ceiling, the draw stands"), FMath::Abs(AirFacts::SmoothCeiling(0.01, 1.0) / 0.01 - 1.0) < 1.0e-7);

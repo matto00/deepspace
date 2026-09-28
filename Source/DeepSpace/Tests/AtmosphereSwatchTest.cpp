@@ -1,11 +1,14 @@
 #include "Misc/AutomationTest.h"
 #include "Atmosphere/Atmosphere.h"
+#include "Atmosphere/PlanetAir.h"
 #include "ImageCore.h"
 #include "ImageUtils.h"
 #include "Misc/Paths.h"
 #include "Sky/ShipSky.h"
+#include "Tests/AirFixtureWorlds.h"
 #include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
+#include "Universe/ProcGenPriorsConfig.h"
 
 #include <cmath>
 
@@ -51,15 +54,22 @@ namespace AtmosphereSwatchTestLocal
         double StarTemperatureK = 0.0;
     };
 
-    /** The skies the developer judges: the spec's fixtures R, G and C by
-     *  their stand-ins, until the drawn worlds exist (Task 12). */
+    /** The skies the developer judges: the spec's fixtures R, G and C as
+     *  drawn (AirFixtureWorlds, the spec's rules), each under its own star. */
     TArray<FSky> Skies()
     {
-        using namespace AtmosphereTestFixtures;
-        return {
-            {TEXT("R_n2o2_2566K"), EarthAir(), HomeStarK},
-            {TEXT("G_n2o2_5772K"), EarthAir(), SunK},
-            {TEXT("C_co2_2566K"), CarbonDioxide(1.0), HomeStarK}};
+        TArray<FSky> Out;
+        const FGenPriors Priors = GetDefault<UProcGenPriorsConfig>()->ToPriors();
+        for (const AirFixtureWorlds::FFixture& Role : AirFixtureWorlds::Find(AirFixtureWorlds::UniverseSeed, Priors, AirFixtureWorlds::SearchSystems))
+        {
+            const FString Name(Role.Role);
+            if (Role.bFound && (Name == TEXT("R") || Name == TEXT("G") || Name == TEXT("C")))
+            {
+                Out.Add({Name + TEXT("_") + Role.Planet().Designation.Replace(TEXT(" "), TEXT("_")),
+                         PlanetAir::SpecOf(Role.Planet()), Role.System.Star.TemperatureK});
+            }
+        }
+        return Out;
     }
 
     /** A sun ElevationDeg above the horizon toward +X. */
@@ -154,6 +164,7 @@ bool FAtmosphereGroundSkySwatchTest::RunTest(const FString& Parameters)
 {
     using namespace AtmosphereSwatchTestLocal;
     const TArray<FSky> All = Skies();
+    TestEqual(TEXT("three skies to judge: the fixtures R, G and C as drawn"), All.Num(), 3);
     int32 Written = 0;
     for (const FSky& Sky : All)
     {

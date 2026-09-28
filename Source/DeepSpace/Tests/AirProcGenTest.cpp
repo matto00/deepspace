@@ -336,11 +336,11 @@ namespace AirProcGenTestLocal
         double PressureBar;
     };
     const FPinnedFixture Pinned[] = {
-        {TEXT("R"), TEXT("Gelaes III"), -2, -1, 0, 0, 2, EAirMix::NitrogenOxygen, 1.393},
-        {TEXT("G"), TEXT("Sova V"), 0, -2, 1, 0, 4, EAirMix::NitrogenOxygen, 0.5235},
-        {TEXT("C"), TEXT("Baemsekai V"), -1, -1, 0, 0, 4, EAirMix::CarbonDioxide, 0.6639},
+        {TEXT("R"), TEXT("Gelaes III"), -2, -1, 0, 0, 2, EAirMix::NitrogenOxygen, 1.068},
+        {TEXT("G"), TEXT("Sova V"), 0, -2, 1, 0, 4, EAirMix::NitrogenOxygen, 0.5134},
+        {TEXT("C"), TEXT("Baemsekai V"), -1, -1, 0, 0, 4, EAirMix::CarbonDioxide, 0.5285},
         {TEXT("N"), TEXT("Baemsekai I"), -1, -1, 0, 0, 0, EAirMix::None, 0.0},
-        {TEXT("J"), TEXT("Krothmertas VII"), -2, -5, 1, 0, 6, EAirMix::HydrogenHelium, 0.6273},
+        {TEXT("J"), TEXT("Krothmertas VII"), -2, -5, 1, 0, 6, EAirMix::HydrogenHelium, 0.4015},
     };
 }
 

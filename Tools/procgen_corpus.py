@@ -5,6 +5,7 @@ Reads the procgen corpus and prints what the universe is made of.
     ./test.sh DeepSpace.Universe.Corpus      # writes Saved/procgen_corpus.tsv
     python3 Tools/procgen_corpus.py          # reads it
     python3 Tools/procgen_corpus.py PATH     # reads another
+    ./test.sh Atmosphere.Full.CorpusSkies    # writes Saved/procgen_corpus_skies.tsv, read beside it
 
 The C++ generator is the only generator (ADR 0006, procgen decision 10);
 this only reads what it wrote, so changing what the report shows needs no
@@ -23,6 +24,7 @@ The columns are Tools/procgen_corpus_contract.json's, read by name.
 """
 
 import collections
+import colorsys
 import json
 import math
 import os
@@ -31,6 +33,7 @@ import sys
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 CONTRACT_PATH = os.path.join(TOOLS, "procgen_corpus_contract.json")
 DEFAULT_TSV = os.path.join(os.path.dirname(TOOLS), "Saved", "procgen_corpus.tsv")
+DEFAULT_SKIES = os.path.join(os.path.dirname(TOOLS), "Saved", "procgen_corpus_skies.tsv")
 
 INT_COLUMNS = {"sector_x", "sector_y", "sector_z", "slot", "planet_count", "planet"}
 TEXT_COLUMNS = {"system", "star_class", "designation", "given_name", "kind", "air_mix"}
@@ -87,6 +90,38 @@ def load_corpus(path, contract=None):
                 row[name] = None
         rows.append(row)
     return rows
+
+
+def load_skies(path, contract=None):
+    """The skies file (Atmosphere.Full.CorpusSkies) as a dict keyed by
+    (sector_x, sector_y, sector_z, slot, planet), each a dict of the world's
+    designation, its noon zenith as three floats and that colour's
+    saturation. Raises ValueError if the file lacks a column the contract's
+    sky_columns names."""
+    contract = contract or load_contract()
+    with open(path) as f:
+        lines = f.read().splitlines()
+    if not lines:
+        raise ValueError("%s is empty" % path)
+    header = lines[0].split("\t")
+    missing = [c for c in contract["sky_columns"] if c not in header]
+    if missing:
+        raise ValueError("%s lacks columns %s" % (path, ", ".join(missing)))
+    skies = {}
+    for number, line in enumerate(lines[1:], start=2):
+        if not line:
+            continue
+        cells = line.split("\t")
+        if len(cells) != len(header):
+            raise ValueError("%s:%d has %d cells, the header %d" % (path, number, len(cells), len(header)))
+        raw = dict(zip(header, cells))
+        key = tuple(int(raw[c]) for c in ("sector_x", "sector_y", "sector_z", "slot", "planet"))
+        skies[key] = {
+            "designation": raw["designation"],
+            "sky_zenith_rgb": tuple(float(v) for v in raw["sky_zenith_rgb"].split(",")),
+            "sky_zenith_saturation": float(raw["sky_zenith_saturation"]),
+        }
+    return skies
 
 
 def systems(rows):
@@ -193,8 +228,8 @@ def _render_histogram(title, bins, total):
     return _render(title, [(_range_label(lo, hi), c) for lo, hi, c in bins], total)
 
 
-def report(rows, contract=None):
-    """The whole report as text."""
+def report(rows, contract=None, skies=None):
+    """The whole report as text. skies, if given, is load_skies' dict."""
     contract = contract or load_contract()
     found = systems(rows)
     planets = [p for s in found for p in s["planets"]]
@@ -283,8 +318,63 @@ def report(rows, contract=None):
             out.append("  %-16s none" % mix)
     out.append("")
 
+    temperate_worlds = [r for r in rows if r["kind"] in TEMPERATE]
+    if skies is None:
+        out.append("No skies: ./test.sh Atmosphere.Full.CorpusSkies writes Saved/procgen_corpus_skies.tsv")
+    else:
+        seen = [skies[k]["sky_zenith_saturation"] for k in
+                ((r["sector_x"], r["sector_y"], r["sector_z"], r["slot"], r["planet"]) for r in temperate_worlds)
+                if k in skies]
+        out.append("  %d of %d temperate worlds have a noon sky" % (len(seen), len(temperate_worlds)))
+        if seen:
+            out += _render_histogram("Noon zenith saturation of temperate worlds' skies (share of those with one)",
+                                     histogram(seen, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]), len(seen))
+            out += sky_colours(temperate_worlds, skies)
+    out.append("")
+
     out += places_or_rolls(found)
     return "\n".join(out)
+
+
+def zenith_hue(rgb):
+    """The hue of a zenith colour in degrees, 0 red, 120 green, 240 blue;
+    None for a grey sky, which has none."""
+    h, sat, _ = colorsys.rgb_to_hsv(*rgb)
+    return None if sat <= 0.0 else 360.0 * h
+
+
+def _median(values):
+    values = sorted(values)
+    return values[len(values) // 2]
+
+
+def sky_colours(temperate_worlds, skies):
+    """The zenith colour's spread, which is what the mix weights are judged
+    by (atmospheres spec, decision 2): by mix, so a carbon-dioxide sky that
+    reads like a nitrogen-oxygen one shows, and as a hue histogram, which
+    saturation alone cannot give -- a peach red-dwarf sky and Earth's blue
+    land in the same saturation bin."""
+    by_mix = collections.OrderedDict((mix, []) for mix in ("none",) + AIR_MIXES)
+    for r in temperate_worlds:
+        sky = skies.get((r["sector_x"], r["sector_y"], r["sector_z"], r["slot"], r["planet"]))
+        if sky is not None:
+            by_mix.setdefault(r["air_mix"] or "none", []).append(sky)
+    out = ["Noon zenith colour of temperate worlds' skies, by mix (worlds, median RGB, hue range, median saturation)"]
+    for mix, seen in by_mix.items():
+        if not seen:
+            out.append("  %-16s none" % mix)
+            continue
+        rgb = tuple(_median(s["sky_zenith_rgb"][i] for s in seen) for i in range(3))
+        hues = [h for h in (zenith_hue(s["sky_zenith_rgb"]) for s in seen) if h is not None]
+        hue = "hue %3.0f-%3.0f deg" % (min(hues), max(hues)) if hues else "hue none (grey)"
+        out.append("  %-16s n=%-6d rgb %.2f,%.2f,%.2f  %s  saturation %.2f" % (
+            mix, len(seen), rgb[0], rgb[1], rgb[2], hue, _median(s["sky_zenith_saturation"] for s in seen)))
+    hues = [h for h in (zenith_hue(s["sky_zenith_rgb"]) for seen in by_mix.values() for s in seen) if h is not None]
+    if hues:
+        out += _render_histogram("Noon zenith hue of temperate worlds' skies, degrees: 0 red, 60 yellow, 120 green, "
+                                 "240 blue (share of those with a hue)",
+                                 histogram(hues, [30.0 * i for i in range(13)]), len(hues))
+    return out
 
 
 def places_or_rolls(found):
@@ -338,7 +428,8 @@ def main(argv):
     if not os.path.exists(path):
         print("No corpus at %s. Write one with: ./test.sh DeepSpace.Universe.Corpus" % path, file=sys.stderr)
         return 1
-    print(report(load_corpus(path)))
+    skies = load_skies(DEFAULT_SKIES) if len(argv) <= 1 and os.path.exists(DEFAULT_SKIES) else None
+    print(report(load_corpus(path), skies=skies))
     return 0
 
 

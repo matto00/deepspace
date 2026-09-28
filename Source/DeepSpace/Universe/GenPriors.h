@@ -235,8 +235,10 @@ namespace GenGuarantees
     /** No air's total extinction straight down at 450 nm (Rayleigh plus
      *  aerosol, not absorption) exceeds this (atmospheres ruling 8, decision
      *  4): every airy world's surface stays legible from orbit. Bounds the
-     *  fact, as a per-world pressure ceiling, never the rendering. */
-    inline constexpr double MaxNadirTau450 = 0.5;
+     *  fact, as a per-world pressure ceiling, never the rendering.
+     *  0.32, not decision 4's first 0.5: atmosphere plan ruling 2 (at 0.5 every
+     *  mix at its ceiling kept 0.34 of its contrast). */
+    inline constexpr double MaxNadirTau450 = 0.32;
 }
 
 /**
