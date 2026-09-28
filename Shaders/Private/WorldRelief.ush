@@ -34,8 +34,8 @@
 // WorldRelief.cpp includes <cmath>, then this file inside a namespace with
 // WR_REAL defined: once as double, once as float.
 #define WR_UINT uint32
-#define WR_DETAIL_BANDS 1
-#define WR_CRATER_BANDS 1
+#define WR_DETAIL_BANDS 12
+#define WR_CRATER_BANDS 6
 #define WR_CONTINENT_LEVELS 4
 inline WR_REAL WR_floor(WR_REAL X) { return std::floor(X); }
 inline WR_REAL WR_frac(WR_REAL X) { return X - std::floor(X); }
@@ -49,8 +49,8 @@ inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0
 #pragma once
 #define WR_REAL float
 #define WR_UINT uint
-#define WR_DETAIL_BANDS 1
-#define WR_CRATER_BANDS 1
+#define WR_DETAIL_BANDS 12
+#define WR_CRATER_BANDS 6
 #define WR_CONTINENT_LEVELS 4
 #define WR_floor(X) floor(X)
 #define WR_frac(X) frac(X)
@@ -67,14 +67,19 @@ inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0
 // detail_frequencies[n - 1], band n of the craters (101..106) is
 // crater_frequencies[n - 101], and each is taken from its own corner of the
 // noise, at SeedOffset + (37, 59, 83) x n. The coarse band is band 0.
-// SPIKE (landing slice (a), task R1): one detail band and one crater band.
+// Every band M_SkyBody draws.
 static const WR_REAL WR_CONTINENT_FREQUENCY = WR_REAL(1.5);
 static const WR_REAL WR_LEVEL_SCALE = WR_REAL(2.0);
-static const WR_REAL WR_DETAIL_FREQUENCY[WR_DETAIL_BANDS] = { WR_REAL(3072.0) };
-static const WR_REAL WR_DETAIL_WEIGHT[WR_DETAIL_BANDS] = { WR_REAL(0.5) };
-static const int WR_DETAIL_INDEX[WR_DETAIL_BANDS] = { 8 };
-static const WR_REAL WR_CRATER_FREQUENCY[WR_CRATER_BANDS] = { WR_REAL(768.0) };
-static const int WR_CRATER_INDEX[WR_CRATER_BANDS] = { 104 };
+static const WR_REAL WR_DETAIL_FREQUENCY[WR_DETAIL_BANDS] = {
+    WR_REAL(24.0), WR_REAL(48.0), WR_REAL(96.0), WR_REAL(192.0), WR_REAL(384.0), WR_REAL(768.0),
+    WR_REAL(1536.0), WR_REAL(3072.0), WR_REAL(6144.0), WR_REAL(12288.0), WR_REAL(24576.0), WR_REAL(49152.0) };
+static const WR_REAL WR_DETAIL_WEIGHT[WR_DETAIL_BANDS] = {
+    WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5),
+    WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5), WR_REAL(0.5) };
+static const int WR_DETAIL_INDEX[WR_DETAIL_BANDS] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+static const WR_REAL WR_CRATER_FREQUENCY[WR_CRATER_BANDS] = {
+    WR_REAL(12.0), WR_REAL(48.0), WR_REAL(192.0), WR_REAL(768.0), WR_REAL(3072.0), WR_REAL(12288.0) };
+static const int WR_CRATER_INDEX[WR_CRATER_BANDS] = { 101, 102, 103, 104, 105, 106 };
 
 // A crater: q is the distance from its centre in crater radii; the bowl is
 // depth x (q^2 - 1 + rim) and the rim falls as depth x rim x (3 - 2q)^2 to

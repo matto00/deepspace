@@ -85,13 +85,21 @@ bool FWorldReliefKnownValuesTest::RunTest(const FString& Parameters)
     // -- The surface terms, the file's own bands ------------------------------
     const FFaceTerms Terms = WorldReliefNoise::FaceF64(Known, 0.0, Offset, 1.0);
     TestTrue(TEXT("the continent at D"), Near(Terms.Continent, -0.051624444675196335));
-    TestTrue(TEXT("the detail at D"), Near(Terms.Detail, 0.17097829632829997));
-    TestTrue(TEXT("the detail's slope at D"), Near(Terms.DetailSlope, FVector3d(-0.8677208825485692, -1.1438504312418438, -0.5836500231613995)));
-    TestTrue(TEXT("the craters' albedo at D"), Near(Terms.CraterAlbedo, 0.006394117987959831));
-    TestTrue(TEXT("the craters' slope at D"), Near(Terms.CraterSlope, FVector3d(0.009846479798514362, 0.0012842534924583904, -0.018859280772458974)));
+    TestTrue(TEXT("every detail band at D"), Near(Terms.Detail, -0.37006419577067096));
+    TestTrue(TEXT("their slope at D"), Near(Terms.DetailSlope, FVector3d(-1.1190180843380462, -2.0437699869510126, -2.957997344868701)));
+    TestTrue(TEXT("every crater band's albedo at D"), Near(Terms.CraterAlbedo, 0.1646827666094558));
+    TestTrue(TEXT("and slope"), Near(Terms.CraterSlope, FVector3d(0.10226657986438999, 0.029989050621318493, 0.27960324776032125)));
     const FFaceTerms Faded = WorldReliefNoise::FaceF64(Known, 1.0 / 768.0, Offset, 1.0);
-    TestEqual(TEXT("a footprint of 1/768 fades every band at 768 or finer to nothing"), Faded.Detail, 0.0);
-    TestEqual(TEXT("craters included"), Faded.CraterAlbedo, 0.0);
+    TestTrue(TEXT("at a footprint of 1/768: the continent"), Near(Faded.Continent, -0.052906497740322966));
+    TestTrue(TEXT("the detail"), Near(Faded.Detail, -0.028110410395840155));
+    TestTrue(TEXT("its slope"), Near(Faded.DetailSlope, FVector3d(-0.18906468101433271, 0.3914639024500385, -2.955562449468286)));
+    TestTrue(TEXT("the craters' albedo"), Near(Faded.CraterAlbedo, 0.015437686430484467));
+    TestTrue(TEXT("and slope"), Near(Faded.CraterSlope, FVector3d(0.02537765447267675, -0.04054271510388996, 0.01898122575896894)));
+    const FFaceTerms Giant = WorldReliefNoise::FaceF64(Known, 1.0 / 768.0, Offset, 6.0);
+    TestTrue(TEXT("a giant's stretched continent"), Near(Giant.Continent, 0.2988758606069588));
+    TestTrue(TEXT("its stretched detail"), Near(Giant.Detail, -0.08159535029992765));
+    TestTrue(TEXT("and slope"), Near(Giant.DetailSlope, FVector3d(-0.6215217207242866, 0.5170705707138437, 0.4500212151402112)));
+    TestTrue(TEXT("craters are never stretched"), Near(Giant.CraterAlbedo, Faded.CraterAlbedo) && Near(Giant.CraterSlope, Faded.CraterSlope));
     return true;
 }
 

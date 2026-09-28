@@ -55,6 +55,8 @@
  * Spike verdict (landing R1): FLOAT FLOOR -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 1.376%
  *
  * Verdict under the ruling (per footprint and per term; held sites' steps only): GO -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 0.462%
+ *
+ * R2, every band (twelve detail, six crater): FLOAT FLOOR past the ruling -- SUMMARY shared-vs-engine 7.64e-03, C++-vs-shared 6.88e-03, float-C++-vs-shared 7.90e-03, C++-vs-engine 6.19e-03, left out at most 2.142%
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,

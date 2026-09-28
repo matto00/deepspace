@@ -74,6 +74,6 @@
     "veil_colour": [0.5, 0.47, 0.42],
     "probe_comment": "Eyes.WorldReliefParity's probes: D over a fixed patch -- normalize(centre + (u - 0.5) span east + (v - 0.5) span north), the three an orthonormal frame -- and the bands the legacy probe draws, by band number (detail n is detail_frequencies[n - 1], crater n is crater_frequencies[n - 101]); the shared file must carry exactly these.",
     "probe_patch": { "centre": [0.6, -0.48, 0.64], "east": [0.8, 0.36, -0.48], "north": [0.0, 0.8, 0.6], "span": 0.5 },
-    "probe_bands": { "detail": [8], "crater": [104] }
+    "probe_bands": { "detail": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "crater": [101, 102, 103, 104, 105, 106] }
   }
 }

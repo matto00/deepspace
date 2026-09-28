@@ -290,6 +290,18 @@ namespace
         }
         Test.TestTrue(TEXT("the shared file carries exactly the probes' detail bands"), Bands.DetailIndices == ProbeDetail);
         Test.TestTrue(TEXT("and exactly their crater bands"), Bands.CraterIndices == ProbeCrater);
+        TArray<int32> EveryDetail;
+        for (int32 Number = 1; Number <= Constants->GetArrayField(TEXT("detail_frequencies")).Num(); ++Number)
+        {
+            EveryDetail.Add(Number);
+        }
+        TArray<int32> EveryCrater;
+        for (int32 Number = 101; Number < 101 + Constants->GetArrayField(TEXT("crater_frequencies")).Num(); ++Number)
+        {
+            EveryCrater.Add(Number);
+        }
+        Test.TestTrue(TEXT("the shared file carries every detail band the contract has, in order"), Bands.DetailIndices == EveryDetail);
+        Test.TestTrue(TEXT("and every crater band"), Bands.CraterIndices == EveryCrater);
 
         const TArray<TSharedPtr<FJsonValue>>& Frequencies = Constants->GetArrayField(TEXT("detail_frequencies"));
         const TArray<TSharedPtr<FJsonValue>>& Weights = Constants->GetArrayField(TEXT("detail_weights"));
