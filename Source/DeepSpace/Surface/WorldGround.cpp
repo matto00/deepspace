@@ -6,12 +6,12 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/OutputDevice.h"
-#include "ProceduralMeshComponent.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkySystem.h"
+#include "Surface/TerrainTileComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWorldGround, Log, All);
 
@@ -578,61 +578,17 @@ FString AWorldGround::Describe() const
 
 UPrimitiveComponent* AWorldGround::NewTileComponent()
 {
-    UProceduralMeshComponent* Mesh = NewObject<UProceduralMeshComponent>(this);
-    Mesh->SetupAttachment(Root);
-    Mesh->SetMobility(EComponentMobility::Movable);
-    Mesh->bUseAsyncCooking = false;
-    Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    Mesh->SetGenerateOverlapEvents(false);
-    // A thousand tiles moving every frame would invalidate the Sun's cached
-    // virtual shadow pages every frame and shadow the deck (decision 6).
-    Mesh->SetCastShadow(false);
-    Mesh->bAffectDistanceFieldLighting = false;
-    Mesh->bAffectDynamicIndirectLighting = false;
-    Mesh->bVisibleInRayTracing = false;
-    Mesh->bVisibleInReflectionCaptures = false;
-    Mesh->bVisibleInRealTimeSkyCaptures = false;
-    Mesh->bReceivesDecals = false;
-    Mesh->bNeverDistanceCull = true;
-    Mesh->SetVisibility(false);
-    Mesh->RegisterComponent();
-    Mesh->SetMaterial(0, Material);
-    Pool.Add(Mesh);
-    return Mesh;
+    UTerrainTileComponent* Tile = NewObject<UTerrainTileComponent>(this);
+    Tile->bKeepForTest = true;
+    Tile->SetupAttachment(Root);
+    Tile->SetVisibility(false);
+    Tile->RegisterComponent();
+    Tile->SetMaterial(0, Material);
+    Pool.Add(Tile);
+    return Tile;
 }
 
 void AWorldGround::UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst)
 {
-    UProceduralMeshComponent* Mesh = CastChecked<UProceduralMeshComponent>(Component);
-    TArray<FVector> Positions;
-    TArray<FVector> Normals;
-    TArray<FVector2D> UV0;
-    TArray<FVector2D> UV1;
-    TArray<FVector2D> UV2;
-    Positions.Reserve(TerrainTile::VertexCount);
-    Normals.Reserve(TerrainTile::VertexCount);
-    UV0.Init(FVector2D::ZeroVector, TerrainTile::VertexCount);
-    UV1.Reserve(TerrainTile::VertexCount);
-    UV2.Reserve(TerrainTile::VertexCount);
-    for (int32 V = 0; V < TerrainTile::VertexCount; ++V)
-    {
-        Positions.Add(FVector(Tile.Positions[V]));
-        Normals.Add(FVector(Tile.Normals[V]));
-        UV1.Add(FVector2D(TerrainTile::UV1Of(Tile, V)));
-        UV2.Add(FVector2D(TerrainTile::UV2Of(Tile, V)));
-    }
-    if (bFirst || Mesh->GetNumSections() == 0)
-    {
-        Mesh->CreateMeshSection(0, Positions, TerrainTile::Indices(), Normals, UV0, UV1, UV2, TArray<FVector2D>(),
-                                TArray<FColor>(), TArray<FProcMeshTangent>(), false);
-    }
-    else
-    {
-        Mesh->UpdateMeshSection(0, Positions, Normals, UV0, UV1, UV2, TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>());
-    }
-    // The morph lowers a vertex by up to its height along its direction, far
-    // outside a small tile's box above the drive floor: widen the bounds by
-    // the tile's relief so it is never culled while it is drawn.
-    const double HalfExtent = FMath::Max(1.0, 0.5 * Mesh->GetLocalBounds().GetBox().GetSize().GetMin());
-    Mesh->SetBoundsScale(static_cast<float>(1.0 + FMath::Max(FMath::Abs(Tile.Range.MinCm), FMath::Abs(Tile.Range.MaxCm)) / HalfExtent));
+    CastChecked<UTerrainTileComponent>(Component)->SetTile(Tile);
 }

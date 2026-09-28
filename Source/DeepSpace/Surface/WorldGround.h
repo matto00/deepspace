@@ -146,8 +146,9 @@ private:
     TOptional<TerrainQuadtree::FHeightRange> BoundsOf(const FTileKey& Key) const;
 
     /** The mesh component a tile is drawn with, and how a tile gets into it:
-     *  ProceduralMeshComponent, or UTerrainTileComponent if the first-day gate
-     *  failed PMC (Task T5 replaces these two, nothing else). */
+     *  UTerrainTileComponent, the static-path primitive, since the first-day
+     *  gate failed ProceduralMeshComponent (Eyes.TerrainBudget; these two are
+     *  all the swap touched). */
     UPrimitiveComponent* NewTileComponent();
     void UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst);
 };
