@@ -1310,8 +1310,9 @@ feet** at the gear's foot height, `Z = -GearClearance` (-150 cm), about
 (-700, -300), (-700, 400), (1600, -100), (1600, 200) cm, and **four belly
 corners** at the belly, `Z = -10` cm, at the hull's plan corners.
 `GEAR` and `BELLY` in `Tools/hauler_layout.py`, mirrored as
-`ShipLanding::GearFeet` and `ShipLanding::BellyCorners`, held equal by
-`test_placement.py` reading the C++ (as it does the dressing tags).
+`ShipLanding::GearFeetXY` (the feet in plan, their Z the gear clearance,
+live on `ds.Land.GearClearance`) and `ShipLanding::BellyCorners`, held
+equal by `test_placement.py` reading the C++ (as it does the dressing tags).
 
 **`FootprintClearance`** is the least height of any footprint point above
 the ground under it: 0 when a foot touches. The descent cap, the hard stop,

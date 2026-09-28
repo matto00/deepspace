@@ -37,6 +37,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundRayOnceAFrameTest, "DeepSpace.Ship.Landi
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundRayAcrossTest, "DeepSpace.Ship.Landing.GroundRayMovedAcross",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSkimsLowOverRealGroundTest, "DeepSpace.Ship.Landing.SkimsLowOverRealGround",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace GroundCatchesLocal
 {
@@ -106,6 +108,7 @@ namespace GroundCatchesLocal
         double WorstContact = 0.0;
         int32 HardStops = 0;
         FString WorstCase;
+        FString HardStopCase;
     };
 
     /** Places the ship so its footprint clears the ground by Clearance: two
@@ -153,6 +156,11 @@ namespace GroundCatchesLocal
         const FGroundLog& Log = Flight.GetGroundLog();
         ++Tally.Flights;
         Tally.HardStops += Log.HardStops;
+        if (Log.HardStops > 0)
+        {
+            Tally.HardStopCase = FString::Printf(TEXT("%s cruise %.0f vertical %.0f chop %.4f thrust %.2f sink %.0f"),
+                                                 Start.Name, Cruise, Vertical, Chop, Thrust, Sink);
+        }
         if (Log.LeastClearance < Tally.LeastClearance || Log.WorstContactSpeed > Tally.WorstContact || (Log.HardStops > 0 && Tally.HardStops == Log.HardStops))
         {
             Tally.WorstCase = FString::Printf(TEXT("%s cruise %.0f vertical %.0f chop %.4f thrust %.2f sink %.0f"),
@@ -214,8 +222,12 @@ namespace GroundCatchesLocal
 
     bool Report(FAutomationTestBase& Test, const FTally& Tally, double Seconds, bool bLeverSweep)
     {
-        Test.AddInfo(FString::Printf(TEXT("%d flights in %.1f s: least clearance %.3f cm, worst contact %.3f cm/s, %d hard stops; worst: %s"),
+        Test.AddInfo(FString::Printf(TEXT("%d flights in %.1f s: least clearance %.3f cm, worst contact %.5f cm/s, %d hard stops; worst: %s"),
                                      Tally.Flights, Seconds, Tally.LeastClearance, Tally.WorstContact, Tally.HardStops, *Tally.WorstCase));
+        if (Tally.HardStops > 0)
+        {
+            Test.AddInfo(FString::Printf(TEXT("a hard stop fired flying %s"), *Tally.HardStopCase));
+        }
         Test.TestTrue(TEXT("no footprint point ends a substep more than 1 cm under the ground"), Tally.LeastClearance >= -1.0);
         Test.TestTrue(TEXT("every contact the levers reach is at or under the touchdown speed"),
                       Tally.WorstContact <= ShipFlight::DefaultTouchdownSpeed * (1.0 + 1e-6));
@@ -302,6 +314,48 @@ bool FGroundCatchesRoughTest::RunTest(const FString& Parameters)
 bool FGroundCatchesRealTest::RunTest(const FString& Parameters)
 {
     using namespace GroundCatchesLocal;
+
+    // A pairwise-covering subset of the grid (spec decision 10): every pair
+    // of levels of any two factors -- cruise, vertical, start, chop, thrust,
+    // sink -- is flown on each world. Vertical, start and chop are three
+    // mutually orthogonal Latin squares over cruise's first five levels
+    // (V = a, S = a + C, chop = a + 2C, mod 5), the sixth cruise level takes
+    // one more square, and thrust and sink are the parities of two further
+    // ones. Thirty flights a world, checked below rather than trusted.
+    struct FCase { int32 Cruise, Vertical, Start, Chop, Thrust, Sink; };
+    TArray<FCase> Cases;
+    for (int32 C = 0; C < CruiseSpeeds.Num(); ++C)
+    {
+        for (int32 A = 0; A < 5; ++A)
+        {
+            const int32 S = C < 5 ? (A + C) % 5 : (A + 3) % 5;
+            const int32 Chop = C < 5 ? (A + 2 * C) % 5 : (A + 1) % 5;
+            Cases.Add({ C, A, S, Chop, ((A + 3 * C) % 5) % 2, ((A + 4 * C) % 5) % 2 });
+        }
+    }
+    const int32 Levels[] = { CruiseSpeeds.Num(), VerticalRates.Num(), 5, Chops.Num(), Thrusts.Num(), Sinks.Num() };
+    auto Factor = [](const FCase& Row, int32 F)
+    {
+        const int32 Of[] = { Row.Cruise, Row.Vertical, Row.Start, Row.Chop, Row.Thrust, Row.Sink };
+        return Of[F];
+    };
+    for (int32 F = 0; F < 6; ++F)
+    {
+        for (int32 G = F + 1; G < 6; ++G)
+        {
+            TSet<int32> Seen;
+            for (const FCase& Row : Cases)
+            {
+                Seen.Add(Factor(Row, F) * 16 + Factor(Row, G));
+            }
+            TestEqual(FString::Printf(TEXT("factors %d and %d: every pair of levels flown"), F, G), Seen.Num(), Levels[F] * Levels[G]);
+        }
+    }
+
+    // The starts: the drive floor, 5 km, 500 m, 20 m and 2 m over the real
+    // ground (the rough starts are the fixture's; here the relief is real).
+    const double Clears[] = { -1.0, 5.0e5, 5.0e4, 2.0e3, 2.0e2 };
+    const TCHAR* Names[] = { TEXT("real drive floor"), TEXT("real 5 km"), TEXT("real 500 m"), TEXT("real 20 m"), TEXT("real 2 m") };
     FTally Tally;
     const double Start = FPlatformTime::Seconds();
     for (const int32 Orbit : { 4, 3 })
@@ -314,17 +368,13 @@ bool FGroundCatchesRealTest::RunTest(const FString& Parameters)
         }
         const FFlightSurface World = SurfaceOver(Home->Ground, 1.02e6 + Home->Ground->MaxHeightCm());
         const double G = Home->Body.GravParam / FMath::Square(World.Radius) / ShipFlight::StandardGravityCmS2;
-        int32 Case = 0;
-        for (int32 C = 0; C < CruiseSpeeds.Num(); ++C)
+        for (int32 Case = 0; Case < Cases.Num(); ++Case)
         {
-            for (int32 V = 0; V < VerticalRates.Num(); ++V, ++Case)
-            {
-                const FVector3d D = FVector3d(FMath::Sin(Case * 0.7), FMath::Cos(Case * 1.3), 0.5 + 0.1 * (Case % 5)).GetSafeNormal();
-                const double Clears[] = { 5.0e4, 2.0e3, 2.0e2 };
-                const FStart Where{ TEXT("real"), D, Clears[Case % 3] };
-                Fly(Tally, World, G, Where, CruiseSpeeds[C], VerticalRates[V], Chops[Case % Chops.Num()],
-                    Thrusts[(Case / 2) % 2], Sinks[Case % 2], 60.0);
-            }
+            const FCase& Row = Cases[Case];
+            const FVector3d D = FVector3d(FMath::Sin(Case * 0.7), FMath::Cos(Case * 1.3), 0.5 + 0.1 * (Case % 5)).GetSafeNormal();
+            const FStart Where{ Names[Row.Start], D, Clears[Row.Start] };
+            Fly(Tally, World, G, Where, CruiseSpeeds[Row.Cruise], VerticalRates[Row.Vertical], Chops[Row.Chop],
+                Thrusts[Row.Thrust], Sinks[Row.Sink], 60.0);
         }
     }
     return Report(*this, Tally, FPlatformTime::Seconds() - Start, true);
@@ -463,6 +513,112 @@ bool FGroundRayAcrossTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("a frame of 240 substeps flies the speed of 240 frames of one, within 1 cm/s"),
         FMath::Abs(Fine.GetSpeed() - Coarse.GetSpeed()) <= 1.0);
     TestTrue(TEXT("and to the same place, within 10 cm"), (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size() <= 10.0);
+    return true;
+}
+
+/*
+ * Low over real relief, the ship still moves (decision 10's skim floor, 20
+ * m/s at 50 m and below). The along-ground ray is level at the feet, so near
+ * the ground each fresh sample proves only Above / sqrt(1 + MaxSlope^2) of it,
+ * about an eighth of the clearance on the real relief: 64 fresh samples in a
+ * frame see a few metres, and an exhausted march is a hit. Held to that, a
+ * ship hovering 2-10 m up over flat ground was held to 0-15 m/s. The samples
+ * are facts about the ground, so a later frame's march reuses them and
+ * spends its fresh ones past where the last one stopped.
+ *
+ * The starts are searched for, never typed in: stretches of the real relief
+ * where the ground along the path, and 12 m either side, stays within a metre
+ * or two of the ground under the ship, so nothing ahead is really in the way.
+ */
+bool FSkimsLowOverRealGroundTest::RunTest(const FString& Parameters)
+{
+    using namespace GroundCatchesLocal;
+    const FGroundFieldRef Ground = ShipGround::FromRelief(FixtureParams());
+    const FFlightSurface World = SurfaceOver(Ground, 1.02e6 + Ground->MaxHeightCm());
+    const double R = World.Radius;
+    const double Strip = 3.0e4;
+
+    // The ground's height at a plan offset (Along, Side) from D, in metres of arc.
+    auto HeightAt = [&](const FVector3d& D, const FVector3d& Heading, const FVector3d& Side, double Along, double Across)
+    {
+        return Ground->Height((D * R + Heading * Along + Side * Across).GetSafeNormal(), 0.0);
+    };
+
+    struct FClear
+    {
+        double Clearance;   // footprint clearance at the start, cm
+        double Rise;        // the most the strip may rise over the ground under the ship, cm
+        double Least;       // horizontal speed the ship must reach, cm/s
+    };
+    const FClear Cases[] = { { 2.0e2, 1.0e2, 1.5e3 }, { 5.0e2, 2.0e2, 1.5e3 }, { 1.0e3, 3.0e2, 1.8e3 } };
+    FRandomStream Stream(20260928);
+    for (const FClear& Case : Cases)
+    {
+        // A flat stretch: 300 m ahead, 12 m either side, never above the
+        // ground under the ship by more than Rise.
+        FVector3d D = FVector3d::ZeroVector;
+        FVector3d Heading = FVector3d::ZeroVector;
+        for (int32 Try = 0; Try < 4000 && D.IsZero(); ++Try)
+        {
+            const FVector3d Candidate(Stream.GetUnitVector());
+            const FVector3d East = FVector3d::CrossProduct(FVector3d(0.0, 0.0, 1.0), Candidate).GetSafeNormal();
+            const FVector3d North = FVector3d::CrossProduct(Candidate, East);
+            const double Turn = Stream.FRandRange(0.0, 2.0 * UE_DOUBLE_PI);
+            const FVector3d H = East * FMath::Cos(Turn) + North * FMath::Sin(Turn);
+            const FVector3d Side = FVector3d::CrossProduct(Candidate, H);
+            const double Under = HeightAt(Candidate, H, Side, 0.0, 0.0);
+            bool bFlat = true;
+            for (double Along = -2.0e3; Along <= Strip && bFlat; Along += 1.0e2)
+            {
+                for (double Across = -1.2e3; Across <= 1.2e3 && bFlat; Across += 3.0e2)
+                {
+                    bFlat = HeightAt(Candidate, H, Side, Along, Across) <= Under + Case.Rise;
+                }
+            }
+            if (bFlat)
+            {
+                D = Candidate;
+                Heading = H;
+            }
+        }
+        if (!TestFalse(FString::Printf(TEXT("a flat stretch of real relief for %.0f m up"), Case.Clearance / 100.0), D.IsZero()))
+        {
+            return false;
+        }
+
+        FShipFlightState Flight;
+        Flight.SetSurfaces({ World });
+        const FQuat Turn = Level(D, FVector(Heading));
+        double Agl = Case.Clearance + ShipLanding::DefaultGearClearanceCm;
+        for (int32 Pass = 0; Pass < 3; ++Pass)
+        {
+            Flight.SetUniverseTransform(Above(World, D, Agl), Turn);
+            Agl += Case.Clearance - ShipLanding::FootprintClearance(World, Flight.GetUniversePosition(), Turn,
+                                                                     ShipLanding::DefaultGearClearanceCm).Least;
+        }
+        const FUniversePosition From = Flight.GetUniversePosition();
+        FShipFlightCommand Command;
+        Command.Throttle = ThrottleFor(2.0e3, Flight.GetLimits());
+        Flight.SetCommand(Command);
+        Flight.ResetGroundLog();
+        double Fastest = 0.0;
+        for (double T = 0.0; T < 4.0; T += 1.0 / 60.0)
+        {
+            Flight.Step(1.0 / 60.0);
+            const FVector Up = (Flight.GetUniversePosition() - World.Centre).GetSafeNormal();
+            const FVector V = Flight.GetVelocity();
+            Fastest = FMath::Max(Fastest, (V - Up * (V | Up)).Size());
+        }
+        const double Flown = (Flight.GetUniversePosition() - From).Size();
+        AddInfo(FString::Printf(TEXT("%.0f m up over real relief: %.1f m/s at the most, %.0f m flown, least clearance %.1f cm, %d hard stops"),
+                                Case.Clearance / 100.0, Fastest / 100.0, Flown / 100.0,
+                                Flight.GetGroundLog().LeastClearance, Flight.GetGroundLog().HardStops));
+        TestTrue(FString::Printf(TEXT("%.0f m up, the ship skims at %.0f m/s or more"), Case.Clearance / 100.0, Case.Least / 100.0),
+                 Fastest >= Case.Least);
+        TestTrue(TEXT("and stays on the flat stretch"), Flown < Strip - 2.0e3);
+        TestTrue(TEXT("no footprint point under the ground"), Flight.GetGroundLog().LeastClearance >= -1.0);
+        TestEqual(TEXT("and the hard stop never fires"), Flight.GetGroundLog().HardStops, 0);
+    }
     return true;
 }
 

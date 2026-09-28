@@ -236,8 +236,10 @@ public:
     float GetLinearAcceleration() const;
 
     /** Watts the boosters want to hold the ship against gravity: 150 W a g
-     *  under a solid world's drive floor, airborne, and nothing anywhere a
-     *  ship can be parked (landing decision 5). */
+     *  under a solid world's drive floor, airborne, and nothing at any floor
+     *  or between worlds (landing decision 5). Until slice (c)'s LANDED the
+     *  ship is always airborne here, so a ship resting on the ground under
+     *  the floor still wants it. */
     float GetHoldWant() const;
 
     /** Watts actually reaching the hold, paid first inside the boosters'

@@ -70,6 +70,26 @@ bool FShipHUDGroundTest::RunTest(const FString& Parameters)
     Flight.Step(1.0 / 60.0);
     TestTrue(FString::Printf(TEXT("in the regime's hysteresis band, the lever dim and ABOVE THE GROUND'S REACH (\"%s\")"), *UShipHUDWidget::MotionLine(Flight).Dim),
              UShipHUDWidget::MotionLine(Flight).Dim.Contains(TEXT("CLIMB 200 M/S")) && UShipHUDWidget::MotionLine(Flight).Dim.Contains(TEXT("ABOVE THE GROUND'S REACH")));
+
+    // At a giant's floor sphere, in cruise, with a solid world a hundred
+    // million km off: the regime is the giant's (decision 8), and the corner
+    // never reads the other world's rock, which is still the nearest ground.
+    FFlightSurface Giant;
+    Giant.Centre = Somewhere();
+    Giant.Radius = 7.0e9;
+    Giant.Floor = 1.12e7;
+    Giant.bWorld = true;
+    const FFlightSurface Rock = SurfaceOver(Swells, 1.02e6 + 100.0, Somewhere() + FVector(1.0e13, 0.0, 0.0));
+    FShipFlightState OverGiant;
+    OverGiant.SetSurfaces({ Giant, Rock });
+    OverGiant.SetUniverseTransform(Giant.Centre + FVector(D) * (Giant.Radius + Giant.Floor + 100.0), Level(D));
+    OverGiant.Step(1.0 / 60.0);
+    const FFlightSurface* RegimeWorld = OverGiant.GetRegimeSurface();
+    TestTrue(TEXT("at the giant's floor, cruising, the ship is in the giant's regime"),
+             OverGiant.IsInNearRegime() && OverGiant.GetMode() == EFlightMode::Cruise && RegimeWorld && !RegimeWorld->HasGround());
+    TestTrue(TEXT("while the far rock is still the nearest ground"), OverGiant.GetGroundAltitude().IsSet());
+    const FString Corner = UShipHUDWidget::AltitudeLineText(OverGiant, FSkySystem()).ToString();
+    TestFalse(FString::Printf(TEXT("and the corner does not read that rock (\"%s\")"), *Corner), Corner.Contains(TEXT("ABOVE GROUND")));
     return true;
 }
 

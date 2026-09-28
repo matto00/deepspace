@@ -316,6 +316,12 @@ public:
      *  floor sphere otherwise -- entering under it and leaving over 1.1 x it. */
     bool IsInNearRegime() const;
 
+    /** The world the regime is taken over -- the nearest world's cruise
+     *  floor, a ground or a floor sphere -- or null with none. What the
+     *  vertical speed is measured against; the HUD reads its ground, if it
+     *  has one, never another world's. */
+    const FFlightSurface* GetRegimeSurface() const;
+
     /** 1 at 40 km and under, 0 at 50 km and over: how far cruise flies the
      *  plan view and the vertical lever counts. 0 outside the regime. */
     double GetRegimeWeight() const;
@@ -331,6 +337,15 @@ public:
     /** The ship's radial speed, cm/s, + climbing, over the regime's world
      *  (or the nearest world); 0 with none. */
     double GetVerticalSpeed() const;
+
+    /** The ship's radial speed as the vertical lever's catch reads it (a
+     *  press at HOVER catches the ship where it is, the 2026-09-26 ruling),
+     *  cm/s: 0 wherever the lever is not live -- above the regime, or in the
+     *  drive, the radial part of cruise's or the drive's motion is no rate
+     *  the lever set -- and without the starved sink's bias, which is the
+     *  boosters', not the lever's, and which the flight adds again to any
+     *  sink the lever asks. */
+    double GetVerticalCatchSpeed() const;
 
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
@@ -566,6 +581,13 @@ private:
         int32 Frame = -1;
     };
     TArray<FGroundRayCache, TInlineAllocator<4>> RayCache;
+
+    /** What the along-ground ray (slot 1) has proven clear, carried from
+     *  frame to frame: facts about the ground, so SetSurfaces keeps it and
+     *  RayToGround discards it for another ground. Level at the feet, that
+     *  ray proves only about an eighth of the clearance a sample on real
+     *  relief, and without this a low hover saw a few metres ahead. */
+    ShipFlight::FGroundRayProof AheadProof;
     int32 FrameCount = 0;
 
     TOptional<double> CachedRay(int32 Slot, int32 SurfaceIndex, const FVector& Direction, double Clearance, double Lookahead);

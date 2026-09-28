@@ -131,7 +131,8 @@ private:
 /**
  * The boosters' hold against gravity (landing decision 5): a want that
  * exists only under a solid world's drive floor, airborne, so staying put is
- * never taxed anywhere a ship can be parked. It is one consumer's want, not a
+ * never taxed at any floor or between worlds (resting on the ground is free
+ * once slice (c) passes bAirborne false at touchdown). It is one consumer's want, not a
  * new consumer -- a new one would be another weight to tune toward an optimum.
  */
 namespace ShipPower
@@ -145,6 +146,10 @@ namespace ShipPower
     /** The want ramps in over this far under the floor, cm, so crossing it is
      *  not a step. */
     inline constexpr double HoldRampCm = 1.0e5;
+
+    /** ds.Boosters.StarvedSink's default, m/s: the most a hold that gets
+     *  nothing lets the ship sink, and never while it is asked to climb. */
+    inline constexpr float DefaultStarvedSinkMetresPerSecond = 2.0f;
 
     /** WattsPerG x min(g / g_E, 3), ramped over the first kilometre under the
      *  floor; 0 at or above the floor, and 0 landed (bAirborne false). */

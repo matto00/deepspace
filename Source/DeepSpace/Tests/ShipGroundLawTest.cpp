@@ -82,6 +82,14 @@ bool FGroundRayTest::RunTest(const FString& Parameters)
               ShipFlight::RayToGround(World, Under, FVector(Pole), 0.0, 1.0e6).IsSet());
     const TOptional<double> Down = ShipFlight::RayToGround(World, Under, -FVector(Pole), 0.0, 1.0e6);
     TestTrue(TEXT("and one heading down meets it at once"), Down.IsSet() && *Down == 0.0);
+    {
+        // Level to a rounding: the along-ground ray is level by construction,
+        // and the sign of its U . D is noise. From under the ground it may
+        // not leave on that noise.
+        const FVector East = FVector::CrossProduct(FVector(Pole), FVector(0.0, 1.0, 0.0)).GetSafeNormal();
+        const TOptional<double> Level = ShipFlight::RayToGround(World, Under, (East + FVector(Pole) * 1.0e-5).GetSafeNormal(), 0.0, 1.0e6);
+        TestTrue(TEXT("a level ray from under the ground is a hit at 0, whatever the sign of its rounding"), Level.IsSet() && *Level == 0.0);
+    }
 
     // An exhausted march is a hit, never "no hit": a grazing ray a metre
     // over the crests of ground steeper than any real world. Along +X from
@@ -164,6 +172,80 @@ bool FGroundRayTest::RunTest(const FString& Parameters)
         }
     }
     TestEqual(TEXT("on slopes of 60, no ray reports clear ground that is not"), SteepLies, 0);
+
+    // A proof carried from march to march: the grazing ray above, marched
+    // again every "frame" while the ship creeps along it, sinks and drifts a
+    // little, sees further each time -- only its fresh samples count against
+    // the 64 -- and still reports only what is true, re-checked every 5 cm.
+    {
+        ShipFlight::FGroundRayProof Proof;
+        const FUniversePosition Start = Above(Cliffs, Pole, 0.5 * Steep->MaxHeightCm() + 100.0);
+        const FVector Along(1.0, 0.0, 0.0);
+        double First = 0.0;
+        double Last = 0.0;
+        int32 ProofLies = 0;
+        int32 MostFresh = 0;
+        for (int32 Frame = 0; Frame < 40; ++Frame)
+        {
+            const FUniversePosition From = Start + FVector(2.0 * Frame, 0.3 * FMath::Sin(Frame * 0.9), -0.5 * Frame);
+            int32 Fresh = 0;
+            const TOptional<double> Hit = ShipFlight::RayToGround(Cliffs, From, Along, 0.0, 1.0e7, &Fresh, &Proof);
+            MostFresh = FMath::Max(MostFresh, Fresh);
+            const double Seen = Hit ? *Hit : 1.0e7;
+            (Frame == 0 ? First : Last) = Seen;
+            const int32 Samples = FMath::Clamp(FMath::CeilToInt32(Seen / 5.0), 1, 200000);
+            for (int32 Sample = 0; Sample <= Samples; ++Sample)
+            {
+                const FVector P = (From + Along * (Seen * Sample / Samples * 0.999)) - Cliffs.Centre;
+                const double R = P.Size();
+                if (R - Cliffs.Radius - Steep->Height(FVector3d(P / R), 0.0) < -1.0)
+                {
+                    ++ProofLies;
+                    break;
+                }
+            }
+        }
+        AddInfo(FString::Printf(TEXT("a grazing ray with its proof: %.1f m seen on the first march, %.1f m on the fortieth"),
+                                First / 100.0, Last / 100.0));
+        TestTrue(TEXT("with its proof a march picks up where the last one ran out"), Last > 10.0 * First);
+        TestTrue(TEXT("spending no more than 64 fresh samples a march"), MostFresh <= ShipFlight::GroundMarchSteps);
+        TestEqual(TEXT("and no march with a proof reports clear ground that is not"), ProofLies, 0);
+
+        // Rays that do meet the ground: level, a metre over the local
+        // ground, into the cliffs' flanks, the ship sinking and drifting a
+        // little frame by frame (on slopes of 60 it cannot creep forward
+        // without starting inside the rock). The proof may only ever carry the ray
+        // as far as the ground really is clear.
+        ShipFlight::FGroundRayProof Toward;
+        int32 TowardLies = 0;
+        int32 Hits = 0;
+        for (int32 Frame = 0; Frame < 60; ++Frame)
+        {
+            const FUniversePosition From = Above(Cliffs, Pole, 100.0) + FVector(0.0, 0.2 * FMath::Sin(Frame * 0.7), -0.3 * Frame);
+            const TOptional<double> Hit = ShipFlight::RayToGround(Cliffs, From, Along, 0.0, 1.0e5, nullptr, &Toward);
+            Hits += Hit ? 1 : 0;
+            const double Seen = Hit ? *Hit : 1.0e5;
+            const int32 Samples = FMath::Clamp(FMath::CeilToInt32(Seen / 2.0), 1, 200000);
+            for (int32 Sample = 0; Sample <= Samples; ++Sample)
+            {
+                const FVector P = (From + Along * (Seen * Sample / Samples * 0.999)) - Cliffs.Centre;
+                const double R = P.Size();
+                if (R - Cliffs.Radius - Steep->Height(FVector3d(P / R), 0.0) < -1.0)
+                {
+                    ++TowardLies;
+                    break;
+                }
+            }
+        }
+        TestTrue(FString::Printf(TEXT("rays into the flanks meet them (%d of 60)"), Hits), Hits > 0);
+        TestEqual(TEXT("and with a proof carried none reports clear ground that is not"), TowardLies, 0);
+
+        // A proof of another ground proves nothing here.
+        const TOptional<double> Elsewhere = ShipFlight::RayToGround(World, Start, Along, 0.0, 1.0e7, nullptr, &Proof);
+        const TOptional<double> Fresh = ShipFlight::RayToGround(World, Start, Along, 0.0, 1.0e7);
+        TestTrue(TEXT("a proof of another ground is discarded, not used"),
+                 Elsewhere.IsSet() == Fresh.IsSet() && Elsewhere.Get(-1.0) == Fresh.Get(-1.0) && Proof.Ground == World.Ground);
+    }
     return true;
 }
 

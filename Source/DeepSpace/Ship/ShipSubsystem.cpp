@@ -188,7 +188,7 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarStarvedSink(
-        TEXT("ds.Boosters.StarvedSink"), 2.0f,
+        TEXT("ds.Boosters.StarvedSink"), ShipPower::DefaultStarvedSinkMetresPerSecond,
         TEXT("m/s the ship sinks at when the hold gets nothing, only under a solid world's drive floor, never while climbing."),
         ECVF_Default);
 
@@ -978,7 +978,7 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const bool bVerticalUp = Helm.bVerticalUpHeld && !bVerticalUpHoldSpent;
     const bool bVerticalDown = Helm.bVerticalDownHeld && !bVerticalDownHoldSpent;
     const double Top = FlightState.GetLimits().VerticalTop;
-    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalSpeed(), Top);
+    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalCatchSpeed(), Top);
     Command.Vertical = ShipVerticalLever::Sweep(Command.Vertical, bVerticalUp, bVerticalDown, VerticalUps, VerticalDowns,
                                                 DeltaSeconds, FMath::Max(0.0f, CVarVerticalSweep.GetValueOnGameThread()));
     FlightState.SetCommand(Command);
@@ -1805,28 +1805,43 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
     {
         // Decision 12: to the ground under the law the ship is flying,
         // measured along the velocity.
+        // What cruise flies to is the ground, never the drive floor: the
+        // floor sphere's time is dropped whatever the ground ray says. Under
+        // that floor it was 0 on any path with a component down, so a level
+        // flight over the peaks read ETA 0 S, flickering with the sign.
+        View->EtaSeconds.Reset();
+        View->PassingCm.Reset();
         FFlightSurface Surface;
         Surface.Centre = Fix->Centre;
         Surface.Radius = Fix->Radius;
         Surface.Floor = Fix->Floor;
         Surface.bWorld = true;
         Surface.Ground = ShipGround::FromRelief(Fix->Relief);
+        const FUniversePosition ShipAt = FlightState.GetUniversePosition();
         const FVector Along = FlightState.GetVelocity() / Speed;
-        const double Reach = FlightState.GetUniversePosition().DistanceTo(Fix->Centre);
-        if (const TOptional<double> Hit = ShipFlight::RayToGround(Surface, FlightState.GetUniversePosition(), Along, Limits.GearClearanceCm, 2.0 * Reach))
+        const FVector ToCentre = Fix->Centre - ShipAt;
+        const double Reach = ToCentre.Size();
+        const TOptional<double> Hit = ShipFlight::RayToGround(Surface, ShipAt, Along, Limits.GearClearanceCm, 2.0 * Reach);
+        if (!Hit && (Along | ToCentre) > 0.0)
+        {
+            // A path that misses the ground: how high it passes over the
+            // datum, as TargetMarker::View words it, never a time.
+            View->PassingCm = FMath::Max(FVector::CrossProduct(ToCentre, Along).Size() - Fix->Radius, 0.0);
+        }
+        if (Hit)
         {
             // Inside the regime of the target itself: the regime is any
             // world's, and a ship at a giant's floor is in the giant's, while
             // the laws it flies there toward a solid target far off are the
             // ones above the regime. The regime is left above 1.1 x its top.
-            const TOptional<double> TargetAgl = ShipFlight::GroundAt(Surface, FlightState.GetUniversePosition());
+            const TOptional<double> TargetAgl = ShipFlight::GroundAt(Surface, ShipAt);
             const bool bTargetsRegime = FlightState.IsInNearRegime() && TargetAgl
                 && *TargetAgl - Limits.GearClearanceCm <= FMath::Max(Limits.RegimeCm, 1.0) * ShipFlight::RegimeExitFactor;
             if (bTargetsRegime)
             {
                 // Inside the regime: the approach law with its knee, and the
                 // skim cap where the path is shallow.
-                const FVector Up = (FlightState.GetUniversePosition() - Fix->Centre).GetSafeNormal();
+                const FVector Up = (ShipAt - Fix->Centre).GetSafeNormal();
                 const ShipFlight::FGroundLaw Law{ Limits.LinearAcceleration, Limits.ApproachSeconds, Limits.TouchdownSpeed,
                                                   Limits.SkimSeconds, Limits.SkimFloor };
                 const double Sine = FMath::Max(-(Along | Up), 1.0e-6);
@@ -1835,12 +1850,15 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
                 // over uneven ground a foot meets the rock sooner than the ray
                 // under the origin says, by the shortfall between the two
                 // heights. Without it the ETA's last ten seconds ran slow.
+                // Both heights over the target's own ground, never the
+                // nearest ground's, which can be another world's.
                 double Path = *Hit;
-                const TOptional<double> Agl = FlightState.GetGroundAltitude();
-                const TOptional<double> Foot = FlightState.GetFootprintClearance();
-                if (Agl && Foot)
+                const TOptional<double> Agl = ShipFlight::GroundAt(Surface, ShipAt);
+                const ShipLanding::FFootprintClearance Foot = ShipLanding::FootprintClearance(
+                    Surface, ShipAt, FlightState.GetUniverseOrientation(), Limits.GearClearanceCm);
+                if (Agl && Foot.Point != INDEX_NONE)
                 {
-                    const double Shortfall = FMath::Max(0.0, (*Agl - Limits.GearClearanceCm) - *Foot);
+                    const double Shortfall = FMath::Max(0.0, (*Agl - Limits.GearClearanceCm) - Foot.Least);
                     Path = FMath::Max(0.0, Path - Shortfall / Sine);
                 }
                 View->EtaSeconds = ShipFlight::SecondsToGround(Path, Speed, Sine, Law);
@@ -1858,7 +1876,6 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
                     View->EtaSeconds = Seconds;
                 }
             }
-            View->PassingCm.Reset();
         }
     }
     return View;
