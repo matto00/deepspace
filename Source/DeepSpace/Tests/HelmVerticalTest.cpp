@@ -76,6 +76,13 @@ bool FHelmVerticalTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("X sets the vertical lever to HOVER"), Flight.GetCommand().Vertical, 0.0);
     Hand(false, true, 0, 0);
     TestEqual(TEXT("C held through X moves nothing"), Flight.GetCommand().Vertical, 0.0);
+    // HOVER's detent alone would hold against a held C; the spent hold is
+    // what keeps the key inert until it is let go, wherever the lever is set
+    // meanwhile (a tool's SetVerticalLever).
+    Ship->SetVerticalLever(Pilot, -0.3);
+    for (int32 Frame = 0; Frame < 30; ++Frame) { Hand(false, true, 0, 0); }
+    TestEqual(TEXT("C held through X is spent until let go, off HOVER too"), Flight.GetCommand().Vertical, -0.3);
+    Ship->SetVerticalLever(Pilot, 0.0);
     Hand(false, false, 0, 0);
 
     // Sinking again; X, and C pressed at once while the ship is still
