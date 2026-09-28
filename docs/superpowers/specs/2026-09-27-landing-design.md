@@ -708,6 +708,18 @@ A second run agreed to within 1 ms on the draw (69.47, 105.86) and exactly on th
 past the budget that T5 must measure its static path through the same gate before T6 builds on
 it: a draw cost that is the GPU's, not the dynamic path's, would fail the custom primitive too.
 
+**Measured again with `UTerrainTileComponent` (Task T5, 2026-09-28, the same gate, same machine):**
+its kept tiles 153.5 MB at 2,500 tiles (against 400); 2,200 tiles cost 4.96 ms of a 4K capture
+over the empty scene (against 6); moving every tile 0.95 ms of game thread (against 2) and no more
+to draw after it (-0.76 ms, against 2); one `SetTile` 0.012 ms. **All four pass.** Two things
+differ from the plan. The proxy draws on the *dynamic* path, not the static one: on the static
+path the batch was cached (`DrawStaticElements` ran with the vertex factory initialised) but
+nothing reached the picture, which the gate now checks -- a base-colour capture must find a tile
+at the centre -- and the same proxy on the dynamic path draws. The draw cost was PMC's per-section
+dynamic path, not the GPU's, so the dynamic path of a primitive with one batch and no CPU rebuild
+passes; the static path stays a possible saving (the budget's 6 ms has 1 ms spare). And the
+kept copy (one `FTileBuild` per tile, for proxy recreation) is about 30% of PMC's, not a quarter.
+
 **The frame.** `AWorldGround` (new, `Source/DeepSpace/Surface/`) attaches
 to `AShipCounterFrame`, identity relative, and is spawned by
 `build_hauler.py` as `hauler_ground` (tagged `Sky.Ground`). Each tile's

@@ -540,6 +540,28 @@ private:
      *  its own height, less the hull's reach, for the along-ground cap. */
     TOptional<double> GroundAhead(int32 SurfaceIndex, const FVector& Heading, double Speed);
 
+    /**
+     * The ground rays, marched once a frame per direction (decision 10's
+     * cost): each later substep of the frame takes the distance flown along
+     * the ray off the proven-clear distance, and marches again only if the
+     * direction turned by more than a degree. Slot 0 is cruise's path along
+     * the nose, slot 1 the horizontal heading in the regime.
+     */
+    struct FGroundRayCache
+    {
+        int32 Slot = INDEX_NONE;
+        int32 Surface = INDEX_NONE;
+        FVector Direction = FVector::ZeroVector;
+        FUniversePosition From;
+        TOptional<double> Hit;
+        double SeenTo = 0.0;
+        int32 Frame = -1;
+    };
+    TArray<FGroundRayCache, TInlineAllocator<4>> RayCache;
+    int32 FrameCount = 0;
+
+    TOptional<double> CachedRay(int32 Slot, int32 SurfaceIndex, const FVector& Direction, double Clearance, double Lookahead);
+
     FUniversePosition Position;
     FQuat   Orientation = FQuat::Identity;
     FVector Velocity = FVector::ZeroVector;        // cm/s, universe frame
