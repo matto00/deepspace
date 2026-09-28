@@ -317,6 +317,17 @@ PILOT_EYE = (PILOT_SEAT[0],
              (PILOT_SEAT[1][0] + SEATED_EYE[0], PILOT_SEAT[1][1] + SEATED_EYE[1]),
              SEATED_EYE[2])
 
+# -- Landing: the footprint (landing decision 11) --------------------------
+# Ship space, cm: X fore, Y starboard, the deck at Z = 0. The gear's four
+# feet, in plan -- their Z is -ds.Land.GearClearance, set in C++ -- and the
+# belly's four plan corners at the slab's underside. The flight reads every
+# one: the descent cap and the ground's hard stop take the least height of
+# any of them above the ground. Mirrored as ShipLanding::GearFeetXY and
+# ShipLanding::BellyCorners; test_placement.py holds them equal, and holds
+# the belly to the hull generate() builds.
+GEAR = [(-700, -300), (-700, 400), (1600, -100), (1600, 200)]
+BELLY = [(-820, -410, -10), (-820, 510, -10), (1770, -410, -10), (1770, 510, -10)]
+
 # Where the eyes are, seated in the chart chair: the chart's use transform --
 # NAV_SCREEN_USE_DISTANCE aft of its glass, on the floor, facing it -- plus
 # SEATED_EYE, the same body in the same sitting idle as at the helm. The
