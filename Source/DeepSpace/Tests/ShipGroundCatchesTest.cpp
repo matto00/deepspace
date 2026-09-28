@@ -33,6 +33,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCatchesRoughTest, "DeepSpace.Ship.Landin
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCatchesRealTest, "DeepSpace.Ship.Landing.GroundAlwaysCatchesRealRelief",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundRayOnceAFrameTest, "DeepSpace.Ship.Landing.GroundRayOnceAFrame",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace GroundCatchesLocal
 {
@@ -291,6 +293,71 @@ bool FGroundCatchesRealTest::RunTest(const FString& Parameters)
         }
     }
     return Report(*this, Tally, FPlatformTime::Seconds() - Start, true);
+}
+
+/*
+ * The ray marched once a frame is invisible: a frame of 240 substeps flies
+ * exactly as 240 frames of one, while cruise brakes down its ground ray
+ * above the regime, nose straight down at 20 km/s. Only the frame's first
+ * substep marches; the rest take what was flown along the ray off its hit.
+ */
+bool FGroundRayOnceAFrameTest::RunTest(const FString& Parameters)
+{
+    using namespace GroundCatchesLocal;
+    const FGroundFieldRef Ground = ShipGround::FromRelief(FixtureParams());
+    const FFlightSurface World = SurfaceOver(Ground, 1.02e6 + Ground->MaxHeightCm());
+    const FVector3d D = FVector3d(0.2, -0.1, 1.0).GetSafeNormal();
+    const FQuat NoseDown = FRotationMatrix::MakeFromXZ(-FVector(D), FVector(1.0, 0.0, 0.0) - FVector(D) * D.X).ToQuat();
+
+    auto Start = [&](FShipFlightState& Flight)
+    {
+        Flight.SetSurfaces({ World });
+        Flight.SetUniverseTransform(Above(World, D, 4.0e7), NoseDown);
+        FShipFlightCommand Command;
+        Command.Throttle = 1.0;
+        Flight.SetCommand(Command);
+    };
+
+    // Fine frames until cruise has been braking on the ray for a quarter
+    // second, and still far above the regime.
+    FShipFlightState Fine;
+    Start(Fine);
+    int32 Braking = -1;
+    int32 Steps = 0;
+    for (; Steps < 120 * 120 && (Braking < 0 || Steps < Braking + 30); ++Steps)
+    {
+        Fine.Step(FShipFlightState::FixedStep);
+        if (Braking < 0 && Fine.GetHold() != EFlightHold::Free)
+        {
+            Braking = Steps;
+        }
+    }
+    if (!TestTrue(TEXT("cruise brakes on the ground ray"), Braking >= 0))
+    {
+        return false;
+    }
+    TestTrue(TEXT("far above the regime"), Fine.GetGroundAltitude().Get(0.0) > 1.0e7 && Fine.GetRegimeWeight() == 0.0);
+
+    FShipFlightState Coarse;
+    Start(Coarse);
+    for (int32 I = 0; I < Steps; ++I)
+    {
+        Coarse.Step(FShipFlightState::FixedStep);
+    }
+    const double SpeedBefore = Coarse.GetSpeed();
+    Coarse.Step(240.0 * FShipFlightState::FixedStep);
+    for (int32 I = 0; I < 240; ++I)
+    {
+        Fine.Step(FShipFlightState::FixedStep);
+    }
+    AddInfo(FString::Printf(TEXT("braking from %.0f m/s: fine %.3f m/s, one frame %.3f m/s; %.3f cm apart; %.0f km up"),
+        SpeedBefore / 100.0, Fine.GetSpeed() / 100.0, Coarse.GetSpeed() / 100.0,
+        (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size(), Fine.GetGroundAltitude().Get(0.0) / 1.0e5));
+    TestTrue(TEXT("still braking at the frame's end"), Fine.GetSpeed() < SpeedBefore - 100.0 && Fine.GetRegimeWeight() == 0.0);
+    TestTrue(TEXT("a frame of 240 substeps flies the speed of 240 frames of one, within 1 cm/s"),
+        FMath::Abs(Fine.GetSpeed() - Coarse.GetSpeed()) <= 1.0);
+    TestTrue(TEXT("and to the same place, within 10 cm"), (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size() <= 10.0);
+    return true;
 }
 
 #endif
