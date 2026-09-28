@@ -617,11 +617,19 @@ arithmetic. The counter-frame's points stay on the engine Sphere.
 simplex noise with its gradient: the value brightens the face (behind the
 `surface_max_swing` clamp, the half-float guard) and the gradient tilts a
 per-pixel normal -- the sphere's own, from object space, so no mesh facet
-shows in the shading. Each band's height goes with its wavelength, so every
-scale the screen holds has the same slope. Rocky worlds add Voronoi craters
-in bands stepping by four (the count wider than D goes as D^-2), fewer in the
-basins, scaled by the look's `Cratering` (bare rock 1, ice 0.5, terrestrial
-0.15, ocean and giants 0). A giant's belts come from its day
+shows in the shading. Each band's height goes with its wavelength, so every scale the screen holds
+has the same slope, and **the amplitude is the ground's** (landing decision
+3): `ReliefScale` is `FWorldRelief::SlopeScale`, the world's drawn peak over
+its radius and the sum's bound, so the orbit shades exactly the heights a ship
+lands on -- Earth-like, 1/g, capped at 10 km -- and relief is data (the
+priors), not a knob: `ds.Sky.Relief` and `ds.Sky.Craters` are retired, because
+a knob that moved the height would move the ground under a landed ship.
+Craters are summed compact kernels (`WR_CraterSum`), one per kept site, in
+bands stepping by four (the count wider than D goes as D^-2); their albedo is
+fewer in the basins, their height the same everywhere, scaled by the world's
+`Cratering` (bare rock 1, ice 0.5, terrestrial 0.15, ocean and giants 0).
+Giants keep a fixed cloud billow (`ShipSky::GiantReliefScale`); oceans are
+flat. A giant's belts come from its day
 (`FPlanet::DayHours`, log-normal about 12 h, drawn by the generator), by the
 Rhines scale (`SkyLook::BeltPairs`). Relief shows where the light is low, as
 real relief does: a world under a high sun still looks smooth.
@@ -1192,7 +1200,7 @@ tests that assert it.
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
-| `ds.Sky.SurfaceDetail`, `.Relief`, `.Craters` | 0.3, 0.2, 1 | `ShipSky.cpp` |
+| `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |

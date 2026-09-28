@@ -68,14 +68,16 @@ double WorldReliefNoise::CellHash(const FVector3d& V)
     return WorldReliefF64::WR_CellHash(V.X, V.Y, V.Z);
 }
 
-FFaceTerms WorldReliefNoise::FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch)
+FFaceTerms WorldReliefNoise::FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch,
+                                       double VertexBandLimit)
 {
-    return WorldReliefLocal::ToFaceTerms(WorldReliefF64::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch));
+    return WorldReliefLocal::ToFaceTerms(WorldReliefF64::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch, VertexBandLimit));
 }
 
-FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch)
+FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch,
+                                       float VertexBandLimit)
 {
-    return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch));
+    return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch, VertexBandLimit));
 }
 
 double WorldReliefNoise::CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band)

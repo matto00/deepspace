@@ -70,7 +70,7 @@ namespace
             { TEXT("mottle"), SkyMaterial::Mottle, TEXT("scalar") },
             { TEXT("detail"), SkyMaterial::Detail, TEXT("scalar") },
             { TEXT("banding"), SkyMaterial::Banding, TEXT("scalar") },
-            { TEXT("relief"), SkyMaterial::Relief, TEXT("scalar") },
+            { TEXT("relief_scale"), SkyMaterial::ReliefScale, TEXT("scalar") },
             { TEXT("cratering"), SkyMaterial::Cratering, TEXT("scalar") },
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
             { TEXT("body_axis_x"), SkyMaterial::BodyAxisX, TEXT("vector") },
@@ -722,13 +722,13 @@ namespace
             Test.TestTrue(FString::Printf(TEXT("%s shapes the face behind the guard"), *Knob.ToString()),
                 Parameter && Guarded.Contains(*Parameter));
         }
-        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::Relief, SkyMaterial::Cratering })
+        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering })
         {
             const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
             Test.TestTrue(FString::Printf(TEXT("and %s reaches the pixel only through the guard or the unit normal"), *Knob.ToString()),
                 Parameter && !Unguarded.Contains(*Parameter));
         }
-        for (const FName Knob : { SkyMaterial::Relief, SkyMaterial::Cratering })
+        for (const FName Knob : { SkyMaterial::ReliefScale, SkyMaterial::Cratering })
         {
             const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
             Test.TestTrue(FString::Printf(TEXT("%s tilts the normal"), *Knob.ToString()), Parameter && Turning.Contains(*Parameter));
