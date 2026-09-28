@@ -17137,6 +17137,15 @@ at the handover).
 
 ## Task 39 (Z): slice (b) done -- the frame at 4K, the flight the developer makes, the documentation, the merge
 
+**Amended (2026-09-28): `Eyes.LandingFrame` no longer asserts the 16.6 ms budget.** The ground
+measured 19.4 ms against it before any shadow, and the ruling on slice (b)'s build hands the frame
+to profiling ("profile first, with the cast shadows in, and fix the real cost"; the split factor is
+the last resort). The cast-shadow plan (`2026-09-28-landing-b-cast-shadows.md`, Task 1) took the
+test for that work: six cases, ABBA medians, a tagged report
+(`Saved/Eyes/LandingFrame/<tag>/report.txt`), and a frame over 16.6 ms reported as an info line,
+never failed. So a green `Eyes.LandingFrame` says nothing about the budget: read the `on_ms` of its
+`50km` and `1.5m` lines. The test code and Step 1's expectation below are the first version.
+
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping
 every task's paragraph).
