@@ -791,7 +791,8 @@ work handed to worker threads) with **at most 2 builds in flight**
 count). The game thread applies at most `ds.Terrain.UploadsPerFrame` (4)
 finished tiles a frame. Estimated cost: 3-8 us a sample (more with the
 summed craters, decision 3), 5-10 ms a tile, 200-400 tiles a second on two
-workers.
+workers. **Measured (Task T4, `DeepSpace.Surface.Tile`, 2026-09-27): 3.43 ms a
+tile** on the fixture barren world, craters in, single-threaded.
 
 **What the build must keep up with.** Under the drive floor the skim cap
 (decision 10) holds horizontal speed to at most 0.4 x AGL a second, so the
@@ -829,7 +830,9 @@ different levels carry different bands). A split still pops by what the
 child's finer bands add: at split factor 2 that is about slope / 64
 radians, a few 4K pixels. `DeepSpace.Surface.Tile` computes the largest
 vertex jump at a split in 4K pixels at the split distance, and slice (b)
-reports it. Geomorphing (vertices easing between levels) is sign-off item
+reports it. **Measured (Task T4, 2026-09-27): 1.66 4K pixels** at split factor
+2 on the fixture barren world (and the half-float height's rounding, 195 cm
+at most, is 0.07 of a pixel at the handover). Geomorphing (vertices easing between levels) is sign-off item
 16.
 
 **Rejected:** `UDynamicMeshComponent` (full half-edge topology, heavier than
