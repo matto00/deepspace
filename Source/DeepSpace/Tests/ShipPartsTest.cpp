@@ -1,6 +1,8 @@
 #include "Misc/AutomationTest.h"
 #include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightState.h"
+#include "Ship/ShipModuleDataAsset.h"
+#include "Ship/ShipPartCatalogue.h"
 #include "Ship/ShipParts.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -93,6 +95,38 @@ bool FShipPartsArithmeticTest::RunTest(const FString& Parameters)
                  Entry && Entry->Bay == ShipBay::Name(Bay) && Entry->Part.PartId.IsNone() && Entry->LivesDrawn == 0);
     }
     TestNull(TEXT("None is not in it"), ShipParts::FindBay(Empty, EShipBay::None));
+    return true;
+}
+
+/*
+ * A module is a part (decision 1): it says which bay it fits, and a part
+ * whose bay was never set reads None rather than the reactor.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsAssetSpecTest, "DeepSpace.Ship.Parts.AssetSpec",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShipPartsAssetSpecTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("a part whose bay was never set reads None, never the reactor"),
+             GetDefault<UShipModuleDataAsset>()->Bay == EShipBay::None);
+
+    UShipModuleDataAsset* Part = NewObject<UShipModuleDataAsset>();
+    Part->ModuleId = TEXT("Drive.QuickLever");
+    Part->Bay = EShipBay::Drive;
+    Part->PowerDraw = 25.0f;
+    Part->Words = FText::FromString(TEXT("Takes the lever before you have let go of it."));
+    Part->Ratings.Add(EShipRating::DriveResponse, 4.5);
+
+    const FShipPartSpec Spec = Part->GetSpec();
+    TestEqual(TEXT("the spec carries the id"), Spec.Id, FName(TEXT("Drive.QuickLever")));
+    TestTrue(TEXT("and the bay"), Spec.Bay == EShipBay::Drive);
+    TestEqual(TEXT("and the draw"), Spec.Draw, 25.0);
+    TestTrue(TEXT("and exactly the ratings it sets"),
+             Spec.Ratings.Num() == 1 && Spec.Ratings.Contains(EShipRating::DriveResponse) && Spec.Ratings[EShipRating::DriveResponse] == 4.5);
+
+    UShipPartCatalogue* Catalogue = NewObject<UShipPartCatalogue>();
+    Catalogue->Parts.Add(Part);
+    TestTrue(TEXT("a catalogue holds its parts by soft pointer"), Catalogue->Parts.Num() == 1 && Catalogue->Parts[0].Get() == Part);
     return true;
 }
 
