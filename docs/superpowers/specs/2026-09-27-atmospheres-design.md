@@ -386,7 +386,7 @@ distribution bends under the ceiling rather than stacking against it.
 generator; physical facts belong to procgen, looks to the sky):
 
 - mean molecular weight by mix: 28.97 (N2/O2), 44.0 (CO2), 2.3 (H2/He);
-- `ScaleHeightCm = k T / (mu m_u g)`, with `T = EquilibriumK` (no
+- `ScaleHeightKm = k T / (mu m_u g)` (in km; the sky converts to cm), with `T = EquilibriumK` (no
   greenhouse; *Deliberate fakes*): about 7.5 km for Earth air on a 1 g, 255
   K world; about 15 km for H2/He on a 2.6 g, 110 K giant;
 - the column relative to Earth's, `(P / 1 bar) x (g_E / g) x (28.97 / mu)`
@@ -1089,16 +1089,19 @@ next.
 
 | Role | Rule | Candidate | Why |
 |---|---|---|---|
-| **R**: a red-dwarf N2/O2 sky | the home system's terrestrial or ocean world with N2/O2, else the nearest N2/O2 world under an M dwarf | Baemsekai V (terrestrial, 252 K, 2,566 K star), if it draws N2/O2 | most skies look like this one |
-| **G**: a G-star N2/O2 sky | the nearest N2/O2 world under a 5,000-6,000 K star | Sova IV (terrestrial, 5,306 K, one jump from home), if it draws N2/O2 | the rare blue |
-| **C**: a CO2 sky | the nearest CO2 world to home | -- | the dusty sky most of the rest will wear |
-| **N**: airless, unchanged | the home system's first barren world | Baemsekai IV (barren) | the air term must be exactly zero |
-| **J**: a giant's air | the nearest gas giant to home, named with its mass and disc pressure | -- | H2/He haze, the fixed rim's replacement |
+| **R**: a red-dwarf N2/O2 sky | the home system's terrestrial or ocean world with N2/O2, else the nearest N2/O2 world under an M dwarf | Baemsekai V (terrestrial, 252 K, 2,566 K star), if it draws N2/O2; it drew CO2 (it is C), so Gelaes III | most skies look like this one |
+| **G**: a G-star N2/O2 sky | the nearest N2/O2 world under a 5,000-6,000 K star | Sova IV (terrestrial, 5,306 K, one jump from home), if it draws N2/O2; Sova V, as drawn | the rare blue |
+| **C**: a CO2 sky | the nearest CO2 world to home | Baemsekai V, as drawn | the dusty sky most of the rest will wear |
+| **N**: airless, unchanged | the home system's first barren world | Baemsekai I (barren; I-IV all are, and I is first) | the air term must be exactly zero |
+| **J**: a giant's air | the nearest gas giant to home, named with its mass and disc pressure | Krothmertas VII, as drawn | H2/He haze, the fixed rim's replacement |
 | **E**: entry | R, from its drive floor's approach, at 15 km/s | -- | a drive approach into air |
 
 **The fixtures as drawn** (universe seed 20260925, priors as committed at this
-table's commit; found by `DeepSpace.Atmosphere.FixtureWorlds`, whose log
-reprints this table -- a change that moves a world shows there first):
+table's commit; found by `DeepSpace.Atmosphere.FixtureWorlds`, which holds
+each role to its row -- world, sector, slot, orbit index, mix, and pressure
+to four figures -- and fails when a change moves one; its log reprints the
+table, so a meant move is copied from there into this table and the test's
+together):
 
 | Role | World | Sector, slot, orbit index | Mix | Pressure (bar) | Gravity (g) | tau450 | Mass (M_E) | Star (K) | Distance (ly) |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1128,7 +1131,8 @@ the ring). Not `ds.Sky.Goto n 30`: 30 km is inside the air, which is slice
   `EntryGlow.{h,cpp}`.
 - `Source/DeepSpace/Universe/AirFacts.{h,cpp}` -- `EAirMix`, gas constants,
   retention, scale height, column, the nadir ceiling.
-- `Source/DeepSpace/Tests/AtmosphereTest.cpp`, `AirProcGenTest.cpp`,
+- `Source/DeepSpace/Tests/AtmosphereTest.cpp`, `AirFactsTest.cpp`, `AirProcGenTest.cpp`,
+  `AirFixtureWorlds.h`,
   `Tests/Eyes/AtmosphereProbeTest.cpp`, `Tests/Eyes/AtmosphereCrossingTest.cpp`,
   `Tests/Eyes/AtmosphereParityTest.cpp`.
 - `Tools/sky_air_ground.py` -- the function that authors `M_SkyGround`'s
@@ -1293,11 +1297,18 @@ sign-off (ruling 1).
   - **[4]** `.EntryFlicker`: `EntryGlow::Flicker`'s spectrum has no energy
     above 2 Hz and its depth is at most 10% x Glow, at 20 km/s and at 1 c;
     zero at Glow 0.
+- **Gases (`DeepSpace.Universe.Gases`, `AirFactsTest.cpp`)** **[1]**: the
+  pure `AirFacts`: retention (Earth keeps N2/O2 and loses H2/He; the
+  0.3 M_E, 320 K case; the 10 M_E, 200 K case); the scale heights; the
+  ceilings at 1 g and their linearity in gravity and retention; a giant's
+  disc (a 15 M_E giant about 0.11 bar, a Jupiter about 2.4); the smooth
+  ceiling's shape; decision 5's table, every constant of every mix,
+  pinned where it is defined.
 - **Procgen (`DeepSpace.Universe.Air`)** **[1]**: Barren and Ice airless;
-  giants H2/He with their disc at `MaxNadirTau450` (a 15 M_E giant about
-  0.11 bar, a Jupiter about 2.4); retention (Earth keeps N2/O2 and loses
-  H2/He; the 0.3 M_E, 320 K case; the 10 M_E, 200 K case); no world holds a
-  mix whose retention is zero; every airy world, giants included, at or
+  giants H2/He with their disc at `MaxNadirTau450`; no world holds a
+  mix whose retention is zero; every temperate world's pressure is
+  `SmoothCeiling(drawn, PressureCeilingBar(mix, g, retention))`, recomputed
+  from its inputs; every airy world, giants included, at or
   under `MaxNadirTau450`; **the smooth ceiling leaves no spike**: over
   the corpus's airy worlds, with `P_max` each world's own ceiling (a
   per-world ratio, since the ceiling varies with gravity, mix and
