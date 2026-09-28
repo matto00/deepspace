@@ -1182,7 +1182,82 @@ bool FPlaytestEtaCountsDownTest::RunTest(const FString& Parameters)
     }
     TestFalse(TEXT("at rest on the floor the ETA is gone"), UShipHUDWidget::TargetLineText(*Ship, Home).ToString().Contains(TEXT("ETA")));
 
-    // The cruise leg flies to the ground: Task 29 (S7) restores it with the ETA to the ground.
+    // -- Cruise, on starved boosters, to the ground ------------------------------
+    // Cruise brakes on the curve alone, with no hold, so its time is that
+    // law's. Over a solid world it flies to the ground, and the ETA names
+    // the moment it arrives there (sign-off item 13). The regime is off for
+    // the leg: inside it cruise flies the nose's plan view and never dives
+    // (decision 8), and this leg is about the law, not the lever. At a
+    // quarter thrust cruise takes 40 s and 400 km to reach its top, and
+    // brakes from it over 500 km, so the flight starts 1,200 km up.
+    SkyTestWorld::FScopedCVar NoRegime(TEXT("ds.Land.Regime"), 0.0f);
+    Ship->AllStop(Pilot);
+    Ship->SetDriveEngaged(Pilot, false);
+    Ship->SetConsumerWeight(ShipPower::Boosters, 0.0f);
+    {
+        const FVector Out = (Flight.GetUniversePosition() - World.Centre).GetSafeNormal();
+        Ship->PlaceShip(World.Centre + Out * (World.Radius + World.Floor + 1.2e8), Facing(-Out));
+    }
+    Ship->Tick(Dt);
+    TestTrue(TEXT("the boosters are starved"), Flight.GetLimits().LinearAcceleration < 0.3 * FShipFlightLimits::Cruise().LinearAcceleration);
+    TestTrue(TEXT("and the ship cruises"), Flight.GetMode() == EFlightMode::Cruise);
+    Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
+
+    TArray<FReading> Cruising;
+    Seconds = 0.0;
+    Arrived = -1.0;
+    Tick = 0;
+    while (Seconds < 300.0 && Arrived < 0.0)
+    {
+        Ship->Tick(Dt);
+        Seconds += Dt;
+        ++Tick;
+        const bool bSettled = Flight.GetHold() != EFlightHold::Free || Flight.GetSpeed() >= 0.999 * Flight.GetLimits().MaxSpeed;
+        if (Tick % 30 == 0 && bSettled)
+        {
+            const TOptional<FTargetView> View = Ship->GetTargetView(*Home);
+            if (View && View->EtaSeconds)
+            {
+                Cruising.Add({ Seconds, *View->EtaSeconds, UShipHUDWidget::TargetLineText(*Ship, Home).ToString(),
+                               Flight.GetHold() != EFlightHold::Free });
+            }
+        }
+        // At rest, held at the ground. Above the regime cruise stops the
+        // hull's bounding reach short of the ray to the ground, so nose-down
+        // its lowest point rests a metre or two clear, never touching.
+        if (Flight.GetHold() == EFlightHold::AtFloor && Flight.GetSpeed() < TargetMarker::MinSpeed)
+        {
+            Arrived = Seconds;
+        }
+    }
+    int32 Braking = 0;
+    for (const FReading& Reading : Cruising)
+    {
+        Braking += Reading.bCapped ? 1 : 0;
+    }
+    if (!TestTrue(FString::Printf(TEXT("the cruising ship reaches the ground (%.1f s) read at its top (%d) and braking (%d)"),
+                                  Arrived, Cruising.Num() - Braking, Braking),
+                  Arrived > 0.0 && Cruising.Num() - Braking >= 5 && Braking >= 5))
+    {
+        return false;
+    }
+    const double Clear = Flight.GetFootprintClearance().Get(TNumericLimits<double>::Max());
+    TestTrue(FString::Printf(TEXT("and it rests at the ground, not the drive floor: the footprint %.2f m clear"), Clear / 100.0),
+             Clear >= -1.0 && Clear <= 300.0);
+    double CruiseStep = 0.0;
+    double CruiseArrival = 0.0;
+    for (int32 Index = 0; Index < Cruising.Num(); ++Index)
+    {
+        CruiseArrival = FMath::Max(CruiseArrival, FMath::Abs(Cruising[Index].At + Cruising[Index].Eta - Arrived));
+        if (Index > 0)
+        {
+            const double Fell = Cruising[Index - 1].Eta - Cruising[Index].Eta;
+            CruiseStep = FMath::Max(CruiseStep, FMath::Abs(Fell - (Cruising[Index].At - Cruising[Index - 1].At)));
+        }
+    }
+    AddInfo(FString::Printf(TEXT("cruise: first reading \"%s\" at %.0f s; on the ground at %.1f s"), *Cruising[0].Line, Cruising[0].At, Arrived));
+    TestTrue(FString::Printf(TEXT("starved cruise counts a second less every second, to a tenth (worst %.3f s)"), CruiseStep), CruiseStep <= 0.1);
+    TestTrue(FString::Printf(TEXT("and names when it reaches the ground, to a second (worst %.2f s)"), CruiseArrival), CruiseArrival <= 1.0);
     Ship->SetConsumerWeight(ShipPower::Boosters, 1.0f);
     return true;
 }

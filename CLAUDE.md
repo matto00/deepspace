@@ -987,7 +987,14 @@ distance at the present speed under the cap's own law (its braking part on
 the continuous curve, which the cap's stepped one undercuts by under 7 m/s,
 about half a substep) -- so it counts down a
 second a second and names the moment the ship arrives
-(`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). On a path that
+(`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). In cruise over
+a solid world -- and in DriveBelowFloor, which flies cruise -- it counts to
+**the ground**, at every altitude, under the law the ship flies: inside the
+near regime `ShipFlight::SecondsToGround` (the approach law and the skim
+cap), above it the braking curve to where cruise stops, the hull's reach
+short of the ray (`DeepSpace.UI.TargetMarker.GroundEta`). A cruising ship
+now passes through the drive floor with nothing happening there, so
+`FloorFor`'s floor is the ETA's only under the drive and its spool-down. On a path that
 misses it says `PASSING <altitude> UP`; at rest, nothing. While the lever is
 still spooling up it overstates. The bottom-left corner shows no time: it has
 no destination.

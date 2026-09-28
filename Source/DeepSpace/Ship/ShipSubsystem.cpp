@@ -1786,15 +1786,60 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
     }
     // The braking the boosters have now and the cap's law as the flight
     // state is running it, so the time is the flight's own at this moment's
-    // power, not a copy of it at full thrust. Which law depends on the lever
-    // flying: the drive (and its spool-down) holds 4 s off a floor before it
-    // brakes, while cruise brakes on the curve alone (CruiseSubStep), so a
-    // cruising ship's hold is none. With both, a starved cruise's ETA ran
-    // about a sixth short, and counted down faster than the clock.
-    const double Hold = FlightState.GetMode() == EFlightMode::Cruise ? 0.0 : FlightState.GetLimits().HoldSeconds;
-    return TargetMarker::View(Here, *Target, FlightState.GetUniversePosition(), FlightState.GetUniverseOrientation(),
-                              FlightState.GetVelocity(), Fix->Floor, FlightState.GetLimits().LinearAcceleration,
-                              Hold, NavState.IsInTransit());
+    // power, not a copy of it at full thrust. With both laws at once, a
+    // starved cruise's ETA ran about a sixth short, and counted down faster
+    // than the clock. Which law depends on the lever flying, not on the
+    // mode's name: the drive (and its spool-down) holds 4 s off its floor
+    // before it brakes; cruise -- and DriveBelowFloor, which flies cruise --
+    // brakes on the curve alone, and over solid ground flies to the ground
+    // itself.
+    const EFlightMode Mode = FlightState.GetMode();
+    const bool bCruiseFlies = Mode == EFlightMode::Cruise || Mode == EFlightMode::DriveBelowFloor;
+    const FShipFlightLimits& Limits = FlightState.GetLimits();
+    TOptional<FTargetView> View = TargetMarker::View(Here, *Target, FlightState.GetUniversePosition(), FlightState.GetUniverseOrientation(),
+                                                     FlightState.GetVelocity(), Fix->Floor, Limits.LinearAcceleration,
+                                                     bCruiseFlies ? 0.0 : Limits.HoldSeconds, NavState.IsInTransit());
+    const double Speed = FlightState.GetSpeed();
+    if (View && bCruiseFlies && Fix->Ground == EGround::Solid && Speed >= TargetMarker::MinSpeed)
+    {
+        // Decision 12: to the ground under the law the ship is flying,
+        // measured along the velocity.
+        FFlightSurface Surface;
+        Surface.Centre = Fix->Centre;
+        Surface.Radius = Fix->Radius;
+        Surface.Floor = Fix->Floor;
+        Surface.bWorld = true;
+        Surface.Ground = ShipGround::FromRelief(Fix->Relief);
+        const FVector Along = FlightState.GetVelocity() / Speed;
+        const double Reach = FlightState.GetUniversePosition().DistanceTo(Fix->Centre);
+        if (const TOptional<double> Hit = ShipFlight::RayToGround(Surface, FlightState.GetUniversePosition(), Along, Limits.GearClearanceCm, 2.0 * Reach))
+        {
+            if (FlightState.IsInNearRegime())
+            {
+                // Inside the regime: the approach law with its knee, and the
+                // skim cap where the path is shallow.
+                const FVector Up = (FlightState.GetUniversePosition() - Fix->Centre).GetSafeNormal();
+                const ShipFlight::FGroundLaw Law{ Limits.LinearAcceleration, Limits.ApproachSeconds, Limits.TouchdownSpeed,
+                                                  Limits.SkimSeconds, Limits.SkimFloor };
+                View->EtaSeconds = ShipFlight::SecondsToGround(*Hit, Speed, FMath::Max(-(Along | Up), 1.0e-6), Law);
+            }
+            else
+            {
+                // Above it: cruise's braking curve alone, to where it stops --
+                // the hull's reach short of the ray, as the flight state's
+                // NearestOnCruisePath has it. The approach law here named a
+                // time up to half a minute off, and counted seconds of five.
+                const double Stop = FMath::Max(0.0, *Hit - ShipLanding::ReachCm(Limits.GearClearanceCm));
+                const double Seconds = ShipFlight::SecondsToFloor(Stop, Speed, Limits.LinearAcceleration, 0.0);
+                if (FMath::IsFinite(Seconds))
+                {
+                    View->EtaSeconds = Seconds;
+                }
+            }
+            View->PassingCm.Reset();
+        }
+    }
+    return View;
 }
 
 bool UShipSubsystem::IsNearEnoughToFly(const FStarSystem& Here, const FBodyId& World) const
