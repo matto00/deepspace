@@ -81,6 +81,9 @@ below goes past them, it says so and is on the sign-off list.
 
 **The port-bug test, restated (R4, same day):** two float evaluations can each sit at the floor on opposite sides, so the shared file is not judged against the engine's nodes directly. It is a port bug only if the shared file misses double by more than 1.25 x what the engine's nodes miss it by, at any footprint and term (R4 on Baemsekai IV, 1/768 detail slope: shared vs double 1.27e-3, engine vs double 1.25e-3; shared vs engine 1.01e-3 -- the floor, not a bug). Shared vs engine is still printed.
 
+**Confirmed by the developer (same day):** the ruled table stays the minimum under the 1.25x rule (the ratio is a necessary condition for a port bug, not a sufficient one), and after R5 retired the engine's nodes their measured distance from double is frozen as `EngineFloor` constants per footprint and term. Slice (a) merged as `8cd12ab`, kept; the developer's in-play look at Baemsekai III, IV and V (and IV at dusk) is carried to the next playtest.
+
+
 
 
 
