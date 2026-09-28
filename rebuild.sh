@@ -86,7 +86,10 @@ fi
 # find -newer, not arithmetic on timestamps: no dependency on bc, which is
 # not installed here -- an earlier version used it, and failed after every
 # successful build, which made launch.sh refuse to open the editor.
-if [[ -n $(find Source -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' \) \
+# The DeepSpace library against its own sources -- which include the shared
+# ground file, Shaders/Private/WorldRelief.ush (landing decision 1).
+if [[ -n $(find Source/DeepSpace Source/DeepSpace.Target.cs Source/DeepSpaceEditor.Target.cs Shaders -type f \
+               \( -name '*.cpp' -o -name '*.h' -o -name '*.cs' -o -name '*.ush' \) \
                -newer "$LIB" -print -quit) ]]; then
     echo "!!! $LIB is older than the newest source file." >&2
     exit 1

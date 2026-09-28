@@ -79,6 +79,12 @@ below goes past them, it says so and is on the sign-off list.
 
 **The measured floor as a rule (applying the R2 ruling, same day):** a term's C++-vs-GPU tolerance is 1e-3, or, where the engine's own nodes miss double by more at that footprint and term, 1.25 x that engine-vs-double error. The shared file against the engine's nodes stays held to the ruled table; failing that is a port bug and stops the build. (R2 found detail slope at 1/768, 1.18e-3 with the engine's nodes at 1.04e-3, and crater albedo at 1/12288, 1.01e-3 with the engine's at 1.38e-3.)
 
+**The port-bug test, restated (R4, same day):** two float evaluations can each sit at the floor on opposite sides, so the shared file is not judged against the engine's nodes directly. It is a port bug only if the shared file misses double by more than 1.25 x what the engine's nodes miss it by, at any footprint and term (R4 on Baemsekai IV, 1/768 detail slope: shared vs double 1.27e-3, engine vs double 1.25e-3; shared vs engine 1.01e-3 -- the floor, not a bug). Shared vs engine is still printed.
+
+**Confirmed by the developer (same day):** the ruled table stays the minimum under the 1.25x rule (the ratio is a necessary condition for a port bug, not a sufficient one), and after R5 retired the engine's nodes their measured distance from double is frozen as `EngineFloor` constants per footprint and term. Slice (a) merged as `8cd12ab`, kept; the developer's in-play look at Baemsekai III, IV and V (and IV at dusk) is carried to the next playtest.
+
+
+
 
 
 
@@ -246,11 +252,13 @@ is `float` in HLSL and `double` in C++ and a handful of shims (`frac`,
 `M_SkyBody` stops using the engine's built-in Noise, VectorNoise and
 Voronoi nodes and calls the same file through one **Custom node** (a
 material node whose body is HLSL text) whose include path is
-`/Project/Private/WorldRelief.ush`. For the shader compiler to find
-`/Project/...`, a tiny second module, `DeepSpaceShaders`, loads at
-`PostConfigInit` (before shaders compile) and calls
-`AddShaderSourceDirectoryMapping`. That is the standard Unreal way for a
-project to own shader code.
+`/Project/Private/WorldRelief.ush`. The shader compiler finds
+`/Project/...` because UE 5.8 maps `/Project` to the project's `Shaders/`
+itself, at PreInit (`LaunchEngineLoop.cpp:2557`), and
+`DeepSpace.Surface.ShaderMapping` holds that the mapping finds the file.
+(As planned, a second module, `DeepSpaceShaders`, made that mapping at
+`PostConfigInit`; it was found redundant and removed at R2 -- *Ruled at
+R2*, above.)
 
 The file is a **rewrite, not a line-for-line port**, of the engine's own
 functions (`Rand3DPCG16` from `RandomPCG.ush`; `GradientNoise3D_ALU`,
@@ -274,8 +282,8 @@ numerically by the rendered parity test below.
 working days, is one detail band and one crater band in the file, compiled
 into `./build.sh` and into a Custom node, rendered by the parity test
 against today's engine nodes. **Go:** within the numeric tolerance below.
-**No-go**, and the fallback is taken: the `DeepSpaceShaders` module is
-dropped for the pasted text (if the module is the obstacle), or, if the
+**No-go**, and the fallback is taken: the include is dropped for the
+pasted text (if the `/Project` mapping is the obstacle), or, if the
 subset itself cannot reach parity, the engine nodes stay in `M_SkyBody` and
 the C++ is an independent port held to them by the same rendered test
 (sign-off item 1's third alternative).
@@ -328,9 +336,13 @@ they run under `-nullrhi`, with no GPU):
   reads it back, and compares with C++ `Face(D, Footprint)` and the gradient
   at the same D and footprint: **max absolute difference 1e-3 in face and
   slope units, over 256 x 256 samples at each of five footprints**. The same
-  test renders today's graph (kept for slice (a) as `M_SkyReliefProbeLegacy`,
-  the engine nodes, deleted when (a) merges) against the new one to the same
-  tolerance: that is "the orbital look unchanged", as a number. Because it
+  test rendered today's graph (kept for slice (a) as `M_SkyReliefProbeLegacy`,
+  the engine nodes) against the new one: that was "the orbital look
+  unchanged", as a number, proven at R4 and recorded in the test's header.
+  The legacy probe was then retired as slice (a) closed; the engine nodes'
+  last measured distance from double, per footprint and term on both the
+  barren world and the giant, is recorded in the test as the floor the
+  rule holds the GPU to. Because it
   must compile the Custom node to draw anything, it also catches the grey
   material.
 - *Eyes:* the developer flies to three worlds.
@@ -539,8 +551,10 @@ redistributed):
 
 At the default split **the lights stay whole while hovering**: the hold
 comes out of the boosters' share, not the lights'. What the pilot sees is
-the allocation screen's boosters line (`BOOSTERS 480 W of 585 W`) and the
-HUD's `SPARE` at zero: effort as watts, never as a percentage. Manoeuvre
+the allocation screen's boosters line (`BOOSTERS 480 W of 585 W`): effort
+as watts, never as a percentage. (This once named the HUD's `SPARE` at zero
+too; the wear plan removed `SPARE` from the HUD, ruled 2026-09-27, so the
+boosters line is the cue.) Manoeuvre
 thrust falling to 0.76 or 0.25 changes acceleration only (2 km/s^2 to 1.5
 or 0.5), which near the ground is imperceptible; the top is never lowered
 by thrust (below).
@@ -1517,8 +1531,8 @@ the world; it learns to place over ground at low altitude in slice (b)
 
 - `Shaders/Private/WorldRelief.ush` -- the shared noise core (the scalar,
   no-swizzle subset; `WR_`-prefixed).
-- `Source/DeepSpaceShaders/` -- the `PostConfigInit` module mapping
-  `/Project` to `Shaders/`; `DeepSpace.uproject` lists it.
+- (No shader module: the engine maps `/Project` to `Shaders/` itself. The
+  planned `Source/DeepSpaceShaders/` was removed at R2.)
 - `Source/DeepSpace/Surface/WorldReliefParams.h` (plain data, `EGround`),
   `WorldRelief.{h,cpp}`, `TerrainQuadtree.{h,cpp}`, `TerrainTile.{h,cpp}`
   (pure), `WorldGround.{h,cpp}` (`AWorldGround`).
@@ -1663,15 +1677,18 @@ move: gravity never enters the velocity (decision 4). Fixtures that build
 After `fix/surface-artifacts` merges. First the spike (decision 1),
 with its go/no-go. Then `WorldRelief` (C++ and the shared `.ush`; `Height`
 from the detail bands, craters in the material only, as today), the
-`DeepSpaceShaders` module, `M_SkyBody` rewritten onto the Custom node, the
+engine's own `/Project` mapping held by a test, `M_SkyBody` rewritten onto the Custom node, the
 probe materials and `Eyes.WorldReliefParity`, the relief prior and
 `FPlanet::ReliefKm` (drawn and in the corpus, but not yet read by the
 look), `FSkyBody` gaining `Ground`, `GravParam` and `Relief`.
 
 **Done when:** `./build.sh` and `./test.sh` are green with the surface and
 procgen tests above, each mutate-proven; `Eyes.WorldReliefParity` passes
-(the new graph against the legacy one, and C++ against the GPU, max
-absolute difference 1e-3 over 256 x 256 samples at five footprints); the
+(the new graph against the legacy one, and C++ against the GPU, at five
+footprints over 256 x 256 samples, by the measured floor as a rule -- the
+rulings at R2 and R4; the legacy half was run at R4 and retired with the
+probe, and what remains holds Baemsekai IV through `FWorldRelief` and a
+giant at stretch 6 through the file in double, to the recorded floor); the
 developer flies to Baemsekai III, IV and V and sees no change. Nothing a
 player can see is new: that is the point.
 
@@ -1738,7 +1755,7 @@ build tasks at 2. **Every changed file has exactly one owner per slice.**
 | Track | Slice | Owns | Waits on |
 |---|---|---|---|
 | **P: procgen** | a | `Surface/WorldReliefParams.h` (**first**, as a header R and F agree), `Universe/*` (GM, `ReliefKm`, `PlanetSeed`, `SurfaceSeed`), `GenPriors.*`, `DefaultGame.ini`, the corpus files, `Sky/SkySystem.*` | -- |
-| **R: relief** | a | `Shaders/`, `Source/DeepSpaceShaders/`, `DeepSpace.uproject`, `Surface/WorldRelief.*` and its tests, `Tests/Eyes/WorldReliefParityTest.cpp`, `Tools/eyes.sh`; **in slice (a)** `setup_sky_materials.py`, `SkyMaterialContract.h` and `sky_material_contract.json` (`M_SkyBody`, the probes) | surface-artifacts merged; P's `WorldReliefParams.h` |
+| **R: relief** | a | `Shaders/`, `Surface/WorldRelief.*` and its tests, `Tests/Eyes/WorldReliefParityTest.cpp`, `Tools/eyes.sh`; **in slice (a)** `setup_sky_materials.py`, `SkyMaterialContract.h` and `sky_material_contract.json` (`M_SkyBody`, the probes) | surface-artifacts merged; P's `WorldReliefParams.h` |
 | **F: flight** | b, c | `Ship/ShipFlightState.*`, `ShipFlightSurface.*`, `ShipVerticalLever.*`, `ShipLanding.*`, `ShipGravity.*`, their pure tests, `Tools/hauler_layout.py` (`GEAR`, `BELLY`) and `Tools/test_placement.py` | speed-bands merged; P merged |
 | **S: subsystem, power, input, HUD** | b, c | `ShipSubsystem.*` (**including `UpdateSurfaces`**), `ShipPowerState.*`, `ShipHum*`, `DeepSpaceCharacter.*`, `setup_flight_input.py`, `UI/ShipHUDWidget.*`, `UI/TargetMarker.*`, the Playtest tests | F's pure interfaces (agreed first as headers) |
 | **T: terrain and sky** | b | `Surface/TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `DeepSpace.Build.cs`, `SkyProjection.*`, `ShipSky.*`, `Tools/sky_probe.py`, `build_hauler.py`/`verify_level.py` for `hauler_ground`; **in slice (b)** `setup_sky_materials.py` and the contract, handed over from R when (a) merges (`M_SkyGround`, the `PeakCm` switch, the summed craters in the material) and `Surface/WorldRelief.*` for the summed craters in `Height` | R merged |
@@ -1808,8 +1825,8 @@ Each is expensive to reverse, changes an earlier ruling, or is a choice a
 reasonable person could make differently.
 
 1. **One height function as a shared `.ush` compiled into both the C++ and
-   `M_SkyBody` (through a Custom node and a `PostConfigInit` shader
-   module)**: a rewrite of the engine's noise in a scalar, no-swizzle,
+   `M_SkyBody` (through a Custom node, on the engine's own `/Project`
+   shader mapping; the planned `PostConfigInit` module was removed at R2)**: a rewrite of the engine's noise in a scalar, no-swizzle,
    `WR_`-prefixed subset, proven equal to today's nodes by a rendered
    parity test, after a spike with a go/no-go. *Alternatives:* the
    file pasted into the Custom node by the setup script (no module); baked

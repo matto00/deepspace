@@ -7,6 +7,7 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Universe/AirFacts.h"
 #include "Universe/GalaxyGenerator.h"
 #include "Universe/StarSystem.h"
 #include "Universe/SystemDescription.h"
@@ -57,7 +58,8 @@ namespace ProcGenCorpusTestLocal
         TEXT("star_class"), TEXT("star_mass_solar"), TEXT("star_luminosity_solar"), TEXT("star_temperature_k"),
         TEXT("habitable_inner_au"), TEXT("habitable_outer_au"), TEXT("frost_line_au"), TEXT("planet_count"),
         TEXT("planet"), TEXT("designation"), TEXT("given_name"), TEXT("kind"),
-        TEXT("semi_major_axis_au"), TEXT("mass_earth"), TEXT("radius_earth"), TEXT("equilibrium_k"), TEXT("population"), TEXT("surface_gravity_g"), TEXT("relief_km")};
+        TEXT("semi_major_axis_au"), TEXT("mass_earth"), TEXT("radius_earth"), TEXT("equilibrium_k"), TEXT("population"), TEXT("surface_gravity_g"), TEXT("relief_km"),
+        TEXT("air_mix"), TEXT("surface_pressure_bar"), TEXT("scale_height_km"), TEXT("nadir_tau_450")};
 
     struct FTestWorld
     {
@@ -150,7 +152,11 @@ namespace ProcGenCorpusTestLocal
             Num(Planet.EquilibriumK, NonFinite),
             Num(Planet.Population, NonFinite),
             Num(Planet.SurfaceGravityEarth(), NonFinite),
-            Num(Planet.ReliefKm, NonFinite)}, TEXT("\t"));
+            Num(Planet.ReliefKm, NonFinite),
+            AirFacts::Name(Planet.AirMix),
+            Num(Planet.SurfacePressureBar, NonFinite),
+            Num(AirFacts::ScaleHeightKm(Planet.AirMix, Planet.EquilibriumK, Planet.SurfaceGravityEarth()), NonFinite),
+            Num(AirFacts::NadirTau450(Planet.AirMix, Planet.SurfacePressureBar, Planet.SurfaceGravityEarth()), NonFinite)}, TEXT("\t"));
     }
 
     /** What every column of one row must hold, by column name, worked out
@@ -189,7 +195,11 @@ namespace ProcGenCorpusTestLocal
             {TEXT("equilibrium_k"), bAny ? G(Planet.EquilibriumK) : FString()},
             {TEXT("population"), bAny ? G(Planet.Population) : FString()},
             {TEXT("surface_gravity_g"), bAny ? G(Planet.SurfaceGravityEarth()) : FString()},
-            {TEXT("relief_km"), bAny ? G(Planet.ReliefKm) : FString()}};
+            {TEXT("relief_km"), bAny ? G(Planet.ReliefKm) : FString()},
+            {TEXT("air_mix"), bAny ? FString(AirFacts::Name(Planet.AirMix)) : FString()},
+            {TEXT("surface_pressure_bar"), bAny ? G(Planet.SurfacePressureBar) : FString()},
+            {TEXT("scale_height_km"), bAny ? G(AirFacts::ScaleHeightKm(Planet.AirMix, Planet.EquilibriumK, Planet.SurfaceGravityEarth())) : FString()},
+            {TEXT("nadir_tau_450"), bAny ? G(AirFacts::NadirTau450(Planet.AirMix, Planet.SurfacePressureBar, Planet.SurfaceGravityEarth())) : FString()}};
     }
 
     /** One row a TSV line must be, to be read. */
@@ -206,7 +216,7 @@ namespace ProcGenCorpusTestLocal
      *  still sees it. */
     FString NoPlanetColumns()
     {
-        return TEXT("-1\t\t\t\t\t\t\t\t\t\t");
+        return TEXT("-1\t\t\t\t\t\t\t\t\t\t\t\t\t\t");
     }
 }
 

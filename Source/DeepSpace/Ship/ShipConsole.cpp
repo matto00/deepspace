@@ -5,6 +5,7 @@
 #include "Engine/StaticMesh.h"
 #include "Components/WidgetComponent.h"
 #include "Ship/InteractableComponent.h"
+#include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipScreen.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/EngineeringConsoleWidget.h"
@@ -112,9 +113,10 @@ FText AShipConsole::GetReadout() const
         return NSLOCTEXT("DeepSpace", "ConsoleNoShip", "NO SIGNAL");
     }
 
-    return FText::Format(
-        NSLOCTEXT("DeepSpace", "ConsoleReadout", "DRAW {0} W / {1} W\nSPARE {2} W"),
-        FText::AsNumber(FMath::RoundToInt(Ship->GetPowerDraw())),
-        FText::AsNumber(FMath::RoundToInt(Ship->GetReactorOutput())),
-        FText::AsNumber(FMath::RoundToInt(Ship->GetPowerHeadroom())));
+    // The reactor's nameplate, the first line of the console's list (wear
+    // decision 9): never a total drawn or a headroom, which the lived-in
+    // spec's decision 11 rules out. The signature stays, because
+    // BP_ShipConsole may still call it.
+    const UShipModuleDataAsset* Reactor = Ship->GetFittedPart(EShipBay::Reactor);
+    return Reactor ? FText::FromString(UEngineeringConsoleWidget::Nameplate(EShipBay::Reactor, *Reactor)) : FText::GetEmpty();
 }

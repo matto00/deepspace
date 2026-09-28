@@ -4,6 +4,27 @@
 #include "Universe/GenPriors.h"
 #include "Universe/StarSystem.h"
 
+/** One world's air as the generator draws it (atmospheres decision 2): the
+ *  mix, the log-normal draw before its ceiling, the ceiling, and the
+ *  pressure the world has. Public so the ceiling's shape can be tested
+ *  against the draws it bent. */
+struct FAirDraw
+{
+    EAirMix Mix = EAirMix::None;
+    double DrawnBar = 0.0;
+    double CeilingBar = 0.0;
+    double PressureBar = 0.0;
+};
+
+/** Whether GenerateWithPlanetCount draws the air (atmospheres spec, *Tests*:
+ *  the labels "compared with the draws off"). Off only in a test: every
+ *  world airless and nothing else different. */
+enum class EAirDraws : uint8
+{
+    On,
+    Off,
+};
+
 /**
  * A system seed in, a star system out. Pure, stateless and const: the same
  * (seed, priors) always gives the same system, bit for bit, and nothing is
@@ -47,11 +68,16 @@ struct DEEPSPACE_API FStarSystemGenerator
      *  law can be tested on made worlds (landing decision 3). */
     static double GenerateRelief(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors);
 
+    /** A world's air as Generate draws it for the planet whose seed this
+     *  is, from Planet's Kind, MassEarth, RadiusEarth and EquilibriumK. */
+    static FAirDraw GenerateAir(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors);
+
     /** The whole system. Its star and name agree with the stub's because
      *  they come from the same streams. */
     static FStarSystem Generate(const FStarSystemStub& Stub, const FGenPriors& Priors);
 
     /** The same with the planet count forced rather than drawn. For the test
      *  that holds a count one higher to leave the first n planets alone. */
-    static FStarSystem GenerateWithPlanetCount(const FStarSystemStub& Stub, const FGenPriors& Priors, int32 PlanetCount);
+    static FStarSystem GenerateWithPlanetCount(const FStarSystemStub& Stub, const FGenPriors& Priors, int32 PlanetCount,
+        EAirDraws AirDraws = EAirDraws::On);
 };

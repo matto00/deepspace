@@ -50,6 +50,7 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 ./rebuild.sh --force --launch   # close the editor, rebuild, reopen it
 ./launch.sh         # open DeepSpace: rebuilds first only if C++ is stale; focuses an open editor
 unreal-editor DeepSpace.uproject    # open the project
+Tools/eyes.sh Eyes.WorldReliefParity   # a rendered check (Eyes.*): outside ./test.sh, through the lock, never -nullrhi
 
 # Regenerate IDE project files (after moving files or adding modules)
 ~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
@@ -92,7 +93,8 @@ tree built green and the same code committed failed, and four worktrees that
 were each green broke together at the merge. Off, green in a worktree means
 green merged.
 
-**Prove a test can fail with `Tools/mutate.sh`** before trusting it. It
+**Prove a test can fail with `Tools/mutate.sh`** before trusting it. A rendered check is proven the same way with
+`MUTATE_RUNNER=Tools/eyes.sh`. It
 checks everything that has made a mutation silently prove nothing here -- the
 text not found, the mutant not compiling, the library not rebuilt -- before
 reading a verdict, and restores the file. Rebuild afterwards: its last build
@@ -147,6 +149,10 @@ been abandoned. Say so.
   interaction trace.
 - `Source/DeepSpace/Universe/` — procgen: pure generators behind
   `UUniverseSubsystem`, the one authority on what exists (*The universe*).
+- `Source/DeepSpace/Surface/` — the ground: `FWorldRelief`, pure, the one
+  height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
+  compiles too (the engine maps `/Project` to `Shaders/` by itself);
+  `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -162,6 +168,10 @@ been abandoned. Say so.
   the hum, the lights and lamps, the chart chair.
 - `Ship/ShipDressing*` — the pure dressing core, its rules and ini, the
   surface and keep-out markers, and `UShipDressingSubsystem` (*The dressing*).
+- `Ship/ShipParts.*`, `Ship/ShipPartCatalogue.h` -- the pure parts core: the
+  bays, the ratings and the stock ship as numbers, the catalogue's rules, and
+  the plain loadout state. `UShipSubsystem` fits parts and derives the rated
+  values from them (*Parts and bays*).
 
 Consumers **ask** the subsystem for state; they never store it. That discipline
 is what keeps ship state from scattering across actors.
@@ -221,6 +231,14 @@ out, boosters push down to a quarter thrust, the jump drive charges slower.
 and nothing in the model changes on its own with time. If a change here
 introduces a rate the player must keep up with, it has broken the anti-chore
 principle -- say so rather than tuning it.
+
+The reactor's output and every want are the fitted parts' ratings
+(*Parts and bays*), and draws are booked by bay. **The engineering console
+shows one nameplate per fitted part and nothing else**: no total drawn, no
+headroom, no percentage, no tier, no comparison. The lived-in spec's
+decision 11 made the reactor's readout a nameplate, and a total beside it is
+a utilisation meter. The laptop's per-consumer watts are each consumer's own
+share of its own want, never a total.
 
 Generated actors are addressed **by tag, never by name or index**.
 `Tools/build_hauler.py` tags the lights `Power.Lights`, the same string as
@@ -543,6 +561,20 @@ lock):
     "$PWD/DeepSpace.uproject" -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" \
     -unattended -nopause -nosplash -NoLiveCoding      # report: Saved/setup_sky_materials.txt
 ```
+
+**`M_SkyBody`'s face is one shared file.** Every band is
+`Shaders/Private/WorldRelief.ush` -- the noise the C++ ground compiles too
+(`Surface/WorldRelief.*`, landing decision 1) -- reached through one Custom
+node as `/Project/Private/WorldRelief.ush`, a path the engine maps to the
+project's `Shaders/` by itself at start-up (no project module does it;
+`DeepSpace.Surface.ShaderMapping` holds the mapping). **A Custom node's HLSL
+error is invisible headless**: the translator passes, no shader compiles
+under `-nullrhi`, and every world draws grey with every test green.
+`Tools/eyes.sh Eyes.WorldReliefParity` is what renders it: run it after any
+edit to the `.ush`, and after re-authoring the sky's materials. It holds the
+GPU's float to the same file in double at the measured float floor; a
+mutant that only folds away in the shader compiler (`(x + c) - c`) proves
+nothing there, since the GPU never sees it.
 
 The materials are unlit, and the sun lights only the ship. The glass casts no
 shadow, and its `M_SkyGlass` reflects the lit room through `MPC_Sky`'s
@@ -1025,6 +1057,65 @@ flies the whole loop with the ship dressed. Whether it reads as somebody's
 ship is a playtest question: walk it at `ds.Dress.LivedIn` 0.3, 1 and 2, and
 at `ds.Dress.Seed` 1, 2 and 3.
 
+## Parts and bays
+
+The ship is fitted, not fixed
+(`docs/superpowers/specs/2026-09-27-ship-wear-and-upgrades-design.md`).
+Slice 1, the upgrade seam, is built. The install act, the save and wear are
+not. **A part is a module in a bay, and it changes a number.** An upgrade is
+a different number, never a different model.
+
+- **Six fixed bays and two auxiliary slots** (`EShipBay`, `Ship/ShipParts.h`):
+  reactor, drive, boosters, lights, life support, sensors, `Aux1` and `Aux2`.
+  Each holds one part.
+  - `UShipSubsystem::FitPart` swaps, and the displaced part joins the spares.
+  - A part whose `Bay` is `None`, or with no id, is refused.
+  - A core part is only ever swapped; `RemovePart` is for aux slots.
+- **An empty bay reads the stock part and draws nothing**, so a bare test
+  world is today's bare world. A played ship fits the six stock parts, from
+  `BP_DeepSpaceGameMode`'s list, which is what `Tests/StockShip.h` installs.
+  - **The stock ship is today's ship**: 1400 W, 620 W of draws, 1370 W at
+    rest, 380 W winding in 45 s, 3 notches/s, 12 ly.
+- **Rated values are derived, never stored.** `GetRatings()` is the stock
+  numbers with every fitted part's ratings over them.
+  - Each rating belongs to one bay, and no part rates a top speed.
+  - A fit moves the supply and the lights' want at once.
+  - **The boosters' want has one writer, `ApplyAllocation`.** Landing's
+    hold adds to it there.
+- **Draws are booked by bay** (`Bay.Lights`). This resolved the old clash
+  between the `DA_Lights` draw and the `Power.Lights` consumer: the Lights
+  part owns both.
+  - Test loads go through `AddLoad`/`RemoveLoad` (`Load.<name>`). They are
+    not parts.
+- **The catalogue is `Tools/ship_parts.json`.** `Tools/setup_ship_parts.py`
+  authors `Content/Ship/Parts/DA_*`, `DA_ShipCatalogue` and the game mode's
+  list from it (editor closed, through the lock; the report is
+  `Saved/setup_ship_parts.txt`). **Never edit a part asset by hand.**
+  - `DeepSpace.Ship.Parts.Contract` holds the JSON, the assets and
+    `FShipRatings::Stock()` equal.
+  - `.CatalogueRules` holds decision 7 over every row:
+    - every combination is whole at rest under the stock reactor;
+    - every upgrade is at least as open as stock on every axis of its bay;
+    - no part in a bay dominates another;
+    - aux parts rate nothing and draw nothing at rest.
+
+    **Parts widen what the ship can do; they never make it need more of
+    anything.**
+  - `FindPart` resolves ids through `DA_ShipCatalogue`, which `CatalogueAsset`
+    in `[/Script/DeepSpace.ShipSubsystem]` names.
+- **Four CVars override the fitted part.** `ds.Nav.RangeLy`,
+  `ds.Nav.ChargeSeconds`, `ds.Nav.WindingWant` and `ds.Drive.Response` default
+  to `-1`, the part's. 0 or more overrides it for the session
+  (`ShipParts::Effective`, applied only in the ship's getters). Wherever this
+  file quotes one of them as a number, read the fitted part's rating.
+- **The console's nameplates**: one line per fitted part,
+  `BAY  Name  figure  Words`, each figure the part's own. No CVar or live
+  value moves a plate, and an empty slot has no line
+  (`DeepSpace.Ship.Parts.NameplatesAreFacts`).
+- **The state is plain** (`FShipLoadoutState`): bays by name, and spares with
+  their own state. The wear fields stay zero until slice 4.
+  `RestoreLoadout` falls back to the stock part for whatever it cannot name.
+
 ## Playtest console
 
 The backtick key opens Unreal's console in play (in the editor, the
@@ -1056,6 +1147,15 @@ ds.Drive.Top 0.01           shorten the drive lever to 0.01 c for a session (nev
 the course. `ds.HUD 0` hides the HUD for an unadorned look. `ds.Dress.LivedIn`
 and `ds.Dress.Seed` redress the ship where you stand (*The dressing*).
 
+Parts, from the console, until there is somewhere to find them:
+
+```text
+ds.Ship.Install Reactor.TwinCore   fit a part by id or name; ds.Ship.Install Reactor.Stock puts it back
+ds.Ship.Install Drive.QuickLever   the drive that follows its lever half as fast again
+ds.Ship.Spares                     the spares aboard; 'give <part>' adds one, 'clear' empties them
+ds.Ship.Describe                   every bay: its part, draw and ratings (a developer's line)
+```
+
 ## Where each tunable lives
 
 No value below has been settled by a playtest yet. Each is a
@@ -1067,18 +1167,18 @@ tests that assert it.
 
 | CVar | Default | Lives in |
 |---|---|---|
-| `ds.Nav.ChargeSeconds` | 45 s (settled 2026-09-26) | `ShipSubsystem.cpp`, from `FShipFlightState::JumpChargeSeconds` (`ShipFlightState.h`) |
-| `ds.Nav.WindingWant` | 380 W (settled 2026-09-26) | `ShipSubsystem.cpp` |
+| `ds.Nav.ChargeSeconds` | -1: the drive part's (stock 45 s, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
+| `ds.Nav.WindingWant` | -1: the drive part's (stock 380 W, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
 | `ds.Nav.StarvedRate` | 0.2 | `ShipSubsystem.cpp` |
 | `ds.Nav.FoldDraw` | 0 W | `ShipSubsystem.cpp` |
 | `ds.Nav.TransitSeconds` | 6 s | `ShipSubsystem.cpp`, from `FNavTuning` (`ShipNavState.h`) |
 | `ds.Nav.ConeDeg` | 8 deg | `ShipSubsystem.cpp` |
 | `ds.Nav.StandoffAU` | 2.4 AU | `ShipSubsystem.cpp`, from `NavStart::DefaultStandoffAU` (`NavStart.h`) |
-| `ds.Nav.RangeLy` | 12 ly | `ShipSubsystem.cpp` |
+| `ds.Nav.RangeLy` | -1: the sensors part's (stock 12 ly) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
 | `ds.Nav.PlaceAtStart` | 1 | `ShipSubsystem.cpp` |
 | `ds.Nav.WorldStandoffDeg` | 2 deg (the world's width at an in-system arrival) | `ShipSubsystem.cpp`, from `NavStart::DefaultWorldStandoffDeg` (`NavStart.h`) |
 | `ds.Drive.Top` | 0.1 c; clamped to [20 km/s, 0.1 c], so it can only shorten the lever | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultTopLight` (`ShipDriveLever.h`) |
-| `ds.Drive.Response` | 3 notches/s at full thrust | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultResponse` |
+| `ds.Drive.Response` | -1: the drive part's (stock 3 notches/s at full thrust) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
 | `ds.Drive.Sweep` | 3 notches/s, a held key after 0.3 s | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultSweep` |
 | `ds.Cruise.Sweep` | 0.2 of the lever a second (the lever reads on a log scale) | `ShipSubsystem.cpp`, from `ShipDriveLever::DefaultCruiseSweep` |
 | `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
@@ -1103,13 +1203,15 @@ dressing's rules (`Config/DefaultGame.ini`, above, reloaded with
 `ds.Universe.ReloadPriors` and `ds.Dress.Reload`; write a settled dressing
 number back into `ShipDressingRules.cpp`); room moods and practicals
 (`hauler_layout.py`, a level rebuild); the chart's seat (`place_nav_screen`, a
-level rebuild); the reactor rating and each consumer's want
-(`UShipSubsystem`'s `static constexpr`s, a header change). And, as named
-constants with tests on them: the drive's notch table, `EaseSeconds` 0.4,
+level rebuild); every part's draw and rated values -- the reactor's supply,
+each consumer's want, the boosters' 2 km/s^2, the drive's response and
+charge, the array's range -- in `Tools/ship_parts.json`, authored into assets
+by `Tools/setup_ship_parts.py` (*Parts and bays*). And, as named constants
+with tests on them: the drive's notch table, `EaseSeconds` 0.4,
 `RepeatDelaySeconds` 0.3, `ArriveNotches` and cruise's log floor
-`CruiseFloorCmPerSecond` 1 m/s (`ShipDriveLever.*`); cruise's top 20 km/s,
-its astern top 200 m/s and the boosters' 2 km/s^2 (`FShipFlightLimits`, a
-header change); the 80% braking margin
+`CruiseFloorCmPerSecond` 1 m/s (`ShipDriveLever.*`); cruise's top 20 km/s and
+its astern top 200 m/s (`FShipFlightLimits`, a header change); the 80%
+braking margin
 (`ShipFlight::BrakingMargin`); the 5% `HOLDING OFF` threshold
 (`UShipHUDWidget::HoldingOffShown`); the map's `SystemMap::PickRadius` (14
 px) and its 600 x 424 draw size; the chart's layout and 816 x 576

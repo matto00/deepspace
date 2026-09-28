@@ -13,6 +13,7 @@
 #include "GameFramework/Pawn.h"
 #include "Sky/LocalSystem.h"
 #include "Tests/SkyTestWorld.h"
+#include "Tests/StockShip.h"
 #include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -86,24 +87,29 @@ bool FShipScreensAgreeTest::RunTest(const FString& Parameters)
         }
 
         // Two different *kinds* of screen agree too: the console's switch
-        // and the laptop's readout are views of one value.
+        // and the laptop's readout are views of one value. On the stock
+        // ship, so the console has plates to show.
+        TestEqual(TEXT("the stock ship fits"), StockShip::Install(Ship), 6);
         UEngineeringConsoleWidget* Console = MakeScreen<UEngineeringConsoleWidget>(World);
         TestTrue(TEXT("the ship starts lit"), Ship->AreLightsOn());
+        const FString Plates = Console->GetReadoutText().ToString();
+        TestFalse(TEXT("the console shows its plates"), Plates.IsEmpty());
 
         Console->ToggleLights();
         TestFalse(TEXT("the console's switch reaches the ship"), Ship->AreLightsOn());
 
         Galley->RefreshFromShip();
-        TestTrue(TEXT("and the laptop shows the lights wanting nothing"),
-                 Galley->GetRowText(ShipPower::Lights).ToString().Contains(TEXT("0 W of 0 W")));
+        const FString Dark = Galley->GetRowText(ShipPower::Lights).ToString();
+        TestTrue(TEXT("and the laptop shows the lights wanting nothing"), Dark.Contains(TEXT("0 W of 0 W")));
 
-        // The console's own readout is recomputed, never remembered: the
-        // freed power shows up as it is reallocated.
-        const FString Lit = Console->GetReadoutText().ToString();
+        // Recomputed, never remembered: the freed power shows up on the
+        // laptop's lights row as it is reallocated. The console shows
+        // nameplates, which the switch does not move (wear decision 9).
         Console->ToggleLights();
         TestTrue(TEXT("the ship is lit again"), Ship->AreLightsOn());
-        TestNotEqual(TEXT("and the readout changed with it"),
-                     Console->GetReadoutText().ToString(), Lit);
+        Galley->RefreshFromShip();
+        TestNotEqual(TEXT("and the laptop's lights row changed with it"), Galley->GetRowText(ShipPower::Lights).ToString(), Dark);
+        TestEqual(TEXT("while the console's plates did not"), Console->GetReadoutText().ToString(), Plates);
     }
 
     GEngine->DestroyWorldContext(World);

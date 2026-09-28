@@ -70,6 +70,11 @@ public:
      */
     static FText JumpLineText(const UShipSubsystem& Ship, const UUniverseSubsystem* Universe);
 
+    /** The power corner, top right: the reactor's watts, and no SPARE or
+     *  total drawn (wear and upgrades, sign-off 11 and the plan's ruling).
+     *  Static, so a test reads what the corner draws. */
+    static FText PowerLineText(const UShipSubsystem& Ship);
+
     /**
      * The place line, top left: the system and its star's class, as
      * NavText::Place words them, from Here, the system the HUD asked for

@@ -1,0 +1,31 @@
+{
+  "_comment": "The ship's parts (wear and upgrades decision 5): the one source. Tools/setup_ship_parts.py authors Content/Ship/Parts from it; DeepSpace.Ship.Parts.Contract holds the assets and FShipRatings::Stock() to it; DeepSpace.Ship.Parts.CatalogueRules holds decision 7 over it. Ratings are in engine units (LinearAcceleration in cm/s^2). A rating a row leaves out reads stock. Names and words are placeholders (sign-off 12): character and history, never quality.",
+  "directory": "/Game/Ship/Parts",
+  "catalogue": "DA_ShipCatalogue",
+  "parts": [
+    {"id": "Reactor.Stock", "asset": "DA_Reactor_Stock", "bay": "Reactor", "name": "Fusion bottle",
+     "words": "Hums in the deck plates. Nobody aboard remembers it new.", "draw": 0,
+     "ratings": {"ReactorWatts": 1400}},
+    {"id": "Reactor.TwinCore", "asset": "DA_Reactor_TwinCore", "bay": "Reactor", "name": "Twin-core reactor",
+     "words": "Hums a fifth low. Came off a salvage tug.", "draw": 0,
+     "ratings": {"ReactorWatts": 1800}},
+    {"id": "Drive.Stock", "asset": "DA_Drive_Stock", "bay": "Drive", "name": "Fold drive",
+     "words": "Ticks for a minute after every fold.", "draw": 0,
+     "ratings": {"WindingWant": 380, "ChargeSeconds": 45, "DriveResponse": 3}},
+    {"id": "Drive.QuickLever", "asset": "DA_Drive_QuickLever", "bay": "Drive", "name": "Quick-lever drive",
+     "words": "Takes the lever before you have let go of it.", "draw": 0,
+     "ratings": {"WindingWant": 380, "ChargeSeconds": 45, "DriveResponse": 4.5}},
+    {"id": "Boosters.Stock", "asset": "DA_Boosters_Stock", "bay": "Boosters", "name": "Booster cluster",
+     "words": "Quiet until you lean on them.", "draw": 0,
+     "ratings": {"BoostersWant": 450, "LinearAcceleration": 200000}},
+    {"id": "Lights.Stock", "asset": "DA_Lights_Stock", "bay": "Lights", "name": "Interior lighting",
+     "words": "Warm, a little amber in the corridor.", "draw": 120,
+     "ratings": {"LightsWant": 300}},
+    {"id": "LifeSupport.Stock", "asset": "DA_LifeSupport_Stock", "bay": "LifeSupport", "name": "Air plant",
+     "words": "Somebody taped the filter door shut.", "draw": 300,
+     "ratings": {}},
+    {"id": "Sensors.Stock", "asset": "DA_Sensors_Stock", "bay": "Sensors", "name": "Survey array",
+     "words": "Older than the hull, and it shows.", "draw": 200,
+     "ratings": {"RangeLy": 12}}
+  ]
+}

@@ -28,7 +28,9 @@ namespace ShipPower
  *
  * Two kinds of load, deliberately different:
  *
- * - **Draws** are installed modules. They take what they take, off the top.
+ * - **Draws** are what a fitted part, a test load or the fold takes off the
+ *   top, keyed by bay ("Bay.<Bay>"), "Load.<name>" or "Nav.Fold". They take
+ *   what they take.
  * - **Consumers** divide what is left, in proportion to a weight the player
  *   sets. Each has a *want* and receives a *share*; satisfaction is share
  *   over want, and every consumer degrades proportionally rather than
@@ -37,6 +39,10 @@ namespace ShipPower
  *
  * Nothing drifts. Weights are a preference the player set and they stay set;
  * no value in here changes on its own with time.
+ *
+ * The reactor's output is the reactor part's rating, which UShipSubsystem
+ * pushes on every fit (the wear and upgrades spec). A draw is never keyed by
+ * part, so a swap can never leave two parts drawing in one bay.
  */
 struct DEEPSPACE_API FShipPowerState
 {

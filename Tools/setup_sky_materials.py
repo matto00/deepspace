@@ -29,6 +29,7 @@ unreal.log does not reach stdout under the commandlet; the report is in
 Saved/setup_sky_materials.txt.
 """
 
+import collections
 import json
 import os
 
@@ -39,6 +40,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONTRACT = json.load(open(os.path.join(HERE, "sky_material_contract.json")))
 DIRECTORY = CONTRACT["directory"]
 CONSTANTS = CONTRACT["constants"]
+SHARED = CONTRACT["shared_relief"]
+
+# The raw terms a face is composed from, whichever noise made them.
+Terms = collections.namedtuple("Terms", "coarse fine crater_face crater_slope")
+
+# The Custom node's body: one call into the shared file, its outputs pinned.
+# HLSL only -- the file itself is the shared part.
+SHARED_CODE = (
+    "WR_Terms T = %s(Direction.x, Direction.y, Direction.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, Stretch);\n"
+    "Continent = T.Continent;\n"
+    "CraterAlbedo = T.CraterAlbedo;\n"
+    "CraterSlope = float3(T.CraterSlopeX, T.CraterSlopeY, T.CraterSlopeZ);\n"
+    "return float4(T.DetailSlopeX, T.DetailSlopeY, T.DetailSlopeZ, T.Detail);\n" % SHARED["entry"])
 
 REPORT = []
 
@@ -193,143 +207,12 @@ class Graph:
 
 # -- the materials -------------------------------------------------------------
 
-def noise_band(g, position, offset, frequency, levels, filter_width, stretch):
-    """One band of the face: GradientALU noise of `levels` octaves on
-    position * frequency + offset, -1..1, mean zero.
-
-    The noise gets its own pixel footprint through FilterWidth, which the
-    engine's noise loop uses exactly as a fade: every octave is multiplied by
-    saturate(1 - footprint * its frequency), so an octave is gone once its
-    wavelength is under filter_pixels and all there by a few times that.
-    That per-pixel fade is what makes the finer bands arrive as the world
-    grows on screen -- and arrive near the ground before the horizon, where
-    one pixel covers far more of it -- without anything counting pixels on
-    the CPU. A faded octave contributes 0, the band's middle, so a world
-    too small to hold its detail is exactly its coarse face.
-
-    The frequency is applied here rather than as the node's Scale so the
-    seed offset can be added after it: the offset is then a few hundred
-    units against positions up to fifty thousand, and costs the finest band
-    nothing in float precision. `stretch` is the most the position is
-    stretched along any axis, so the footprint is taken at the highest
-    frequency the band really has.
-    """
-    scaled = g.add(g.mul(position, g.constant(frequency)), offset)
-    width = g.mul(g.mul(filter_width, g.constant(frequency)), stretch)
-    noise = g.node(unreal.MaterialExpressionNoise,
-                   scale=1.0, output_min=-1.0, output_max=1.0, levels=int(levels),
-                   level_scale=float(CONSTANTS["level_scale"]), turbulence=False,
-                   noise_function=unreal.NoiseFunction.NOISEFUNCTION_GRADIENT_ALU)
-    # Position is the first input, connected by index: its pin is named for
-    # a world-space origin it does not have here.
-    g.link(scaled, noise, "")
-    link_any(g, width, noise, ("FilterWidth", "Filter Width"))
-    return noise
-
-
-def link_any(g, source, target, names):
-    """Connect to whichever spelling of a pin this engine uses."""
-    for pin in names:
-        if MEL.connect_material_expressions(source, "", target, pin):
-            return
-    raise RuntimeError("could not connect %s -> %s.%s" % (source.get_name(), target.get_name(), "/".join(names)))
-
-
-def fade(g, width, frequency):
-    """saturate(1 - width * frequency): the engine noise loop's own fade,
-    written out for the vector noise, which has no FilterWidth. An octave of
-    this frequency is gone once its wavelength is under filter_pixels and
-    all there by a few times that."""
-    return g.unary(unreal.MaterialExpressionSaturate,
-                   g.unary(unreal.MaterialExpressionOneMinus, g.mul(width, g.constant(frequency))))
-
-
 def mask(g, source, channels, output_name=""):
     """A ComponentMask of `channels` ("rgb", "a") from source."""
     node = g.node(unreal.MaterialExpressionComponentMask,
                   r="r" in channels, g="g" in channels, b="b" in channels, a="a" in channels)
     g.link(source, node, "", output_name=output_name)
     return node
-
-
-def detail_band(g, stretched, offset, frequency, width):
-    """One detail band as simplex noise with its gradient, from the vector
-    noise's Perlin Gradient: rgb the gradient in noise space, a the value,
-    -1..1. The one evaluation feeds both the face (a) and the relief (rgb),
-    so the ground that lights up and the ground that tilts are the same
-    ground. Faded by the footprint, as the scalar bands fade themselves."""
-    scaled = g.add(g.mul(stretched, g.constant(frequency)), offset)
-    noise = g.node(unreal.MaterialExpressionVectorNoise,
-                   noise_function=unreal.VectorNoiseFunction.VNF_GRADIENT_ALU)
-    g.link(scaled, noise, "")
-    return noise, fade(g, width, frequency)
-
-
-def crater_band(g, direction, offset, frequency, footprint):
-    """One band of craters: a Voronoi cell per crater site, its seed the
-    crater's centre, and whether the site holds a crater at all from the
-    cell's own hash, so the lattice the seeds are jittered from never shows.
-
-    The cells are 3D and the sphere slices them, so a seed off the surface
-    makes a smaller, shallower crater than one on it: sizes vary within a
-    band without anything drawing them. Across bands the cells shrink by
-    four and their number on the surface grows by sixteen, so the count of
-    craters wider than D goes as D^-2 -- the size-frequency law of the
-    Moon's and Mercury's highlands. That is the distribution; nothing here
-    is uniform but where on the noise a world is.
-
-    Returns (face, slope): the crater's albedo -- darker floor, brighter rim
-    -- for the face, and its height's gradient for the relief. Over q, the
-    distance from the centre in crater radii, the height is
-
-        q < 1         depth * (q^2 - 1 + rim)          the bowl
-        1 <= q < 1.5  depth * rim * (3 - 2q)^2         the rim falling away
-
-    whose slope is depth * 2q inside and -4 depth rim (3 - 2q) outside, along
-    the direction away from the centre."""
-    radius = float(CONSTANTS["crater_radius"])
-    depth = float(CONSTANTS["crater_depth"])
-    rim = float(CONSTANTS["crater_rim"])
-
-    scaled = g.add(g.mul(direction, g.constant(frequency)), offset)
-    cells = g.node(unreal.MaterialExpressionVectorNoise,
-                   noise_function=unreal.VectorNoiseFunction.VNF_VORONOI_ALU, quality=1)
-    g.link(scaled, cells, "")
-    centre = mask(g, cells, "rgb")
-    distance = mask(g, cells, "a")
-
-    # Every seed is within 0.26 of its lattice corner, so the corner --
-    # floor(seed + 0.5) -- names the cell, and the hash of it decides once
-    # and for good whether this site is a crater.
-    site = g.add(centre, g.constant(0.5))
-    hashed = g.node(unreal.MaterialExpressionVectorNoise,
-                    noise_function=unreal.VectorNoiseFunction.VNF_CELLNOISE_ALU)
-    g.link(site, hashed, "")
-    held = g.node(unreal.MaterialExpressionStep, const_x=0.0)
-    g.link(mask(g, hashed, "r"), held, "Y")
-    g.link(g.constant(CONSTANTS["crater_keep"]), held, "X")
-
-    q = g.mul(distance, g.constant(1.0 / radius))
-    outside = g.node(unreal.MaterialExpressionStep, const_y=1.0)
-    g.link(q, outside, "X")
-    inside = g.unary(unreal.MaterialExpressionOneMinus, outside)
-    falling = g.unary(unreal.MaterialExpressionSaturate,
-                      g.add(g.mul(q, g.constant(-2.0)), g.constant(3.0)))
-
-    wall = g.add(g.mul(g.mul(q, g.constant(2.0 * depth)), inside),
-                 g.mul(g.mul(falling, g.constant(-4.0 * depth * rim)), outside))
-    # Away from the centre, unit -- over a floored distance rather than
-    # normalised, because at the exact centre a normalised zero is NaN, and a
-    # NaN pixel is a black hole the bloom spreads. The wall's slope is 0 there.
-    apart = g.binary(unreal.MaterialExpressionMax, distance, g.constant(1.0e-4))
-    away = g.binary(unreal.MaterialExpressionDivide, g.binary(unreal.MaterialExpressionSubtract, scaled, centre), apart)
-
-    floor_dark = g.mul(g.unary(unreal.MaterialExpressionOneMinus, g.mul(q, q)),
-                       g.mul(inside, g.constant(-float(CONSTANTS["crater_floor_dark"]))))
-    rim_bright = g.mul(g.mul(falling, outside), g.constant(float(CONSTANTS["crater_rim_bright"])))
-
-    weight = g.mul(held, fade(g, footprint, frequency))
-    return g.mul(g.add(floor_dark, rim_bright), weight), g.mul(g.mul(away, wall), weight)
 
 
 def body_axes(g):
@@ -364,88 +247,105 @@ def to_world(g, axes, body):
     return g.add(g.add(along(x, "r"), along(y, "g")), along(z, "b"))
 
 
-def surface(g, knobs, seed, axes):
-    """The world's face and relief, both from the object-space noise: the
-    face is the factor the shaded disc is multiplied by, 1 + swing, and the
-    relief is the gradient of a height field the normal is tilted by.
-    Everything is a function of D, the unit direction to the pixel in the
-    body's own axes -- normalize(LocalPosition), turned by BodyAxisX/Y
-    (body_axes) -- so both are fixed to the body however the proxy is moved
-    and rescaled each frame, and every frequency is in cycles per body
-    radius, whatever mesh draws it.
+def seed_offset(g, seed):
+    """SurfaceSeed's xyz: where on the noise this world is."""
+    offset = g.node(unreal.MaterialExpressionComponentMask, r=True, g=True, b=True, a=False)
+    g.link(seed, offset)
+    return offset
 
-        footprint = max(|ddx D|, |ddy D|) * filter_pixels
-        offset    = SurfaceSeed.xyz            (where on the noise this world is)
-        pairs     = SurfaceSeed.w              (a giant's belts, from its day)
-        stretch   = lerp(1, belt_stretch, Banding)
-        P         = D * (1, 1, stretch)
 
-        coarse    = noise(P * continent_frequency + offset)
-        rocky     = clamp(coarse * continent_contrast, -1, 1)
-        belts     = sin(pi * pairs * (D.z + belt_warp * coarse)) * belt fade
-        band_i    = simplex(P * detail_frequency_i + offset_i) * fade_i * detail_weight_i
-        craters   = Cratering * lerp(maria_cratering, 1, highland) * sum_c crater_c
-        face      = lerp(rocky, belts, Banding) * Mottle + sum_i band_i.a * Detail + craters.albedo
-        factor    = 1 + clamp(face, -max_swing, max_swing)
-        slope     = Relief * lerp(1, relief_giant, Banding) * sum_i band_i.rgb * (1, 1, stretch)
-                  + craters.slope
+def stretch_of(g, banding):
+    """lerp(1, belt_stretch, Banding): how far a giant's detail is drawn out
+    across its belts, so it streaks as cloud does."""
+    stretch = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["belt_stretch"]))
+    g.link(banding, stretch, "Alpha")
+    return stretch
 
-    Rock gets basins and highlands, steepened so they read as places with
-    edges rather than weather, and craters on the highlands, fewer in the
-    basins, as the maria of the Moon have; a giant gets belts parallel to its
-    orbit (the universe's z is the system's pole) wandered by the same coarse
-    noise, the same detail stretched sixfold across the belts so it streaks
-    as cloud does, and a third of rock's relief, the billow of cloud tops.
 
-    Each band's height is its value over its frequency -- its amplitude goes
-    with its wavelength -- so its slope is the same at every scale: the
-    ground the screen can hold has the same relief close in as far out, and
-    the finer it gets the more of it there is, which is what says how near.
-    The face is centred on zero, so the disc keeps its flux on average, and
-    the clamp is the half-float guard: the face never more than doubles a
-    pixel, and the relief only turns a unit normal.
-    """
-    mottle, detail, banding, relief, cratering = knobs
-    # The mesh is unturned, so its object space has the world's axes: the
-    # direction to the pixel is taken there and turned into the body's.
+def stretch_axes(g, stretch):
+    """(1, 1, stretch), which stretches a direction along the pole."""
+    return g.binary(unreal.MaterialExpressionAppendVector,
+                    g.node(unreal.MaterialExpressionConstant2Vector, r=1.0, g=1.0), stretch)
+
+
+def body_direction(g, axes):
+    """D, the unit direction to the pixel in the body's own axes --
+    normalize(LocalPosition), turned by BodyAxisX/Y -- and the pixel's
+    footprint on it, max(|ddx D|, |ddy D|) * filter_pixels. The mesh is
+    unturned, so its object space has the world's axes."""
     position = g.node(unreal.MaterialExpressionLocalPosition)
     seen = g.node(unreal.MaterialExpressionNormalize)
     g.link(position, seen, "", output_name="XYZ")
     direction = to_body(g, axes, seen)
-
     ddx = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDX, direction))
     ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
     footprint = g.mul(g.binary(unreal.MaterialExpressionMax, ddx, ddy), g.constant(CONSTANTS["filter_pixels"]))
+    return direction, footprint
 
-    stretch = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["belt_stretch"]))
-    g.link(banding, stretch, "Alpha")
-    axes = g.binary(unreal.MaterialExpressionAppendVector,
-                    g.node(unreal.MaterialExpressionConstant2Vector, r=1.0, g=1.0), stretch)
-    offset = g.node(unreal.MaterialExpressionComponentMask, r=True, g=True, b=True, a=False)
-    g.link(seed, offset)
+
+def shared_terms(g, direction, footprint, seed, stretch):
+    """The same raw terms from Shaders/Private/WorldRelief.ush -- the file the
+    C++ compiles too (landing decision 1) -- through one Custom node that
+    includes it and calls its entry point. Every band the file carries."""
+    custom = g.node(unreal.MaterialExpressionCustom)
+    custom.set_editor_property("description", "WorldRelief")
+    custom.set_editor_property("code", SHARED_CODE)
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+    custom.set_editor_property("include_file_paths", [SHARED["include"]])
+    pins = []
+    for input_name in SHARED["inputs"]:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", input_name)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+    outputs = []
+    for output_name, kind in SHARED["outputs"]:
+        pin = unreal.CustomOutput()
+        pin.set_editor_property("output_name", output_name)
+        pin.set_editor_property("output_type", getattr(unreal.CustomMaterialOutputType, kind))
+        outputs.append(pin)
+    custom.set_editor_property("additional_outputs", outputs)
+    for input_name, source in zip(SHARED["inputs"], (direction, footprint, seed_offset(g, seed), stretch)):
+        g.link(source, custom, input_name)
+    return Terms(mask(g, custom, "r", output_name="Continent"), custom,
+                 mask(g, custom, "r", output_name="CraterAlbedo"),
+                 mask(g, custom, "rgb", output_name="CraterSlope"))
+
+
+def surface(g, knobs, seed, direction, footprint, terms):
+    """The world's face and relief, composed from its raw terms: the face is
+    the factor the shaded disc is multiplied by, 1 + swing, and the relief is
+    the gradient of a height field the normal is tilted by.
+
+        stretch   = lerp(1, belt_stretch, Banding)
+        coarse, fine, craters = terms(D, footprint, SurfaceSeed, stretch)
+        rocky     = clamp(coarse * continent_contrast, -1, 1)
+        belts     = sin(pi * pairs * (D.z + belt_warp * coarse)) * belt fade
+        craters   = Cratering * lerp(maria_cratering, 1, highland) * crater terms
+        face      = lerp(rocky, belts, Banding) * Mottle + fine.a * Detail + craters.albedo
+        factor    = 1 + clamp(face, -max_swing, max_swing)
+        slope     = Relief * lerp(1, relief_giant, Banding) * fine.rgb * (1, 1, stretch)
+                  + craters.slope
+
+    terms is shared_terms: the shared file.
+    Rock gets basins and highlands with craters, fewer in the basins; a giant
+    gets belts wandered by the same coarse noise and a third of rock's relief.
+    The face is centred on zero, so the disc keeps its flux on average, and
+    the clamp is the half-float guard."""
+    mottle, detail, banding, relief, cratering = knobs
+    stretch = stretch_of(g, banding)
+    t = terms(g, direction, footprint, seed, stretch)
+
+    rocky = g.node(unreal.MaterialExpressionClamp, min_default=-1.0, max_default=1.0)
+    g.link(g.mul(t.coarse, g.constant(CONSTANTS["continent_contrast"])), rocky, "")
+
     # The seed's w, a giant's belt pairs, from the parameter's own alpha pin:
     # its default output is only the colour's three channels.
     pairs = g.node(unreal.MaterialExpressionMultiply, const_b=1.0)
     g.link(seed, pairs, "A", output_name="A")
-    stretched = g.mul(direction, axes)
-
-    def band_offset(index):
-        # Each band from its own corner of the noise, so no band's features
-        # sit on the one below's and the octaves read as separate scales.
-        return g.add(offset, g.colour((37.0 * index, 59.0 * index, 83.0 * index)))
-
-    coarse = noise_band(g, stretched, band_offset(0), CONSTANTS["continent_frequency"], CONSTANTS["continent_levels"],
-                        footprint, stretch)
-
-    rocky = g.node(unreal.MaterialExpressionClamp, min_default=-1.0, max_default=1.0)
-    g.link(g.mul(coarse, g.constant(CONSTANTS["continent_contrast"])), rocky, "")
-
-    # Belts: pairs light and dark from pole to pole, as many as the giant's
-    # day gives it. They fade on the same footprint rule as the noise, so a
-    # giant a few pixels across is not a moire of stripes.
     latitude = g.node(unreal.MaterialExpressionComponentMask, r=False, g=False, b=True, a=False)
     g.link(direction, latitude)
-    wandered = g.add(latitude, g.mul(coarse, g.constant(CONSTANTS["belt_warp"])))
+    wandered = g.add(latitude, g.mul(t.coarse, g.constant(CONSTANTS["belt_warp"])))
     # Sine with period 2 is sin(pi x).
     belts = g.node(unreal.MaterialExpressionSine, period=2.0)
     g.link(g.mul(wandered, pairs), belts)
@@ -458,31 +358,13 @@ def surface(g, knobs, seed, axes):
     g.link(banded, kind, "B")
     g.link(banding, kind, "Alpha")
     face = g.mul(kind, mottle)
+    face = g.add(face, g.mul(mask(g, t.fine, "a"), detail))
 
-    # One octave per detail band, every one at the contract's weight, so a
-    # band arriving on screen reads as strongly at the approach's floor as at
-    # its start. The value and gradient sum together, four channels at once.
-    width = g.mul(footprint, stretch)
-    fine = None
-    for index, (frequency, weight) in enumerate(zip(CONSTANTS["detail_frequencies"], CONSTANTS["detail_weights"]), 1):
-        noise, faded = detail_band(g, stretched, band_offset(index), frequency, width)
-        term = g.mul(noise, g.mul(faded, g.constant(weight)))
-        fine = term if fine is None else g.add(fine, term)
-    face = g.add(face, g.mul(mask(g, fine, "a"), detail))
-
-    # Craters, where the look says the ground keeps them, and more on the
-    # highlands than in the basins.
-    crater_face = None
-    crater_slope = None
-    for index, frequency in enumerate(CONSTANTS["crater_frequencies"], 1):
-        albedo, slope = crater_band(g, direction, band_offset(100 + index), frequency, footprint)
-        crater_face = albedo if crater_face is None else g.add(crater_face, albedo)
-        crater_slope = slope if crater_slope is None else g.add(crater_slope, slope)
     highland = g.unary(unreal.MaterialExpressionSaturate, g.add(g.mul(rocky, g.constant(0.5)), g.constant(0.5)))
     marked = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=float(CONSTANTS["maria_cratering"]), const_b=1.0)
     g.link(highland, marked, "Alpha")
     crater_gain = g.mul(cratering, marked)
-    face = g.add(face, g.mul(crater_face, crater_gain))
+    face = g.add(face, g.mul(t.crater_face, crater_gain))
 
     swing = float(CONSTANTS["surface_max_swing"])
     bounded = g.node(unreal.MaterialExpressionClamp, min_default=-swing, max_default=swing)
@@ -491,9 +373,61 @@ def surface(g, knobs, seed, axes):
 
     cloud = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["relief_giant"]))
     g.link(banding, cloud, "Alpha")
-    slope = g.add(g.mul(g.mul(mask(g, fine, "rgb"), axes), g.mul(relief, cloud)),
-                  g.mul(crater_slope, crater_gain))
-    return factor, slope, direction
+    slope = g.add(g.mul(g.mul(mask(g, t.fine, "rgb"), stretch_axes(g, stretch)), g.mul(relief, cloud)),
+                  g.mul(t.crater_slope, crater_gain))
+    return factor, slope
+
+
+def probe_direction(g):
+    """D over the contract's fixed patch, from the render target's UV:
+    normalize(centre + (u - 0.5) span east + (v - 0.5) span north)."""
+    patch = CONSTANTS["probe_patch"]
+    uv = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0)
+    across = g.mul(g.add(mask(g, uv, "r"), g.constant(-0.5)), g.constant(patch["span"]))
+    up = g.mul(g.add(mask(g, uv, "g"), g.constant(-0.5)), g.constant(patch["span"]))
+    point = g.add(g.add(g.colour(patch["centre"]), g.mul(g.colour(patch["east"]), across)),
+                  g.mul(g.colour(patch["north"]), up))
+    return g.unary(unreal.MaterialExpressionNormalize, point)
+
+
+def relief_probe(asset, terms):
+    """A probe for Eyes.WorldReliefParity: the raw terms over the fixed patch
+    at the footprint ProbeFootprint says, untonemapped (landing decision 1).
+
+        pixel = ProbeBias.rgb + ProbeSelect.r * (coarse, fine.a, crater albedo)
+                              + ProbeSelect.g * fine.rgb
+                              + ProbeSelect.b * crater slope
+                              + ProbeSelect.a * D
+
+    One-hot selection multiplies by exactly 1 or 0, which float keeps exactly,
+    so each pass reads back one set of terms unaltered. Selecting nothing
+    draws the bias alone: the test's check of the pipe itself."""
+    material = fresh_material(asset)
+    # The terms are signed, and the material template clamps emissive at 0
+    # unless the material says otherwise (MATERIAL_ALLOW_NEGATIVE_EMISSIVECOLOR):
+    # the pipe check read -0.375 back as 0 until this was set.
+    material.set_editor_property("allow_negative_emissive_color", True)
+    g = Graph(material)
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
+    banding = g.scalar("banding", 0.0)
+    footprint = g.scalar("probe_footprint", 0.0)
+    select = g.vector("probe_select", (1.0, 0.0, 0.0, 0.0))
+    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
+    direction = probe_direction(g)
+    t = terms(g, direction, footprint, seed, stretch_of(g, banding))
+    first = g.binary(unreal.MaterialExpressionAppendVector,
+                     g.binary(unreal.MaterialExpressionAppendVector, t.coarse, mask(g, t.fine, "a")), t.crater_face)
+    passes = (first, mask(g, t.fine, "rgb"), t.crater_slope, direction)
+
+    def selected(channel):
+        # The alpha is its own pin: the default output is the colour's three.
+        return mask(g, select, "r", output_name="A") if channel == "a" else mask(g, select, channel)
+
+    out = mask(g, bias, "rgb")
+    for channel, value in zip("rgba", passes):
+        out = g.add(out, g.mul(value, selected(channel)))
+    g.emissive(out)
+    finish(material, asset)
 
 
 def relief_normal(g, direction, slope, axes):
@@ -516,6 +450,7 @@ def sky_body():
     """Planets and moons.
 
         N        = relief_normal                      (surface)
+    (the face's every band from Shaders/Private/WorldRelief.ush, through one Custom node: landing decision 1)
         shaded   = gain * saturate(N.L) * smoothstep(-w, w, N.L)
         disc     = shaded * face                      (surface)
         emissive = Colour * Brightness * lerp(disc, 1, PointBlend)
@@ -551,7 +486,8 @@ def sky_body():
              g.scalar("relief", 0.2), g.scalar("cratering", 0.0))
 
     axes = body_axes(g)
-    factor, slope, direction = surface(g, knobs, seed, axes)
+    direction, footprint = body_direction(g, axes)
+    factor, slope = surface(g, knobs, seed, direction, footprint, shared_terms)
     normal = relief_normal(g, direction, slope, axes)
     n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
     lambert = g.unary(unreal.MaterialExpressionSaturate, n_dot_l)
@@ -721,6 +657,7 @@ def main():
     sky_star()
     sky_starfield()
     sky_glass(collections)
+    relief_probe("M_SkyReliefProbe", shared_terms)
     log("ok")
 
 

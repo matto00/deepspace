@@ -92,5 +92,22 @@ TArray<FString> GenPriorDomain::Refusals(const FGenPriors& P)
     Within(Out, TEXT("ReliefBetaB"), P.ReliefBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
     Within(Out, TEXT("ReliefTerrestrialBetaA"), P.ReliefTerrestrialBetaA, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
     Within(Out, TEXT("ReliefTerrestrialBetaB"), P.ReliefTerrestrialBetaB, GenPriorDomain::MinBetaShape, false, Unbounded, Share);
+
+    Within(Out, TEXT("AirPressureMedianTerrestrialBar"), P.AirPressureMedianTerrestrialBar, 0.0, true, Unbounded, Median);
+    Within(Out, TEXT("AirPressureMedianOceanBar"), P.AirPressureMedianOceanBar, 0.0, true, Unbounded, Median);
+    Within(Out, TEXT("AirPressureSigma"), P.AirPressureSigma, 0.0, true, GenPriorDomain::MaxAirPressureSigma,
+        TEXT("a log-normal sigma for pressure, above zero and no more than 2.5"));
+    const TCHAR* const Gas = TEXT("a mix weight is how often that gas is chosen before retention, relative to the others");
+    Within(Out, TEXT("AirMixWeightNitrogenOxygen"), P.AirMixWeightNitrogenOxygen, 0.0, false, Unbounded, Gas);
+    Within(Out, TEXT("AirMixWeightCarbonDioxide"), P.AirMixWeightCarbonDioxide, 0.0, false, Unbounded, Gas);
+    Within(Out, TEXT("AirMixWeightHydrogenHelium"), P.AirMixWeightHydrogenHelium, 0.0, false, Unbounded, Gas);
+    const double Gases = P.AirMixWeightNitrogenOxygen + P.AirMixWeightCarbonDioxide + P.AirMixWeightHydrogenHelium;
+    const bool bGasesValid = std::isfinite(P.AirMixWeightNitrogenOxygen) && P.AirMixWeightNitrogenOxygen >= 0.0
+        && std::isfinite(P.AirMixWeightCarbonDioxide) && P.AirMixWeightCarbonDioxide >= 0.0
+        && std::isfinite(P.AirMixWeightHydrogenHelium) && P.AirMixWeightHydrogenHelium >= 0.0;
+    if (bGasesValid && !(std::isfinite(Gases) && Gases > 0.0))
+    {
+        Out.Add(FString::Printf(TEXT("AirMixWeightNitrogenOxygen..AirMixWeightHydrogenHelium total %g: some gas must be possible, and the sum finite"), Gases));
+    }
     return Out;
 }
