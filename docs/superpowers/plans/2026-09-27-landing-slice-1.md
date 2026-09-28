@@ -293,6 +293,9 @@ These were raised while planning. None changes a ruling.
    - Pressing F under the floor skips the spool-down.
    - Crater height no longer varies by basin, only crater albedo does.
    - `GroundAlwaysCatches` is split into four siblings over the whole grid.
+   - **The sweep's fixture sines are twice the real relief's steepest *measured* slope (about 45 degrees), not its `MaxSlope`** (fixed at F8, commit `535c8e6`; recorded here in the review fixes, 2026-09-28). Since `S_max` was ruled a measured maximum, the proven `MaxSlope` is about fifteen times the truth (7.9 against 0.51 on the fixture world): sines at it are 83-degree cliffs 3.6 km high, a ground no world has. The real-relief sibling flies the actual relief of Baemsekai IV and III, crater rims included. **Awaits the developer's word**: the spec's decision 10 still says "the real `MaxSlope`".
+   - **The vertical lever's catch reads `FShipFlightState::GetVerticalCatchSpeed`**, not the whole radial speed (review fixes, 2026-09-28): 0 wherever the lever is not live, and the starved sink's bias taken out, since the flight adds it again to any sink the lever asks. Read literally, "the lever position nearest its present rate" caught cruise's closing speed as a full sink, or doubled the bias. `DeepSpace.Ship.Landing.VerticalCatchSpeed`.
+   - **The along-ground ray carries a proof from frame to frame** (`ShipFlight::FGroundRayProof`, review fixes 2026-09-28). Level at the feet, it proves only Above / sqrt(1 + MaxSlope^2) a sample, about an eighth of the clearance on real relief, so 64 samples saw a few metres and a ship hovering 2-5 m up was held to 0-9 m/s over flat ground, against the skim floor's 20 m/s. Each sample is a fact about the ground (a ball clear of it), so later marches pass through old balls for nothing and spend their 64 fresh samples past them; Still an exhausted march is a hit. `DeepSpace.Ship.Landing.SkimsLowOverRealGround` pins it. What a ship that moves low exposed is held too: a foot within the contact centimetre is not let slide on the slope one normal reads (it slid into rock between samples), and a level ray from under the ground is a hit at 0 (`ShipFlight::UnderClimbSine`). The real-relief sibling is now truly pairwise-covering (three orthogonal Latin squares, checked in the test), drive floor and 5 km starts included.
 
 ---
 
@@ -6758,11 +6761,14 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-f && \
-Tools/mutate.sh Source/DeepSpace/Ship/ShipLanding.cpp 'if (Above < Out.Least)' 'if (Above > Out.Least)' DeepSpace.Ship.Landing.Footprint && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipLanding.cpp 'if (Heights[Index].Above < Out.Least)' 'if (Heights[Index].Above > Out.Least)' DeepSpace.Ship.Landing.Footprint && \
 ./build.sh
 ```
 
-Expected: `KILLED`. And by hand: change `1770.0, 510.0, -10.0` to `1770.0, 520.0, -10.0` in
+Expected: `KILLED`. (As built: F8's `f6cb190` moved the loop onto `FootprintHeights`, so the planned text
+`if (Above < Out.Least)` no longer exists; the mutant above is its successor, re-proven KILLED in the review
+fixes, 2026-09-28. The descent cap now takes its own least over `FootprintHeights`, proven separately in F8's
+Step 6.) And by hand: change `1770.0, 510.0, -10.0` to `1770.0, 520.0, -10.0` in
 `ShipLanding.h`, run `python3 Tools/test_placement.py`, see
 `test_the_belly_corners_are_the_ones_the_cpp_lands_on` fail, `git checkout -- Source/DeepSpace/Ship/ShipLanding.h`.
 
@@ -8859,7 +8865,7 @@ namespace GroundCatchesLocal
     {
         const FGroundFieldRef Real = ShipGround::FromRelief(FixtureParams());
         const FGroundFieldRef Sines = MakeShared<FCrossedSines, ESPMode::ThreadSafe>(
-            FCrossedSines::WithSlope(Real->RadiusCm(), 2.0e5, Real->MaxSlope()));
+            FCrossedSines::WithSlope(Real->RadiusCm(), 2.0e5, Real->MaxSlope()));   // as built: 2.0 * SteepestMeasured(*Real) -- Planning notes 6
         return SurfaceOver(Sines, 1.02e6 + Sines->MaxHeightCm());
     }
 
@@ -9129,6 +9135,23 @@ Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Limits.ApproachSecond
 Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'return FMath::Max(0.0, *Cache->Hit - Flown);' 'return *Cache->Hit;' DeepSpace.Ship.Landing.GroundAlwaysCatchesHigh && \
 ./build.sh
 ```
+
+As built (review fixes, 2026-09-28), each of these is also proven KILLED:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-f && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Clear = FMath::Min(Clear, Point.Above);' 'Clear = FMath::Max(Clear, Point.Above);' DeepSpace.Ship.Landing.GroundAlwaysCatchesLow && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Target -= Across * (1.0 - Keep);' 'Target -= Across * 0.0;' DeepSpace.Ship.Landing.GroundAlwaysCatchesRough && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Above < 1.0 ? Across.Size()' 'Above < 0.0 ? Across.Size()' DeepSpace.Ship.Landing.GroundAlwaysCatchesRealRelief && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp 'if (Reach > T + 1.0)' 'if (Reach > T + 1.0e30)' DeepSpace.Ship.Landing.SkimsLowOverRealGround && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp 'FMath::Square(OldRadii[K]);' 'FMath::Square(3.0 * OldRadii[K]);' DeepSpace.Ship.Landing.RayToGround && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp '> UnderClimbSine ?' '> 0.0 ?' DeepSpace.Ship.Landing.RayToGround && \
+./build.sh
+```
+
+the descent cap's own least over the footprint; the along-ground (across-slope) cap of `f6cb190`, which
+landed with no test; a foot at contact held from sliding; the along-ground ray's proof (reuse off, and balls
+inflated); a level ray from under the ground.
 
 Expected: `KILLED` twice: a descent cap that allows 2 m/s at contact breaks the contact speed;
 a cached hit that is never shortened lets a skimming ship reach a ridge the cap thought farther
