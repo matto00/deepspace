@@ -34,6 +34,7 @@ const FShipFlightLimits& FShipFlightState::GetLimits() const
 void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
 {
     const bool bWasDrive = Command.bDrive;
+    const bool bWasBelowFloor = bDriveBelowFloor;
 
     Command.Throttle = FMath::Clamp(NewCommand.Throttle, -CruiseAsternLimit(), 1.0);
     Command.AttitudeRate = FVector(
@@ -64,7 +65,12 @@ void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
         // can; otherwise it is already a cruising ship, and cruise's inertia
         // takes it from exactly here.
         SpoolFromSpeed = ShipDriveLever::SpeedAt(DrivePosition);
-        bSpoolingDown = !CruiseCanTakeOver();
+        // From DriveBelowFloor cruise was already flying the ship: there is
+        // nothing to spool down from. (CruiseCanTakeOver reads the floor
+        // sphere, which a ship under it meets at once; asked here it would
+        // start a spool that the drive's cap holds at a dead stop.)
+        bSpoolingDown = !bWasBelowFloor && !CruiseCanTakeOver();
+        bDriveBelowFloor = false;
         if (!bSpoolingDown)
         {
             DrivePosition = 0.0;
@@ -119,6 +125,7 @@ void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
     bInRegime = false;
     RegimeWeight = 0.0;
     RegimeSurface = INDEX_NONE;
+    bDriveBelowFloor = false;
 }
 
 void FShipFlightState::SetSurfaces(TArray<FFlightSurface> NewSurfaces)
@@ -245,6 +252,17 @@ void FShipFlightState::SubStep(double FixedDelta)
 
     UpdateRegime();
 
+    UpdateDriveBelowFloor();
+    if (bDriveBelowFloor)
+    {
+        // Held, never eased while hidden: when the drive takes over it starts
+        // from what the ship is doing -- after cruise's substep, so the
+        // position is the speed the substep ended with, not one substep of
+        // the boosters behind it.
+        CruiseSubStep(FixedDelta);
+        DrivePosition = ShipDriveLever::PositionOf(FMath::Max(0.0, Velocity | Orientation.GetForwardVector()));
+        return;
+    }
     if ((Command.bDrive || bSpoolingDown) && DriveSubStep(FixedDelta))
     {
         return;
@@ -479,21 +497,31 @@ double FShipFlightState::GetSpeed() const { return Velocity.Size(); }
 
 EFlightMode FShipFlightState::GetMode() const
 {
-    return Command.bDrive ? EFlightMode::Drive : bSpoolingDown ? EFlightMode::SpoolingDown : EFlightMode::Cruise;
+    if (Command.bDrive)
+    {
+        return bDriveBelowFloor ? EFlightMode::DriveBelowFloor : EFlightMode::Drive;
+    }
+    return bSpoolingDown ? EFlightMode::SpoolingDown : EFlightMode::Cruise;
 }
-
-EFlightHold FShipFlightState::GetHold() const { return LastHold; }
-double FShipFlightState::GetHeldFraction() const { return LastHeldFraction; }
 
 double FShipFlightState::GetLeverSpeed() const
 {
-    return Command.bDrive ? ShipDriveLever::NotchSpeed(Command.DriveNotch) : CruiseLeverSpeed();
+    return GetMode() == EFlightMode::Drive ? ShipDriveLever::NotchSpeed(Command.DriveNotch) : CruiseLeverSpeed();
 }
 
 double FShipFlightState::GetOtherLeverSpeed() const
 {
-    return Command.bDrive ? CruiseLeverSpeed() : ShipDriveLever::NotchSpeed(Command.DriveNotch);
+    return GetMode() == EFlightMode::Drive ? CruiseLeverSpeed() : ShipDriveLever::NotchSpeed(Command.DriveNotch);
 }
+
+bool FShipFlightState::IsVerticalLive() const
+{
+    const EFlightMode Mode = GetMode();
+    return RegimeWeight > 0.0 && (Mode == EFlightMode::Cruise || Mode == EFlightMode::DriveBelowFloor);
+}
+
+EFlightHold FShipFlightState::GetHold() const { return LastHold; }
+double FShipFlightState::GetHeldFraction() const { return LastHeldFraction; }
 
 double FShipFlightState::GetDrivePosition() const { return DrivePosition; }
 
@@ -743,11 +771,6 @@ TOptional<double> FShipFlightState::GroundAhead(int32 SurfaceIndex, const FVecto
 bool FShipFlightState::IsInNearRegime() const { return bInRegime; }
 double FShipFlightState::GetRegimeWeight() const { return RegimeWeight; }
 
-bool FShipFlightState::IsVerticalLive() const
-{
-    return RegimeWeight > 0.0 && !Command.bDrive && !bSpoolingDown;
-}
-
 double FShipFlightState::GetVerticalSpeed() const
 {
     int32 Index = RegimeSurface;
@@ -756,4 +779,36 @@ double FShipFlightState::GetVerticalSpeed() const
         return 0.0;
     }
     return Velocity | (Position - Surfaces[Index].Centre).GetSafeNormal();
+}
+
+void FShipFlightState::UpdateDriveBelowFloor()
+{
+    if (!Command.bDrive)
+    {
+        bDriveBelowFloor = false;
+        return;
+    }
+    const FVector Nose = Orientation.GetForwardVector();
+    const double Speed = ShipDriveLever::SpeedAt(DrivePosition);
+    const double Braking = 2.0 * ShipFlight::BrakingMargin * FMath::Max(Limits.LinearAcceleration, 1.0);
+    const double Hold = FMath::Max(Speed * FMath::Max(Limits.HoldSeconds, 0.0), Speed * Speed / Braking);
+    bool bUnder = false;
+    bool bKeep = false;
+    for (const FFlightSurface& Surface : Surfaces)
+    {
+        if (!Surface.HasGround())
+        {
+            continue;
+        }
+        const double Clear = ShipFlight::FloorClearance(Surface, Position);
+        bUnder |= Clear < 0.0;
+        if (Clear < Limits.DriveHandbackCm)
+        {
+            bKeep = true;
+            continue;
+        }
+        const TOptional<double> D = ShipFlight::RayToFloor(Surface, Position, Nose);
+        bKeep |= D.IsSet() && *D <= Hold;
+    }
+    bDriveBelowFloor = bDriveBelowFloor ? bKeep : bUnder;
 }
