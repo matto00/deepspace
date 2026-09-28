@@ -546,6 +546,20 @@ lock):
     -unattended -nopause -nosplash -NoLiveCoding      # report: Saved/setup_sky_materials.txt
 ```
 
+**`M_SkyBody`'s face is one shared file.** Every band is
+`Shaders/Private/WorldRelief.ush` -- the noise the C++ ground compiles too
+(`Surface/WorldRelief.*`, landing decision 1) -- reached through one Custom
+node as `/Project/Private/WorldRelief.ush`, a path the engine maps to the
+project's `Shaders/` by itself at start-up (no project module does it;
+`DeepSpace.Surface.ShaderMapping` holds the mapping). **A Custom node's HLSL
+error is invisible headless**: the translator passes, no shader compiles
+under `-nullrhi`, and every world draws grey with every test green.
+`Tools/eyes.sh Eyes.WorldReliefParity` is what renders it: run it after any
+edit to the `.ush`, and after re-authoring the sky's materials. It holds the
+GPU's float to the same file in double at the measured float floor; a
+mutant that only folds away in the shader compiler (`(x + c) - c`) proves
+nothing there, since the GPU never sees it.
+
 The materials are unlit, and the sun lights only the ship. The glass casts no
 shadow, and its `M_SkyGlass` reflects the lit room through `MPC_Sky`'s
 `InteriorLight` and `Veil`: lights off at the console and the stars come out.
