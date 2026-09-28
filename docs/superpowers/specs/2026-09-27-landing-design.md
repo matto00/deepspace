@@ -90,6 +90,8 @@ below goes past them, it says so and is on the sign-off list.
 - **The terrain stays on the dynamic draw path** (4.96 ms of the 6 ms budget). The static path is shelved: in UE 5.8 it cached the tiles and drew nothing.
 - **The target's ETA while cruising above the near regime's 50 km top** is carried to the playtest.
 - **The frame at the ground** measured 19.4 ms (732 tiles drawn, 951 resident) against the 16.6 ms budget; 10.4 ms at 50 km. The ruling: **profile first, with the cast shadows in, and fix the real cost** (distant tiles' vertex counts, culling, batching draws). The split factor is the last resort, since it coarsens the ground and grows the pops.
+- **Cast shadows are baked, not marched** (2026-09-28). A per-pixel march cost +4 to +27 ms at low sun against a 1 ms budget (the spike, NO-GO at N 12, 8 and 6). Because worlds do not spin and nothing orbits in this slice, the sun is fixed over every surface. So each ground tile computes its vertices' shadow while it is built, off the game thread, from the height function, and the orbital proxy reads a per-world shadow texture baked in C++ when the system loads. It costs nothing per frame. If worlds ever spin, the bake is redone as the sun moves.
+- **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
 
 

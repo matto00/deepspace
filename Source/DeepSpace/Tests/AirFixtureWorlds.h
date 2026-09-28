@@ -10,7 +10,7 @@
  * The atmospheres spec's fixture worlds (*Fixture worlds*), found by its
  * rules among the systems nearest home: the one statement of those rules,
  * which DeepSpace.Atmosphere.FixtureWorlds prints into the spec's table and
- * DeepSpace.Atmosphere.GroundSkySwatch draws. Tests/ only. Each role is the
+ * Atmosphere.Full.GroundSkySwatch draws. Tests/ only. Each role is the
  * first world, nearest home first and in orbit order, that its rule admits.
  */
 namespace AirFixtureWorlds
