@@ -1,8 +1,8 @@
-system	sector_x	sector_y	sector_z	slot	distance_ly	star_class	star_mass_solar	star_luminosity_solar	star_temperature_k	habitable_inner_au	habitable_outer_au	frost_line_au	planet_count	planet	designation	given_name	kind	semi_major_axis_au	mass_earth	radius_earth	equilibrium_k	population	surface_gravity_g	relief_km
-Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	0	Alpha I		barren	0.01	0.5	0.8	880	0	0.78125	7.5
-Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	1	Alpha II		barren	0.02	1	1	620	0	1	6
-Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	2	Alpha III	Hollin	terrestrial	0.04	1	1	300	1000	1	3.8
-Beta	1	0	0	0	5.5	K	0.7	0.2	4400	0.42	0.61	1.2	0	-1										
-Gamma	0	1	0	1	7.25	G	1	1	5800	0.95	1.37	2.7	2	0	Gamma I		ocean	1	1	1	280	0	1	0
-Gamma	0	1	0	1	7.25	G	1	1	5800	0.95	1.37	2.7	2	1	Gamma II		gas giant	4	100	11	140	0	0.826446	0
-Delta	-1	0	0	0	9	M	0.3	0.02	3300	0.13	0.19	0.38	1	0	Delta I		barren	0.05	2	1.2	310	0	1.38889	4.2
+system	sector_x	sector_y	sector_z	slot	distance_ly	star_class	star_mass_solar	star_luminosity_solar	star_temperature_k	habitable_inner_au	habitable_outer_au	frost_line_au	planet_count	planet	designation	given_name	kind	semi_major_axis_au	mass_earth	radius_earth	equilibrium_k	population	surface_gravity_g	relief_km	air_mix	surface_pressure_bar	scale_height_km	nadir_tau_450
+Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	0	Alpha I		barren	0.01	0.5	0.8	880	0	0.78125	7.5	none	0	0	0
+Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	1	Alpha II		barren	0.02	1	1	620	0	1	6	none	0	0	0
+Alpha	0	0	0	0	0	M	0.2	0.01	3100	0.095	0.137	0.27	3	2	Alpha III	Hollin	terrestrial	0.04	1	1	300	1000	1	3.8	nitrogen-oxygen	1	8.78	0.277
+Beta	1	0	0	0	5.5	K	0.7	0.2	4400	0.42	0.61	1.2	0	-1														
+Gamma	0	1	0	1	7.25	G	1	1	5800	0.95	1.37	2.7	2	0	Gamma I		ocean	1	1	1	280	0	1	0	carbon-dioxide	0.8	5.4	0.34
+Gamma	0	1	0	1	7.25	G	1	1	5800	0.95	1.37	2.7	2	1	Gamma II		gas giant	4	100	11	140	0	0.826446	0	hydrogen-helium	2.4	25	0.5
+Delta	-1	0	0	0	9	M	0.3	0.02	3300	0.13	0.19	0.38	1	0	Delta I		barren	0.05	2	1.2	310	0	1.38889	4.2	none	0	0	0
