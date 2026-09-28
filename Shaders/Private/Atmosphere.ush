@@ -1,0 +1,124 @@
+// Atmosphere.ush -- a world's air as light crosses it, written once and
+// compiled twice (atmospheres spec decision 1; ADR 0006 as landing amends
+// it: one text, which a change reaches in both compilers or fails in one).
+//
+// The GPU will include this file into M_SkyBody's Custom node -- and later
+// M_SkyAir, M_SkyAirDome and M_SkyGround -- through the engine's own
+// /Project mapping (landing ruling R2: FEngineLoop::PreInit maps /Project to
+// <project>/Shaders whenever that directory exists; the project maps nothing
+// itself); until orbital slice 1, only the C++ reads it. The
+// C++ includes it into Source/DeepSpace/Atmosphere/Atmosphere.cpp twice: in
+// double (AtmosphereF64), for what the game computes, and in float
+// (AtmosphereF32), the GPU's mirror. A syntax one compiler refuses fails
+// that compiler: ./build.sh for the C++, the rendered Eyes.AtmosphereProbe
+// (orbital slice 1) for the GPU. A Custom node's HLSL error is invisible to
+// the headless suite -- the material ships grey with every test green.
+//
+// The subset is landing's, with AT_ for WR_: valid HLSL and valid C++ at
+// once. No swizzles, no vector or matrix types, no mul(), no implicit vector
+// arithmetic, no out parameters: every vector is spelled out a component at
+// a time, every multi-valued result is a plain struct, and every literal is
+// AT_REAL(...), so the float build computes in float. Only the platform
+// halves step outside it.
+//
+// Units: lengths in radii of the body whose air it is, the surface at R = 1;
+// directions unit, in whichever axes the caller uses consistently.
+// Radiances in the pi convention of M_SkyBody's Lambert face: a white
+// surface lit head-on by the star is 1.
+
+#if defined(AT_CPP)
+// -- C++: the shims ---------------------------------------------------------
+// Atmosphere.cpp includes <cmath>, then this file inside a namespace with
+// AT_REAL defined: once as double, once as float. std:: overloads keep each
+// in its own precision.
+inline AT_REAL AT_floor(AT_REAL X) { return std::floor(X); }
+inline AT_REAL AT_saturate(AT_REAL X) { return X < AT_REAL(0.0) ? AT_REAL(0.0) : (X > AT_REAL(1.0) ? AT_REAL(1.0) : X); }
+inline AT_REAL AT_min(AT_REAL A, AT_REAL B) { return A < B ? A : B; }
+inline AT_REAL AT_max(AT_REAL A, AT_REAL B) { return A > B ? A : B; }
+inline AT_REAL AT_sqrt(AT_REAL X) { return std::sqrt(X); }
+inline AT_REAL AT_exp(AT_REAL X) { return std::exp(X); }
+inline AT_REAL AT_log(AT_REAL X) { return std::log(X); }
+inline AT_REAL AT_cos(AT_REAL X) { return std::cos(X); }
+inline AT_REAL AT_sin(AT_REAL X) { return std::sin(X); }
+#else
+// -- HLSL: the shims --------------------------------------------------------
+#pragma once
+#define AT_REAL float
+#define AT_floor(X) floor(X)
+#define AT_saturate(X) saturate(X)
+#define AT_min(A, B) min(A, B)
+#define AT_max(A, B) max(A, B)
+#define AT_sqrt(X) sqrt(X)
+#define AT_exp(X) exp(X)
+#define AT_log(X) log(X)
+#define AT_cos(X) cos(X)
+#define AT_sin(X) sin(X)
+#endif
+
+// -- Constants ---------------------------------------------------------------
+static const AT_REAL AT_PI = AT_REAL(3.14159265358979);
+
+// The smallest number a logarithm or a divisor here is allowed to see: far
+// under anything physical, and a normal number in float.
+static const AT_REAL AT_TINY = AT_REAL(1.0e-30);
+
+// No optical depth past e^80 is worth carrying: exp(-e^80) is zero in
+// either precision, and the cap keeps an infinity out of every sum.
+static const AT_REAL AT_MAX_EXPONENT = AT_REAL(80.0);
+
+// -- The Chapman function ----------------------------------------------------
+// The airmass of a curved exponential atmosphere: the column along a ray over
+// the column straight up from the same point. X is the point's distance from
+// the centre in scale heights (R / H); CosZenith is the ray's angle to the
+// local vertical. Everything is a logarithm, so float cannot overflow where
+// a sun is below the horizon and the column is e^800 of the vertical one:
+// every transmittance is exp of one combined exponent (decision 1).
+
+// ln of e^(Y^2) erfc(Y), Y >= 0: Numerical Recipes' erfcc with its e^(-Y^2)
+// cancelled, so it neither underflows nor overflows at any Y. Relative error
+// under 1.2e-7.
+AT_REAL AT_LogErfcx(AT_REAL Y)
+{
+    AT_REAL T = AT_REAL(1.0) / (AT_REAL(1.0) + AT_REAL(0.5) * Y);
+    AT_REAL Poly = AT_REAL(-1.26551223) + T * (AT_REAL(1.00002368) + T * (AT_REAL(0.37409196) + T * (AT_REAL(0.09678418)
+        + T * (AT_REAL(-0.18628806) + T * (AT_REAL(0.27886807) + T * (AT_REAL(-1.13520398) + T * (AT_REAL(1.48851587)
+        + T * (AT_REAL(-0.82215223) + T * AT_REAL(0.17087277)))))))));
+    return AT_log(T) + Poly;
+}
+
+// ln Ch(X, z) for a ray at or above the horizon: the leading asymptotic form
+// sqrt(pi X / 2) erfcx(sqrt(X / 2) cos z), times its first correction in
+// 1 / X, 1 + (1 - 0.625 / (1 + Y / 2)^2) / X. The correction is exact to
+// that order at both ends -- 1 / X at the zenith (the column straight up is
+// exactly one scale height of surface density) and 3 / (8 X) at the horizon
+// (Ch = X e^X K1(X)) -- and within 0.035 / X between. Every world that
+// holds its air has X >= 96 (X = 6 lambda^2 for the Jeans lambda, and
+// retention starts at lambda 4), where the whole is within 0.05%.
+AT_REAL AT_LogChapmanUp(AT_REAL X, AT_REAL CosZenith)
+{
+    AT_REAL Y = AT_sqrt(AT_REAL(0.5) * X) * AT_max(CosZenith, AT_REAL(0.0));
+    AT_REAL Q = AT_REAL(1.0) + AT_REAL(0.5) * Y;
+    AT_REAL Correction = AT_REAL(1.0) + (AT_REAL(1.0) - AT_REAL(0.625) / (Q * Q)) / X;
+    return AT_REAL(0.5) * AT_log(AT_REAL(0.5) * AT_PI * X) + AT_LogErfcx(Y) + AT_log(Correction);
+}
+
+// ln Ch for any ray. Below the horizon the ray passes its lowest point, the
+// tangent, at X0 = X sin z, and the column is the whole line through the
+// tangent less the part behind the point:
+//   Ch = 2 Ch(X0, 90 deg) e^(X - X0) - Ch(X, 180 deg - z),
+// exact for an exponential atmosphere. X - X0 is formed as
+// X cos^2 z / (1 + sin z), which float keeps where 1 - sin z would cancel;
+// the grazing column is sqrt(pi X0 / 2) (1 + 3 / (8 X0)).
+AT_REAL AT_LogChapman(AT_REAL X, AT_REAL CosZenith)
+{
+    if (CosZenith >= AT_REAL(0.0))
+    {
+        return AT_LogChapmanUp(X, CosZenith);
+    }
+    AT_REAL Sin = AT_sqrt(AT_max(AT_REAL(1.0) - CosZenith * CosZenith, AT_REAL(0.0)));
+    AT_REAL Rise = X * CosZenith * CosZenith / (AT_REAL(1.0) + Sin);
+    AT_REAL X0 = AT_max(X - Rise, AT_TINY);
+    AT_REAL Grazing = AT_REAL(2.0) * AT_sqrt(AT_REAL(0.5) * AT_PI * X0) * (AT_REAL(1.0) + AT_REAL(0.375) / X0);
+    AT_REAL Behind = AT_exp(AT_LogChapmanUp(X, -CosZenith) - Rise);
+    return Rise + AT_log(AT_max(Grazing - Behind, AT_TINY));
+}
