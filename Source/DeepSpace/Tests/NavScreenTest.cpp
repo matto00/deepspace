@@ -11,6 +11,7 @@
 #include "Ship/InteractableComponent.h"
 #include "Ship/ShipNavScreen.h"
 #include "Ship/ShipNavState.h"
+#include "Ship/ShipParts.h"
 #include "Ship/ShipSubsystem.h"
 #include "UI/NavText.h"
 #include "UI/NavigationWidget.h"
@@ -106,8 +107,10 @@ namespace
 
     double ChartRangeCm()
     {
+        // The rule the ship applies (wear decision 6), over the stock array
+        // this test's ship carries: -1 reads the part.
         const IConsoleVariable* Range = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.RangeLy"));
-        return (Range ? Range->GetFloat() : 12.0f) * UniverseUnits::CmPerLightYear;
+        return ShipParts::Effective(FShipRatings::Stock().RangeLy, Range ? Range->GetFloat() : -1.0f) * UniverseUnits::CmPerLightYear;
     }
 
     /**

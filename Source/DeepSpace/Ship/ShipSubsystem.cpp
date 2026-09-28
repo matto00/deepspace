@@ -21,19 +21,22 @@ namespace
     // constant would make each nudge a rebuild (nav decision 6). The defaults
     // are the starting values, to be written back once play has settled them.
 
+    // The four numbers a fitted part rates (wear and upgrades decision 6):
+    // -1, the default, means "the part's", and 0 or more overrides it for
+    // the session, so a playtest still moves each with no rebuild. The
+    // settled 45 s and 380 W live in the catalogue now (Tools/ship_parts.json,
+    // FShipRatings::Stock), and the ship's four getters are the one place the
+    // rule is applied (ShipParts::Effective). Unlike the rest of this block,
+    // a value play settles for these four is written back into the part's
+    // row in Tools/ship_parts.json, never here: -1 stays their default.
     TAutoConsoleVariable<float> CVarChargeSeconds(
-        TEXT("ds.Nav.ChargeSeconds"), static_cast<float>(FShipFlightState::JumpChargeSeconds),
-        TEXT("Seconds for the jump to wind from cold with the engine fully fed."),
+        TEXT("ds.Nav.ChargeSeconds"), -1.0f,
+        TEXT("Seconds for the jump to wind from cold with the engine fully fed. -1: the drive part's."),
         ECVF_Default);
 
-    // 380 W: small enough that an engine-first split winds at full speed on
-    // the stock hauler, which has 780 W left once its modules draw off the
-    // top. At the old 800 W against a 1000 W reactor the best any split
-    // reached was 48% fed, and ds.Nav.ChargeSeconds was a number no player
-    // could ever see. DeepSpace.Ship.JumpCanWindAtFullSpeed holds it there.
     TAutoConsoleVariable<float> CVarWindingWant(
-        TEXT("ds.Nav.WindingWant"), 380.0f,
-        TEXT("Watts the engine asks for while the jump winds. It asks for nothing otherwise."),
+        TEXT("ds.Nav.WindingWant"), -1.0f,
+        TEXT("Watts the engine asks for while the jump winds; it asks for nothing otherwise. -1: the drive part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarStarvedRate(
@@ -67,8 +70,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarRangeLy(
-        TEXT("ds.Nav.RangeLy"), 12.0f,
-        TEXT("How far the chart reaches, light years."),
+        TEXT("ds.Nav.RangeLy"), -1.0f,
+        TEXT("How far the chart reaches, light years. -1: the sensors part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarPlaceAtStart(
@@ -86,8 +89,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarDriveResponse(
-        TEXT("ds.Drive.Response"), static_cast<float>(ShipDriveLever::DefaultResponse),
-        TEXT("Notches a second the drive's speed may move at full thrust. Thin boosters slow the whole ease, never this."),
+        TEXT("ds.Drive.Response"), -1.0f,
+        TEXT("Notches a second the drive's speed may move at full thrust. Thin boosters slow the whole ease, never this. -1: the drive part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarDriveSweep(
@@ -149,7 +152,7 @@ namespace
         const TArray<FStarSystemStub> Chart = Ship->GetChart();
         const TOptional<FSystemId> Plotted = Ship->GetPlottedSystem();
         Out.Logf(TEXT("%d systems within %.1f ly. Plot one with ds.Nav.Plot <n>."),
-                 Chart.Num(), UShipSubsystem::GetChartRangeLy());
+                 Chart.Num(), Ship->GetChartRangeLy());
         for (int32 Index = 0; Index < Chart.Num(); ++Index)
         {
             const FStarSystemStub& Stub = Chart[Index];
@@ -371,14 +374,19 @@ void UShipSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Collection.InitializeDependency<UUniverseSubsystem>();
     Super::Initialize(Collection);
-    PowerState.SetReactorOutput(DefaultReactorOutput);
+
+    // Today's ship until a part says otherwise: an empty bay reads the stock
+    // part (wear and upgrades decision 3), so a bare test world is exactly
+    // the bare test world it always was.
+    const FShipRatings Stock = FShipRatings::Stock();
+    PowerState.SetReactorOutput(static_cast<float>(Stock.ReactorWatts));
 
     // An even split to start with, which is a starting point and not a
     // recommendation: every split is viable and none is correct. The engine
     // starts idle, wanting nothing, and so takes part in no split until the
     // jump is engaged.
-    PowerState.SetConsumer(ShipPower::Lights, LightsWant, 1.0f);
-    PowerState.SetConsumer(ShipPower::Boosters, BoostersWant, 1.0f);
+    PowerState.SetConsumer(ShipPower::Lights, static_cast<float>(Stock.LightsWant), 1.0f);
+    PowerState.SetConsumer(ShipPower::Boosters, static_cast<float>(Stock.BoostersWant), 1.0f);
     PowerState.SetConsumer(ShipPower::Engine, 0.0f, 1.0f);
 }
 
@@ -455,7 +463,7 @@ void UShipSubsystem::SetLightsOn(bool bOn)
 
     // Want, not weight: the player's weight for the lights is a preference
     // and survives them being switched off and back on.
-    PowerState.SetWant(ShipPower::Lights, bOn ? LightsWant : 0.0f);
+    PowerState.SetWant(ShipPower::Lights, bOn ? static_cast<float>(GetRatings().LightsWant) : 0.0f);
 }
 
 float UShipSubsystem::GetJumpCharge() const
@@ -470,6 +478,9 @@ float UShipSubsystem::GetLinearAcceleration() const
 
 void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
 {
+    // The fitted parts' numbers, derived now and never stored (wear decision 2).
+    const FShipRatings Ratings = GetRatings();
+
     // The engine asks for power only while the jump winds. Idle, holding
     // disengaged, or charged and waiting on alignment it wants nothing, so
     // it takes part in no split and an idle drive costs the ship nothing.
@@ -481,6 +492,16 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     }
     SetFoldDraw(bWinding ? FMath::Max(0.0f, CVarFoldDraw.GetValueOnGameThread()) : 0.0f);
 
+    // The boosters' want has one writer, here (wear sign-off 29): the fitted
+    // part's rating. A fit changes the ratings and this pass writes the want
+    // from them, so a fit and anything else that adds to the want -- landing's
+    // hold -- never write it from two places in one frame.
+    const float BoostersWantNow = static_cast<float>(Ratings.BoostersWant);
+    if (PowerState.GetWant(ShipPower::Boosters) != BoostersWantNow)
+    {
+        PowerState.SetWant(ShipPower::Boosters, BoostersWantNow);
+    }
+
     // Asked for fresh every frame and never stored. A cached satisfaction is
     // how two things that read the same allocation start disagreeing.
     const float BoosterFeed = PowerState.GetSatisfaction(ShipPower::Boosters);
@@ -488,8 +509,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed;
 
     FShipFlightLimits Limits = FlightState.GetLimits();
-    const FShipFlightLimits Rated = FShipFlightLimits::Cruise();
-    Limits.LinearAcceleration = Rated.LinearAcceleration * Thrust;
+    Limits.LinearAcceleration = Ratings.LinearAcceleration * Thrust;
 
     // Thin boosters slow the drive's whole ease by the fraction they soften
     // cruise (decision 4): a quarter thrust takes four times as long to reach
@@ -497,7 +517,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // scaling it as well would slow a starved ship sixteen times -- and the
     // top is never touched, so nothing ever reads as lost potential.
     Limits.DriveThrust = Thrust;
-    Limits.DriveResponse = FMath::Max(0.0f, CVarDriveResponse.GetValueOnGameThread());
+    Limits.DriveResponse = GetDriveResponse();
     Limits.HoldSeconds = CVarHoldSeconds.GetValueOnGameThread();
 
     // In c, and never above 0.1 c: the ruled top (the 2026-09-27 ruling).
@@ -513,7 +533,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // it is: nothing decays while the player is away. A starved engine still
     // winds at StarvedRate, because a drive that cannot finish is a failure
     // state and systems here degrade rather than fail.
-    const double ChargeSeconds = CVarChargeSeconds.GetValueOnGameThread();
+    const double ChargeSeconds = GetChargeSeconds();
     if (NavState.IsEngaged() && !NavState.IsInTransit())
     {
         const double Starved = FMath::Clamp(CVarStarvedRate.GetValueOnGameThread(), 0.0f, 1.0f);
@@ -1241,14 +1261,29 @@ double UShipSubsystem::GetJumpConeRadians() const
     return FMath::DegreesToRadians(FMath::Max(0.0, static_cast<double>(CVarConeDeg.GetValueOnGameThread())));
 }
 
-float UShipSubsystem::GetWindingWant()
+FShipRatings UShipSubsystem::GetRatings() const
 {
-    return FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread());
+    return FShipRatings::Stock();
 }
 
-float UShipSubsystem::GetChartRangeLy()
+float UShipSubsystem::GetWindingWant() const
 {
-    return FMath::Max(0.0f, CVarRangeLy.GetValueOnGameThread());
+    return static_cast<float>(ShipParts::Effective(GetRatings().WindingWant, CVarWindingWant.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetChargeSeconds() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().ChargeSeconds, CVarChargeSeconds.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetDriveResponse() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().DriveResponse, CVarDriveResponse.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetChartRangeLy() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().RangeLy, CVarRangeLy.GetValueOnGameThread()));
 }
 
 bool UShipSubsystem::HasVisited(const FSystemId& Id) const

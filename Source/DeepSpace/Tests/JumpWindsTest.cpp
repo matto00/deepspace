@@ -90,9 +90,9 @@ bool FJumpWindsTest::RunTest(const FString& Parameters)
     // want grows, this is the line that fails -- before a playtest has to.
     const double Spare = Ship->GetReactorOutput() - ModuleDraw;
     AddInfo(FString::Printf(TEXT("reactor %.0f W, modules %.0f W, spare %.0f W, winding wants %.0f W"),
-                            Ship->GetReactorOutput(), ModuleDraw, Spare, UShipSubsystem::GetWindingWant()));
+                            Ship->GetReactorOutput(), ModuleDraw, Spare, Ship->GetWindingWant()));
     TestTrue(TEXT("the stock ship has the watts to wind at full speed"),
-             Spare >= UShipSubsystem::GetWindingWant());
+             Spare >= Ship->GetWindingWant());
 
     // A course, and the nose pointed away from it so the charged jump waits
     // rather than firing and spending what is being measured.
@@ -114,8 +114,7 @@ bool FJumpWindsTest::RunTest(const FString& Parameters)
     Ship->PlaceShip(Ship->GetFlightState().GetUniversePosition(),
                     FRotationMatrix::MakeFromX(-*CourseDir).ToQuat());
 
-    const IConsoleVariable* ChargeVar = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.ChargeSeconds"));
-    const double ChargeSeconds = ChargeVar ? ChargeVar->GetFloat() : FShipFlightState::JumpChargeSeconds;
+    const double ChargeSeconds = Ship->GetChargeSeconds();
 
     // Everything to the engine: the advertised time must be the real one.
     Ship->SetConsumerWeight(ShipPower::Lights, 0.0f);

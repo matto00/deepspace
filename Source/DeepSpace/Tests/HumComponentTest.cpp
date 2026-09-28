@@ -200,7 +200,7 @@ bool FHumComponentTest::RunTest(const FString& Parameters)
     Tick(0.1f);
     TestEqual(TEXT("engaged, it winds"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Winding));
 
-    const float WindingWant = CVarFloat(TEXT("ds.Nav.WindingWant"));
+    const float WindingWant = Ship->GetWindingWant();
     const float Share = Ship->GetConsumerShare(ShipPower::Engine);
     const float Winding = UShipHumComponent::AskShip(*Ship).EngineFeed;
     TestTrue(FString::Printf(TEXT("winding, the drone rises (feed %.3f)"), Winding), Winding > 0.0f);

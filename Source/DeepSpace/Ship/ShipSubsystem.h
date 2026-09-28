@@ -4,6 +4,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipNavState.h"
+#include "Ship/ShipParts.h"
 #include "Ship/ShipPowerState.h"
 #include "ShipSubsystem.generated.h"
 
@@ -337,16 +338,30 @@ public:
      *  jump and the HUD's "dead ahead" ask the same number. */
     double GetJumpConeRadians() const;
 
-    /** Watts the engine asks for while the jump winds, ds.Nav.WindingWant as
-     *  tuned now; never negative. What the hum measures the engine's share
-     *  against (plan conflict 8), asked here rather than of the console by
-     *  name, so the one tunable has one reader and no per-frame lookup. */
-    static float GetWindingWant();
+    /** The ship's rated values: every fitted part's ratings over the stock
+     *  part's (wear and upgrades decision 2), derived on every call and
+     *  stored nowhere. An empty bay reads stock (decision 3). */
+    FShipRatings GetRatings() const;
 
-    /** How far the chart reaches, light years: ds.Nav.RangeLy as tuned now,
-     *  never negative. GetChart's radius, for anything that must know when
-     *  the chart's answer can have changed. */
-    static float GetChartRangeLy();
+    /** Watts the engine asks for while the jump winds: the drive part's
+     *  WindingWant, or ds.Nav.WindingWant when that is 0 or more (decision
+     *  6); never negative. What the hum measures the engine's share against
+     *  (plan conflict 8), asked here so the one number has one reader. */
+    float GetWindingWant() const;
+
+    /** Seconds for a full charge from cold at full feed: the drive part's
+     *  ChargeSeconds, or ds.Nav.ChargeSeconds when set. Never on a screen:
+     *  no screen shows the jump's charge. */
+    float GetChargeSeconds() const;
+
+    /** Notches a second the drive's ease may move at full thrust: the drive
+     *  part's DriveResponse, or ds.Drive.Response when set. */
+    float GetDriveResponse() const;
+
+    /** How far the chart reaches, light years: the sensors part's RangeLy, or
+     *  ds.Nav.RangeLy when set. GetChart's radius, for anything that must know
+     *  when the chart's answer can have changed. */
+    float GetChartRangeLy() const;
 
     bool HasVisited(const FSystemId& Id) const;
 
@@ -495,35 +510,6 @@ private:
     float FoldDrawWatts = 0.0f;
 
     bool bLightsOn = true;
-
-    /**
-     * Placeholder reactor rating. Becomes a module later. Sized so the stock
-     * ship is whole at rest: its modules (620 W) plus the lights (300) and
-     * the boosters (450) come to 1370 W, so at the default split nothing is
-     * dimmed while nothing is being asked of the ship. The split bites when
-     * the jump winds or a module is added -- the first playtest found the
-     * lights at 63% on a quiet ship under the old 1000 W, which read as
-     * broken rather than strained (developer's ruling, 2026-09-26).
-     * DeepSpace.Ship.JumpCanWindAtFullSpeed holds it.
-     */
-    static constexpr float DefaultReactorOutput = 1400.0f;
-
-    /**
-     * What each consumer would use given everything it asked for. They sum
-     * to more than the reactor makes, deliberately: if everything could be
-     * fed at once the split would never be a choice, and a choice with no
-     * cost is not one.
-     *
-     * The engine is not here: it wants ds.Nav.WindingWant while the jump
-     * winds and nothing otherwise, so an idle drive costs the ship nothing
-     * and staying put is never taxed (nav decision 4). Because an idle want
-     * of zero reads as full satisfaction, anything that wants to follow the
-     * winding -- the hum, in slice 2 -- reads watts delivered,
-     * GetConsumerShare(ShipPower::Engine) over ds.Nav.WindingWant, and never
-     * satisfaction (plan conflict 8).
-     */
-    static constexpr float LightsWant = 300.0f;
-    static constexpr float BoostersWant = 450.0f;
 
     /**
      * How hard a completely starved set of boosters still pushes, as a
