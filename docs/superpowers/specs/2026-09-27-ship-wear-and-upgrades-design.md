@@ -1687,6 +1687,8 @@ other track reaches it through pure headers.
 - **Collision with landing's slices** on the subsystem, character and
   layout. Serialised, never side by side (*Seams*).
 
+**Ruled on the plan, 2026-09-27:** the HUD's `SPARE` line goes with the console's, for the same reason (sign-off 11).
+
 ## Decisions needing sign-off
 
 Each is expensive to reverse, goes past a ruling, or is a choice a
