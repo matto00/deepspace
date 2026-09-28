@@ -19,11 +19,30 @@
   - A texel is `2 pi / Width` square at the terminator, where the shadows are. The night side past `PsiLo` is not stored, because it is provably dark.
   - Each column's heights are read once. Each texel's horizon is `AlongProfile` over the texels ahead of it.
   - It is quantised to 16 bits and given a mip per level.
-  - `AShipSky` bakes one world per task, nearest first, at most `ds.Sky.ShadowBakeTasks` at once. It uploads a transient G16 texture and cancels the bakes on a new system or at `EndPlay`.
+  - `AShipSky` bakes one world per task, nearest first, at most `ds.Sky.ShadowBakeTasks` at once, at `BackgroundLow`. It uploads a transient G16 texture (LOD group `TEXTUREGROUP_Pixels2D`, never biased) and discards the CPU copy once the GPU has it.
+  - **Each map is keyed by what it is made from**: the body, its relief (`SameRelief`), the sky's light for it (direction and angular radius) and the width. The sky checks every solid world's key each frame (`SyncShadowMaps`, outside transit) and re-bakes only a map whose key changed. A jump -- in-system or between stars -- re-bakes nothing that did not change, and `ds.Universe.ReloadPriors` re-bakes exactly the worlds whose relief moved. `RebuildFor` does not touch the maps. A changed or dropped map's bake is cancelled and detached, never waited on.
+  - A map that lands **fades in** over `ShipSky::ShadowFadeSeconds` (1 s), so no world's shadow appears in one frame.
 - **The lookup.** Both materials read the map through one Custom node over the shared file's `WR_ShadowMapCoord`, `WR_ShadowTapsAt` and `WR_Bilinear`. Eight texel loads give trilinear filtering at a level chosen from the pixel's footprint.
   - `SunShadowMap::Sample` is the C++ mirror, in double and in float.
+  - The lookup's `Footprint` is **one pixel's** width. The faces' own footprint is `max(|ddx D|, |ddy D|) * filter_pixels` (2.0), so M_SkyBody and M_SkyGround hand the node that divided by `filter_pixels`. Otherwise level 0 would be read only where a texel covers two pixels, and the map would be read one mip coarser than *Measured while planning* states.
+  - Under `PsiLo` the lookup is 0 (`WR_ShadowCoord::Night`), never row 0's value. Relief normals tilt far enough (about 40 degrees on IV) for sun-facing slopes past the terminator to have N.L > 0. The proof says those slopes are dark.
   - M_SkyGround blends the map into the vertex shadow by the same `Morph` that grows the relief in: `lerp(map, vertex, Morph)`. At the 50 km handover (Morph 0) the ground's shadow *is* the orbit's, and by the drive floor it is the tile's.
 - **The switch.** `ds.Sky.Shadows` is the strength in both materials, `lerp(1, shadow, Shadows)`, so 0 draws the unshadowed look. Everything is baked, so the switch costs nothing either way.
+
+**Amended after review (2026-09-28, second pass):** the plan was fixed against a review with two blocking findings and ten others. Each was checked against the tree before it was fixed.
+- **Blocking, fixed:** every in-system jump re-baked every map, because `ShipNavState.cpp` bumps `JumpSerial` on an in-system arrival and `AShipSky::SyncTo` then calls `RebuildFor`. The maps are now keyed per world (Task 6, `.ShadowParameters`).
+- **Blocking, fixed:** no test flew the ground with tile shadows on. `Eyes.ShadowBakeCost` now flies `GroundKeepsUp`'s scenario with them on (Task 7), and the flight has budgets.
+- **Also fixed:**
+  - Tile teardown no longer waits on in-flight builds (Task 4).
+  - The claim that shade never steps at a tile's edge now holds only between tiles of the same level, and a 2:1 edge's step is measured (Task 4) and looked for (Task 10).
+  - The lookup reads one pixel's footprint (Tasks 5, 6), and returns 0 under `PsiLo` (Task 5).
+  - Memory is given per system, and measured rather than computed (Tasks 0, 7).
+  - The dusk handover finds shaded ground before it shoots (Task 8).
+  - Maps fade in (Task 6).
+  - The tile and map switches are separate in test worlds (Task 4), and the bakes run at `BackgroundLow`.
+  - The texture's LOD group is set, and the upload's hitch is timed (Tasks 6, 7).
+  - The worst worlds of the start system and of the corpus are baked in the budgets (Task 7).
+  - Task 6's `JsonNames` callers and the `sky_body`/`sky_ground` signatures are now shown, not described.
 
 **Review status (2026-09-28):** rewritten for the ruling "cast shadows are baked, not marched". The per-pixel march of the first plan was spiked and measured NO-GO (+4 to +27 ms against a 1 ms budget). The ruling is in the spec's *Ruled on slice (b)'s build*. What the first plan built and learned is kept in *What was built and learned* below: the frames and timing baseline (Task 1), the spike's verdict (Task 1b), the gate tool, `Eyes.ReliefLook`'s still-pixel rule, `Eyes.LandingFrame`'s ABBA rounds and the exposure fix. The marched design's Tasks 2-6 are withdrawn. Their measurements that still bear on the bake are carried into *Measured while planning*.
 
@@ -43,13 +62,17 @@
 - **The frame must not rise.** `Eyes.LandingFrame`'s every case with the baked shadow on is held against Task 1's baseline (taken before any shadow existed) by `Tools/landing_frame_gate.py --not-rise`. That gate is GO only if no case's cost exceeds the medians' own error band (floored at 0.2 ms, the most two quiet baselines have differed by). The whole frame is still reported, not asserted: the spec's profiling owns the 16.6 ms.
 - **The bake is measured and budgeted** (Task 7): per tile, per world, and the memory of each. The budgets are Task 0's ruling. The defaults the plan proceeds on are stated there.
 - **Anti-chore:** nothing here is a timer, a charge or a state. A bake is background work the player never waits on. Before it lands, the world simply draws unshadowed.
+- **A map is re-baked only when what it is made from changes** (the body's relief, the sky's light for it, the width). A jump changes none of these. Worlds do not spin and nothing orbits in this slice, so a map baked once serves every visit to its system while the ship is there. The sky's rebuild on a new jump serial rebuilds its proxies and leaves the maps alone.
+- **Nothing here changes in one frame.** A map that lands mid-play fades its world's shadow in over `ShipSky::ShadowFadeSeconds` (1 s), which follows the sky's rule that nothing changes in a single frame. Test flushes land their maps already faded in, so frames that are judged are never caught mid-fade.
+- **The game thread never waits on a bake.** Tile builds and map bakes are cancelled by flag and detached. Their lambdas capture no `this`, only shared, immutable inputs. They are never `Wait()`ed on outside `*ForTest` flushes. A detached task still counts against its cap until it finishes, so a teardown never oversubscribes the workers.
+- **The workers:** 2 tile builds (`BackgroundNormal`) and at most 2 map bakes (`BackgroundLow`, `ds.Sky.ShadowBakeTasks`). That is 4, the machine's cap, and never more. When both queues wait, tiles go first.
 - **All logic is C++ or the shared file.** The material graph only wires (ADR 0002). The material contract has three sides: `SkyMaterialContract.h`, `Tools/sky_material_contract.json` and the assets.
 - **Tools and limits.**
   - Build only with `./build.sh`, test only with `./test.sh`, render and time only with `Tools/eyes.sh`, and mutate only with `Tools/mutate.sh`, all behind `Tools/ue_lock.sh`. The editor is closed.
   - Any local sweep uses at most 3-4 workers, under `nice -n 19`. The bake's own tasks default to 2, the terrain's cap.
   - Every test path is a sibling with no children. Every new test is proven able to fail.
-- **The default suite.** This plan's additions to `./test.sh DeepSpace` total at most 8 s, with no test over the 5 s cap. Heavy measures live in `Eyes.ShadowBakeCost`, outside the suite. Test worlds (`SkyTestWorld::FSkyWorld`) build **without** tile shadows and map bakes unless asked (`EShadows::On`), so the suite's existing grounds cost what they did.
-- **Header changes** (`ShipSky.h`, `WorldGround.h`, `TerrainTile.h`, `WorldRelief.h`) need `./rebuild.sh --force` before an editor session; `./build.sh` suffices for the tests. No `UPROPERTY`, component or `BlueprintImplementableEvent` is removed, so `check_blueprints.py` is not owed.
+- **The default suite.** This plan's additions to `./test.sh DeepSpace` total at most 8 s, with no test over the 5 s cap. Heavy measures live in `Eyes.ShadowBakeCost`, outside the suite. Test worlds (`SkyTestWorld::FSkyWorld`) build **without** tile shadows and map bakes unless asked, and the two are asked for separately: `EShadows::Tiles`, `EShadows::Maps`, or `EShadows::On` for both. So the suite's existing grounds cost what they did, and a test of the tiles never bakes 4096-column maps in the background.
+- **Header changes** (`ShipSky.h`, `WorldGround.h`, `TerrainTile.h`, `WorldRelief.h`, `WorldReliefParams.h`) need `./rebuild.sh --force` before an editor session; `./build.sh` suffices for the tests. No `UPROPERTY`, component or `BlueprintImplementableEvent` is removed, so `check_blueprints.py` is not owed.
 
 ## Review Focus
 
@@ -61,9 +84,16 @@ These are the inputs no happy-path test meets, most likely first. Each is pinned
 4. **The map's seam at azimuth +-pi, its clamped rows and the point under the star.** Bilinear taps wrap in columns and clamp in rows, and the level rises as `cos(psi)` narrows the texels toward the pole. Pinned by `DeepSpace.Surface.SunShadowMap.Lookup` (**Task 5**), and on the GPU by `Eyes.WorldReliefParity`'s seam patch (**Task 8**).
 5. **Rows the map leaves out are provably dark.** `PsiLo` is the dip from the highest peak to the lowest ground plus the star's radius. Pinned by `.Shape` and `.NightBelowTheMap` (**Task 5**).
 6. **`ds.Sky.Shadows` out of range at the console** (7, -1, 0.5). It is clamped to 0..1, and 0 must draw the old look to compiler noise. Pinned by `DeepSpace.Sky.ShadowParameters` (**Task 6**) and by Task 10's check that the shadows-off frames are the before frames.
-7. **A new system, or the end of play, mid-bake.** The bake polls a cancel flag once a column, so teardown waits at most one column. Pinned by `.ShadowParameters` (**Task 6**).
-8. **The light or the tile switch changing under a resident ground.** The ground rebuilds, and no tile keeps a stale shadow. Pinned by `DeepSpace.Surface.GroundShadowLight` (**Task 4**).
-9. **The cost lands where the frame cannot see it, and the suite does not pay it.** Pinned by `Eyes.ShadowBakeCost` (**Task 7**), `Eyes.LandingFrame --not-rise` (**Task 9**) and the suite timing (**Task 10**).
+7. **A jump, a new system, a reload of the priors, or the end of play, mid-bake.**
+   - A jump within the system (a new jump serial, the same system) re-bakes nothing.
+   - A reload that moves a world's relief re-bakes that world alone.
+   - A new system drops the old maps.
+   - A cancelled bake stops within a column, and nothing waits for it.
+   - Pinned by `.ShadowParameters` (**Task 6**).
+8. **The light or the tile switch changing under a resident ground.** The ground rebuilds, no tile keeps a stale shadow, and the game thread never waits for the builds it drops. Pinned by `DeepSpace.Surface.GroundShadowLight` (**Task 4**).
+9. **The cost lands where the frame cannot see it, and the suite does not pay it.** Pinned by `Eyes.ShadowBakeCost` (**Task 7**: the cold cut, the flight with tile shadows on, and a map's landing), `Eyes.LandingFrame --not-rise` (**Task 9**) and the suite timing (**Task 10**).
+10. **A 2:1 tile edge.** A shared direction is shadowed at two footprints, and the finer side's odd vertices carry real values where the coarser side interpolates. So shade can step there even though skirts close the crack. Same-level edges are equal to the bit. The 2:1 step is measured by `.TileSunShadow` (**Task 4**), and looked for in Task 10's frames.
+11. **Under the map's lowest row, and just above it.** Under `PsiLo` the lookup is 0. Just above it, the lowest row is read, clamped. Pinned by `.Lookup` (**Task 5**).
 
 ---
 
@@ -100,8 +130,21 @@ These were measured on a standalone build of `Shaders/Private/WorldRelief.ush`'s
 | `PsiLo`, the map's lowest row | III -4.83 deg, IV -5.21 deg, V -4.84 deg |
 | A map at 4096 columns | about 1,084 rows (IV), 4.44 M texels, 8.9 MB at 16 bits plus 3 MB of mips; 14.6 s a world on one thread with the day exit off (rows above it need no heights, which roughly halves IV's and V's); 20 profile reads a texel |
 | A map at 2048 columns | 542 rows, 1.11 M texels, 3.4 s a world, 3 MB |
+| Solid worlds a system (`Saved/procgen_corpus.tsv`, 9,802 systems) | 3.75 on average, 16 at most |
+| The worlds with the most relief for their size | the start system's Baemsekai I (0.68 Earth radii, 8.84 km) and II (0.74, 7.33 km); in the corpus, Baiti I (0.44, 9.74 km). The deepest `PsiLo`, so the most rows. |
+| The corpus's largest solid world | Tishras I (2.13 Earth radii, 2.57 km): the most bands |
 
-**A texel cannot be under a pixel wherever the proxy draws.** The proxy draws from 50 km up. At the game's 103-degree FOV on a 4K screen a pixel is 6.55e-4 rad at the centre, so a texel of `2 pi R / Width` is under a nadir pixel only above `h = (2 pi / Width) / 6.55e-4 x R`:
+**Memory is per system, not per world.** A system's maps are all resident at once. The figures below are GPU memory at about 12 MB a world at 4096 columns, 47 MB at 8192 and 3 MB at 2048. A transient texture's mips keep their `BulkData` on the CPU after `UpdateResource` unless it is discarded. That has not been verified in engine source, and Task 7 measures it. It would double each figure, so Task 6 discards the copy once the render thread has it.
+
+| Width | a world | a typical system (3.75 worlds) | the worst system (16) |
+|---|---|---|---|
+| 2048 | 3 MB | 11 MB | 48 MB |
+| 4096 | 12 MB | 45 MB | 190 MB |
+| 8192 | 47 MB | 176 MB | 750 MB |
+
+The resident cut's vertex shadows are also kept twice: once in `FResident::Tile` and once in `UTerrainTileComponent::Kept` (`WorldGround.cpp` sets `bKeepForTest` on every tile, for proxy recreation). 951 tiles x 1,089 floats x 2 copies is 8.3 MB, not 4.1.
+
+**A texel cannot be under a pixel wherever the proxy draws.** The table below is the lookup's resolution *as Task 6 wires it*. The node is handed one pixel's footprint: the faces' `max(|ddx D|, |ddy D|) * filter_pixels`, divided by `filter_pixels` (2.0). So level 0 is read wherever a texel covers a pixel or more. The first draft handed the node the filtered footprint. Level 0 would then have been read only where a texel covers two pixels, and every threshold below would halve: at 4096 columns, about 17 degrees rather than 35, which is the edge of the ~18-degree opening frame. The proxy draws from 50 km up. At the game's 103-degree FOV on a 4K screen a pixel is 6.55e-4 rad at the centre, so a texel of `2 pi R / Width` is under a nadir pixel only above `h = (2 pi / Width) / 6.55e-4 x R`:
 
 | Width | h_min / R | the world is then this wide | III texel, h_min | IV texel, h_min | V texel, h_min | IV at 200 km | IV at 50 km |
 |---|---|---|---|---|---|---|---|
@@ -109,7 +152,7 @@ These were measured on a standalone build of `Shaders/Private/WorldRelief.ush`'s
 | 4096 | 2.34 | 34.8 deg | 13.6 km, 20,700 km | 8.8 km, 13,400 km | 8.3 km, 12,600 km | 67 | 268 |
 | 8192 | 1.17 | 54.8 deg | 6.8 km, 10,400 km | 4.4 km, 6,700 km | 4.1 km, 6,300 km | 34 | 134 |
 
-A texel under a pixel at 200 km would take about 68,000 columns (2.8e10 texels), and at 50 km about 274,000. No per-world texture reaches that. So the orbit's map is finer than the screen while the world is under 20-55 degrees across, which includes the opening frame's ~18-degree world at every width above. Nearer than that, the map is magnified: its shadows are soft at the texel's scale, never aliased. Below 50 km the tiles take over, blended in by Morph, with shadows at their vertex spacing. On the ground, at 4K and the game's FOV, a drawn tile's vertices are 12-24 pixels apart (CDLOD split factor 2: a tile is drawn 2-4 edges away), so a vertex shadow's edge is spread over that many pixels. **This is the ruling's cost, and it goes to the developer as Task 0's first question.**
+A texel under a pixel at 200 km would take about 68,000 columns (2.8e10 texels), and at 50 km about 274,000. No per-world texture reaches that. So the orbit's map is finer than the screen while the world is under 20-55 degrees across, which includes the opening frame's ~18-degree world at every width above. Nearer than that, the map is magnified: its shadows are soft at the texel's scale, never aliased. Below 50 km the tiles take over, blended in by Morph, with shadows at their vertex spacing. On the ground, at 4K and the game's FOV, a drawn tile's vertices are 12-24 pixels apart (CDLOD split factor 2: a tile is drawn 2-4 edges away), so a vertex shadow's edge is spread over that many pixels. Where a tile meets a neighbour one level coarser, the shared directions are shadowed at two footprints. The finer side's odd edge vertices carry their own values, where the coarser side interpolates. So the shade can step along a 2:1 edge even though the skirts hide the crack in the geometry. Task 4 measures that step. **This is the ruling's cost, and it goes to the developer as Task 0's first question.**
 
 ---
 
@@ -185,10 +228,16 @@ Expected: a clean tree at `923ae4b` (or later), and both before reports present.
 
 **Owner:** the orchestrator. **Depends on:** nothing. This is the spec approval gate, not an executable task. Put these to the developer in one form (`AskUserQuestion`), with the numbers. Tasks 2-5 are pure and may run meanwhile. Task 6 (the materials) does not start before the answers, and Task 7 holds the cost to the budgets they set.
 
-1. **The orbit's map cannot be finer than a pixel where the proxy draws.** The proxy draws from 50 km up, and a texel under a 4K pixel there would take about 274,000 columns (*Measured while planning*). Each option below states its texel on IV, the height above which that texel is under a pixel, the bake per world on one thread, and GPU memory per world:
-   - (a) **4096 columns** (recommended): texel 8.8 km on IV (13.6 on III, 8.3 on V); finer than the screen while the world is under 35 degrees across, which includes the ~18-degree opening frame; soft shadows at 8.8 km below that, a 67-pixel texel at 200 km. The bake takes about 8-15 s a world and 12 MB.
-   - (b) 8192 columns: texel 4.4 km, finer than the screen under 55 degrees; about 30-60 s a world and 47 MB.
-   - (c) 2048 columns: texel 17.5 km; about 2-4 s a world and 3 MB.
+1. **The orbit's map cannot be finer than a pixel where the proxy draws.** The proxy draws from 50 km up, and a texel under a 4K pixel there would take about 274,000 columns (*Measured while planning*). Each option below states:
+   - its texel on IV;
+   - where that texel is under a pixel, with the node handed one pixel's footprint (Task 6 divides the faces' `filter_pixels` out; without that, every angle below would halve);
+   - the bake per world on one thread;
+   - GPU memory per world, for a typical system (3.75 solid worlds) and for the worst (16).
+
+   The options:
+   - (a) **4096 columns** (recommended). The texel is 8.8 km on IV (13.6 on III, 8.3 on V). The map is finer than the screen while the world is under 35 degrees across, which includes the ~18-degree opening frame. Below that the shadows are soft at 8.8 km: a 67-pixel texel at 200 km. The bake takes about 8-15 s a world. Memory is 12 MB a world, about 45 MB for a typical system and about 190 MB for the worst.
+   - (b) 8192 columns. The texel is 4.4 km, finer than the screen under 55 degrees. About 30-60 s a world. 47 MB a world, about 176 MB typical and about **750 MB** for the worst system.
+   - (c) 2048 columns. The texel is 17.5 km, finer than the screen under 20 degrees, which is only just the opening frame. About 2-4 s a world. 3 MB a world, 11 MB typical, 48 MB worst.
    - (d) A second, local map around the ship, re-baked as it moves. It is the only way to a texel under a pixel below a few thousand km, but it is not "baked when the system loads" and it has a per-frame decision in it: a new ruling.
 
    `ds.Sky.ShadowMapWidth` (a power of two, 256-8192) is read at each system load, so a playtest can try another width without a rebuild.
@@ -197,18 +246,26 @@ Expected: a clean tree at `923ae4b` (or later), and both before reports present.
    - (b) Also raise `ds.Terrain.BuildTasks` from 2 to 3 (the machine's cap): about 18 s.
    - (c) Mark every other vertex and interpolate: about 4x cheaper, about 9 s, with shadow detail at two vertex spacings (24-48 px at 4K). This is a coarsening, and so a ruling.
    - (d) 8 samples: about 5x. At 5 degrees this fails the march's quality bound (mean |dv| 0.07-0.14 against 0.10), so it is not offered alone.
+   - (e) A day exit that depends on the footprint: `SteepestSlope(Params, FootprintCm)` bounds only the bands that have not yet faded at the tile's spacing. The finest bands are what set the 16.72, so a coarse tile's exit falls much lower, and mid-sun tiles cost far less. It is as safe as today's exit, and it changes no value: a vertex over its exit is whole either way. It needs each band's sampled gradient measured, as `.SteepestSlope` measures the sum. It is offered as Task 7b's first remedy, not built now.
 
-   At noon on IV the day exit makes the shadow cost almost nothing. The cost is at dusk.
+   At noon on IV the day exit makes the shadow cost almost nothing. The cost is at dusk. **The cost also bites in flight, not only at a cold start.** At about 8-10x a tile, two tasks build about 40 tiles a second where they built about 400. That risks the drawn ground under the ship falling behind (GearClearance / 10, `DeepSpace.Surface.GroundKeepsUp`), and the wait for the coarse cut before the 50 km handover. Task 7 flies that scenario with the shadow on, against budgets.
 3. **The bake's budgets**, as Task 7 will hold them (recommended defaults):
    - the cold cut at 1.5 m over IV at a 10-degree dusk resident within **30 s** on 2 tasks;
    - a tile's median build with the shadow at most **10x** without;
-   - a world's map at most **15 s** on one thread and **16 MB** (level 0 and its mips);
-   - the resident cut's kept vertex shadows at most **8 MB** of CPU memory;
+   - a world's map at most **15 s** on one thread and **16 MB** (level 0 and its mips), for the slowest and largest of the start system's five worlds and of the corpus's two extremes;
+   - a system's maps at most **64 MB** of GPU memory resident for the start system, measured through the engine (`CalcTextureMemorySizeEnum(TMC_ResidentMips)`), with **0** bytes left on the CPU once uploaded; the corpus's worst system is reported (about 190 MB at 4096), not held;
+   - a map's landing at most **4 ms** of game-thread time (the texture's creation and upload call);
+   - a ground's release with a full set of shadowed builds in flight at most **2 ms** of game-thread time. Release happens on every fold opened near a world, on leaving prefetch range, and on every change to `ds.Terrain.Shadows` or `ShadowSamples`;
+   - in flight with tile shadows on (`GroundKeepsUp`'s scenario, paced to the wall clock): **no** frame under 1 km without drawn ground under the ship, the worst drawn gap within **GearClearance / 10**, and the coarse cut resident within **10 s** of arriving under 51 km;
+   - the resident cut's kept vertex shadows at most **12 MB** of CPU memory, measured from the arrays themselves. Both copies count, about 8.3 MB. The first draft's 8 MB budget was a formula over one copy.
    - `Eyes.LandingFrame` **not rising** in any case.
 
-   Also for the developer's information, not a question: the day exit rests on a *sampled* steepest slope with a 1.5 margin, as the marched plan's did. A slope steeper than any sample would show as a lit speck on it under a high sun.
+   Also for the developer's information, not a question:
+   - The day exit rests on a *sampled* steepest slope with a 1.5 margin, as the marched plan's did. A slope steeper than any sample would show as a lit speck on it under a high sun.
+   - Shade may step at a 2:1 tile edge (Task 4 measures by how much). Task 10 looks for it in the frames.
+   - A map that lands fades its world's shadow in over 1 s. Until it lands the world draws unshadowed, the opening world included, for up to a world's bake time.
 
-Write the answers into the spec (on the track) as a sub-bullet of the ruling "Cast shadows are baked, not marched", and amend this plan where they change it: `SunShadowMap::DefaultWidth` in Task 5, the budget constants in Task 7, and `ds.Terrain.BuildTasks` or the vertex stride in Task 4. Until the answers come, Tasks 2-5 proceed on the recommended defaults: 4096 columns, every vertex, 12 samples.
+Write the answers into the spec (on the track) as a sub-bullet of the ruling "Cast shadows are baked, not marched", and amend this plan where they change it: `SunShadowMap::DefaultWidth` in Task 5, the budget constants in Task 7, and `ds.Terrain.BuildTasks` or the vertex stride in Task 4. **If a first form already went to the developer with the first draft's numbers**, send the corrections with the next one: the per-system memory, the flight's budgets, and the 8 MB budget that was one copy. Until the answers come, Tasks 2-5 proceed on the recommended defaults: 4096 columns, every vertex, 12 samples.
 
 ---
 
@@ -1243,10 +1300,14 @@ Expected: two `KILLED`. The flipped light moves Project and SunLightOf together,
 **Owner:** T. **Depends on:** Tasks 2 and 3.
 
 **Files:**
-- Modify: `Source/DeepSpace/Surface/TerrainTile.h`, `Source/DeepSpace/Surface/TerrainTile.cpp`. Add `FTileBuild::SunVisible` and `ShadowSeconds`, and `TerrainTile::FTileShadow`, `Build(..., Shadow)` and `UV0Of`.
+- Modify: `Source/DeepSpace/Surface/TerrainTile.h`, `Source/DeepSpace/Surface/TerrainTile.cpp`. Add `FTileBuild::SunVisible` and `ShadowSeconds`, and `TerrainTile::FTileShadow`, `Build(..., Shadow, Cancel)` and `UV0Of`.
 - Modify: `Source/DeepSpace/Surface/TerrainTileComponent.cpp`: UV0 carries the shadow.
-- Modify: `Source/DeepSpace/Surface/WorldGround.h`, `Source/DeepSpace/Surface/WorldGround.cpp`. Add the light each tile is built under, `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`, the rebuild when any of them changes, and a line in `Describe`.
-- Modify: `Source/DeepSpace/Tests/SkyTestWorld.h`. Add `EShadows`: test worlds build without the shadow unless asked.
+- Modify: `Source/DeepSpace/Surface/WorldGround.h`, `Source/DeepSpace/Surface/WorldGround.cpp`. Add:
+  - the light each tile is built under, `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`, the rebuild when any of them changes, and a line in `Describe`;
+  - builds that are cancelled and detached, never waited on, in `Release` and `EndPlay`, counted against the cap until they finish (`Draining`);
+  - `GetBuildingCount`, `GetDrainingCount` and `GetTileShadowBytes`, the last measured from the arrays, both copies.
+- Modify: `Source/DeepSpace/Surface/WorldReliefParams.h`: `SameRelief`, moved here from `WorldGround.cpp`'s anonymous namespace, so the sky keys its maps by the same test (Task 6).
+- Modify: `Source/DeepSpace/Tests/SkyTestWorld.h`. Add `EShadows`: test worlds build without tile shadows or maps unless asked, and each is asked for on its own.
 - Create: `Source/DeepSpace/Tests/TileSunShadowTest.cpp` (`DeepSpace.Surface.TileSunShadow`, `DeepSpace.Surface.GroundShadowLight`)
 
 **Interfaces:**
@@ -1258,15 +1319,20 @@ struct FTileBuild { /* ... */ TArray<float> SunVisible; double ShadowSeconds; };
 namespace TerrainTile
 {
     struct FTileShadow { SunShadow::FSunLight Sun; double SteepestSlope = 0.0; int32 Samples = SunShadow::DefaultSamples; };
-    FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow());
+    FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow(),
+                     const std::atomic<bool>* Cancel = nullptr);
     FVector2f UV0Of(const FTileBuild& Tile, int32 Vertex);
 }
 const TerrainTile::FTileShadow& AWorldGround::GetTileShadow() const;
-namespace SkyTestWorld { enum class EShadows : uint8 { Off, On }; }
+int32 AWorldGround::GetBuildingCount() const;
+int32 AWorldGround::GetDrainingCount() const;
+int64 AWorldGround::GetTileShadowBytes() const;
+bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B);   // WorldReliefParams.h, inline
+namespace SkyTestWorld { enum class EShadows : uint8 { Off = 0, Tiles = 1, Maps = 2, On = 3 }; }
 SkyTestWorld::FSkyWorld::FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8, EShadows Shadows = EShadows::Off);
 ```
 
-The CVars are read by name in tests as `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`. `ds.Sky.ShadowMaps` and `ds.Sky.ShadowMapWidth` are Task 6's CVars. `FSkyWorld` sets `ds.Sky.ShadowMaps` only if it exists, so this task does not wait on Task 6.
+The CVars are read by name in tests as `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`. `ds.Sky.ShadowMaps` and `ds.Sky.ShadowMapWidth` are Task 6's CVars. `FSkyWorld` sets `ds.Sky.ShadowMaps` only if it exists, so this task does not wait on Task 6. `EShadows::Tiles` sets `ds.Terrain.Shadows` 1 and `ds.Sky.ShadowMaps` 0, and `Maps` does the reverse. `On` sets both, and `Off` neither.
 
 - [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/TileSunShadowTest.cpp`:
 
@@ -1310,6 +1376,9 @@ namespace TileSunShadowLocal
  * at the tile's spacing -- to the float it is stored in -- the skirt's
  * vertices carry their grid vertex's, and UV0.x is what reaches the mesh.
  * The shadow never moves the ground. Without a light every vertex is whole.
+ * A same-level neighbour's shadows on the shared edge are the tile's to the
+ * bit; a 2:1 edge's step is measured and printed, not bounded (the shade can
+ * step there, where the skirts close only the geometry's crack).
  * The tile is Baemsekai IV-like at level 6 (4.4 km vertices, 141 km across)
  * under a 2-degree sun, where planning measured half the ground shaded: a
  * tile that fixture changes leave uniform is moved, never the bound.
@@ -1357,6 +1426,103 @@ bool FTileSunShadowTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("a skirt vertex carries its grid vertex's shadow"), TerrainTile::UV0Of(Cast, V).X, TerrainTile::UV0Of(Cast, TerrainTile::GridOf(V)).X);
     }
 
+    // The edges. Two tiles of one level share their edge's directions, heights
+    // and footprint, so their shadows there are equal to the bit. Across a 2:1
+    // edge they are not: the finer tile shadows at half the coarser's
+    // footprint, and its odd edge vertices carry values where the coarser
+    // side is drawn as the mean of its two. That step is measured here, not
+    // bounded, and Task 10 looks for it in the frames.
+    constexpr int32 N1 = TerrainTile::Cells + 1;
+    const auto SideVertex = [](int32 Side, int32 T)
+    {
+        switch (Side)
+        {
+        case 0: return T * N1;
+        case 1: return T * N1 + TerrainTile::Cells;
+        case 2: return T;
+        default: return TerrainTile::Cells * N1 + T;
+        }
+    };
+    const auto ShadowAt = [&](const FTileBuild& Tile, const FVector3d& D) -> TOptional<float>
+    {
+        for (int32 Side = 0; Side < 4; ++Side)
+        {
+            for (int32 T = 0; T < N1; ++T)
+            {
+                const int32 V = SideVertex(Side, T);
+                if (Tile.Directions[V] == D)
+                {
+                    return Tile.SunVisible[V];
+                }
+            }
+        }
+        return {};
+    };
+    const TArray<FTileKey, TFixedAllocator<4>> Neighbours = TerrainQuadtree::EdgeNeighbours(Key);
+    const FTileKey* Across = Neighbours.FindByPredicate([&](const FTileKey& N) { return N.Face == Key.Face; });
+    if (TestNotNull(TEXT("the tile has a neighbour on its own face"), Across))
+    {
+        const FTileBuild Same = TerrainTile::Build(*Field, *Across, Shadow);
+        int32 Shared = 0;
+        int32 Unequal = 0;
+        FVector3d Middle = FVector3d::ZeroVector;
+        for (int32 Side = 0; Side < 4; ++Side)
+        {
+            for (int32 T = 0; T < N1; ++T)
+            {
+                const int32 V = SideVertex(Side, T);
+                if (const TOptional<float> There = ShadowAt(Cast, Same.Directions[V]))
+                {
+                    ++Shared;
+                    Unequal += *There == Same.SunVisible[V] ? 0 : 1;
+                    Middle += Same.Directions[V];
+                }
+            }
+        }
+        TestEqual(TEXT("a same-level neighbour shares a whole edge"), Shared, N1);
+        TestEqual(TEXT("and its shadows there, to the bit"), Unequal, 0);
+
+        // The finer tile: the level-7 child of the neighbour at the shared edge's middle.
+        const FVector3d Inside = (Middle.GetSafeNormal() * 0.99 + TerrainQuadtree::CentreDirection(*Across) * 0.01).GetSafeNormal();
+        const FTileBuild Fine = TerrainTile::Build(*Field, TerrainQuadtree::KeyAt(Inside, Key.Level + 1), Shadow);
+        int32 Found = INDEX_NONE;
+        for (int32 Side = 0; Side < 4 && Found == INDEX_NONE; ++Side)
+        {
+            Found = ShadowAt(Cast, Fine.Directions[SideVertex(Side, 0)]) && ShadowAt(Cast, Fine.Directions[SideVertex(Side, 2)]) ? Side : INDEX_NONE;
+        }
+        if (TestTrue(TEXT("the finer tile meets the coarser along one side"), Found != INDEX_NONE))
+        {
+            int32 Evens = 0;
+            double StepSum = 0.0;
+            double StepMax = 0.0;
+            for (int32 T = 0; T < N1; ++T)
+            {
+                const FVector3d& D = Fine.Directions[SideVertex(Found, T)];
+                TOptional<float> Coarse = ShadowAt(Cast, D);
+                if (Coarse)
+                {
+                    ++Evens;
+                }
+                else
+                {
+                    const TOptional<float> Before = ShadowAt(Cast, Fine.Directions[SideVertex(Found, T - 1)]);
+                    const TOptional<float> After = ShadowAt(Cast, Fine.Directions[SideVertex(Found, T + 1)]);
+                    Coarse = Before && After ? TOptional<float>(0.5f * (*Before + *After)) : TOptional<float>();
+                }
+                if (Coarse)
+                {
+                    const double Step = FMath::Abs(Fine.SunVisible[SideVertex(Found, T)] - *Coarse);
+                    StepSum += Step;
+                    StepMax = FMath::Max(StepMax, Step);
+                }
+            }
+            TestEqual(TEXT("the finer edge meets every other coarse vertex"), Evens, TerrainTile::Cells / 2 + 1);
+            AddInfo(FString::Printf(TEXT("2:1 edge, level 6 to 7 under a 2-degree sun: shade steps by %.3f on average, %.3f at most, over %d vertices"),
+                StepSum / N1, StepMax, N1));
+            TestTrue(TEXT("and the step is measured"), FMath::IsFinite(StepMax));
+        }
+    }
+
     // Without a light, whole.
     bool bAllWhole = Lit.SunVisible.Num() == TerrainTile::GridVerts;
     for (const float Seen : Lit.SunVisible)
@@ -1372,13 +1538,15 @@ bool FTileSunShadowTest::RunTest(const FString& Parameters)
  * AWorldGround builds its tiles under the sky's own light for the world
  * under the ship (SkyProjection::SunLightOf), the real ground's steepest
  * slope and ds.Terrain.ShadowSamples, and rebuilds when ds.Terrain.Shadows
- * changes. 800 km over Baemsekai IV only the prefetch chain is wanted, so the
- * test builds a handful of tiles.
+ * changes, letting go of what was building without waiting and without
+ * oversubscribing its workers. 800 km over Baemsekai IV only the prefetch
+ * chain is wanted, so the test builds a handful of tiles.
  */
 bool FGroundShadowLightTest::RunTest(const FString& Parameters)
 {
     using namespace SkyTestWorld;
-    FSkyWorld Test(TEXT("GroundShadowLightWorld"), 8, EShadows::On);
+    // The tiles' shadows only: no map is baked behind this test.
+    FSkyWorld Test(TEXT("GroundShadowLightWorld"), 8, EShadows::Tiles);
     Test.BeginPlay();
     const FSkySystem Here = LocalSystem::Here(Test.World);
     if (!TestTrue(TEXT("the start system has a fourth body"), Here.Bodies.IsValidIndex(4)))
@@ -1410,9 +1578,17 @@ bool FGroundShadowLightTest::RunTest(const FString& Parameters)
         Resident->SunVisible == TerrainTile::Build(*Field, Key, Shadow).SunVisible);
 
     {
-        // Off: the ground starts again, and every vertex is whole.
+        // Off: the ground starts again, and every vertex is whole. The builds
+        // in flight when it restarts are let go, not waited on, and they
+        // count against the cap until they finish.
+        FScopedCVar Samples(TEXT("ds.Terrain.ShadowSamples"), 13.0f);
+        Test.Step(1.0f / 60.0f);   // a restart under a new sample count: builds launch
+        const int32 Cap = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.BuildTasks"))->GetInt();
         FScopedCVar Off(TEXT("ds.Terrain.Shadows"), 0.0f);
-        Test.Step(1.0f / 60.0f);
+        Test.Step(1.0f / 60.0f);   // and another, with those still building
+        TestTrue(FString::Printf(TEXT("a restart never oversubscribes the workers (%d building, %d let go, cap %d)"),
+            Test.Ground->GetBuildingCount(), Test.Ground->GetDrainingCount(), Cap),
+            Test.Ground->GetBuildingCount() + Test.Ground->GetDrainingCount() <= Cap);
         Test.Ground->FlushBuildsForTest();
         Test.Step(1.0f / 60.0f);
         TestFalse(TEXT("with ds.Terrain.Shadows 0 the ground builds under no light"), Test.Ground->GetTileShadow().Sun.IsSet());
@@ -1436,7 +1612,7 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `TerrainTile::FTileShadow`, `FTileBuild::SunVisible`, `UV0Of`, `AWorldGround::GetTileShadow` and `SkyTestWorld::EShadows` are undeclared.
 
-- [ ] **Step 3: The tile.** In `Source/DeepSpace/Surface/TerrainTile.h`, add `#include "Surface/SunShadow.h"` after `#include "Surface/TerrainQuadtree.h"`. In `struct FTileBuild`, after `double SkirtDepthCm = 0.0;`, add:
+- [ ] **Step 3: The tile.** In `Source/DeepSpace/Surface/TerrainTile.h`, add `#include <atomic>` before `#include "CoreMinimal.h"`, and `#include "Surface/SunShadow.h"` after `#include "Surface/TerrainQuadtree.h"`. In `struct FTileBuild`, after `double SkirtDepthCm = 0.0;`, add:
 
 ```cpp
     /** Each grid vertex's share of its star's disc seen past the ground --
@@ -1467,8 +1643,12 @@ In `namespace TerrainTile`, replace the `Build` declaration with:
      *  so a coarse tile never samples fine bands into vertex noise; normals
      *  from the analytic gradient of the same band-limited height; and each
      *  grid vertex's cast shadow under Shadow's light. Pure and thread-safe
-     *  given a thread-safe Ground. */
-    DEEPSPACE_API FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow());
+     *  given a thread-safe Ground. Cancel, if given, is polled once a grid
+     *  row of the shadow; set, the build returns at once with the shadow
+     *  unfinished -- a tile only a let-go build makes, whose result nobody
+     *  reads (AWorldGround::Detach). */
+    DEEPSPACE_API FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow(),
+                                   const std::atomic<bool>* Cancel = nullptr);
 ```
 
 After `UV2Of`'s declaration, add:
@@ -1483,7 +1663,7 @@ After `UV2Of`'s declaration, add:
 In `Source/DeepSpace/Surface/TerrainTile.cpp`, change the definition's signature to:
 
 ```cpp
-FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow)
+FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow, const std::atomic<bool>* Cancel)
 ```
 
 After the grid loop (the `for (int32 J ...)` block that fills heights) and before `// The edges' own interpolation error`, add:
@@ -1497,6 +1677,10 @@ After the grid loop (the `for (int32 J ...)` block that fills heights) and befor
     {
         for (int32 V = 0; V < GridVerts; ++V)
         {
+            if (Cancel && V % (Cells + 1) == 0 && Cancel->load(std::memory_order_relaxed))
+            {
+                return Tile;   // let go: nobody reads this tile
+            }
             Tile.SunVisible[V] = static_cast<float>(SunShadow::Visible(Ground, Tile.Directions[V], Shadow.Sun, Tile.SpacingCm,
                 Shadow.SteepestSlope, Shadow.Samples, Tile.Heights[V]).Visible);
         }
@@ -1534,15 +1718,106 @@ with
      *  built under: the sky's own light for the world (SkyProjection::
      *  SunLightOf), unset while ds.Terrain.Shadows is 0. */
     const TerrainTile::FTileShadow& GetTileShadow() const { return TileShadow; }
+
+    /** Builds in flight, and builds let go by a restart that have not yet
+     *  finished: together never more than ds.Terrain.BuildTasks. */
+    int32 GetBuildingCount() const { return InFlight.Num(); }
+    int32 GetDrainingCount() const { return Draining.Num(); }
+
+    /** The bytes the resident cut's vertex shadows hold on the CPU, read
+     *  from the arrays: each resident tile's, and each pooled component's
+     *  kept copy (bKeepForTest, for proxy recreation). */
+    int64 GetTileShadowBytes() const;
 ```
 
 After `FWorldReliefParams GroundParams;`, add:
 
 ```cpp
     TerrainTile::FTileShadow TileShadow;
+
+    /** Builds let go by Release or EndPlay: cancelled, never waited on, and
+     *  counted against ds.Terrain.BuildTasks until they finish. Their
+     *  lambdas hold only the field, the key, the light and the flag -- never
+     *  this -- so the actor may go before they do. */
+    TArray<UE::Tasks::TTask<FTileBuild>> Draining;
+    TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> BuildCancel;
+
+    /** Cancel and let go of every build in flight. */
+    void Detach();
 ```
 
-In `Source/DeepSpace/Surface/WorldGround.cpp`, add `#include "Sky/SkyProjection.h"` and `#include "Surface/SunShadow.h"` with the other includes. In the anonymous namespace, after `CVarShow`, add:
+Add `#include <atomic>` to `WorldGround.h`.
+
+In `Source/DeepSpace/Surface/WorldReliefParams.h`, after `struct FWorldReliefParams`, add:
+
+```cpp
+/** The same ground: every fact FWorldRelief is built from is equal. The
+ *  ground restarts on a change (AWorldGround), and the sky re-bakes that
+ *  world's shadow map (AShipSky's map keys). */
+inline bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
+{
+    return A.SeedOffset == B.SeedOffset && A.RadiusCm == B.RadiusCm && A.PeakCm == B.PeakCm
+        && A.Cratering == B.Cratering && A.Ground == B.Ground;
+}
+```
+
+and delete the identical `SameRelief` from `WorldGround.cpp`'s anonymous namespace (a copy there would make every call ambiguous).
+
+In `Source/DeepSpace/Surface/WorldGround.cpp`, add `#include "Sky/SkyProjection.h"` and `#include "Surface/SunShadow.h"` with the other includes. Replace the bodies' waits:
+
+- In `EndPlay`, replace the `for (FPending& Pending : InFlight) { Pending.Task.Wait(); }` loop and `InFlight.Reset();` with `Detach(); Draining.Reset();`. The handles are dropped, and the tasks finish on their own within a row.
+- In `Release`, replace the same loop and `InFlight.Reset();` with `Detach();`.
+
+Add:
+
+```cpp
+void AWorldGround::Detach()
+{
+    // Before the shadow a build was ~5 ms, and waiting was cheap. With it, a
+    // build is 16-70 ms, and Release runs on every fold opened near a world.
+    if (BuildCancel.IsValid())
+    {
+        BuildCancel->store(true, std::memory_order_relaxed);
+    }
+    BuildCancel.Reset();
+    for (FPending& Pending : InFlight)
+    {
+        Draining.Add(MoveTemp(Pending.Task));
+    }
+    InFlight.Reset();
+}
+
+int64 AWorldGround::GetTileShadowBytes() const
+{
+    int64 Bytes = 0;
+    for (const TPair<FTileKey, FResident>& Pair : Resident)
+    {
+        Bytes += Pair.Value.Tile.SunVisible.GetAllocatedSize();
+    }
+    for (const TObjectPtr<UPrimitiveComponent>& Pooled : Pool)
+    {
+        const UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pooled.Get());
+        if (const FTileBuild* Kept = Tile ? Tile->GetTileForTest() : nullptr)
+        {
+            Bytes += Kept->SunVisible.GetAllocatedSize();
+        }
+    }
+    return Bytes;
+}
+```
+
+In `FlushBuildsForTest`, as its first statement, add:
+
+```cpp
+    // Tests only: what a restart let go finishes before the cut is timed.
+    for (UE::Tasks::TTask<FTileBuild>& Task : Draining)
+    {
+        Task.Wait();
+    }
+    Draining.Reset();
+```
+
+In `WorldGround.cpp`'s anonymous namespace, after `CVarShow`, add:
 
 ```cpp
     TAutoConsoleVariable<int32> CVarShadows(
@@ -1614,7 +1889,21 @@ In `SyncTo`, replace the nearest-world loop and the restart that follows it, fro
     }
 ```
 
-In `Launch`, replace
+In `Launch`, replace its first line
+
+```cpp
+    const int32 Slots = FMath::Max(1, CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num();
+```
+
+with
+
+```cpp
+    // What a restart let go still holds a worker until it finishes.
+    Draining.RemoveAll([](const UE::Tasks::TTask<FTileBuild>& Task) { return Task.IsCompleted(); });
+    const int32 Slots = FMath::Max(1, CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num() - Draining.Num();
+```
+
+and replace
 
 ```cpp
         const FGroundFieldRef Field = Ground;
@@ -1627,8 +1916,14 @@ with
 ```cpp
         const FGroundFieldRef Field = Ground;
         const TerrainTile::FTileShadow Shadow = TileShadow;
+        if (!BuildCancel.IsValid())
+        {
+            BuildCancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+        }
+        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = BuildCancel;
         InFlight.Add(FPending{ Key, UE::Tasks::Launch(UE_SOURCE_LOCATION,
-            [Field, Key, Shadow]() { return TerrainTile::Build(*Field, Key, Shadow); }, UE::Tasks::ETaskPriority::BackgroundNormal) });
+            [Field, Key, Shadow, Cancel]() { return TerrainTile::Build(*Field, Key, Shadow, Cancel.Get()); },
+            UE::Tasks::ETaskPriority::BackgroundNormal) });
 ```
 
 In `Describe`, after the first `FString Out = FString::Printf(...)` line (the world, the morph, the counts) and before the per-level loop, add:
@@ -1642,14 +1937,17 @@ In `Describe`, after the first `FString Out = FString::Printf(...)` line (the wo
 - [ ] **Step 6: Test worlds build without the shadow unless asked.** In `Source/DeepSpace/Tests/SkyTestWorld.h`, before `struct FSkyWorld`, add:
 
 ```cpp
-    /** Whether a test world casts shadows: every tile's vertices marched and
-     *  every solid world's map baked (the cast-shadow plan). They are the
-     *  costliest thing a test world does and most tests never look at one,
+    /** Whether a test world casts shadows: Tiles marches every tile's
+     *  vertices (ds.Terrain.Shadows), Maps bakes every solid world's map
+     *  (ds.Sky.ShadowMaps), On both (the cast-shadow plan). They are the
+     *  costliest things a test world does and most tests never look at one,
      *  so they are off unless a test asks, and put back after. */
     enum class EShadows : uint8
     {
-        Off,
-        On
+        Off = 0,
+        Tiles = 1,
+        Maps = 2,
+        On = 3
     };
 ```
 
@@ -1657,13 +1955,16 @@ Change the constructor's signature to `explicit FSkyWorld(const TCHAR* Name, int
 
 ```cpp
             // Before any actor exists: the ground and the sky read these when
-            // they first build.
-            for (const TCHAR* Switch : { TEXT("ds.Terrain.Shadows"), TEXT("ds.Sky.ShadowMaps") })
+            // they first build. The tiles and the maps are asked for apart,
+            // so a test of one never pays for the other in the background.
+            const TPair<const TCHAR*, EShadows> Switches[] = { { TEXT("ds.Terrain.Shadows"), EShadows::Tiles }, { TEXT("ds.Sky.ShadowMaps"), EShadows::Maps } };
+            for (const TPair<const TCHAR*, EShadows>& Switch : Switches)
             {
-                if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Switch))
+                if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Switch.Key))
                 {
                     ShadowSwitchesWere.Add(Variable, Variable->GetString());
-                    Variable->Set(Shadows == EShadows::On ? 1 : 0, ECVF_SetByCode);
+                    const bool bOn = (static_cast<uint8>(Shadows) & static_cast<uint8>(Switch.Value)) != 0;
+                    Variable->Set(bOn ? 1 : 0, ECVF_SetByCode);
                 }
             }
 ```
@@ -1691,23 +1992,27 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh &
 Expected: both PASS, and every `DeepSpace.Surface.*` test still passes.
 - `.TileComponent` builds its tile without a light: whole, and UV0 (1, 0).
 - `.GroundActor` and the rest build in `FSkyWorld`, now with the shadow off, so they cost what they did.
-- Copy `.TileSunShadow`'s info line into the task report.
+- Copy `.TileSunShadow`'s two info lines into the task report: the tile's shaded counts, and the 2:1 edge's step. The step goes to the developer with Task 0's answers, and Task 10 looks for it in the frames.
 - If that tile turns out uniform, move it to another fixture direction and record which. Do not drop the check.
+- If the same-level edge is not equal to the bit, two tiles compute one direction differently (`GridDirection`, or a height read at another footprint). That is a bug, not a tolerance to widen.
 
 - [ ] **Step 8: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Surface/TerrainTile.h Source/DeepSpace/Surface/TerrainTile.cpp \
   Source/DeepSpace/Surface/TerrainTileComponent.cpp Source/DeepSpace/Surface/WorldGround.h Source/DeepSpace/Surface/WorldGround.cpp \
-  Source/DeepSpace/Tests/SkyTestWorld.h Source/DeepSpace/Tests/TileSunShadowTest.cpp && \
+  Source/DeepSpace/Surface/WorldReliefParams.h Source/DeepSpace/Tests/SkyTestWorld.h Source/DeepSpace/Tests/TileSunShadowTest.cpp && \
 git commit -qm "feat(terrain): every tile's vertices carry the cast shadow, computed as the tile is built
 
 TerrainTile::Build marches SunShadow::Visible at each grid vertex's own
 height and the tile's spacing under the sky's own light (SunLightOf); the
 skirts copy theirs; UV0.x carries it (full precision, already allocated).
 AWorldGround rebuilds when the light, ds.Terrain.Shadows or
-ds.Terrain.ShadowSamples changes. Test worlds build without the shadow unless
-asked (SkyTestWorld::EShadows). DeepSpace.Surface.TileSunShadow,
+ds.Terrain.ShadowSamples changes, and lets go of the builds in flight
+without waiting (cancelled by flag, counted against the cap until they
+finish). Test worlds build without tile shadows or maps unless asked, each
+apart (SkyTestWorld::EShadows). DeepSpace.Surface.TileSunShadow (with a
+same-level edge held to the bit and a 2:1 edge's step measured),
 .GroundShadowLight.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -1721,14 +2026,18 @@ Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'SunShadow::Visible(Gro
 Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'return FVector2f(Tile.SunVisible.IsValidIndex(G) ? Tile.SunVisible[G] : 1.0f, 0.0f);' 'return FVector2f(Tile.SunVisible.IsValidIndex(Vertex) ? Tile.SunVisible[Vertex] : 1.0f, 0.0f);' 'DeepSpace.Surface.TileSunShadow$'; \
 Tools/mutate.sh Source/DeepSpace/Surface/WorldGround.cpp '            Shadow.Sun = SkyProjection::SunLightOf(System, Index);' '            Shadow.Sun = SkyProjection::SunLightOf(System, Index - 1);' 'DeepSpace.Surface.GroundShadowLight$'; \
 Tools/mutate.sh Source/DeepSpace/Surface/WorldGround.cpp '!SameShadow(Shadow, TileShadow))' '!SameShadow(Shadow, Shadow))' 'DeepSpace.Surface.GroundShadowLight$'; \
+Tools/mutate.sh Source/DeepSpace/Surface/WorldGround.cpp 'CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num() - Draining.Num();' 'CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num();' 'DeepSpace.Surface.GroundShadowLight$'; \
 ./build.sh
 ```
 
-Expected: four `KILLED`.
+Expected: five `KILLED`.
 - The shadow marched at twice the tile's spacing is not the one at its spacing.
 - The skirt that reads its own index is out of range, and so whole.
 - The light of the body before is another world's.
 - The ground that never restarts keeps its shadowed tiles with the switch at 0.
+- The cap that forgets what it let go launches a full set beside the builds still draining.
+
+That `Release` and `EndPlay` no longer wait is a property of the code, not of a value, so no headless mutant can see it. `Eyes.ShadowBakeCost` times it (`release_ms`, Task 7). The same-level edge's equality has no mutant of its own either: it holds by construction, and the bit-equality would catch any nondeterminism.
 
 ---
 
@@ -1968,9 +2277,17 @@ bool FSunShadowMapLookupTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("just short of +pi the lookup is the last and first columns' mean (%.8f, %.8f)"), Before, Between),
         FMath::IsNearlyEqual(Before, Between, 1e-5));
     TestTrue(FString::Printf(TEXT("and just past -pi it is the same (%.8f)"), After), FMath::IsNearlyEqual(After, Between, 1e-5));
-    // Rows clamp: under the lowest, the lowest; over the highest, the highest.
+    // Under PsiLo no point of the world sees any of the star (the night
+    // exit's proof), so the lookup is 0 there -- never row 0's value, which a
+    // relief normal tilted toward the sun past the terminator would otherwise
+    // be lit by. Between PsiLo and row 0's centre the rows clamp to row 0;
+    // over the highest, the highest.
     const double Column3 = -UE_DOUBLE_PI + 3.5 * Map.Step;
-    TestTrue(TEXT("under the lowest row the lowest row"), FMath::IsNearlyEqual(SunShadowMap::Sample(Map, At(Map, Column3, -0.3), 1.0e-9), Value(0, 3, 0), 1e-9));
+    TestTrue(TEXT("under PsiLo the lookup is 0, in double"), SunShadowMap::Sample(Map, At(Map, Column3, -0.3), 1.0e-9) == 0.0);
+    TestTrue(TEXT("and in float"), SunShadowMap::SampleF32(Map, FVector3f(At(Map, Column3, -0.3)), 1.0e-9f) == 0.0f);
+    TestTrue(TEXT("and just under it, at every level"), SunShadowMap::Sample(Map, At(Map, Column3, Map.PsiLo - 1.0e-6), 0.5) == 0.0);
+    TestTrue(TEXT("just over PsiLo the lowest row"),
+        FMath::IsNearlyEqual(SunShadowMap::Sample(Map, At(Map, Column3, Map.PsiLo + 0.25 * Map.Step), 1.0e-9), Value(0, 3, 0), 1e-9));
     TestTrue(TEXT("over the highest the highest"), FMath::IsNearlyEqual(SunShadowMap::Sample(Map, At(Map, Column3, 1.45), 1.0e-9), Value(0, 3, 3), 1e-9));
     // The level: a footprint twice a texel at the terminator reads level 1.
     const double RowZero = Map.PsiLo + 0.5 * Map.Step;
@@ -2071,10 +2388,13 @@ struct WR_ShadowCoord
     int Level0;      // the finer of the two levels read
     int Level1;      // the coarser
     WR_REAL Blend;   // how far toward Level1
+    int Night;       // 1 under PsiLo, where the lookup is 0: no point sees any of the star
 };
 
 // D in the body's axes; the frame's X and Z; PsiLo and Step, rad; Footprint
-// the pixel's, D units; Levels the map's.
+// one pixel's width, D units (the faces' filtered footprint divided by
+// filter_pixels, which M_SkyBody and M_SkyGround do before the node); Levels
+// the map's.
 WR_ShadowCoord WR_ShadowMapCoord(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL XX, WR_REAL XY, WR_REAL XZ,
                                  WR_REAL ZX, WR_REAL ZY, WR_REAL ZZ, WR_REAL PsiLo, WR_REAL Step, WR_REAL Footprint, int Levels)
 {
@@ -2087,6 +2407,7 @@ WR_ShadowCoord WR_ShadowMapCoord(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL XX,
     WR_ShadowCoord Out;
     Out.U = (Phi + WR_PI) / Step - WR_REAL(0.5);
     Out.V = (Psi - PsiLo) / Step - WR_REAL(0.5);
+    Out.Night = Psi < PsiLo ? 1 : 0;
     // The pixel's footprint in texels along a texel's narrower side: along
     // the rows a texel is Step cos(psi) across, so toward the point under
     // the star the map is read coarser; a map coarser than the pixel is read
@@ -2154,6 +2475,7 @@ WR_REAL WR_Bilinear(WR_REAL A, WR_REAL B, WR_REAL C, WR_REAL D, WR_REAL FX, WR_R
         int32 Level0 = 0;
         int32 Level1 = 0;
         double Blend = 0.0;
+        int32 Night = 0;   // under PsiLo: the lookup is 0
     };
     struct FShadowTaps
     {
@@ -2188,6 +2510,7 @@ In `Source/DeepSpace/Surface/WorldRelief.cpp`, in `namespace WorldReliefLocal`, 
         Out.Level0 = C.Level0;
         Out.Level1 = C.Level1;
         Out.Blend = C.Blend;
+        Out.Night = C.Night;
         return Out;
     }
 
@@ -2331,8 +2654,10 @@ namespace SunShadowMap
     DEEPSPACE_API void BuildLevels(FSunShadowMap& Map);
 
     /** What M_SkyBody and M_SkyGround read at D (body axes) for a pixel of
-     *  this footprint (D units): the shared file's lookup and eight texel
-     *  loads, trilinear, in double and in float. 1 for a map with no levels. */
+     *  this footprint -- one pixel's width, D units, not the faces'
+     *  filter_pixels-wide footprint: the shared file's lookup and eight
+     *  texel loads, trilinear, in double and in float. 0 under PsiLo, and 1
+     *  for a map with no levels. */
     DEEPSPACE_API double Sample(const FSunShadowMap& Map, const FVector3d& D, double Footprint);
     DEEPSPACE_API float SampleF32(const FSunShadowMap& Map, const FVector3f& D, float Footprint);
 }
@@ -2493,6 +2818,10 @@ double SunShadowMap::Sample(const FSunShadowMap& Map, const FVector3d& D, double
         return 1.0;
     }
     const WorldReliefNoise::FShadowCoord C = WorldReliefNoise::ShadowMapCoordF64(D, Map.FrameX, Map.FrameZ, Map.PsiLo, Map.Step, Footprint, Map.LevelCount());
+    if (C.Night != 0)
+    {
+        return 0.0;   // under PsiLo: provably dark
+    }
     double Seen[2];
     for (int32 Pick = 0; Pick < 2; ++Pick)
     {
@@ -2512,6 +2841,10 @@ float SunShadowMap::SampleF32(const FSunShadowMap& Map, const FVector3f& D, floa
     }
     const WorldReliefNoise::FShadowCoord C = WorldReliefNoise::ShadowMapCoordF32(D, FVector3f(Map.FrameX), FVector3f(Map.FrameZ),
         static_cast<float>(Map.PsiLo), static_cast<float>(Map.Step), Footprint, Map.LevelCount());
+    if (C.Night != 0)
+    {
+        return 0.0f;
+    }
     float Seen[2];
     for (int32 Pick = 0; Pick < 2; ++Pick)
     {
@@ -2563,10 +2896,11 @@ Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'const double Elevatio
 Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'Ground.MinHeightCm()) + Radius);' 'Ground.MinHeightCm()));' 'DeepSpace.Surface.SunShadowMap.Shape$'; \
 Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp '            while (Row + Count < Map.Rows && Count * Map.Step <= End)' '            while (Row + Count < Map.Rows && Count * Map.Step <= 0.5 * End)' 'DeepSpace.Surface.SunShadowMap.TexelsAreTheProfile$'; \
 Tools/mutate.sh Source/DeepSpace/Surface/SunShadowMap.cpp 'Next[Y * NextW + X] = static_cast<uint16>((Sum + 2) / 4);' 'Next[Y * NextW + X] = static_cast<uint16>(Sum / 4);' 'DeepSpace.Surface.SunShadowMap.Mips$'; \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush '    Out.Night = Psi < PsiLo ? 1 : 0;' '    Out.Night = 0;' 'DeepSpace.Surface.SunShadowMap.Lookup$'; \
 ./build.sh
 ```
 
-Expected: seven `KILLED`.
+Expected: eight `KILLED`.
 - The unshifted column reads half a texel off at every centre.
 - The wrap that clamps at column 0 misses the seam's mean.
 - The level that ignores `cos(psi)` reads 1.27 rad up at level 0, not 1.76.
@@ -2574,6 +2908,7 @@ Expected: seven `KILLED`.
 - `PsiLo` without the star's radius misses its known value.
 - The profile cut to half the march's end misses the texels whose horizon lies further out: the test's own profile reads the whole column.
 - The unrounded mean gives 52, not 53.
+- The lookup with no night reads row 0 under `PsiLo`, not 0.
 
 `.NightBelowTheMap` has no mutant of its own: what it proves is a consequence of the night exit's proof (Task 2) and `PsiLo`'s formula (`.Shape`), and it is there so that a later change to either cannot leave rows out that are not dark.
 
@@ -2588,7 +2923,12 @@ Expected: seven `KILLED`.
 - Modify: `Source/DeepSpace/Sky/SkyMaterialContract.h`. Add `Shadows`, `ShadowMap`, `ShadowFrameX`, `ShadowFrameZ`, `ShadowProbePath`, `ShadowDefaultTexturePath`, `ShadowCoordEntry`, `ShadowInputs()`, `*Textures()` and `ShadowProbe*()`, and extend `BodyScalars/Vectors` and `GroundScalars/Vectors`.
 - Modify: `Tools/setup_sky_materials.py`. Add `white_png`, `shadow_default_texture`, `Graph.texture`, `rgba`, `SHADOW_CODE`, `sun_shadow` and `shadow_probe`. Wire the shadow into `sky_body` and `sky_ground`, and check textures in `finish`.
 - Modify: `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`. Add texture roles and names, `CheckShadowNode`, and amend M_SkyBody's "no texture" rule.
-- Modify: `Source/DeepSpace/Sky/ShipSky.h`, `Source/DeepSpace/Sky/ShipSky.cpp`. Add the CVars `ds.Sky.Shadows`, `ds.Sky.ShadowMaps`, `ds.Sky.ShadowMapWidth` and `ds.Sky.ShadowBakeTasks`; the bakes at `RebuildFor`, landed each frame and cancelled on a rebuild and at `EndPlay`; `DrawBodies` writing the map, the frame and the strength; `CopyBodyLook` copying them; and `ShipSky::{ShadowStrength, ShadowBakeOrder, ShadowFrameX, ShadowFrameZ, MakeShadowTexture}`.
+- Modify: `Source/DeepSpace/Sky/ShipSky.h`, `Source/DeepSpace/Sky/ShipSky.cpp`. Add:
+  - the CVars `ds.Sky.Shadows`, `ds.Sky.ShadowMaps`, `ds.Sky.ShadowMapWidth` and `ds.Sky.ShadowBakeTasks`;
+  - the bakes, each keyed by what its map is made from and checked every frame outside transit (`SyncShadowMaps`), never tied to `RebuildFor`, at `BackgroundLow`, each cancelled and let go on its own when its key changes and at `EndPlay`;
+  - landing each frame, the upload in an unbiased LOD group, the CPU copy discarded once the render thread has it, and the landing timed;
+  - `DrawBodies` writing the map, the frame and the strength faded in over `ShadowFadeSeconds`, and `CopyBodyLook` copying them;
+  - `ShipSky::{ShadowStrength, ShadowFadeSeconds, ShadowFade, ShadowMapWidth, FShadowKey, SameShadowKey, ShadowBakeOrder, ShadowFrameX, ShadowFrameZ, MakeShadowTexture, ShadowTextureCpuBytes, DiscardShadowTextureCpu}`.
 - Create: `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp` (`DeepSpace.Sky.ShadowParameters`)
 - Built by the authoring run: `Content/Materials/Sky/M_SkyBody`, `M_SkyGround`, `M_SkyShadowProbe`, `T_SkyShadowWhite` (LFS)
 
@@ -2611,14 +2951,23 @@ class AShipSky
     const FSunShadowMap* GetShadowMapForTest(FName Body) const;
     bool bKeepShadowMapsForTest;
     int32 GetShadowBakesPending() const;
+    int32 GetShadowBakesStarted() const;
+    double GetSlowestShadowLandSeconds() const;
 };
 namespace ShipSky
 {
+    struct FShadowKey { FWorldReliefParams Relief; SunShadow::FSunLight Sun; double SteepestSlope; int32 Width; };
+    bool SameShadowKey(const FShadowKey& A, const FShadowKey& B);
     float ShadowStrength();
+    inline constexpr double ShadowFadeSeconds = 1.0;
+    float ShadowFade(double SecondsSinceLanded);
+    int32 ShadowMapWidth();
     TArray<int32> ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship);
     FLinearColor ShadowFrameX(const FSunShadowMap& Map);   // X, and PsiLo in w
     FLinearColor ShadowFrameZ(const FSunShadowMap& Map);   // Z (the light), and Step in w
     UTexture2D* MakeShadowTexture(const FSunShadowMap& Map, FName Name);
+    int64 ShadowTextureCpuBytes(const UTexture2D& Texture);
+    void DiscardShadowTextureCpu(UTexture2D& Texture);
 }
 ```
 
@@ -2630,6 +2979,7 @@ namespace ShipSky
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
@@ -2644,18 +2994,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowParametersTest, "DeepSpace.Sky.ShadowPar
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 /**
- * The sky bakes each solid world's cast-shadow map when the system loads and
- * hands it to the world's material: a 16-bit texture, a mip per level, its
- * frame the sky's own light (SkyProjection::SunLightOf) and ds.Sky.Shadows
- * clamped to 0..1 as the strength; the ground's instance gets all of it
- * through CopyBodyLook. Worlds with no ground get no map. A rebuild mid-bake
- * cancels and starts again. At 256 columns, so the test bakes in a moment.
+ * The sky bakes each solid world's cast-shadow map and hands it to the
+ * world's material: a 16-bit texture, a mip per level, never LOD-biased, its
+ * CPU copy discarded once uploaded, its frame the sky's own light
+ * (SkyProjection::SunLightOf) and ds.Sky.Shadows clamped to 0..1 as the
+ * strength; the ground's instance gets all of it through CopyBodyLook.
+ * Worlds with no ground get no map. Each map is keyed by what it is made
+ * from, so a jump within the system (a new jump serial, the same system)
+ * re-bakes nothing, a reload that moves one world's relief re-bakes that
+ * world alone, a new system drops the old maps, and nothing waits for a
+ * bake it lets go. A map that lands fades in over ShadowFadeSeconds. At 256
+ * columns, so the test bakes in a moment.
  */
 bool FShadowParametersTest::RunTest(const FString& Parameters)
 {
     using namespace SkyTestWorld;
     FScopedCVar Narrow(TEXT("ds.Sky.ShadowMapWidth"), 256.0f);
-    FSkyWorld Test(TEXT("ShadowParametersWorld"), 8, EShadows::On);
+    FSkyWorld Test(TEXT("ShadowParametersWorld"), 8, EShadows::Maps);
     Test.Sky->bKeepShadowMapsForTest = true;
     Test.BeginPlay();
     Test.Step(1.0f / 60.0f);
@@ -2665,6 +3020,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("and all land"), Test.Sky->GetShadowBakesPending(), 0);
 
     const FSkySystem Here = LocalSystem::Here(Test.World);
+    const int32 Serial = LocalSystem::Serial(Test.World);
     const TArray<int32> Order = ShipSky::ShadowBakeOrder(Here, Test.Ship->GetFlightState().GetUniversePosition());
     int32 Solid = 0;
     for (int32 Index = 0; Index < Here.Bodies.Num(); ++Index)
@@ -2687,6 +3043,10 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         TestTrue(FString::Printf(TEXT("%s: the texture is the map, 256 x %d, G16, a mip per level"), *Body.Id.ToString(), Map->Rows),
             Texture->GetSizeX() == 256 && Texture->GetSizeY() == Map->Rows && Texture->GetPixelFormat() == PF_G16
             && Texture->GetNumMips() == Map->LevelCount());
+        // A device profile's LOD bias would drop mip 0 while the lookup's U
+        // is still in level-0 texels: every read in the wrong place.
+        TestEqual(TEXT("in an LOD group no profile biases"), static_cast<int32>(Texture->LODGroup), static_cast<int32>(TEXTUREGROUP_Pixels2D));
+        TestEqual(TEXT("with no copy left on the CPU once uploaded"), ShipSky::ShadowTextureCpuBytes(*Texture), static_cast<int64>(0));
         TestTrue(TEXT("baked under the sky's own light"), Map->FrameZ.Equals(SkyProjection::SunLightOf(Here, Index).Direction.GetSafeNormal(), 1e-12));
         UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Index)->GetMaterial(0));
         if (!TestNotNull(TEXT("the proxy draws a dynamic instance"), Instance))
@@ -2708,7 +3068,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
             Ship.DistanceTo(Nearer.Position) - Nearer.Radius <= Ship.DistanceTo(Farther.Position) - Farther.Radius);
     }
 
-    // The strength: ds.Sky.Shadows, clamped.
+    // The strength: ds.Sky.Shadows, clamped (a flush lands its maps faded in).
     UMaterialInstanceDynamic* Fourth = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(4)->GetMaterial(0));
     for (const TPair<float, float>& Case : { TPair<float, float>(7.0f, 1.0f), TPair<float, float>(-1.0f, 0.0f), TPair<float, float>(0.5f, 0.5f) })
     {
@@ -2731,17 +3091,91 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("at its strength"), Ground->K2_GetScalarParameterValue(SkyMaterial::Shadows), Fourth->K2_GetScalarParameterValue(SkyMaterial::Shadows));
     }
 
-    // A rebuild mid-bake cancels what was baking and starts again.
+    // A jump within the system: ShipNavState bumps the jump serial on an
+    // in-system arrival, and the sky rebuilds its proxies for it. Neither of a
+    // map's inputs moved, so nothing is baked again and every texture stays.
+    const FName Nearest = Here.Bodies[Order[0]].Id;
+    TMap<FName, UTexture2D*> Held;
+    for (const int32 Index : Order)
+    {
+        Held.Add(Here.Bodies[Index].Id, Test.Sky->GetShadowTexture(Here.Bodies[Index].Id));
+    }
+    const int32 Started = Test.Sky->GetShadowBakesStarted();
     Test.Sky->RebuildFor(Here);
-    TestTrue(TEXT("a rebuild starts the bakes again"), Test.Sky->GetShadowBakesPending() > 0);
-    Test.Sky->RebuildFor(Here);
-    Test.Sky->FlushShadowBakesForTest();
-    TestNotNull(TEXT("and after a second rebuild mid-bake every map still lands"), Test.Sky->GetShadowTexture(Here.Bodies[Order[0]].Id));
+    Test.Sky->SyncTo(Here, Serial + 1, false);
+    Test.Step(1.0f / 60.0f);
+    TestEqual(TEXT("a jump within the system re-bakes nothing"), Test.Sky->GetShadowBakesStarted(), Started);
+    TestEqual(TEXT("and leaves nothing pending"), Test.Sky->GetShadowBakesPending(), 0);
+    bool bSame = true;
+    for (const TPair<FName, UTexture2D*>& Was : Held)
+    {
+        bSame = bSame && Test.Sky->GetShadowTexture(Was.Key) == Was.Value;
+    }
+    TestTrue(TEXT("and every world keeps its texture"), bSame);
+
+    // In transit the maps are left as they are, whatever the system reads.
+    // (The step above rebuilt for the real serial again, so Serial is what is built.)
+    Test.Sky->SyncTo(FSkySystem(), Serial, true);
+    TestTrue(TEXT("in transit the maps are kept"), Test.Sky->GetShadowTexture(Nearest) == Held[Nearest]);
+
+    // A reload of the priors that moves one world's relief keeps the serial:
+    // that world alone is baked again, and its old map is let go at once.
+    {
+        FSkySystem Reloaded = Here;
+        Reloaded.Bodies[Order[0]].Relief.PeakCm *= 1.1;
+        Test.Sky->SyncTo(Reloaded, Serial, false);
+        TestEqual(TEXT("a reload that moves one world's relief re-bakes that world alone"), Test.Sky->GetShadowBakesStarted(), Started + 1);
+        TestNull(TEXT("and lets its stale map go"), Test.Sky->GetShadowTexture(Nearest));
+        bool bOthers = true;
+        for (const TPair<FName, UTexture2D*>& Was : Held)
+        {
+            bOthers = bOthers && (Was.Key == Nearest || Test.Sky->GetShadowTexture(Was.Key) == Was.Value);
+        }
+        TestTrue(TEXT("and every other world keeps its own"), bOthers);
+    }
+
+    // A map that lands fades in: a new width re-bakes every map, and the
+    // frame the nearest one lands in draws it at strength 0, a second later
+    // whole. (The next frame reads the real system again, so the reloaded
+    // world is baked back to its own relief with the rest.)
+    {
+        FScopedCVar Wider(TEXT("ds.Sky.ShadowMapWidth"), 512.0f);
+        UTexture2D* Landed = nullptr;
+        for (int32 Tries = 0; Tries < 600 && !Landed; ++Tries)
+        {
+            Test.Step(1.0f / 60.0f);
+            FPlatformProcess::Sleep(0.005f);
+            Landed = Test.Sky->GetShadowTexture(Nearest);
+        }
+        if (TestNotNull(TEXT("the nearest world's map lands at the new width"), Landed))
+        {
+            TestEqual(TEXT("at 512 columns"), Landed->GetSizeX(), 512);
+            UMaterialInstanceDynamic* Near = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Order[0])->GetMaterial(0));
+            TestEqual(TEXT("and the frame it lands in draws it at strength 0: no shadow appears in one frame"),
+                Near->K2_GetScalarParameterValue(SkyMaterial::Shadows), 0.0f);
+            for (int32 Tick = 0; Tick < FMath::CeilToInt32(ShipSky::ShadowFadeSeconds * 60.0f) + 2; ++Tick)
+            {
+                Test.Step(1.0f / 60.0f);
+            }
+            TestEqual(TEXT("and one fade later, whole"), Near->K2_GetScalarParameterValue(SkyMaterial::Shadows), ShipSky::ShadowStrength());
+        }
+        TestEqual(TEXT("the fade is 0 as a map lands"), ShipSky::ShadowFade(0.0), 0.0f);
+        TestEqual(TEXT("half at half the fade"), ShipSky::ShadowFade(0.5 * ShipSky::ShadowFadeSeconds), 0.5f);
+        TestEqual(TEXT("and whole after it"), ShipSky::ShadowFade(7.0), 1.0f);
+        Test.Sky->FlushShadowBakesForTest();
+    }
+
+    // A new system: the old maps go, and the bakes they had are let go.
+    Test.Sky->SyncTo(FSkySystem(), Serial + 2, false);
+    TestNull(TEXT("a new system drops the old maps"), Test.Sky->GetShadowTexture(Nearest));
+    TestEqual(TEXT("and has nothing pending"), Test.Sky->GetShadowBakesPending(), 0);
+    Test.Step(1.0f / 60.0f);   // back to the start system: it queues again
+    TestTrue(TEXT("and coming back queues its worlds again"), Test.Sky->GetShadowBakesPending() > 0);
     {
         FScopedCVar None(TEXT("ds.Sky.ShadowMaps"), 0.0f);
-        Test.Sky->RebuildFor(Here);
-        TestEqual(TEXT("with ds.Sky.ShadowMaps 0 nothing is baked"), Test.Sky->GetShadowBakesPending(), 0);
-        TestNull(TEXT("and no map is held"), Test.Sky->GetShadowTexture(Here.Bodies[Order[0]].Id));
+        Test.Step(1.0f / 60.0f);
+        TestEqual(TEXT("with ds.Sky.ShadowMaps 0 nothing is baked, and what was baking is let go"), Test.Sky->GetShadowBakesPending(), 0);
+        TestNull(TEXT("and no map is held"), Test.Sky->GetShadowTexture(Nearest));
     }
     return true;
 }
@@ -2818,7 +3252,7 @@ After `"shared_relief"`, add:
 
 ```json
   "shadow": {
-    "comment": "The cast shadow (baked, not marched): M_SkyBody, M_SkyGround and M_SkyShadowProbe each call the world's map through one Custom node over the shared file -- WR_ShadowMapCoord for the texel coordinates and the level, WR_ShadowTapsAt for the four texels at each of two levels, WR_Bilinear and WR_Lerp to blend them, eight Loads of ShadowMap -- and then lerp(map, Vertex, Morph): the body passes Vertex 1 and Morph 0, the ground its UV0.x and its Morph. SkyMaterialContract.h holds the same entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them. default_texture is what a world without a map reads, white.",
+    "comment": "The cast shadow (baked, not marched): M_SkyBody, M_SkyGround and M_SkyShadowProbe each call the world's map through one Custom node over the shared file -- WR_ShadowMapCoord for the texel coordinates and the level (and Night, under PsiLo, where the map is 0), WR_ShadowTapsAt for the four texels at each of two levels, WR_Bilinear and WR_Lerp to blend them, eight Loads of ShadowMap -- and then lerp(map, Vertex, Morph): the body passes Vertex 1 and Morph 0, the ground its UV0.x and its Morph. Footprint is one pixel's: the body and the ground pass their face's footprint over filter_pixels, the probe ProbeFootprint as it is. SkyMaterialContract.h holds the same entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them. default_texture is what a world without a map reads, white.",
     "entry": "WR_ShadowMapCoord",
     "inputs": ["Direction", "Footprint", "FrameX", "FrameZ", "ShadowMap", "Vertex", "Morph"],
     "default_texture": "/Game/Materials/Sky/T_SkyShadowWhite.T_SkyShadowWhite"
@@ -2843,7 +3277,30 @@ After `"shared_relief"`, add:
             (Type == TEXT("scalar") ? OutScalars : (Type == TEXT("texture") ? OutTextures : OutVectors)).Add(Name);
 ```
 
-Its caller declares `TSet<FName> JsonTextures;` beside `JsonScalars` and `JsonVectors` and passes it.
+It has two callers. In the per-material loop, replace
+
+```cpp
+        TSet<FName> JsonScalars;
+        TSet<FName> JsonVectors;
+        JsonNames(Contract, *Entry, JsonScalars, JsonVectors);
+```
+
+with
+
+```cpp
+        TSet<FName> JsonScalars;
+        TSet<FName> JsonVectors;
+        TSet<FName> JsonTextures;
+        JsonNames(Contract, *Entry, JsonScalars, JsonVectors, JsonTextures);
+```
+
+In the `MPC_Sky` block, replace `JsonNames(Contract, Collection, JsonScalars, JsonVectors);` with
+
+```cpp
+        TSet<FName> JsonTextures;
+        JsonNames(Contract, Collection, JsonScalars, JsonVectors, JsonTextures);
+        TestEqual(TEXT("MPC_Sky has no textures"), JsonTextures.Num(), 0);
+```
 
 (c) `AssetNames` takes the type:
 
@@ -2928,8 +3385,8 @@ with
      * The cast shadow's node, in a material that reads the map: exactly one
      * Custom node calls WR_ShadowMapCoord, through the shared file's include,
      * with the contract's pins in order; it alone takes the ShadowMap object;
-     * and the object's default is the white texture, so a world without a map
-     * reads 1.
+     * the object's default is the white texture, so a world without a map
+     * reads 1; and a face hands it one pixel's footprint.
      */
     void CheckShadowNode(FAutomationTestBase& Test, UMaterial& Material, const TSharedPtr<FJsonObject>& Contract)
     {
@@ -2975,6 +3432,17 @@ with
             Test.TestTrue(FString::Printf(TEXT("%s: through the shared file"), *Material.GetName()),
                 Custom->IncludeFilePaths.Contains(FString(SkyMaterial::WorldReliefInclude)));
             Test.TestTrue(FString::Printf(TEXT("%s: and it takes the map"), *Material.GetName()), bTakesMap);
+            // The faces hand the node one pixel's footprint: theirs over
+            // filter_pixels (face_footprint). Handed the filtered one, the
+            // map would be read a level coarser than planned everywhere.
+            if (Material.GetFName() != TEXT("M_SkyShadowProbe") && Custom->Inputs.Num() > 1)
+            {
+                const UMaterialExpressionMultiply* Over = Cast<UMaterialExpressionMultiply>(Custom->Inputs[1].Input.Expression);
+                const UMaterialExpressionConstant* By = Over ? Cast<UMaterialExpressionConstant>(Over->B.Expression) : nullptr;
+                const double FilterPixels = Contract->GetObjectField(TEXT("constants"))->GetNumberField(TEXT("filter_pixels"));
+                Test.TestTrue(FString::Printf(TEXT("%s: the shadow's footprint is the face's over filter_pixels"), *Material.GetName()),
+                    By && FMath::IsNearlyEqual(static_cast<double>(By->R), 1.0 / FilterPixels, 1e-6));
+            }
         }
         Test.TestEqual(FString::Printf(TEXT("%s has one shadow node"), *Material.GetName()), Nodes, 1);
     }
@@ -3012,7 +3480,7 @@ with
 
 `CheckSurfaceFace`'s structural checks are unchanged. They are read from the face's node, which the shadow's does not feed, and the shadow multiplies `shaded` after the light's dot products, so the guard, the unit normals and the knobs' paths are as they were. The new parameters (`Shadows`, `ShadowFrameX`, `ShadowFrameZ`) reach the pixel, which its last loop checks.
 
-Add `#include "Materials/MaterialExpressionTextureObjectParameter.h"` with the other material includes.
+Add `#include "Materials/MaterialExpressionTextureObjectParameter.h"`, `#include "Materials/MaterialExpressionMultiply.h"` and `#include "Materials/MaterialExpressionConstant.h"` with the other material includes (skip any already there).
 
 - [ ] **Step 6: The authoring.** In `Tools/setup_sky_materials.py`:
 
@@ -3023,14 +3491,18 @@ Add `#include "Materials/MaterialExpressionTextureObjectParameter.h"` with the o
 # baked, not marched): the world's map read at D -- the shared file's
 # coordinates, taps and blends, eight texel loads, trilinear -- then lerp(map,
 # Vertex, Morph). The body passes Vertex 1 and Morph 0; the ground its UV0.x
-# and its Morph, and skips the loads once the relief has grown in. HLSL only:
-# the arithmetic is the shared file's, and SunShadowMap::Sample mirrors it.
+# and its Morph, and skips the loads once the relief has grown in. Under PsiLo
+# the map is 0 (C.Night: provably dark). Footprint is one pixel's width: the
+# faces hand it their filtered footprint over filter_pixels (face_footprint).
+# HLSL only: the arithmetic is the shared file's, and SunShadowMap::Sample
+# mirrors it.
 SHADOW_CODE = (
     "if (Morph >= 1.0) { return Vertex; }\n"
     "uint MapWidth; uint MapRows; uint MapLevels;\n"
     "ShadowMap.GetDimensions(0, MapWidth, MapRows, MapLevels);\n"
     "WR_ShadowCoord C = %s(Direction.x, Direction.y, Direction.z, FrameX.x, FrameX.y, FrameX.z, FrameZ.x, FrameZ.y, FrameZ.z, "
     "FrameX.w, FrameZ.w, Footprint, int(MapLevels));\n"
+    "if (C.Night != 0) { return WR_Lerp(0.0, Vertex, Morph); }\n"
     "WR_ShadowTaps T0 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level0);\n"
     "WR_ShadowTaps T1 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level1);\n"
     "float Seen0 = WR_Bilinear(ShadowMap.Load(int3(T0.X0, T0.Y0, C.Level0)).r, ShadowMap.Load(int3(T0.X1, T0.Y0, C.Level0)).r,\n"
@@ -3096,6 +3568,14 @@ def shadow_default_texture():
     return texture
 
 
+def face_footprint(g, footprint):
+    """One pixel's footprint from a face's filtered one: the faces' is
+    max(|ddx D|, |ddy D|) * filter_pixels, and the shadow's lookup takes a
+    pixel's (WR_ShadowMapCoord), so level 0 is read wherever a texel covers
+    a pixel -- not only where it covers filter_pixels of them."""
+    return g.mul(footprint, g.constant(1.0 / CONSTANTS["filter_pixels"]))
+
+
 def rgba(g, vector):
     """A vector parameter's four channels: its default output is only the three."""
     return g.binary(unreal.MaterialExpressionAppendVector, mask(g, vector, "rgb"), mask(g, vector, "r", output_name="A"))
@@ -3124,7 +3604,7 @@ def cast(g, shaded, shadow, strength):
     return g.mul(shaded, blend)
 ```
 
-(d) `sky_body()` and `sky_ground()` gain a `default_texture` argument. In `sky_body`, replace
+(d) `sky_body()` and `sky_ground()` gain a `default_texture` argument: change `def sky_body():` to `def sky_body(default_texture):` and `def sky_ground():` to `def sky_ground(default_texture):`. In `sky_body`, replace
 
 ```python
     shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
@@ -3135,7 +3615,7 @@ with
 
 ```python
     shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
-    shadow = sun_shadow(g, direction, footprint, default_texture, g.constant(1.0), g.constant(0.0))
+    shadow = sun_shadow(g, direction, face_footprint(g, footprint), default_texture, g.constant(1.0), g.constant(0.0))
     disc = g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)
 ```
 
@@ -3154,7 +3634,7 @@ with
     # the map's is blended into it by the morph that grows the relief in, so at
     # the handover the ground's shadow is the orbit's exactly.
     vertex = mask(g, g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "r")
-    shadow = sun_shadow(g, direction, footprint, default_texture, vertex, morph)
+    shadow = sun_shadow(g, direction, face_footprint(g, footprint), default_texture, vertex, morph)
     g.emissive(g.mul(g.mul(colour, brightness), g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)))
 ```
 
@@ -3191,17 +3671,21 @@ def shadow_probe(default_texture):
         raise RuntimeError("%s does not match its contract: want textures %s, has %s" % (asset, want_textures, textures))
 ```
 
-(g) In `main()`, before `sky_body()`, add `white = shadow_default_texture()`. Then call `sky_body(white)` and `sky_ground(white)`, and after `sky_ground_probe()` add `shadow_probe(white)`.
+(g) In `main()`, before `sky_body()`, add `white = shadow_default_texture()`. Then replace the calls `sky_body()` with `sky_body(white)` and `sky_ground()` with `sky_ground(white)`, and after `sky_ground_probe()` add `shadow_probe(white)`. The probe passes `ProbeFootprint` to the node as it is: it is already a pixel's footprint, and the parity test hands `SunShadowMap::Sample` the same number.
 
-- [ ] **Step 7: The sky's bakes.** In `Source/DeepSpace/Sky/ShipSky.h`:
+- [ ] **Step 7: The sky's bakes.** The maps are **not** tied to `RebuildFor`. `RebuildFor` runs on every new jump serial, and `ShipNavState.cpp` bumps that serial on an in-system arrival too. Tied to it, every in-system jump would throw away every world's map and re-bake the system: about 15-30 s of two workers for the corpus's 3.75 solid worlds, with every world unshadowed meanwhile, though neither input to a map had moved. And `ds.Universe.ReloadPriors` changes a relief without changing the serial, so a map tied to the serial would go stale under a ground that had rebuilt. So each map is keyed by what it is made from, and the key is checked every frame.
 
-(a) Add `#include <atomic>`, `#include "Surface/SunShadowMap.h"` and `#include "Tasks/Task.h"`. Add `class UTexture2D;` with the forward declarations.
+In `Source/DeepSpace/Sky/ShipSky.h`:
+
+(a) Add `#include <atomic>`, `#include "RenderCommandFence.h"`, `#include "Surface/SunShadowMap.h"`, `#include "Surface/WorldReliefParams.h"` and `#include "Tasks/Task.h"`. Add `class UTexture2D;` with the forward declarations.
 
 (b) In the public section, after `GetNeighbourStars()`, add:
 
 ```cpp
-    /** Launch every waiting shadow bake, wait for them all, and upload them:
-     *  for tests, which must see a world's map rather than a frame without. */
+    /** Launch every waiting shadow bake, wait for them all (and for any let
+     *  go), upload them, and discard their CPU copies: for tests, which must
+     *  see a world's map rather than a frame without. Maps landed this way
+     *  are already faded in, so a judged frame never catches a fade. */
     void FlushShadowBakesForTest();
 
     /** The body's cast-shadow texture once its bake has landed; null before,
@@ -3213,8 +3697,15 @@ def shadow_probe(default_texture):
     const FSunShadowMap* GetShadowMapForTest(FName Body) const;
     bool bKeepShadowMapsForTest = false;
 
-    /** Bakes waiting or in flight. */
-    int32 GetShadowBakesPending() const { return ShadowQueue.Num() + ShadowBakes.Num(); }
+    /** Bakes waiting or in flight (not those let go). */
+    int32 GetShadowBakesPending() const;
+
+    /** Every bake ever launched: a jump that re-baked nothing leaves it where it was. */
+    int32 GetShadowBakesStarted() const { return ShadowBakesStarted; }
+
+    /** The game-thread seconds the slowest map's landing took (its texture's
+     *  creation and upload call), since play began, for Eyes.ShadowBakeCost. */
+    double GetSlowestShadowLandSeconds() const { return SlowestShadowLandSeconds; }
 ```
 
 (c) In the protected section, add `virtual void EndPlay(const EEndPlayReason::Type Reason) override;`.
@@ -3224,52 +3715,81 @@ def shadow_probe(default_texture):
 ```cpp
     /**
      * The cast shadow's maps (the developer's ruling on slice (b)'s build:
-     * baked in C++ when the system loads, off the game thread). A cache of
-     * this actor's drawing like the proxies, keyed by the same rebuild: one
-     * bake a solid world, nearest first, at most ds.Sky.ShadowBakeTasks at
-     * once, each polling ShadowCancel once a column, so a rebuild or EndPlay
-     * waits at most a column.
+     * baked in C++, off the game thread). A cache of this actor's drawing,
+     * keyed -- unlike the proxies -- not by the jump serial but by what each
+     * map is made from (ShipSky::FShadowKey): the body's relief, the sky's
+     * light for it and the width. SyncShadowMaps checks every solid world's
+     * key each frame outside transit and re-bakes only a map whose key
+     * changed, so a jump re-bakes nothing that did not change. One bake a
+     * world, nearest first, at most ds.Sky.ShadowBakeTasks at once, at
+     * BackgroundLow (the terrain's builds go first), each with its own cancel
+     * flag, polled once a column. A map dropped mid-bake is cancelled and let
+     * go (ShadowDraining), never waited on, and counted against the cap until
+     * it stops.
      */
-    struct FShadowWaiting
-    {
-        FName Body;
-        FWorldReliefParams Relief;
-        SunShadow::FSunLight Sun;
-        double SteepestSlope = 0.0;
-    };
-    struct FShadowBake
-    {
-        FName Body;
-        UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> Task;
-    };
     struct FShadowFrame
     {
         FLinearColor X;
         FLinearColor Z;
     };
-    TArray<FShadowWaiting> ShadowQueue;
-    TArray<FShadowBake> ShadowBakes;
-    TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> ShadowCancel;
+    struct FShadowEntry
+    {
+        ShipSky::FShadowKey Key;
+        TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel;
+        UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> Task;   // valid while in flight
+        FShadowFrame Frame;
+        double LandedAt = 0.0;   // world seconds its texture landed: the fade runs from here
+    };
+    TMap<FName, FShadowEntry> ShadowEntries;
+    TArray<FName> ShadowQueue;   // waiting, nearest first
+    TArray<UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>>> ShadowDraining;
+    /** Textures whose CPU copy goes once the render thread has them. */
+    TArray<TPair<FName, TUniquePtr<FRenderCommandFence>>> ShadowUploads;
+    int32 ShadowBakesStarted = 0;
+    double SlowestShadowLandSeconds = 0.0;
 
     UPROPERTY(Transient)
     TMap<FName, TObjectPtr<UTexture2D>> ShadowTextures;
 
-    TMap<FName, FShadowFrame> ShadowFrames;
     TMap<FName, TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> KeptShadowMaps;
 
-    void QueueShadowBakes(const FSkySystem& System);
-    void CancelShadowBakes();
-    /** Land what has finished and launch what the cap allows; with bWait,
-     *  wait for those in flight first. */
+    /** Every solid world's key against the map held for it: a changed one is
+     *  dropped and queued again, a world no longer here dropped. */
+    void SyncShadowMaps(const FSkySystem& System);
+    /** Cancel and let go of the body's bake, and drop its map. */
+    void DropShadowMap(FName Body);
+    /** Land what has finished, discard uploaded CPU copies, and launch what
+     *  the cap allows; with bWait, wait for those in flight first. */
     void PumpShadowBakes(bool bWait);
 ```
 
-(e) In `namespace ShipSky`, after `CopyBodyLook`, add:
+(e) In `namespace ShipSky`, after `CopyBodyLook`, add the block below. `ShipSky`'s namespace comes after `class AShipSky` in the header, and the class's `FShadowEntry` names `FShadowKey`. So `FShadowKey` and `SameShadowKey` go in a second `namespace ShipSky { ... }` block *before* the class, and the rest go where shown.
 
 ```cpp
     /** ds.Sky.Shadows, clamped to 0..1: the cast shadow's strength in both
      *  materials, lerp(1, shadow, strength). 0 draws the unshadowed look. */
     DEEPSPACE_API float ShadowStrength();
+
+    /** How long a landed map takes to fade its world's shadow in: the sky's
+     *  rule that nothing changes in one frame. */
+    inline constexpr double ShadowFadeSeconds = 1.0;
+
+    /** The fade SecondsSinceLanded after a map landed, 0..1, linear. */
+    DEEPSPACE_API float ShadowFade(double SecondsSinceLanded);
+
+    /** ds.Sky.ShadowMapWidth as baked: a power of two, 256..8192. */
+    DEEPSPACE_API int32 ShadowMapWidth();
+
+    /** What a world's map is made from. A map is re-baked exactly when this
+     *  changes -- never on a jump that moves none of it. */
+    struct FShadowKey
+    {
+        FWorldReliefParams Relief;
+        SunShadow::FSunLight Sun;
+        double SteepestSlope = 0.0;
+        int32 Width = 0;
+    };
+    DEEPSPACE_API bool SameShadowKey(const FShadowKey& A, const FShadowKey& B);
 
     /** The bodies whose shadow maps are baked -- the solid worlds -- nearest
      *  to Ship's surface first. */
@@ -3281,15 +3801,25 @@ def shadow_probe(default_texture):
     DEEPSPACE_API FLinearColor ShadowFrameZ(const FSunShadowMap& Map);
 
     /** A transient G16 texture of the map, linear, grayscale, each level its
-     *  own mip, never streamed. Null for a map with no levels. */
+     *  own mip, never streamed, in TEXTUREGROUP_Pixels2D (no device profile
+     *  biases it: a dropped mip 0 would put every lookup, whose U is in
+     *  level-0 texels, in the wrong place). Null for a map with no levels. */
     DEEPSPACE_API UTexture2D* MakeShadowTexture(const FSunShadowMap& Map, FName Name);
+
+    /** The bytes a texture's mips still hold on the CPU, and letting them go
+     *  once the render thread has the texture. A transient texture otherwise
+     *  keeps them after UpdateResource, doubling each map's cost. After the
+     *  discard the resource cannot be rebuilt from the CPU; nothing here
+     *  rebuilds it (NeverStream, an unbiased group). */
+    DEEPSPACE_API int64 ShadowTextureCpuBytes(const UTexture2D& Texture);
+    DEEPSPACE_API void DiscardShadowTextureCpu(UTexture2D& Texture);
 ```
 
 Also amend `CopyBodyLook`'s comment: "... and the cast shadow's map, frame and strength".
 
 In `Source/DeepSpace/Sky/ShipSky.cpp`:
 
-(f) Add the includes `#include "Engine/Texture2D.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"`, `#include "TextureResource.h"` and `#include "UObject/Package.h"`. With the other CVars, add:
+(f) Add the includes `#include "Engine/Texture2D.h"`, `#include "HAL/PlatformTime.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"`, `#include "TextureResource.h"` and `#include "UObject/Package.h"`. With the other CVars, add:
 
 ```cpp
     TAutoConsoleVariable<float> CVarShadows(
@@ -3299,120 +3829,226 @@ In `Source/DeepSpace/Sky/ShipSky.cpp`:
 
     TAutoConsoleVariable<int32> CVarShadowMaps(
         TEXT("ds.Sky.ShadowMaps"), 1,
-        TEXT("1 bakes each solid world's cast-shadow map when a system loads, off the game thread; 0 bakes none. Read at each load."),
+        TEXT("1 bakes each solid world's cast-shadow map, off the game thread, re-baking one only when its relief, its light or the width changes; 0 bakes none and drops those held."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarShadowMapWidth(
         TEXT("ds.Sky.ShadowMapWidth"), SunShadowMap::DefaultWidth,
-        TEXT("Columns of each world's cast-shadow map, a power of two from 256 to 8192 (4096: 8.8 km texels on Baemsekai IV). Read at each load."),
+        TEXT("Columns of each world's cast-shadow map, a power of two from 256 to 8192 (4096: 8.8 km texels on Baemsekai IV). Changing it re-bakes every map."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarShadowBakeTasks(
         TEXT("ds.Sky.ShadowBakeTasks"), 2,
-        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads: the machine's cap, never the core count."),
+        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads at low priority: with the terrain's 2, the machine's cap of 4, never the core count."),
         ECVF_Default);
 ```
 
-(g) At the end of `AShipSky::RebuildFor`, after the proxies are made, add:
+(g) `AShipSky::RebuildFor` is **unchanged**: the maps are not the proxies' and outlive a rebuild. The new proxies' instances are handed the held maps by `DrawBodies` in the same frame.
+
+(h) In `AShipSky::SyncTo`, as its first statements, add:
 
 ```cpp
-    // The cast shadow's maps belong to the system drawn: anything baking for
-    // the last one is cancelled, and this one's solid worlds queue, nearest
-    // first.
-    CancelShadowBakes();
-    ShadowTextures.Reset();
-    ShadowFrames.Reset();
-    KeptShadowMaps.Reset();
-    if (CVarShadowMaps.GetValueOnGameThread() != 0)
+    // The cast shadow's maps: each world's key against the map held for it,
+    // outside transit (between stars the system reads empty, and a map baked
+    // for the system being left is still that system's), then land and
+    // launch.
+    if (!bInTransit)
     {
-        QueueShadowBakes(System);
+        SyncShadowMaps(System);
     }
+    PumpShadowBakes(false);
 ```
-
-(h) In `AShipSky::SyncTo`, as its first statement, add `PumpShadowBakes(false);`.
 
 (i) Add the member functions:
 
 ```cpp
 void AShipSky::EndPlay(const EEndPlayReason::Type Reason)
 {
-    CancelShadowBakes();
+    // Cancelled and let go: the bakes hold no this, and stop within a column.
+    TArray<FName> Held;
+    ShadowEntries.GetKeys(Held);
+    for (const FName Body : Held)
+    {
+        DropShadowMap(Body);
+    }
+    ShadowDraining.Reset();
+    ShadowUploads.Reset();
     Super::EndPlay(Reason);
 }
 
-void AShipSky::QueueShadowBakes(const FSkySystem& System)
+void AShipSky::SyncShadowMaps(const FSkySystem& System)
 {
-    const UShipSubsystem* Ship = UShipSubsystem::Get(this);
-    const FUniversePosition From = Ship ? Ship->GetFlightState().GetUniversePosition() : FUniversePosition();
-    ShadowCancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
-    for (const int32 Index : ShipSky::ShadowBakeOrder(System, From))
+    TSet<FName> Wanted;
+    if (CVarShadowMaps.GetValueOnGameThread() != 0)
     {
-        const FSkyBody& Body = System.Bodies[Index];
-        ShadowQueue.Add({ Body.Id, Body.Relief, SkyProjection::SunLightOf(System, Index), SunShadow::SteepestSlope(Body.Relief) });
+        const UShipSubsystem* Ship = UShipSubsystem::Get(this);
+        const FUniversePosition From = Ship ? Ship->GetFlightState().GetUniversePosition() : FUniversePosition();
+        const int32 Width = ShipSky::ShadowMapWidth();
+        for (const int32 Index : ShipSky::ShadowBakeOrder(System, From))
+        {
+            const FSkyBody& Body = System.Bodies[Index];
+            Wanted.Add(Body.Id);
+            ShipSky::FShadowKey Key;
+            Key.Relief = Body.Relief;
+            Key.Sun = SkyProjection::SunLightOf(System, Index);
+            Key.SteepestSlope = SunShadow::SteepestSlope(Body.Relief);
+            Key.Width = Width;
+            const FShadowEntry* Held = ShadowEntries.Find(Body.Id);
+            if (Held && ShipSky::SameShadowKey(Held->Key, Key))
+            {
+                continue;   // made from the same things: nothing to bake
+            }
+            DropShadowMap(Body.Id);
+            ShadowEntries.Add(Body.Id).Key = Key;
+            ShadowQueue.Add(Body.Id);
+        }
+    }
+    TArray<FName> Gone;
+    for (const TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+    {
+        if (!Wanted.Contains(Pair.Key))
+        {
+            Gone.Add(Pair.Key);
+        }
+    }
+    for (const FName Body : Gone)
+    {
+        DropShadowMap(Body);
     }
 }
 
-void AShipSky::CancelShadowBakes()
+void AShipSky::DropShadowMap(FName Body)
 {
-    if (ShadowCancel.IsValid())
+    if (FShadowEntry* Entry = ShadowEntries.Find(Body))
     {
-        ShadowCancel->store(true);
+        if (Entry->Cancel.IsValid())
+        {
+            Entry->Cancel->store(true, std::memory_order_relaxed);
+        }
+        if (Entry->Task.IsValid())
+        {
+            ShadowDraining.Add(MoveTemp(Entry->Task));
+        }
+        ShadowEntries.Remove(Body);
     }
-    for (FShadowBake& Bake : ShadowBakes)
+    ShadowQueue.Remove(Body);
+    ShadowTextures.Remove(Body);
+    KeptShadowMaps.Remove(Body);
+    ShadowUploads.RemoveAll([Body](const TPair<FName, TUniquePtr<FRenderCommandFence>>& Upload) { return Upload.Key == Body; });
+}
+
+int32 AShipSky::GetShadowBakesPending() const
+{
+    int32 Pending = ShadowQueue.Num();
+    for (const TPair<FName, FShadowEntry>& Pair : ShadowEntries)
     {
-        Bake.Task.Wait();
+        Pending += Pair.Value.Task.IsValid() ? 1 : 0;
     }
-    ShadowBakes.Reset();
-    ShadowQueue.Reset();
+    return Pending;
 }
 
 void AShipSky::PumpShadowBakes(bool bWait)
 {
-    const int32 Cap = FMath::Max(1, CVarShadowBakeTasks.GetValueOnGameThread());
-    const int32 Width = static_cast<int32>(FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::Clamp(CVarShadowMapWidth.GetValueOnGameThread(), 256, 8192))));
-    while (ShadowBakes.Num() < Cap && ShadowQueue.Num() > 0)
+    using FBakeTask = UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>>;
+    if (bWait)
     {
-        const FShadowWaiting Next = ShadowQueue[0];
-        ShadowQueue.RemoveAt(0);
-        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = ShadowCancel;
-        ShadowBakes.Add({ Next.Body, UE::Tasks::Launch(UE_SOURCE_LOCATION,
-            [Next, Width, Cancel]() -> TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>
-            {
-                const FReliefGround Ground(Next.Relief);
-                return MakeShared<FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Ground, Next.Sun, Next.SteepestSlope, Width, Cancel.Get()));
-            }, UE::Tasks::ETaskPriority::BackgroundNormal) });
-    }
-    for (int32 Index = ShadowBakes.Num() - 1; Index >= 0; --Index)
-    {
-        FShadowBake& Bake = ShadowBakes[Index];
-        if (bWait)
+        for (FBakeTask& Task : ShadowDraining)
         {
-            Bake.Task.Wait();
+            Task.Wait();
         }
-        if (!Bake.Task.IsCompleted())
+    }
+    ShadowDraining.RemoveAll([](const FBakeTask& Task) { return Task.IsCompleted(); });
+
+    // Launch: what was let go still holds a worker until it stops.
+    const int32 Cap = FMath::Max(1, CVarShadowBakeTasks.GetValueOnGameThread());
+    int32 Busy = ShadowDraining.Num() + (GetShadowBakesPending() - ShadowQueue.Num());
+    while (Busy < Cap && ShadowQueue.Num() > 0)
+    {
+        const FName Body = ShadowQueue[0];
+        ShadowQueue.RemoveAt(0);
+        FShadowEntry& Entry = ShadowEntries.FindChecked(Body);
+        Entry.Cancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+        const ShipSky::FShadowKey Key = Entry.Key;
+        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = Entry.Cancel;
+        Entry.Task = UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Key, Cancel]() -> TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>
+            {
+                const FReliefGround Ground(Key.Relief);
+                return MakeShared<FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Ground, Key.Sun, Key.SteepestSlope, Key.Width, Cancel.Get()));
+            }, UE::Tasks::ETaskPriority::BackgroundLow);
+        ++Busy;
+        ++ShadowBakesStarted;
+    }
+
+    // Land.
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+    {
+        FShadowEntry& Entry = Pair.Value;
+        if (!Entry.Task.IsValid())
         {
             continue;
         }
-        const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe> Map = Bake.Task.GetResult();
-        if (Map.IsValid() && Map->LevelCount() > 0)
+        if (bWait)
         {
-            ShadowTextures.Add(Bake.Body, ShipSky::MakeShadowTexture(*Map, Bake.Body));
-            ShadowFrames.Add(Bake.Body, { ShipSky::ShadowFrameX(*Map), ShipSky::ShadowFrameZ(*Map) });
-            if (bKeepShadowMapsForTest)
-            {
-                KeptShadowMaps.Add(Bake.Body, Map);
-            }
+            Entry.Task.Wait();
         }
-        ShadowBakes.RemoveAt(Index);
+        if (!Entry.Task.IsCompleted())
+        {
+            continue;
+        }
+        const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe> Map = Entry.Task.GetResult();
+        Entry.Task = FBakeTask();
+        if (!Map.IsValid() || Map->LevelCount() == 0)
+        {
+            continue;
+        }
+        const double Began = FPlatformTime::Seconds();
+        UTexture2D* Texture = ShipSky::MakeShadowTexture(*Map, Pair.Key);
+        SlowestShadowLandSeconds = FMath::Max(SlowestShadowLandSeconds, FPlatformTime::Seconds() - Began);
+        if (!Texture)
+        {
+            continue;
+        }
+        ShadowTextures.Add(Pair.Key, Texture);
+        Entry.Frame = { ShipSky::ShadowFrameX(*Map), ShipSky::ShadowFrameZ(*Map) };
+        // In play the fade starts now; a test's flush lands it whole.
+        Entry.LandedAt = bWait ? Now - ShipSky::ShadowFadeSeconds : Now;
+        TUniquePtr<FRenderCommandFence> Fence = MakeUnique<FRenderCommandFence>();
+        Fence->BeginFence();
+        ShadowUploads.Emplace(Pair.Key, MoveTemp(Fence));
+        if (bKeepShadowMapsForTest)
+        {
+            KeptShadowMaps.Add(Pair.Key, Map);
+        }
+    }
+
+    // Once the render thread has a texture, its CPU copy is dead weight.
+    for (int32 Index = ShadowUploads.Num() - 1; Index >= 0; --Index)
+    {
+        if (bWait)
+        {
+            ShadowUploads[Index].Value->Wait();
+        }
+        if (!ShadowUploads[Index].Value->IsFenceComplete())
+        {
+            continue;
+        }
+        if (const TObjectPtr<UTexture2D>* Texture = ShadowTextures.Find(ShadowUploads[Index].Key))
+        {
+            ShipSky::DiscardShadowTextureCpu(*Texture->Get());
+        }
+        ShadowUploads.RemoveAt(Index);
     }
 }
 
 void AShipSky::FlushShadowBakesForTest()
 {
-    while (GetShadowBakesPending() > 0)
+    do
     {
         PumpShadowBakes(true);
     }
+    while (GetShadowBakesPending() > 0 || ShadowUploads.Num() > 0);
 }
 
 UTexture2D* AShipSky::GetShadowTexture(FName Body) const
@@ -3431,18 +4067,22 @@ const FSunShadowMap* AShipSky::GetShadowMapForTest(FName Body) const
 (j) In `DrawBodies`, inside `if (System.Bodies[Index].Kind != ESkyBodyKind::Star)`, after the two `BodyAxis` writes, add:
 
 ```cpp
-            // The cast shadow: the strength every frame, the map once baked.
-            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
-            if (const TObjectPtr<UTexture2D>* Map = ShadowTextures.Find(System.Bodies[Index].Id))
+            // The cast shadow: the strength every frame, faded in from the
+            // frame the map landed; the map and its frame once it has.
+            const FName Id = System.Bodies[Index].Id;
+            const FShadowEntry* Shadow = ShadowEntries.Find(Id);
+            const TObjectPtr<UTexture2D>* Map = ShadowTextures.Find(Id);
+            const float Fade = Shadow && Map ? ShipSky::ShadowFade(GetWorld()->GetTimeSeconds() - Shadow->LandedAt) : 0.0f;
+            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength() * Fade);
+            if (Shadow && Map)
             {
-                const FShadowFrame& ShadowFrame = ShadowFrames.FindChecked(System.Bodies[Index].Id);
                 Instance->SetTextureParameterValue(SkyMaterial::ShadowMap, Map->Get());
-                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShadowFrame.X);
-                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShadowFrame.Z);
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameX, Shadow->Frame.X);
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, Shadow->Frame.Z);
             }
 ```
 
-(`ShadowFrame`, not `Frame`: `DrawBodies` already has a parameter `Frame`, the `FSkyFrame`.)
+(`Shadow`, not `Frame`: `DrawBodies` already has a parameter `Frame`, the `FSkyFrame`.) A world whose map was dropped keeps its old texture on the instance until a new one lands, but at strength 0, so it draws unshadowed. The instance's reference holds that texture's GPU memory until then, or until a new system's rebuild makes new instances.
 
 (k) Replace `ShipSky::CopyBodyLook`'s body with:
 
@@ -3458,12 +4098,30 @@ const FSunShadowMap* AShipSky::GetShadowMapForTest(FName Body) const
     To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));
 ```
 
+The ground copies the faded strength, so it fades in with the orbit.
+
 (l) Add the pure helpers at the end of the file:
 
 ```cpp
 float ShipSky::ShadowStrength()
 {
     return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);
+}
+
+float ShipSky::ShadowFade(double SecondsSinceLanded)
+{
+    return static_cast<float>(FMath::Clamp(SecondsSinceLanded / ShadowFadeSeconds, 0.0, 1.0));
+}
+
+int32 ShipSky::ShadowMapWidth()
+{
+    return static_cast<int32>(FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::Clamp(CVarShadowMapWidth.GetValueOnGameThread(), 256, 8192))));
+}
+
+bool ShipSky::SameShadowKey(const FShadowKey& A, const FShadowKey& B)
+{
+    return SameRelief(A.Relief, B.Relief) && A.Sun.Direction == B.Sun.Direction && A.Sun.AngularRadius == B.Sun.AngularRadius
+        && A.SteepestSlope == B.SteepestSlope && A.Width == B.Width;
 }
 
 TArray<int32> ShipSky::ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship)
@@ -3518,17 +4176,47 @@ UTexture2D* ShipSky::MakeShadowTexture(const FSunShadowMap& Map, FName Name)
         FMemory::Memcpy(Mip->BulkData.Realloc(static_cast<int64>(Texels.Num()) * sizeof(uint16)), Texels.GetData(), Texels.Num() * sizeof(uint16));
         Mip->BulkData.Unlock();
     }
-    // Grayscale and linear, as the parameters' default is (SAMPLERTYPE_GRAYSCALE).
+    // Grayscale and linear, as the parameters' default is (SAMPLERTYPE_GRAYSCALE);
+    // in a group no device profile biases, so mip 0 is always resident.
     Texture->CompressionSettings = TC_Grayscale;
     Texture->SRGB = false;
     Texture->Filter = TF_Nearest;
+    Texture->LODGroup = TEXTUREGROUP_Pixels2D;
     Texture->NeverStream = true;
     Texture->UpdateResource();
     return Texture;
 }
+
+int64 ShipSky::ShadowTextureCpuBytes(const UTexture2D& Texture)
+{
+    int64 Bytes = 0;
+    if (const FTexturePlatformData* Data = Texture.GetPlatformData())
+    {
+        for (const FTexture2DMipMap& Mip : Data->Mips)
+        {
+            Bytes += Mip.BulkData.GetBulkDataSize();
+        }
+    }
+    return Bytes;
+}
+
+void ShipSky::DiscardShadowTextureCpu(UTexture2D& Texture)
+{
+    if (FTexturePlatformData* Data = Texture.GetPlatformData())
+    {
+        for (FTexture2DMipMap& Mip : Data->Mips)
+        {
+            Mip.BulkData.RemoveBulkData();
+        }
+    }
+}
 ```
 
+`SameRelief` is `WorldReliefParams.h`'s (Task 4). If `RemoveBulkData` is refused on a transient mip (an assert, or the size unchanged), say so in the task report and keep the copy. Task 7 then measures the doubled memory, and a budget over goes to Task 7b. Never keep the copy silently.
+
 - [ ] **Step 8: Build and author.**
+
+The header changes here (`ShipSky.h`) and Task 4's (`WorldReliefParams.h`, `WorldGround.h`, `TerrainTile.h`) need `./rebuild.sh --force` before an editor session.
 
 Run:
 
@@ -3551,6 +4239,8 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./test.sh De
 Expected: all PASS.
 - `.MaterialContract` translates every graph, the three shadow nodes included. **A Custom node's HLSL error does not show here**: the translator passes and no shader compiles under `-nullrhi`. It shows in Task 8's `Eyes.WorldReliefParity`, which is the first thing to run after this commit.
 - If `.ShadowParameters` fails on `GetNumMips` under `-nullrhi`, read the count from `Texture->GetPlatformData()->Mips.Num()` instead, and say so in the test's comment.
+- If it fails on "no copy left on the CPU" under `-nullrhi`, check that the fence completed (`FlushShadowBakesForTest` waits on it) before doubting `RemoveBulkData`. Never drop the check.
+- If the fade leg's landing frame reads a strength over 0, the landing and `DrawBodies` ran in different frames: `PumpShadowBakes` must run at the top of `SyncTo`, before `DrawBodies`.
 
 - [ ] **Step 10: Commit.**
 
@@ -3560,14 +4250,18 @@ cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Tools/sky_
   Source/DeepSpace/Tests/ShipSkyShadowTest.cpp Content/Materials/Sky && \
 git commit -qm "feat(sky): the orbit and the ground read each world's baked cast shadow
 
-AShipSky bakes every solid world's SunShadowMap when the system loads, off
-the game thread (nearest first, ds.Sky.ShadowBakeTasks at once, cancelled on
-a rebuild and at EndPlay), uploads a G16 texture with a mip a level, and
-hands it, its frame and ds.Sky.Shadows to M_SkyBody; CopyBodyLook carries
-them to M_SkyGround, which blends the map into its vertices' shadow by Morph.
-One Custom node over the shared file's lookup in both, and in the parity
-probe M_SkyShadowProbe. DeepSpace.Sky.ShadowParameters; the contract's
-textures.
+AShipSky bakes every solid world's SunShadowMap off the game thread, keyed
+by what the map is made from (relief, the sky's light, the width) and
+checked each frame: a jump re-bakes nothing, a reload of the priors re-bakes
+the worlds whose relief moved, and a dropped bake is cancelled and let go,
+never waited on (nearest first, ds.Sky.ShadowBakeTasks at once, at low
+priority). It uploads a G16 texture with a mip a level in an unbiased LOD
+group, discards the CPU copy once uploaded, and hands the texture, its frame
+and ds.Sky.Shadows -- faded in over a second -- to M_SkyBody; CopyBodyLook
+carries them to M_SkyGround, which blends the map into its vertices' shadow
+by Morph. One Custom node over the shared file's lookup in both, handed a
+pixel's footprint, and in the parity probe M_SkyShadowProbe.
+DeepSpace.Sky.ShadowParameters; the contract's textures.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3580,50 +4274,163 @@ Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'return FMath::Clamp(CVarShadow
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));' '' 'DeepSpace.Sky.ShadowParameters$'; \
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius < Ship.DistanceTo' 'Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius > Ship.DistanceTo' 'DeepSpace.Sky.ShadowParameters$'; \
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    if (CVarShadowMaps.GetValueOnGameThread() != 0)' '    if (true)' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '            if (Held && ShipSky::SameShadowKey(Held->Key, Key))' '            if (false)' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    return SameRelief(A.Relief, B.Relief) && A.Sun.Direction' '    return A.Sun.Direction' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Shadows, ShipSky::ShadowStrength() * Fade);' 'SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    Texture->LODGroup = TEXTUREGROUP_Pixels2D;' '' 'DeepSpace.Sky.ShadowParameters$'; \
 ./build.sh
 ```
 
-Expected: four `KILLED`.
+Expected: eight `KILLED`.
 - The unclamped strength draws 7.
 - The ground that is not handed the map reads the white default.
 - The bakes ordered farthest first break the order.
 - The switch that is never read bakes with `ds.Sky.ShadowMaps` 0.
+- The key never matched re-bakes every map every frame, so a jump within the system is not free.
+- The key blind to relief keeps a stale map through a reload of the priors.
+- The strength with no fade draws the landing frame whole.
+- The texture in the default group fails the LOD group's check.
+
+That a dropped bake is never waited on is a property of the code, not of a value, so no headless mutant can see it. Task 7 times the jump and the drop.
 
 The material side is proven on the GPU by Tasks 8 and 9, after Task 7 has measured the cost.
 
 ---
 ## Task 7: THE COST, measured and budgeted -- `Eyes.ShadowBakeCost`
 
-**Owner:** T. **Depends on:** Task 6 (the sky's bakes) and Task 4 (the tiles'), and Task 0's third answer (the budgets). This measures only; it changes no shader and no game code.
+**Owner:** T. **Depends on:** Task 6 (the sky's bakes) and Task 4 (the tiles'), and Task 0's third answer (the budgets). This measures, and changes no shader and no game code. The one exception is that it moves `DeepSpace.Surface.GroundKeepsUp`'s flight into a shared header, so the same flight is flown with the shadow on.
 
 **Files:**
+- Create: `Source/DeepSpace/Tests/GroundKeepsUpScenario.h`. This is `GroundKeepsUp`'s flight, moved out unchanged: paced to the wall clock, from the drive floor at the full sink, then the skim cap's top at 500 m and at 50 m. It returns its counts.
+- Modify: `Source/DeepSpace/Tests/GroundKeepsUpTest.cpp`, which flies it through the header with the shadow off, as before, and asserts what it asserted.
 - Create: `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp` (`Eyes.ShadowBakeCost`)
 
 **Interfaces:**
-- Consumes: `TerrainTile::{Build, FTileShadow}`, `AWorldGround::{GetTileShadow, GetDrawnKeys, GetResidentCount, FlushBuildsForTest}` (Task 4); `SunShadowMap::Bake`, `FSunShadowMap::Bytes` (Task 5); `AShipSky::{FlushShadowBakesForTest, RebuildFor, GetShadowMapForTest, bKeepShadowMapsForTest}` and `ds.Sky.ShadowMapWidth`, `ds.Sky.ShadowBakeTasks` (Task 6); `SkyProjection::SunLightOf` (Task 3); `SunShadow::SteepestSlope`; `ShipSky::GotoPlacement`; `SkyTestWorld::{FSkyWorld, EShadows, PilotEye}`.
-- Produces: `Saved/Eyes/ShadowBakeCost/report.txt`, with lines `cut ...`, `tile ...`, `map ...` and one `budget <name> <measured> <limit> within|OVER` line for each budget.
+- Consumes:
+  - `TerrainTile::{Build, FTileShadow}` and `AWorldGround::{GetTileShadow, GetDrawnKeys, GetResidentCount, GetTileShadowBytes, GetBuildingCount, FlushBuildsForTest, IsDrawingBody}` (Task 4);
+  - `SunShadowMap::Bake` and `FSunShadowMap::Bytes` (Task 5);
+  - `AShipSky::{FlushShadowBakesForTest, GetShadowTexture, GetShadowMapForTest, bKeepShadowMapsForTest, GetShadowBakesStarted, GetSlowestShadowLandSeconds}`, `ShipSky::ShadowTextureCpuBytes`, and `ds.Sky.ShadowMapWidth` and `ds.Sky.ShadowBakeTasks` (Task 6);
+  - `SkyProjection::SunLightOf` (Task 3), `SunShadow::SteepestSlope`, `ShipSky::GotoPlacement`, and `SkyTestWorld::{FSkyWorld, EShadows, FScopedCVar}`.
+- Produces:
+  - `GroundKeepsUpScenario::{FResult, Fly}`;
+  - `Saved/Eyes/ShadowBakeCost/report.txt`, with lines `cut ...`, `release ...`, `tile ...`, `map ...`, `system ...`, `jump ...` and `flight ...`, and one `budget <name> <measured> <limit> within|OVER` line for each budget.
 
 **The budgets, decided now** (Task 0's third question; these are its recommended defaults, and they are replaced here by its answers):
 
 | Budget | Limit | Why |
 |---|---|---|
 | `cold_cut_s`: the cut at 1.5 m over IV at a 10-degree dusk, resident from nothing, with the shadow, on `ds.Terrain.BuildTasks` 2 | 30 s | planning's 27 s estimate at 12 samples; residency never gates motion, and the coarse tiles come first |
+| `release_ms`: the game-thread time a ground's release with a full set of shadowed builds in flight adds to its frame, over an ordinary frame's median | 2 ms | it runs on every fold opened near a world; a wait on a build is 16-70 ms |
 | `tile_ratio`: a tile's median build with the shadow over without, 64 of that cut's keys, 10-degree light | 10 x | planning's 7.7-9.4 x |
-| `world_bake_s`: one world's map on one thread at `ds.Sky.ShadowMapWidth`, the slowest of III, IV and V | 15 s | a world is shadowed well before a ship at the arrival standoff can reach it |
-| `world_map_mb`: one world's map, level 0 and every mip | 16 MB | 4096 columns: planning's 12 MB |
-| `tile_shadow_mb`: the resident cut's kept vertex shadows, CPU | 8 MB | 951 tiles x 1,089 floats = 4.1 MB |
+| `world_bake_s`: one world's map on one thread at `ds.Sky.ShadowMapWidth`, the slowest of the start system's I-V and of the corpus's two extremes | 15 s | a world is shadowed well before a ship at the arrival standoff can reach it |
+| `world_map_mb`: one world's map, level 0 and every mip, the largest of the same | 16 MB | 4096 columns: planning's 12 MB; the deepest `PsiLo` has the most rows |
+| `system_gpu_mb`: the start system's maps resident on the GPU, measured through the engine | 64 MB | 5 worlds x about 12 MB; the corpus's worst system (16 worlds) is reported, not held |
+| `system_cpu_mb`: what the start system's textures still hold on the CPU once uploaded | 0 MB | the copy is discarded (Task 6) |
+| `map_land_ms`: the slowest map's landing on the game thread (texture creation and upload call) | 4 ms | it happens in play, up to a world's bake time after the system loads |
+| `jump_rebakes`: bakes started by an in-system jump, arrival and rebuild included | 0 | a jump moves neither input to any map |
+| `flight_missing`: frames under 1 km with no drawn ground under the ship, `GroundKeepsUp`'s flight with the shadow on | 0 | the invariant `GroundKeepsUp` holds with it off |
+| `flight_worst_cm`: the worst drawn gap under 1 km in that flight | GearClearance / 10 | the same |
+| `flight_not_drawing`: frames under the drive floor where the ground does not draw the body, in that flight | 0 | the same |
+| `coarse_s`: from arriving 49 km over fresh ground to the ground drawing the body, paced to the wall clock | 10 s | the 50 km handover waits on it |
+| `tile_shadow_mb`: the resident cut's vertex shadows on the CPU, both copies, from the arrays | 12 MB | 951 tiles x 1,089 floats x 2 copies = 8.3 MB |
 
 The frame is `Eyes.LandingFrame`'s, in Task 9: it must not rise.
 
-- [ ] **Step 1: The measurement.** Create `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp`:
+- [ ] **Step 1: The flight, shared.** Create `Source/DeepSpace/Tests/GroundKeepsUpScenario.h`:
 
 ```cpp
+#pragma once
+
+#include "Tests/SkyTestWorld.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+/**
+ * DeepSpace.Surface.GroundKeepsUp's flight, shared so Eyes.ShadowBakeCost
+ * flies the same one with the cast shadow on: over Baemsekai IV, from the
+ * drive floor at the full sink, then the skim cap's top at 500 m and at 50
+ * m, each frame paced to the wall clock so the workers get the time they get
+ * in play. It counts; the callers judge.
+ */
+namespace GroundKeepsUpScenario
+{
+    struct FResult
+    {
+        int32 UnderFloor = 0;    // frames under the drive floor
+        int32 ProxyShown = 0;    // of those, the proxy drawn
+        int32 NotDrawing = 0;    // of those, the ground not drawing the body
+        int32 Low = 0;           // frames under 1 km
+        int32 Missing = 0;       // of those, no drawn ground under the ship
+        double Worst = 0.0;      // the worst drawn gap under 1 km, cm
+        double Fastest = 0.0;    // the descent's fastest sink, cm/s
+        double Tolerance = 0.0;  // GearClearance / 10, cm
+        TArray<double> Top;      // each skim leg's best share of the cap (500 m, 50 m)
+        TArray<bool> HeldOff;    // and whether a ridge held it off
+        bool bValid = false;
+    };
+
+    /** Fly it in Test, already begun: ds.Terrain.BuildTasks and
+     *  UploadsPerFrame as the caller set them. */
+    FResult Fly(SkyTestWorld::FSkyWorld& Test);
+}
+
+#endif
+```
+
+Move `GroundKeepsUpTest.cpp`'s flight into it as an inline `Fly`: everything from `UShipSubsystem* Ship = Test.Ship;` through the end of the skim loop. The frame lambda, the counters and the three phases go in unchanged. Each counter becomes the result's field, and each skim leg's `Top` and `bHeldOff` is appended to `Top` and `HeldOff`. Move the includes it needs with it (`GameFramework/Pawn.h`, `HAL/PlatformProcess.h`, `HAL/PlatformTime.h`, `Ship/ShipFlightSurface.h`, `Ship/ShipSubsystem.h`, `Sky/LocalSystem.h`, `Sky/ShipSky.h`, `Surface/GroundField.h`, `Surface/WorldGround.h`). `GroundKeepsUpTest.cpp` becomes:
+
+```cpp
+bool FGroundKeepsUpTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    FScopedCVar Tasks(TEXT("ds.Terrain.BuildTasks"), 2.0f);
+    FScopedCVar Uploads(TEXT("ds.Terrain.UploadsPerFrame"), 4.0f);
+    FSkyWorld Test(TEXT("GroundKeepsUpWorld"));
+    if (!TestNotNull(TEXT("the ground spawns before play"), Test.Ground))
+    {
+        return false;
+    }
+    Test.BeginPlay();
+    const GroundKeepsUpScenario::FResult R = GroundKeepsUpScenario::Fly(Test);
+    if (!TestTrue(TEXT("the flight was flown"), R.bValid && R.Top.Num() == 2 && R.HeldOff.Num() == 2))
+    {
+        return false;
+    }
+    TestTrue(FString::Printf(TEXT("the descent reached the full sink, 200 m/s (%.1f m/s)"), R.Fastest / 100.0), R.Fastest >= 0.99 * 2.0e4);
+    for (int32 Leg = 0; Leg < 2; ++Leg)
+    {
+        const double Height = Leg == 0 ? 500.0 : 50.0;
+        AddInfo(FString::Printf(TEXT("at %.0f m: cruise reached %.2f of the skim cap%s"), Height, R.Top[Leg], R.HeldOff[Leg] ? TEXT(", held off a ridge") : TEXT("")));
+        TestTrue(FString::Printf(TEXT("at %.0f m the ship flew at the skim cap's top, or a ridge held it off (%.2f)"), Height, R.Top[Leg]),
+                 R.Top[Leg] >= 0.9 || R.HeldOff[Leg]);
+    }
+    AddInfo(FString::Printf(TEXT("%d frames under the drive floor, %d under 1 km; worst drawn gap %.2f cm"), R.UnderFloor, R.Low, R.Worst));
+    TestTrue(TEXT("the flight spent frames under the floor and under 1 km"), R.UnderFloor > 1000 && R.Low > 1000);
+    TestEqual(TEXT("under the drive floor the proxy is never drawn"), R.ProxyShown, 0);
+    TestEqual(TEXT("and the ground draws the body every frame"), R.NotDrawing, 0);
+    TestEqual(TEXT("under 1 km there is always drawn ground under the ship"), R.Missing, 0);
+    TestTrue(FString::Printf(TEXT("and it is within GearClearance / 10 of the analytic ground, moving (worst %.2f cm)"), R.Worst),
+             R.Worst <= R.Tolerance);
+    return true;
+}
+```
+
+The test's messages are its old ones, word for word. Run `./test.sh DeepSpace.Surface.GroundKeepsUp`: it passes as before, in about the same two minutes. Its old mutation proofs still apply through the header.
+
+- [ ] **Step 2: The measurement.** Create `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp`:
+
+```cpp
+#include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformMemory.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "RenderingThread.h"
+#include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyProjection.h"
@@ -3632,13 +4439,14 @@ The frame is `Eyes.LandingFrame`'s, in Task 9: it must not rise.
 #include "Surface/SunShadowMap.h"
 #include "Surface/TerrainTile.h"
 #include "Surface/WorldGround.h"
+#include "Tests/GroundKeepsUpScenario.h"
 #include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
  * A MEASUREMENT, not a guard: what the baked cast shadow costs (the
- * cast-shadow plan, Task 6). Named outside DeepSpace. so ./test.sh never runs
+ * cast-shadow plan, Task 7). Named outside DeepSpace. so ./test.sh never runs
  * it -- it is timed, and a timing belongs behind the lock on a quiet machine
  * -- and run as the rendered checks are:
  *
@@ -3648,15 +4456,27 @@ The frame is `Eyes.LandingFrame`'s, in Task 9: it must not rise.
  *
  * - The cold cut: the ground at 1.5 m over Baemsekai IV under a 10-degree
  *   dusk, resident from nothing, without and with the shadow
- *   (ds.Terrain.Shadows 0 then 1), on the ground's own tasks.
+ *   (ds.Terrain.Shadows 0 then 1), on the ground's own tasks; and a release
+ *   of the ground with shadowed builds in flight, on the game thread.
  * - A tile: 64 of that cut's keys, each built here, on this thread, without
  *   the shadow and with it under a 3-, 10- and 60-degree sun over the cut's
  *   centre. Medians and 90th percentiles of BuildSeconds, and their ratio.
- * - A world's map: Baemsekai III, IV and V, each baked here on one thread at
- *   ds.Sky.ShadowMapWidth, and the sky's own bakes of every solid world on
- *   ds.Sky.ShadowBakeTasks, from a rebuild to the last texture.
- * - Memory: each map's bytes, level 0 and its mips, and the resident cut's
- *   kept vertex shadows.
+ * - A world's map: Baemsekai I-V, and the corpus's two extremes -- the most
+ *   relief for its size (Baiti I: 0.44 Earth radii, 9.74 km) and the
+ *   largest solid world (Tishras I: 2.13, 2.57 km) -- at Cratering 1, the
+ *   costliest, under IV's light, each baked here on one thread at
+ *   ds.Sky.ShadowMapWidth.
+ * - The system: the sky's own bakes of every solid world on
+ *   ds.Sky.ShadowBakeTasks, the GPU memory they hold as the engine counts it
+ *   (TMC_ResidentMips), what they still hold on the CPU, the process's
+ *   physical memory before and after, and the slowest landing on the game
+ *   thread; the corpus's worst system (16 worlds) by the same per-world
+ *   figure, reported.
+ * - A jump within the system: the bakes it starts.
+ * - The flight: GroundKeepsUp's, with the shadow on, paced to the wall clock;
+ *   and the wait, from 49 km over fresh ground, for the ground to draw the
+ *   body.
+ * - The resident cut's vertex shadows, both copies, from the arrays.
  *
  * Each budget prints one line, `budget <name> <measured> <limit> within|OVER`;
  * the plan's rule reads them. Nothing is asserted but that each measure was
@@ -3669,10 +4489,18 @@ namespace ShadowBakeCostLocal
 {
     // The budgets: Task 0's answers (the plan's recommended defaults until then).
     constexpr double ColdCutBudgetSeconds = 30.0;
+    constexpr double ReleaseBudgetMs = 2.0;
     constexpr double TileRatioBudget = 10.0;
     constexpr double WorldBakeBudgetSeconds = 15.0;
     constexpr double WorldMapBudgetMB = 16.0;
-    constexpr double TileShadowBudgetMB = 8.0;
+    constexpr double SystemGpuBudgetMB = 64.0;
+    constexpr double SystemCpuBudgetMB = 0.0;
+    constexpr double MapLandBudgetMs = 4.0;
+    constexpr double JumpRebakesBudget = 0.0;
+    constexpr double CoarseBudgetSeconds = 10.0;
+    constexpr double TileShadowBudgetMB = 12.0;
+    constexpr int32 WorstSystemWorlds = 16;   // Saved/procgen_corpus.tsv's most solid worlds in one system
+    constexpr double EarthRadiusCm = 6.371e8;
 
     double Percentile(TArray<double> Values, double Share)
     {
@@ -3688,19 +4516,31 @@ namespace ShadowBakeCostLocal
     {
         return FString::Printf(TEXT("budget %s %.3f %.3f %s"), Name, Measured, Limit, Measured <= Limit ? TEXT("within") : TEXT("OVER"));
     }
+
+    double MB(double Bytes)
+    {
+        return Bytes / (1024.0 * 1024.0);
+    }
 }
 
 bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
 {
     using namespace SkyTestWorld;
     using namespace ShadowBakeCostLocal;
+    FScopedCVar Tasks(TEXT("ds.Terrain.BuildTasks"), 2.0f);
+    FScopedCVar Uploads(TEXT("ds.Terrain.UploadsPerFrame"), 4.0f);
+    const FPlatformMemoryStats Before = FPlatformMemory::GetStats();
     FSkyWorld Test(TEXT("ShadowBakeCostWorld"), 8, EShadows::On);
     Test.Sky->bKeepShadowMapsForTest = true;
     Test.BeginPlay();
     Test.Step(1.0f / 60.0f);
+    const double SkyStart = FPlatformTime::Seconds();
     Test.Sky->FlushShadowBakesForTest();
+    const double SkySeconds = FPlatformTime::Seconds() - SkyStart;
+    FlushRenderingCommands();
+    const FPlatformMemoryStats After = FPlatformMemory::GetStats();
     const FSkySystem Here = LocalSystem::Here(Test.World);
-    if (!TestTrue(TEXT("the start system has worlds III, IV and V"), Here.Bodies.IsValidIndex(5)))
+    if (!TestTrue(TEXT("the start system has worlds I-V"), Here.Bodies.IsValidIndex(5)))
     {
         return false;
     }
@@ -3714,7 +4554,52 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         AddInfo(Text);
     };
 
-    // -- The cold cut ---------------------------------------------------------
+    // -- The system: the sky's own bakes, and their memory as the engine counts it
+    {
+        int32 Maps = 0;
+        double GpuMB = 0.0;
+        double CpuMB = 0.0;
+        double LevelsMB = 0.0;
+        for (const FSkyBody& Body : Here.Bodies)
+        {
+            UTexture2D* Texture = Test.Sky->GetShadowTexture(Body.Id);
+            const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Body.Id);
+            if (!Texture || !Map)
+            {
+                continue;
+            }
+            ++Maps;
+            GpuMB += MB(Texture->CalcTextureMemorySizeEnum(TMC_ResidentMips));
+            CpuMB += MB(ShipSky::ShadowTextureCpuBytes(*Texture));
+            LevelsMB += MB(Map->Bytes());
+            TestTrue(FString::Printf(TEXT("%s: the GPU holds mip 0 at the map's width (no LOD bias)"), *Body.Id.ToString()),
+                Texture->GetResource() && Texture->GetResource()->GetSizeX() == static_cast<uint32>(Map->Width));
+        }
+        IConsoleVariable* BakeTasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowBakeTasks"));
+        Line(FString::Printf(TEXT("system the sky's bakes: %d worlds on %d tasks, %.2f s from the load to the last texture; GPU %.2f MB resident (the levels are %.2f MB), CPU %.2f MB left; process physical %+.1f MB over the world's start"),
+            Maps, BakeTasks ? BakeTasks->GetInt() : 0, SkySeconds, GpuMB, LevelsMB, CpuMB,
+            MB(static_cast<double>(After.UsedPhysical) - static_cast<double>(Before.UsedPhysical))));
+        Line(FString::Printf(TEXT("system the corpus's worst, %d solid worlds, at this system's %.2f MB a world: %.1f MB on the GPU (reported, not held)"),
+            WorstSystemWorlds, GpuMB / FMath::Max(Maps, 1), WorstSystemWorlds * GpuMB / FMath::Max(Maps, 1)));
+        Line(Budget(TEXT("system_gpu_mb"), GpuMB, SystemGpuBudgetMB));
+        Line(Budget(TEXT("system_cpu_mb"), CpuMB, SystemCpuBudgetMB));
+        Line(Budget(TEXT("map_land_ms"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
+    }
+
+    // -- A jump within the system: the serial moves, the sky rebuilds, nothing is baked
+    {
+        const int32 Started = Test.Sky->GetShadowBakesStarted();
+        Test.Sky->SyncTo(Here, LocalSystem::Serial(Test.World) + 1, false);
+        for (int32 Tick = 0; Tick < 10; ++Tick)
+        {
+            Test.Step(1.0f / 60.0f);
+        }
+        const int32 Rebakes = Test.Sky->GetShadowBakesStarted() - Started;
+        Line(FString::Printf(TEXT("jump within the system: %d bakes started"), Rebakes));
+        Line(Budget(TEXT("jump_rebakes"), Rebakes, JumpRebakesBudget));
+    }
+
+    // -- The cold cut, and a release with shadowed builds in flight --------------
     const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, 0.0, Test.Ship->GetFlightState().GetUniversePosition(),
                                                                  ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(10.0));
     if (!TestTrue(TEXT("goto dusk places over Baemsekai IV"), Dusk.IsSet() && Star))
@@ -3724,8 +4609,12 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
     const FVector Up = (Dusk->Position - Fourth.Position).GetSafeNormal();
     const FVector Sunward = (Star->Position - Fourth.Position).GetSafeNormal();
     const FVector Heading = FVector::CrossProduct(Up, Sunward).GetSafeNormal();
-    Test.Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + Field->Height(FVector3d(Up), 0.0) + 150.0),
-                         FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
+    const auto AtDusk = [&]()
+    {
+        Test.Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + Field->Height(FVector3d(Up), 0.0) + 150.0),
+                             FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
+    };
+    AtDusk();
     IConsoleVariable* TerrainShadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.Shadows"));
     IConsoleVariable* BuildTasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.BuildTasks"));
     if (!TestNotNull(TEXT("ds.Terrain.Shadows exists"), TerrainShadows) || !TestNotNull(TEXT("ds.Terrain.BuildTasks exists"), BuildTasks))
@@ -3747,8 +4636,37 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
     Line(FString::Printf(TEXT("cut 1.5m_dusk10 over Baemsekai IV: %d tiles resident on %d tasks; without the shadow %.2f s, with it %.2f s (x%.2f)"),
         Resident, BuildTasks->GetInt(), CutWithout, CutWith, CutWith / FMath::Max(CutWithout, 1e-6)));
     Line(Budget(TEXT("cold_cut_s"), CutWith, ColdCutBudgetSeconds));
-    const double TileShadowMB = Resident * TerrainTile::GridVerts * sizeof(float) / (1024.0 * 1024.0);
+    const double TileShadowMB = MB(static_cast<double>(Test.Ground->GetTileShadowBytes()));
+    Line(FString::Printf(TEXT("cut vertex shadows: %.2f MB from the arrays, both copies (%.2f MB by the formula for one)"),
+        TileShadowMB, MB(Resident * TerrainTile::GridVerts * sizeof(float))));
     Line(Budget(TEXT("tile_shadow_mb"), TileShadowMB, TileShadowBudgetMB));
+    {
+        // A restart with builds in flight: a sample count the cut was not
+        // built at. The release is read as its frame over an ordinary one's
+        // median, so the frame's own work is not charged to it.
+        FScopedCVar Samples(TEXT("ds.Terrain.ShadowSamples"), 13.0f);
+        TArray<double> Ordinary;
+        for (int32 Tick = 0; Tick < 11; ++Tick)
+        {
+            const double Began = FPlatformTime::Seconds();
+            Test.Step(1.0f / 60.0f);   // the first restarts under 13 samples; the rest build
+            Ordinary.Add(1e3 * (FPlatformTime::Seconds() - Began));
+        }
+        Ordinary.RemoveAt(0);
+        const int32 Building = Test.Ground->GetBuildingCount();
+        TerrainShadows->Set(0, ECVF_SetByCode);
+        const double Start = FPlatformTime::Seconds();
+        Test.Step(1.0f / 60.0f);   // the restart's release, and the frame around it
+        const double Ms = 1e3 * (FPlatformTime::Seconds() - Start) - Percentile(Ordinary, 0.5);
+        TerrainShadows->Set(1, ECVF_SetByCode);
+        Line(FString::Printf(TEXT("release with %d shadowed builds in flight: %.2f ms over an ordinary frame's median (%.2f ms)"),
+            Building, Ms, Percentile(Ordinary, 0.5)));
+        TestTrue(TEXT("builds were in flight when the ground let go"), Building > 0);
+        Line(Budget(TEXT("release_ms"), Ms, ReleaseBudgetMs));
+    }
+    AtDusk();
+    Test.Step(1.0f / 60.0f);
+    Test.Ground->FlushBuildsForTest();
 
     // -- A tile ---------------------------------------------------------------
     const TArray<FTileKey> Drawn = Test.Ground->GetDrawnKeys();
@@ -3785,44 +4703,89 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         }
     }
 
-    // -- A world's map ----------------------------------------------------------
-    IConsoleVariable* Width = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowMapWidth"));
-    const int32 Columns = Width ? Width->GetInt() : SunShadowMap::DefaultWidth;
+    // -- A world's map: the start system's five, and the corpus's two extremes
+    const int32 Columns = ShipSky::ShadowMapWidth();
+    const SunShadow::FSunLight FourthLight = SkyProjection::SunLightOf(Here, 4);
+    struct FWorld
+    {
+        FString Name;
+        FWorldReliefParams Relief;
+        SunShadow::FSunLight Sun;
+    };
+    TArray<FWorld> Worlds;
+    for (int32 Index = 1; Index <= 5; ++Index)
+    {
+        if (Here.Bodies[Index].Ground == EGround::Solid)
+        {
+            Worlds.Add({ Here.Bodies[Index].Id.ToString(), Here.Bodies[Index].Relief, SkyProjection::SunLightOf(Here, Index) });
+        }
+    }
+    const auto Extreme = [&](const TCHAR* Name, double RadiusEarth, double PeakKm)
+    {
+        FWorldReliefParams Relief = Fourth.Relief;
+        Relief.RadiusCm = RadiusEarth * EarthRadiusCm;
+        Relief.PeakCm = PeakKm * 1.0e5;
+        Relief.Cratering = 1.0;
+        Worlds.Add({ FString::Printf(TEXT("%s-like (the corpus's, at Cratering 1)"), Name), Relief, FourthLight });
+    };
+    Extreme(TEXT("Baiti I"), 0.443141, 9.74015);
+    Extreme(TEXT("Tishras I"), 2.12699, 2.5735);
     double Slowest = 0.0;
     double Largest = 0.0;
-    for (const int32 Index : { 3, 4, 5 })
+    for (const FWorld& World : Worlds)
     {
-        const FSkyBody& Body = Here.Bodies[Index];
-        const FReliefGround Ground(Body.Relief);
+        const FReliefGround Ground(World.Relief);
         const double Start = FPlatformTime::Seconds();
-        const FSunShadowMap Map = SunShadowMap::Bake(Ground, SkyProjection::SunLightOf(Here, Index), SunShadow::SteepestSlope(Body.Relief), Columns);
+        const FSunShadowMap Map = SunShadowMap::Bake(Ground, World.Sun, SunShadow::SteepestSlope(World.Relief), Columns);
         const double Seconds = FPlatformTime::Seconds() - Start;
-        const double MB = Map.Bytes() / (1024.0 * 1024.0);
         Slowest = FMath::Max(Slowest, Seconds);
-        Largest = FMath::Max(Largest, MB);
-        TestTrue(FString::Printf(TEXT("%s's map baked"), *Body.Id.ToString()), Map.LevelCount() > 0);
+        Largest = FMath::Max(Largest, MB(Map.Bytes()));
+        TestTrue(FString::Printf(TEXT("%s's map baked"), *World.Name), Map.LevelCount() > 0);
         Line(FString::Printf(TEXT("map %s: %d x %d, %d levels, %.2f s on one thread, %.2f MB, psi_lo %.2f deg"),
-            *Body.Id.ToString(), Map.Width, Map.Rows, Map.LevelCount(), Seconds, MB, FMath::RadiansToDegrees(Map.PsiLo)));
+            *World.Name, Map.Width, Map.Rows, Map.LevelCount(), Seconds, MB(Map.Bytes()), FMath::RadiansToDegrees(Map.PsiLo)));
     }
     Line(Budget(TEXT("world_bake_s"), Slowest, WorldBakeBudgetSeconds));
     Line(Budget(TEXT("world_map_mb"), Largest, WorldMapBudgetMB));
+
+    // -- The flight, with the shadow on ------------------------------------------
     {
+        // Fresh ground: far enough off that the ground lets go of everything.
+        const FVector Away = (Test.Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal();
+        Test.Ship->PlaceShip(Fourth.Position + Away * (Fourth.Radius + 5.0e8), FRotationMatrix::MakeFromX(-Away).ToQuat());
+        Test.Step(1.0f / 60.0f);
+        const GroundKeepsUpScenario::FResult R = GroundKeepsUpScenario::Fly(Test);
+        TestTrue(TEXT("the flight was flown"), R.bValid);
+        Line(FString::Printf(TEXT("flight GroundKeepsUp's with the shadow on: %d frames under the drive floor, %d under 1 km; %d without drawn ground, %d not drawing the body, worst drawn gap %.2f cm (allowed %.2f)"),
+            R.UnderFloor, R.Low, R.Missing, R.NotDrawing, R.Worst, R.Tolerance));
+        Line(Budget(TEXT("flight_missing"), R.Missing, 0.0));
+        Line(Budget(TEXT("flight_worst_cm"), R.Worst, R.Tolerance));
+        Line(Budget(TEXT("flight_not_drawing"), R.NotDrawing, 0.0));
+    }
+    {
+        // The handover's wait: from 49 km over ground nothing was built for.
+        const FVector Side = FVector::CrossProduct(Up, Sunward).GetSafeNormal();
+        const FVector Fresh = (Up * FMath::Cos(0.8) + Side * FMath::Sin(0.8)).GetSafeNormal();
+        Test.Ship->PlaceShip(Fourth.Position + Fresh * (Fourth.Radius + 5.0e8), FRotationMatrix::MakeFromX(-Fresh).ToQuat());
+        Test.Step(1.0f / 60.0f);
+        Test.Ship->PlaceShip(Fourth.Position + Fresh * (Fourth.Radius + 4.9e6), FRotationMatrix::MakeFromX(-Fresh).ToQuat());
         const double Start = FPlatformTime::Seconds();
-        Test.Sky->RebuildFor(Here);
-        Test.Sky->FlushShadowBakesForTest();
-        int32 Maps = 0;
-        double MB = 0.0;
-        for (const FSkyBody& Body : Here.Bodies)
+        double Waited = -1.0;
+        while (FPlatformTime::Seconds() - Start < 60.0)
         {
-            if (const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Body.Id))
+            const double Began = FPlatformTime::Seconds();
+            Test.Step(1.0f / 60.0f);
+            if (Test.Ground->IsDrawingBody())
             {
-                ++Maps;
-                MB += Map->Bytes() / (1024.0 * 1024.0);
+                Waited = FPlatformTime::Seconds() - Start;
+                break;
+            }
+            while (FPlatformTime::Seconds() - Began < 1.0 / 60.0)
+            {
+                FPlatformProcess::Sleep(0.001f);
             }
         }
-        IConsoleVariable* Tasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowBakeTasks"));
-        Line(FString::Printf(TEXT("map the sky's bakes: %d worlds on %d tasks, %.2f s from the rebuild to the last texture, %.2f MB in all"),
-            Maps, Tasks ? Tasks->GetInt() : 0, FPlatformTime::Seconds() - Start, MB));
+        Line(FString::Printf(TEXT("coarse the ground drew the body %.2f s after arriving 49 km over fresh ground, shadow on (-1: not in 60 s)"), Waited));
+        Line(Budget(TEXT("coarse_s"), Waited < 0.0 ? 60.0 : Waited, CoarseBudgetSeconds));
     }
 
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");
@@ -3835,27 +4798,36 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 2: Run it**, on a quiet machine: no other build, test or render running.
+`GroundKeepsUpScenario::Fly` places the ship at IV's drive floor itself, over "the ship's own side of the world", as `GroundKeepsUp` always did. The placement 5,000 km out before it only makes the ground let go of the dusk cut first, so the flight starts from what play would have.
 
-Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.ShadowBakeCost; cat Saved/Eyes/ShadowBakeCost/report.txt`
+- [ ] **Step 3: Run it**, on a quiet machine: no other build, test or render running.
 
-Expected: `passed: 1`, and the report's `cut`, three `tile`, three `map`, one sky-bakes line and five `budget` lines. Planning expects:
+Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.GroundKeepsUp && Tools/eyes.sh Eyes.ShadowBakeCost; cat Saved/Eyes/ShadowBakeCost/report.txt`
+
+Expected: `GroundKeepsUp` passes as before. `Eyes.ShadowBakeCost` reports `passed: 1` (a run of about four minutes), with the `system`, `jump`, `cut`, `release`, three `tile`, seven `map`, `flight` and `coarse` lines, and fourteen `budget` lines. Planning expects:
 - the cold cut at about 3 s without the shadow and about 27 s with it;
+- a release well under 2 ms, since nothing waits;
 - a tile about 8x at 10 degrees, less at 3 (many vertices exit hidden), about 1x at 60 (the day exit);
-- each map about 8-15 s on one thread and about 12 MB;
-- the sky's five bakes at about (the sum over worlds) / 2 on two tasks.
+- each map about 8-15 s on one thread and about 12 MB, the Baiti I-like the most rows;
+- the system at about 60 MB on the GPU and 0 left on the CPU;
+- the jump at 0 bakes;
+- the flight: in doubt. At about 40 tiles a second the finest levels come late, and whether the drawn gap stays within GearClearance / 10 is the question this measure exists to answer.
 
-A number far from its prediction is a finding to report, not a failure.
+A number far from its prediction is a finding to report, not a failure. If the process's physical memory rose by about the GPU figure again, the CPU copy is still held somewhere (`ShadowTextureCpuBytes` says 0): report it with Task 7b's memory options.
 
-- [ ] **Step 3: The verdict.**
-  - **Every budget line reads `within`:** write the report's budget lines and the `cut`, `tile sun 10` and `map` lines into this file's header comment, as one line each after `Nothing is asserted...`, headed `Measured (2026-09-28, RTX 4070 Ti SUPER, Ryzen 5 7600X):`. Commit (Step 4), and go on to Task 8.
-  - **Any line reads `OVER`:** commit the measurement (Step 4) and go to Task 7b. Do not start Task 8.
+- [ ] **Step 4: The verdict.**
+  - **Every budget line reads `within`:** write the report's budget lines and the `system`, `cut`, `tile sun 10`, `map`, `flight` and `coarse` lines into this file's header comment, as one line each after `Nothing is asserted...`, headed `Measured (2026-09-28, RTX 4070 Ti SUPER, Ryzen 5 7600X):`. Commit (Step 5), and go on to Task 8.
+  - **Any line reads `OVER`:** commit the measurement (Step 5) and go to Task 7b. Do not start Task 8.
 
-- [ ] **Step 4: Commit.**
+- [ ] **Step 5: Commit.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp && \
-git commit -qm "test(eyes): the baked cast shadow's cost -- per tile, per world, and their memory, against their budgets
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/GroundKeepsUpScenario.h Source/DeepSpace/Tests/GroundKeepsUpTest.cpp \
+  Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp && \
+git commit -qm "test(eyes): the baked cast shadow's cost -- per tile, per world, per system, in flight, and its memory, against their budgets
+
+GroundKeepsUp's flight moves into GroundKeepsUpScenario.h, unchanged, so
+Eyes.ShadowBakeCost flies it with the tile shadows on.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3868,14 +4840,26 @@ No mutation proves a measurement. The budget lines' `OVER` wording is what Task 
 
 Reached from Task 7. Stop, and put the report's lines to the developer with the options that match the budget that failed. Do not tune past a budget without the ruling.
 
-- **`cold_cut_s` or `tile_ratio` over:** Task 0's second question, with measured numbers now:
+- **`cold_cut_s`, `tile_ratio`, `coarse_s` or a `flight_*` budget over:** Task 0's second question, with measured numbers now. The first remedy to propose is the day exit by footprint (Task 0, 2(e)).
+  - It is `SunShadow::SteepestSlope(Params, FootprintCm)`: the sampled steepest slope of only the bands not yet faded at the tile's spacing, each band's sampled gradient measured as `.SteepestSlope` measures the sum.
+  - It changes no value: a vertex over its exit is whole either way. `.Exits` must hold at every footprint it is given.
+  - It needs no ruling, only its measurement.
+  - The other options follow.
   - `ds.Terrain.BuildTasks` 3;
   - every other vertex, interpolated (a coarsening: it needs the ruling);
   - `ds.Terrain.ShadowSamples` 8, which `.AgainstProfile` measured as over its 5-degree bound (a quality NO-GO unless the developer relaxes it);
   - or a larger budget.
   - First, profile `FWorldRelief::Height`, whose crater sum is most of a height's cost. `DetailSum` evaluates every band, even one its footprint has faded to 0. Skipping those (`if (FootprintD * Frequencies[Band] >= 1.0) continue;`) changes no value, since the band's scale is exactly 0 there, and saved about 25% of a coarse read in planning's harness. Such a change must keep `DeepSpace.Surface.WorldRelief.KnownValues` and `Eyes.WorldReliefParity` exact, and is proposed with its measurement.
 - **`world_bake_s` over:** a narrower `ds.Sky.ShadowMapWidth` (2048 is about 4x faster), or more bake tasks. Or accept it: a world's map lands this many seconds after the system loads, and until then it draws unshadowed.
-- **`world_map_mb` or `tile_shadow_mb` over:** a narrower width; or 8-bit texels (half the memory, 1/255 steps); or dropping the kept `FTileBuild` copy in `UTerrainTileComponent`, which exists only for proxy recreation.
+- **`world_map_mb`, `system_gpu_mb` or `tile_shadow_mb` over:**
+  - a narrower width;
+  - 8-bit texels (half the memory, 1/255 steps);
+  - baking only the worlds within some reach of the ship (a new ruling: it is no longer "baked when the system loads");
+  - dropping one of the two kept copies of a tile's `SunVisible`: the resident tile's, or `UTerrainTileComponent`'s, which exists only for proxy recreation.
+- **`system_cpu_mb` over 0:** the CPU copy was not discarded. If `RemoveBulkData` is refused on a transient mip, say so. The option is then to upload the mips through the RHI directly (`RHIUpdateTexture2D` into a texture created with no bulk data), which is a larger change and needs the go-ahead.
+- **`map_land_ms` over:** the same RHI upload, on the render thread, so the game thread only enqueues it. Or accept a hitch of that size once a world, up to a world's bake time after the system loads.
+- **`release_ms` over:** a bug, not a tune. Something still waits on a build: look for a `Wait()` outside `*ForTest`.
+- **`jump_rebakes` over 0:** a bug, not a tune. A key changed on a jump that moved neither input. Look at what `SameShadowKey` compares: the light is body-to-star and must not move with the ship.
 
 When the ruling comes back, write it into the spec under the ruling's bullet, amend Task 7's budgets or Tasks 4/5's defaults, re-run Task 7, and go on.
 
@@ -3893,9 +4877,9 @@ When the ruling comes back, write it into the spec under the ruling's bullet, am
 - Consumes: `M_SkyShadowProbe`, `SkyMaterial::{ShadowProbePath, ShadowMap, ShadowFrameX, ShadowFrameZ, ProbeFootprint}`, `ShipSky::{MakeShadowTexture, ShadowFrameX, ShadowFrameZ}`, `AShipSky::FlushShadowBakesForTest` (Task 6); `SunShadowMap::{Shape, Bake, Sample, SampleF32}` (Task 5); `SkyProjection::SunLightOf` (Task 3); `SunShadow::SteepestSlope`; the parity test's `Draw`, `Selecting`, `EPass`, `FGap`, `IsFinite`, `FloorRuleFactor`, `Side`, `HomeSky`, `Fourth`, `Probe`, `Target`, `Report`.
 - Produces: report lines `Baemsekai IV's shadow map, <place>, footprint <f>: ...`, and `SUMMARY shadow map C++-vs-GPU <x>, float-vs-double <y>`; and a second line in `Saved/Eyes/HandoverParity/report.txt`.
 
-**The tolerance, decided now:** the measured floor as a rule. The texels are the same 16-bit integers on both sides, and the GPU's `Load` of a UNORM16 texel is that integer over 65535. What is left is the lookup's own arithmetic in float: the frame's dot products, `asin`, `atan2`, `log2`, and the taps' weights. So at each footprint and each place the GPU is held to the larger of 1e-3 and 1.25 x the float mirror's (`SampleF32`) distance from double, measured in the same run at the same D. Every pixel is held: the lookup is continuous in D, the seam included, and its only steps are the texels' own values. A FLOAT FLOOR verdict escalates.
+**The tolerance, decided now:** the measured floor as a rule. The texels are the same 16-bit integers on both sides, and the GPU's `Load` of a UNORM16 texel is that integer over 65535. What is left is the lookup's own arithmetic in float: the frame's dot products, `asin`, `atan2`, `log2`, and the taps' weights. So at each footprint and each place the GPU is held to the larger of 1e-3 and 1.25 x the float mirror's (`SampleF32`) distance from double, measured in the same run at the same D. Every pixel is held: the lookup is continuous in D, the seam included, and its only steps are the texels' own values. The one exception is the night edge at `PsiLo`, where float and double can fall on either side. There the step is row 0's value, which is nearly 0 on a real map, since the rows just above `PsiLo` are almost all dark. A FLOAT FLOOR verdict escalates.
 
-**The handover, decided now:** at 49.9 km over IV under a 3-degree dusk, where the map shades part of the ground, the ground's frame must be the orbit's to 1e-3 of its mean with the shadow on. The shadow must reach both frames: each is darker with it than without, by the same share to 1e-3. And the seam's per-pixel p99 gap may grow at most 3x with the shadow on. At 49.9 km the morph is about 3e-5, so the ground's shadow is the map to that.
+**The handover, decided now:** at 49.9 km over IV under a 3-degree dusk, turned about the light until the map shades the view's central quarter (its mean at most 0.9, read from the kept map before any frame is shot), the ground's frame must be the orbit's to 1e-3 of its mean with the shadow on. The shadow must reach both frames: each is darker with it than without, by the same share to 1e-3. And the seam's per-pixel p99 gap may grow at most 3x with the shadow on. At 49.9 km the morph is about 3e-5, so the ground's shadow is the map to that.
 
 - [ ] **Step 1: The map's leg.** In `WorldReliefParityTest.cpp`, add the includes `#include "Engine/Texture2D.h"`, `#include "Sky/SkyProjection.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"` and `#include "Surface/SunShadowMap.h"`. Before `Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));`, add:
 
@@ -4017,7 +5001,7 @@ Expected: PASS, with 0 shader-compile errors and ten shadow-map blocks (two plac
   - **Over its allowance at a few pixels of the finest footprint only, the float mirror close to it:** a FLOAT FLOOR verdict (the GPU's `atan2` or `log2` beyond the C++ float build's). Stop and report the gaps; the tolerance is not loosened.
   - **Over broadly, or at the seam's place only:** a port bug. Look first at the frame's `w` channels (PsiLo and Step reaching the node), the pin order, and the taps' wrap.
 
-- [ ] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"` and `#include "Sky/ShipSky.h"` (if absent). Make the world `FSkyWorld Test(TEXT("HandoverParityWorld"), 8, EShadows::On);`, and after `Test.BeginPlay();` add:
+- [ ] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"`, `#include "Sky/ShipSky.h"` (if absent) and `#include "Surface/SunShadowMap.h"`. Make the world `FSkyWorld Test(TEXT("HandoverParityWorld"), 8, EShadows::On);`, set `Test.Sky->bKeepShadowMapsForTest = true;` before `Test.BeginPlay();`, and after `Test.BeginPlay();` add:
 
 ```cpp
     // Every world's cast-shadow map is baked before any frame is judged.
@@ -4079,13 +5063,68 @@ Then, before `const FString Dir = ...`, add:
     {
         return false;
     }
+    // The view must hold shade before the shadow can be said to reach it.
+    // The capture is 20 degrees straight down from 49.9 km, so its central
+    // quarter is about 4.4 km of ground either way: about one 8.8 km texel.
+    // Where that texel falls would decide the leg. So the map itself is read
+    // first -- SunShadowMap::Sample over the central quarter at a pixel's
+    // footprint -- and the placement is turned about the light, which keeps
+    // the star 3 degrees up at the nadir, until the map shades that ground
+    // by at least a tenth.
+    const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Fourth.Id);
+    if (!TestNotNull(TEXT("Baemsekai IV's map is baked and kept"), Map))
+    {
+        return false;
+    }
+    const auto ViewMean = [&](const FUniversePosition& Position)
+    {
+        const FVector Offset = Position - Fourth.Position;
+        const FVector3d Nadir = FVector3d(Offset.GetSafeNormal());
+        const double Altitude = Offset.Size() - Fourth.Radius;
+        const double TanHalf = FMath::Tan(FMath::DegreesToRadians(0.5 * Capture->FOVAngle));
+        const double Half = Altitude * 0.5 * TanHalf / Fourth.Radius;     // the central quarter's half-width, rad
+        const double Pixel = 2.0 * TanHalf * Altitude / Size / Fourth.Radius;   // one pixel's footprint, D units
+        const FVector3d East = FVector3d::CrossProduct(FVector3d::UnitZ(), Nadir).GetSafeNormal();
+        const FVector3d North = FVector3d::CrossProduct(Nadir, East);
+        double Sum = 0.0;
+        int32 Count = 0;
+        for (int32 Y = -8; Y <= 8; ++Y)
+        {
+            for (int32 X = -8; X <= 8; ++X)
+            {
+                Sum += SunShadowMap::Sample(*Map, (Nadir + (East * X + North * Y) * (Half / 8.0)).GetSafeNormal(), Pixel);
+                ++Count;
+            }
+        }
+        return Sum / Count;
+    };
+    FNavPlacement Placed = *Dusk;
+    double Shade = ViewMean(Placed.Position);
+    for (int32 Turn = 1; Turn <= 720 && Shade > 0.9; ++Turn)
+    {
+        // 0.05 degrees a turn, about 4.7 km on IV: half a texel.
+        const FQuat About(FVector(Map->FrameZ), Turn * FMath::DegreesToRadians(0.05));
+        FNavPlacement Trial = *Dusk;
+        Trial.Position = Fourth.Position + About.RotateVector(Dusk->Position - Fourth.Position);
+        Trial.Orientation = About * Dusk->Orientation;
+        const double Seen = ViewMean(Trial.Position);
+        if (Seen < Shade)
+        {
+            Shade = Seen;
+            Placed = Trial;
+        }
+    }
+    if (!TestTrue(FString::Printf(TEXT("the view holds shade: the map's mean over the central quarter is %.3f, at most 0.9"), Shade), Shade <= 0.9))
+    {
+        return false;   // no leg can judge the handover's shadow on ground the map leaves lit
+    }
     double Means[2][2] = { { 0.0, 0.0 }, { 0.0, 0.0 } };   // [shadows][ground, orbit]
     double P99[2] = { 0.0, 0.0 };                          // [shadows]
     for (int32 On = 0; On < 2; ++On)
     {
         Shadows->Set(static_cast<float>(On), ECVF_SetByCode);
         Test.Ground->SetActorHiddenInGame(false);
-        Ship->PlaceShip(Dusk->Position, Dusk->Orientation);
+        Ship->PlaceShip(Placed.Position, Placed.Orientation);
         Test.Step(1.0f / 60.0f);
         Test.Ground->FlushBuildsForTest();
         Test.Step(1.0f / 60.0f);
@@ -4107,8 +5146,8 @@ Then, before `const FString Dir = ...`, add:
     Shadows->Set(ShadowsWere, ECVF_SetByCode);
     const double GroundShare = Means[1][0] / FMath::Max(Means[0][0], 1e-12);
     const double OrbitShare = Means[1][1] / FMath::Max(Means[0][1], 1e-12);
-    const FString DuskLine = FString::Printf(TEXT("49.9 km over Baemsekai IV at a 3-degree dusk: ground %.6f (%.6f without the shadow), orbit %.6f (%.6f); the shadow keeps %.4f of the ground's light, %.4f of the orbit's; per-pixel p99 %.2e with it, %.2e without"),
-        Means[1][0], Means[0][0], Means[1][1], Means[0][1], GroundShare, OrbitShare, P99[1], P99[0]);
+    const FString DuskLine = FString::Printf(TEXT("49.9 km over Baemsekai IV at a 3-degree dusk (the map's mean over the view %.3f): ground %.6f (%.6f without the shadow), orbit %.6f (%.6f); the shadow keeps %.4f of the ground's light, %.4f of the orbit's; per-pixel p99 %.2e with it, %.2e without"),
+        Shade, Means[1][0], Means[0][0], Means[1][1], Means[0][1], GroundShare, OrbitShare, P99[1], P99[0]);
     AddInfo(DuskLine);
     TestTrue(FString::Printf(TEXT("with the shadow the ground's frame is the orbit's to 1e-3 of it (%s)"), *DuskLine),
         FMath::Abs(Means[1][0] - Means[1][1]) <= 1.0e-3 * Means[1][1]);
@@ -4124,7 +5163,7 @@ Then make the report carry both lines: replace `FFileHelper::SaveStringToFile(Li
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.HandoverParity; cat Saved/Eyes/HandoverParity/report.txt`
 
-Expected: PASS, with two lines. The existing 49.9 km line is unchanged: at the start's sun (62.6 degrees on IV) the day exit leaves the map whole there. On the dusk line both shares are well under 1, within 1e-3 of each other, and the p99 with the shadow is within 3x of without. The shares depend on how much of the central quarter the map shades at 8.8 km texels, 3 degrees up. If a share reads 0.99 or more, the shadow reached neither frame at the handover: look at the ground's copy of the map (`CopyBodyLook`) and at the proxy's `Shadows` before anything else.
+Expected: PASS, with two lines. The existing 49.9 km line is unchanged: at the start's sun (62.6 degrees on IV) the day exit leaves the map whole there. On the dusk line both shares are well under 1, within 1e-3 of each other, and the p99 with the shadow is within 3x of without. The shares depend on how much of the central quarter the map shades at 8.8 km texels, 3 degrees up. The leg first finds a placement whose view the map shades by at least a tenth (the line prints the map's mean there). So a share of 0.99 or more now means the shadow did not reach that frame. For the ground, look at `CopyBodyLook`. For both, look at the proxy's `Shadows`, which a flush lands faded in. If no placement holds shade ("the view holds shade" fails), the map is lit along the whole 36 degrees of terminator searched: look at the bake (`.TexelsAreTheProfile`) and the light's frame before the handover.
 
 - [ ] **Step 5: The verdict line, and commit.** Add this to `WorldReliefParityTest.cpp`'s header, after the T2 verdict line, filled in from the run:
 
@@ -4433,7 +5472,9 @@ If the comparison prints `OFF FRAME DIFFERS`, the switch is not the old look bey
 
 - [ ] **Step 5: Look at the frames.** Open `Saved/Eyes/ReliefLook/shadows-after/world_4_ground_low_read_shadows1.png` and its `read_shadows0` twin, then the same pair for `orbit_low`, then both 10-degree pairs. Check that:
 - the shadows fall away from the sun, and lie across the view in the ground frames;
-- no speckle, banding or tile seam shows where the unshadowed frame has none, and no shadow steps at a tile's edge (a tile's vertices and its neighbour's are the same directions, so their shadows are the same numbers);
+- no speckle, banding or tile seam shows where the unshadowed frame has none;
+- no shadow steps at an edge between two tiles of one level. Their shared vertices are the same directions at the same footprint, so the shadows are the same numbers, which `.TileSunShadow` holds to the bit;
+- **at a 2:1 edge, look for a step in the shade.** Only tiles of the same level agree at a shared edge. Where a level-L tile meets a level-L+1 one, a shared direction is shadowed at two footprints, and the finer side's odd vertices carry values the coarser side interpolates. The skirts close the crack in the geometry but not the step in the shade. `.TileSunShadow` printed the step's size under a 2-degree sun (Task 4's report). If it shows in the 3-degree ground frames, record where and how large. Put it to the developer with the remedy: shadow each tile's edge ring at twice its spacing, the coarser side's footprint, and make its odd edge vertices the mean of their two neighbours. That holds a 2:1 edge only one way, so it is a ruling. Do not tune it away here;
 - the terminator side is darker and never brighter;
 - from orbit the map's shadows are soft at its texel, and never blocky: a blocky edge is the lookup's level or its bilinear taps.
 
@@ -4442,7 +5483,7 @@ Write a one-line judgement per world into the spec line below. The developer's o
 - [ ] **Step 6: The spec.** In `docs/superpowers/specs/2026-09-27-landing-design.md`, under the ruling "**Cast shadows are baked, not marched** (2026-09-28)", add an indented line with the runs' numbers:
 
 ```markdown
-  - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (<N> samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is <W> columns (<texel> km texels on IV), baked when the system loads. The bake: the cold cut at 1.5 m <cut> s (was <cut0>), a tile <ratio>x its heights at a 10-degree dusk, a world's map <world> s and <MB> MB, the sky's five <sky> s on <tasks> tasks. The frame: not rising (`Eyes.LandingFrame --not-rise`, every case within its band; whole frames <A>..<F> ms, handed to the ground's profiling). Parity: the map C++ vs GPU <worst> against the float mirror's <float>; the handover at a 3-degree dusk ground <g> vs orbit <o> (<share> of the light kept). Frames at the read exposure, mean luma on held pixels before -> after (coverage): at 10 degrees, orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees, orbit ..., ground .... Judged: <one line a world>. The developer's look carried to the playtest.
+  - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (<N> samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is <W> columns (<texel> km texels on IV), baked when the system loads. The bake: the cold cut at 1.5 m <cut> s (was <cut0>), a tile <ratio>x its heights at a 10-degree dusk, a world's map <world> s and <MB> MB (the slowest and largest of I-V and the corpus's two extremes), the sky's five <sky> s on <tasks> tasks, <gpu> MB resident on the GPU and <cpu> MB left on the CPU (the corpus's worst system about <worst> MB), the slowest landing <land> ms; an in-system jump re-bakes <rebakes>; a release with builds in flight <release> ms; in flight with tile shadows on, <missing> frames without drawn ground, worst gap <gap> cm, the coarse cut <coarse> s after arriving; a 2:1 tile edge steps the shade by <step> on average. The frame: not rising (`Eyes.LandingFrame --not-rise`, every case within its band; whole frames <A>..<F> ms, handed to the ground's profiling). Parity: the map C++ vs GPU <worst> against the float mirror's <float>; the handover at a 3-degree dusk ground <g> vs orbit <o> (<share> of the light kept). Frames at the read exposure, mean luma on held pixels before -> after (coverage): at 10 degrees, orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees, orbit ..., ground .... Judged: <one line a world>. The developer's look carried to the playtest.
 ```
 
 - [ ] **Step 7: The parent plan and CLAUDE.md.** In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
@@ -4464,14 +5505,25 @@ as the night side. Its light is the sky's own, `SkyProjection::LightDirection`.
 Each ground tile computes its vertices' shadow as it is built, off the game
 thread (`TerrainTile::Build`, 12 samples, `ds.Terrain.ShadowSamples`), into
 UV0.x, so a vertex shadow is as sharp as its tile's spacing: 12-24 pixels
-between vertices at 4K on the drawn cut. Each solid world's map for the orbit
+between vertices at 4K on the drawn cut. Two tiles of one level agree on
+their shared edge to the bit; at a 2:1 edge the shade can step, since the
+skirts close only the geometry's crack (`.TileSunShadow` measures it). Each solid world's map for the orbit
 (`SunShadowMap`: equirectangular in the star's frame, 4096 columns,
 `ds.Sky.ShadowMapWidth`, 8.8 km texels on Baemsekai IV, the provably dark
-night side left out, 16 bits and a mip a level) is baked by `AShipSky` when
-the system loads, nearest first, `ds.Sky.ShadowBakeTasks` at once, cancelled
-on a new system; before it lands the world draws unshadowed. It is finer than
-a 4K pixel only while the world is under about 35 degrees across, and softer
-nearer: no per-world texture can be finer than the screen from 50 km. Both
+night side left out, 16 bits and a mip a level) is baked by `AShipSky`,
+nearest first, `ds.Sky.ShadowBakeTasks` at once at low priority, and **keyed
+by what it is made from** -- the relief, the sky's light for the world, the
+width -- never by the jump serial: an in-system jump bumps the serial and
+rebuilds the proxies, and re-bakes nothing, while `ds.Universe.ReloadPriors`
+re-bakes exactly the worlds whose relief moved. A dropped bake is cancelled
+and let go, never waited on. Before a map lands the world draws unshadowed,
+and when it lands its shadow fades in over `ShipSky::ShadowFadeSeconds`
+(1 s). The texture is in `TEXTUREGROUP_Pixels2D`, so no device profile's
+LOD bias drops mip 0 under the lookup, and its CPU copy is discarded once
+uploaded. It is finer than a 4K pixel only while the world is under about
+35 degrees across -- the lookup is handed one pixel's footprint, the faces'
+over `filter_pixels` -- and softer nearer: no per-world texture can be finer
+than the screen from 50 km. Under its lowest row, `PsiLo`, it reads 0. Both
 materials read the map through one Custom node over the shared file's
 `WR_ShadowMapCoord` (`SunShadowMap::Sample` mirrors it, and
 `Eyes.WorldReliefParity` holds them together), and M_SkyGround blends it into
@@ -4482,8 +5534,9 @@ dusk). The night's exit is a proof, the day's a sampled steepest slope with a
 would show as a lit speck under a high sun. `ds.Sky.Shadows 0` draws the
 unshadowed look. It costs the frame nothing (`Eyes.LandingFrame`, `--not-rise`
 against the frame before any shadow); what it costs the bake is
-`Eyes.ShadowBakeCost`'s. Test worlds build without it unless asked
-(`SkyTestWorld::EShadows`).
+`Eyes.ShadowBakeCost`'s, which also flies `GroundKeepsUp`'s flight with the
+tile shadows on. Test worlds build without either unless asked, and ask for
+each apart (`SkyTestWorld::EShadows::Tiles`, `::Maps`, `::On`).
 ```
 
 In *Landing*'s paragraph that begins "**The ground** (`AWorldGround`, `hauler_ground`)", after "shaded by `M_SkyGround` exactly as the orbit shades", add: "(each tile's vertices carrying the cast shadow, *The sky*)".
@@ -4492,11 +5545,11 @@ In *Where each tunable lives*, after the `ds.Sky.SurfaceDetail` row, add:
 
 ```markdown
 | `ds.Sky.Shadows` | 1 (0 draws the unshadowed look) | `ShipSky.cpp` |
-| `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2; read at each system load | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
+| `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2 at low priority; a change to the width re-bakes every map | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
 | `ds.Terrain.Shadows`, `.ShadowSamples` | 1, 12; changing either rebuilds the ground | `WorldGround.cpp`, the samples from `SunShadow::DefaultSamples` (`SunShadow.h`) |
 ```
 
-Add to the named-constants sentence at the table's foot: "the cast shadow's `SunShadow::SteepestMargin` (1.5) and sampled gradients (`DetailGradientSampled`, `CraterGradientSampled`, re-measured by `DeepSpace.Surface.SunShadow.SteepestSlope`)".
+Add to the named-constants sentence at the table's foot: "the cast shadow's `SunShadow::SteepestMargin` (1.5) and sampled gradients (`DetailGradientSampled`, `CraterGradientSampled`, re-measured by `DeepSpace.Surface.SunShadow.SteepestSlope`), and its maps' fade-in, `ShipSky::ShadowFadeSeconds` (1 s)".
 
 - [ ] **Step 8: The whole suite, and its time.**
 
@@ -4557,10 +5610,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Task 0's three questions are answered and written into the spec.
 - `DeepSpace.Surface.SunShadow.*` holds the pure march to its known values, exits, schedule and quality against the dense march, and its sampled slope to the real ground's.
 - `DeepSpace.Surface.TileSunShadow` and `.GroundShadowLight` hold every tile's vertices to that march under the sky's own light. `DeepSpace.Sky.SunLightIsTheSkys` holds that light to the sky's.
-- `DeepSpace.Surface.SunShadowMap.*` holds each world's map to its profile, its dark rows to the proof, and its lookup to its known values. `DeepSpace.Sky.ShadowParameters` holds the sky's bakes and the materials' parameters.
+- `DeepSpace.Surface.SunShadowMap.*` holds each world's map to its profile, its dark rows to the proof, and its lookup to its known values, 0 under `PsiLo` included.
+- `DeepSpace.Sky.ShadowParameters` holds the sky's bakes and the materials' parameters: keyed maps, a jump within the system re-baking nothing, a reload re-baking only what moved, the fade-in, the unbiased LOD group, and no CPU copy.
+- `DeepSpace.Sky.MaterialContract` holds the faces to handing the lookup one pixel's footprint.
 - `Eyes.WorldReliefParity` holds the map's lookup on the GPU to its C++ mirror at the measured floor, across the terminator and across the seam.
 - `Eyes.HandoverParity` holds the ground to the orbit at a 3-degree dusk with the shadow on.
-- `Eyes.ShadowBakeCost`'s every budget reads `within`, or Task 7b's ruling is recorded.
+- `Eyes.ShadowBakeCost`'s every budget reads `within`, or Task 7b's ruling is recorded. That covers the flight with tile shadows on, the release, the jump, the landing hitch and the system's memory as the engine counts it.
 - `Eyes.LandingFrame` does not rise in any case (`--not-rise`), and its switch is proven by pixels.
 - The before/after frames of Baemsekai III, IV and V are in `Saved/Eyes/ReliefLook/shadows-{before,after}`: from 200 km and at the ground, at 10 degrees and at 3, at the game's exposure plus the stated read stops. Each has its mean brightness and shadow coverage on still pixels and its aliasing, recorded in the spec. Every shadows-off read frame is its before on the pixels both runs held.
 - The default suite's additions are at most 8 s.
@@ -4578,7 +5633,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
      - The handover is Task 6's Morph blend (the ground's shadow *is* the map at Morph 0) and Task 8's `Eyes.HandoverParity` dusk leg.
      - The lookup is held on the GPU by Task 8's `Eyes.WorldReliefParity` leg under the float-floor rule.
      - The sun direction is one function: Task 3's `SunLightIsTheSkys`, Task 4's `GroundShadowLight`, and Task 6's `ShadowParameters` (`FrameZ` against `SunLightOf`).
-  5. The bake's cost per tile and per world, and memory, measured and budgeted; LandingFrame must not rise: Task 7 (`Eyes.ShadowBakeCost`, five budgets, Task 7b on over) and Task 9 (`--not-rise`).
+  5. The bake's cost per tile, per world and per system, and memory, measured and budgeted; LandingFrame must not rise: Task 7 (`Eyes.ShadowBakeCost`, fourteen budgets, Task 7b on over) and Task 9 (`--not-rise`).
+     - The flight with tile shadows on is `GroundKeepsUp`'s own, shared through `GroundKeepsUpScenario.h`.
+     - Memory is read from the engine and from the arrays, not from formulas.
   6. The done-when's frames: Task 10. III, IV and V, from 200 km and at the ground, at 10 and 3 degrees, at the game's exposure plus the stated read stops, with mean brightness and coverage on still pixels.
 - **What was kept:** Tasks 1 and 1b's code and verdicts, the gate tool (extended, not changed, by `--not-rise`), `Eyes.ReliefLook`'s still-pixel rule (unchanged; the held means added beside it), `Eyes.LandingFrame`'s ABBA rounds and switch proof (unchanged), and the exposure fix (`EyesFrames::Expose`, used as it is).
 - **Names across tasks:**
@@ -4600,4 +5657,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - The map cannot be finer than the screen from 50 km (Task 0, question 1).
   - A vertex shadow is as sharp as its tile's spacing (CLAUDE.md's paragraph).
   - The day exit is a sampled claim (Task 0; `.SteepestSlope`).
-  - A world draws unshadowed until its map lands (Task 7b's `world_bake_s`).
+  - A world draws unshadowed until its map lands (Task 7b's `world_bake_s`), then fades in over a second.
+  - The shade can step at a 2:1 tile edge (Task 4 measures it, Task 10 looks for it).
+  - The CPU copy's discard rests on `RemoveBulkData` being allowed on a transient mip. Task 6 checks it, and Task 7 measures it.
+- **Review fixes, where each is pinned:**
+  - the maps keyed per world (`.ShadowParameters`, Task 6);
+  - the flight with tile shadows on (`Eyes.ShadowBakeCost`, Task 7);
+  - no waits in teardown (`GroundShadowLight`'s cap, Task 4; `release_ms`, Task 7);
+  - the 2:1 edge (`.TileSunShadow`, Task 4; Task 10 Step 5);
+  - a pixel's footprint (`.MaterialContract`, Task 6);
+  - the per-system memory (Task 0; `system_gpu_mb`, Task 7);
+  - 0 under `PsiLo` (`.Lookup`, Task 5);
+  - the dusk handover's shaded view (Task 8);
+  - the fade (`.ShadowParameters`);
+  - the split switches (`EShadows`, Task 4);
+  - the LOD group and the landing's hitch (Tasks 6, 7);
+  - the worst worlds (`world_bake_s`, `world_map_mb`, Task 7).
