@@ -22,6 +22,7 @@
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/WorldGround.h"
 #include "Surface/WorldRelief.h"
 #include "Universe/UniverseUnits.h"
 
@@ -423,6 +424,19 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
     const float Mottle = CVarMottle.GetValueOnGameThread();
     const float Detail = CVarSurfaceDetail.GetValueOnGameThread();
 
+    // The ground below 50 km over a solid world (landing decision 7): it
+    // says which body it draws; that proxy is hidden, and its look copied
+    // into the ground's material. The projection still computes the hidden
+    // proxy, with its rendered floor, so the depth stack is unchanged. The
+    // ground ticks first (its tick is this actor's prerequisite), so this is
+    // the frame's own answer.
+    AWorldGround* Ground = nullptr;
+    for (TActorIterator<AWorldGround> It(GetWorld()); It && !Ground; ++It)
+    {
+        Ground = *It;
+    }
+    const FName GroundBody = Ground ? Ground->GetDrawnBody() : NAME_None;
+
     for (int32 Index = 0; Index < Proxies.Num(); ++Index)
     {
         UStaticMeshComponent* Proxy = Proxies[Index];
@@ -434,6 +448,13 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
         const double Scale = View.ProxyScale;
         Proxy->SetRelativeTransform(FTransform(FQuat::Identity,
             View.ProxyLocation - Universe.UnrotateVector(MeshCentre * Scale), FVector(Scale)));
+        // Every proxy's visibility is set here, never by SetSkyVisible(true),
+        // so the one the ground has is not shown and hidden again each frame.
+        const bool bGroundHasIt = GroundBody != NAME_None && System.Bodies[Index].Id == GroundBody;
+        if (Proxy->IsVisible() == bGroundHasIt)
+        {
+            Proxy->SetVisibility(!bGroundHasIt);
+        }
 
         UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Proxy->GetMaterial(0));
         if (!Instance)
@@ -463,6 +484,10 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             // floats: 6e-8, where the instance transform's rotation kept 3e-5.
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisX, AsParameter(Universe.GetAxisX()));
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisY, AsParameter(Universe.GetAxisY()));
+        }
+        if (bGroundHasIt && Ground->GetGroundMaterialInstance())
+        {
+            ShipSky::CopyBodyLook(*Instance, *Ground->GetGroundMaterialInstance());
         }
     }
 }
@@ -620,11 +645,13 @@ void AShipSky::WriteParameters()
 
 void AShipSky::SetSkyVisible(bool bVisible)
 {
+    // Shown, each proxy's visibility is DrawBodies', which runs next and
+    // knows which body the ground draws (landing decision 7).
     for (UStaticMeshComponent* Proxy : Proxies)
     {
-        if (Proxy && Proxy->IsVisible() != bVisible)
+        if (!bVisible && Proxy && Proxy->IsVisible())
         {
-            Proxy->SetVisibility(bVisible);
+            Proxy->SetVisibility(false);
         }
     }
     // The sun is shown by DrawSun, which alone knows whether there is one.
@@ -748,6 +775,18 @@ int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
     }
     const FName Name(*Trimmed);
     return System.Bodies.IndexOfByPredicate([&Name](const FSkyBody& Body) { return Body.Id == Name; });
+}
+
+void ShipSky::CopyBodyLook(UMaterialInstanceDynamic& From, UMaterialInstanceDynamic& To)
+{
+    for (const FName Name : { SkyMaterial::Colour, SkyMaterial::LightDirection, SkyMaterial::SurfaceSeed })
+    {
+        To.SetVectorParameterValue(Name, From.K2_GetVectorParameterValue(Name));
+    }
+    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering })
+    {
+        To.SetScalarParameterValue(Name, From.K2_GetScalarParameterValue(Name));
+    }
 }
 
 double ShipSky::ReliefScaleOf(const FSkyBody& Body)

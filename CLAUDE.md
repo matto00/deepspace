@@ -522,6 +522,18 @@ on a dome at 250,000 km (`AShipSky::DomeRadius`), behind every body. A
 body is a point until it resolves, and the resolve is a blend in the material,
 so there is no moment of change.
 
+**Below 50 km over a solid world the ground draws the body** (landing
+decision 7). At 50 km the projection's magnification is exactly 1 -- the
+proxy is the true sphere at its true place -- so the ground (`AWorldGround`,
+*The ground*) takes the body there once its coarse cut is resident, gives it
+back over 55 km, and always has it under the drive floor, where the proxy is
+never drawn. The relief grows in: every tile's heights are scaled by one
+morph fraction, 0 at 50 km to 1 at the drive floor, while the flight always
+has the whole relief. The sky still projects the hidden proxy with its
+rendered floor, so the depth stack is unchanged, and it copies that body's
+look into the ground's material (`ShipSky::CopyBodyLook`), so the handover
+has no brightness step.
+
 **The sky polls and stores nothing** (conflict 2). `AShipSky` has no
 `SetSystem` and no `SetInTransit`: nothing calls into it, and nothing needs to
 find it. Every frame it asks `LocalSystem` (`Current`, `Serial`,

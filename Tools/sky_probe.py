@@ -19,6 +19,9 @@ stack, the photometry) and the drive's law from the flight-feel spec
     speed <= min(max(d / 4 s, the stepped braking curve), d / step), the
     curve v^2 / 1.6a + v step / 2 = d (ShipFlight::MaySpeed);
     the floor the sky's own, max(10 km, 1.6e-3 R), one radius over a star
+    -- the drive's floor over a solid world is that above its highest peak
+    (landing decision 10); this table flies the drive to it over a flat
+    datum, which is where the rendered floor still sets the proxy
 
 -- flown at 120 Hz substeps as FShipFlightState flies it, and the arrival
 standoff of plan conflict 9,

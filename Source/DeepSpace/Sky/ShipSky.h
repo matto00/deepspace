@@ -11,6 +11,7 @@
 class FOutputDevice;
 class UDirectionalLightComponent;
 class UInstancedStaticMeshComponent;
+class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UMaterialParameterCollection;
 class UPostProcessComponent;
@@ -236,6 +237,12 @@ namespace ShipSky
      *  (FWorldRelief::SlopeScale) over a solid world, the giant billow over a
      *  banded one, none otherwise. */
     DEEPSPACE_API double ReliefScaleOf(const FSkyBody& Body);
+
+    /** The body's look, copied from its proxy's instance into the ground's:
+     *  the light, colour and seed, and the brightness, mottle, detail, relief
+     *  and craters -- one writer of the look, so the handover can have no
+     *  step in it (landing decision 9). */
+    DEEPSPACE_API void CopyBodyLook(UMaterialInstanceDynamic& From, UMaterialInstanceDynamic& To);
 
     /** The flux of the faintest background star, in solar luminosities at a
      *  light year squared: a Sun at 70.4 ly. The Sun is absolute magnitude
