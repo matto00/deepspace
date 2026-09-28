@@ -173,6 +173,19 @@ bool FAtmosphereBacklitRingTest::RunTest(const FString& Parameters)
         LitPeak = FMath::Max(LitPeak, Luminance(Limb(Earth(), Height * H, Quarter).InScatter));
     }
     AddInfo(FString::Printf(TEXT("brightest over 0.25-8 H: the ring %.4e, the lit limb %.4e"), RingPeak, LitPeak));
+
+    // The ring is the haze's forward peak, not only the gas's. At 3 H in
+    // Earth's air there is no haze left (its scale height is 1.2 km), so the
+    // gas's (1 + cos^2) alone makes the ring win there. Low in a thin air,
+    // where the grazing path is still optically thin and the haze is dense,
+    // the aerosol's g carries the ring: the gas alone could make it at most
+    // twice the lit limb, and the haze makes it many times that.
+    const FAtmosphere Thin = FAtmosphere::Build(AtmosphereTestFixtures::NitrogenOxygen(AtmosphereTestFixtures::LowBar), AtmosphereTestFixtures::SunK);
+    const double ThinH = Thin.GetAir().GasH;
+    const double HazyRing = Luminance(Limb(Thin, 0.25 * ThinH, Behind).InScatter);
+    const double HazyLit = Luminance(Limb(Thin, 0.25 * ThinH, Quarter).InScatter);
+    AddInfo(FString::Printf(TEXT("0.05 bar, 0.25 H up: the backlit ring %.4e, the lit limb %.4e, %.1f times"), HazyRing, HazyLit, HazyRing / FMath::Max(HazyLit, 1.0e-300)));
+    TestTrue(TEXT("low in a thin hazy air the ring outshines the lit limb by more than the gas's twofold could: the haze scatters forward"), HazyRing > 4.0 * HazyLit);
     return true;
 }
 
