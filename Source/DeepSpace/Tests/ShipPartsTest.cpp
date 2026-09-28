@@ -1,4 +1,6 @@
 #include "Misc/AutomationTest.h"
+#include "Core/DeepSpaceGameMode.h"
+#include <limits>
 #include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipModuleDataAsset.h"
@@ -209,6 +211,56 @@ bool FShipPartsCatalogueRulesTest::RunTest(const FString& Parameters)
     Refused(TEXT("a second part under a known id"),
             Part(TEXT("Reactor.TwinCore"), EShipBay::Reactor, 0.0, { { EShipRating::ReactorWatts, 1800.0 } }), TEXT("share the id"));
     Refused(TEXT("a part that fits no bay"), Part(TEXT("Nowhere.Part"), EShipBay::None, 0.0), TEXT("fits no bay"));
+    Refused(TEXT("a part with no id"),
+            Part(TEXT(""), EShipBay::Lights, 120.0, { { EShipRating::LightsWant, 300.0 } }), TEXT("has no id"));
+    Refused(TEXT("a lights part that draws -50 W, supply from a bay that is not the reactor"),
+            Part(TEXT("Lights.Sink"), EShipBay::Lights, -50.0, { { EShipRating::LightsWant, 300.0 } }), TEXT("a negative draw"));
+    Refused(TEXT("a draw that is not a number"),
+            Part(TEXT("Lights.Nan"), EShipBay::Lights, std::numeric_limits<double>::quiet_NaN(), { { EShipRating::LightsWant, 300.0 } }), TEXT("not a number"));
+
+    // Every rating is positive and finite: none reads as "more open" by being
+    // negative, zero or NaN.
+    Refused(TEXT("a drive that charges in -1 s"),
+            Part(TEXT("Drive.Instant"), EShipBay::Drive, 0.0, { { EShipRating::ChargeSeconds, -1.0 } }), TEXT("positive, finite"));
+    Refused(TEXT("a drive that winds on -50 W"),
+            Part(TEXT("Drive.Giver"), EShipBay::Drive, 0.0, { { EShipRating::WindingWant, -50.0 } }), TEXT("positive, finite"));
+    Refused(TEXT("lights that want nothing"),
+            Part(TEXT("Lights.Dark"), EShipBay::Lights, 120.0, { { EShipRating::LightsWant, 0.0 } }), TEXT("positive, finite"));
+    Refused(TEXT("a range that is not a number"),
+            Part(TEXT("Sensors.Nan"), EShipBay::Sensors, 200.0, { { EShipRating::RangeLy, std::numeric_limits<double>::quiet_NaN() } }), TEXT("positive, finite"));
+
+    // Every axis of decision 7, by direction: worse than stock on it alone is
+    // refused by its name. Each probe is better on another axis, so without
+    // the axis it would pass (or read only as dominating the quick lever).
+    Refused(TEXT("a drive quicker than the quick lever that draws 25 W"),
+            Part(TEXT("Drive.Hungry"), EShipBay::Drive, 25.0, { { EShipRating::DriveResponse, 5.0 } }),
+            TEXT("less open than stock on its draw"));
+    // The draw is an axis in every core bay: in each, a part better than
+    // stock on its other axis and whole at rest, but drawing more.
+    Refused(TEXT("a hotter reactor that draws 25 W"),
+            Part(TEXT("Reactor.Hot"), EShipBay::Reactor, 25.0, { { EShipRating::ReactorWatts, 1500.0 } }),
+            TEXT("Reactor.Hot: less open than stock on its draw"));
+    Refused(TEXT("a leaner booster cluster that draws 25 W"),
+            Part(TEXT("Boosters.Warm"), EShipBay::Boosters, 25.0, { { EShipRating::BoostersWant, 430.0 } }),
+            TEXT("Boosters.Warm: less open than stock on its draw"));
+    Refused(TEXT("leaner lights whose fittings draw 140 W"),
+            Part(TEXT("Lights.Hot"), EShipBay::Lights, 140.0, { { EShipRating::LightsWant, 280.0 } }),
+            TEXT("Lights.Hot: less open than stock on its draw"));
+    Refused(TEXT("an air plant that draws 310 W"),
+            Part(TEXT("LifeSupport.Hungry"), EShipBay::LifeSupport, 310.0), TEXT("LifeSupport.Hungry: less open than stock on its draw"));
+    Refused(TEXT("a longer array that draws 210 W"),
+            Part(TEXT("Sensors.Long"), EShipBay::Sensors, 210.0, { { EShipRating::RangeLy, 14.0 } }),
+            TEXT("Sensors.Long: less open than stock on its draw"));
+    Refused(TEXT("a drive quicker than the quick lever that takes 60 s to charge"),
+            Part(TEXT("Drive.SlowCharge"), EShipBay::Drive, 0.0,
+                 { { EShipRating::DriveResponse, 5.0 }, { EShipRating::ChargeSeconds, 60.0 } }),
+            TEXT("less open than stock on ChargeSeconds"));
+    Refused(TEXT("a booster cluster that wants 470 W, still whole at rest"),
+            Part(TEXT("Boosters.Hungry"), EShipBay::Boosters, 0.0, { { EShipRating::BoostersWant, 470.0 } }),
+            TEXT("less open than stock on BoostersWant"));
+    Refused(TEXT("a booster cluster that pushes 1.5 km/s^2"),
+            Part(TEXT("Boosters.Weak"), EShipBay::Boosters, 0.0, { { EShipRating::LinearAcceleration, 150000.0 } }),
+            TEXT("less open than stock on LinearAcceleration"));
     {
         TArray<FShipPartSpec> Without = Specs;
         Without.RemoveAll([](const FShipPartSpec& Spec) { return Spec.Id == FName(TEXT("Sensors.Stock")); });
@@ -222,6 +274,18 @@ bool FShipPartsCatalogueRulesTest::RunTest(const FString& Parameters)
                        { { EShipRating::WindingWant, 380.0 }, { EShipRating::ChargeSeconds, 45.0 }, { EShipRating::DriveResponse, 4.5 } }));
         const TArray<FString> Found = ShipParts::Validate(Twins);
         TestTrue(FString::Printf(TEXT("two parts with equal numbers are both legal (%s)"), *FString::Join(Found, TEXT("; "))), Found.IsEmpty());
+    }
+    // And better than stock on those same axes is legal, so each axis's
+    // direction is pinned both ways.
+    {
+        TArray<FShipPartSpec> Opener = Specs;
+        Opener.Add(Part(TEXT("Lights.Frugal"), EShipBay::Lights, 100.0, { { EShipRating::LightsWant, 300.0 } }));
+        Opener.Add(Part(TEXT("Drive.QuickCharge"), EShipBay::Drive, 0.0, { { EShipRating::ChargeSeconds, 30.0 } }));
+        Opener.Add(Part(TEXT("Boosters.Frugal"), EShipBay::Boosters, 0.0, { { EShipRating::BoostersWant, 400.0 } }));
+        Opener.Add(Part(TEXT("Boosters.Strong"), EShipBay::Boosters, 0.0, { { EShipRating::LinearAcceleration, 250000.0 } }));
+        const TArray<FString> Found = ShipParts::Validate(Opener);
+        TestTrue(FString::Printf(TEXT("a lower draw, a quicker charge, a lower want and a harder push are legal (%s)"),
+                                 *FString::Join(Found, TEXT("; "))), Found.IsEmpty());
     }
     // And two parts that trade one axis for another neither dominates.
     {
@@ -314,6 +378,38 @@ bool FShipPartsContractTest::RunTest(const FString& Parameters)
             TestTrue(FString::Printf(TEXT("%s rates %s as Stock() does (%g)"), *Row->Spec.Id.ToString(),
                                      *ShipParts::RatingName(Rating).ToString(), Stock.Get(Rating)),
                      Rated && *Rated == Stock.Get(Rating));
+        }
+    }
+
+    // -- the game mode's saved list is the six stock parts, in bay order --------
+    // What play and Tests/StockShip.h install. Three of the six draw 0 W, so
+    // a list missing one would change no sum any other test checks.
+    {
+        const UClass* ModeClass = LoadClass<ADeepSpaceGameMode>(
+            nullptr, TEXT("/Game/Blueprints/BP_DeepSpaceGameMode.BP_DeepSpaceGameMode_C"));
+        if (TestNotNull(TEXT("BP_DeepSpaceGameMode loads"), ModeClass))
+        {
+            const TArray<TSoftObjectPtr<UShipModuleDataAsset>>& Held =
+                ModeClass->GetDefaultObject<ADeepSpaceGameMode>()->GetStartingModules();
+            TArray<FString> Wanted;
+            for (const EShipBay Bay : ShipBay::All())
+            {
+                if (!ShipBay::IsCore(Bay))
+                {
+                    continue;
+                }
+                const ShipPartsJson::FRow* Row = Catalogue.Rows.FindByPredicate([Bay](const ShipPartsJson::FRow& Candidate)
+                {
+                    return Candidate.Spec.Id == ShipBay::StockPartId(Bay);
+                });
+                Wanted.Add(Row ? ShipPartsJson::ObjectPath(Catalogue, Row->Asset) : ShipBay::StockPartId(Bay).ToString());
+            }
+            TestEqual(TEXT("StartingModules holds one part per core bay"), Held.Num(), Wanted.Num());
+            for (int32 Index = 0; Index < FMath::Min(Held.Num(), Wanted.Num()); ++Index)
+            {
+                TestEqual(FString::Printf(TEXT("StartingModules[%d] is %s"), Index, *Wanted[Index]),
+                          Held[Index].ToSoftObjectPath().ToString(), Wanted[Index]);
+            }
         }
     }
 

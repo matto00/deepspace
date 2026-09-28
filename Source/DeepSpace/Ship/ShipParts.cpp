@@ -311,13 +311,27 @@ TArray<FString> ShipParts::Validate(const TArray<FShipPartSpec>& Catalogue)
             Problems.Add(FString::Printf(TEXT("%s: fits no bay"), *Id));
             continue;
         }
-        if (Part.Draw < 0.0)
+        if (!FMath::IsFinite(Part.Draw))
+        {
+            Problems.Add(FString::Printf(TEXT("%s: a draw that is not a number"), *Id));
+        }
+        else if (Part.Draw < 0.0)
         {
             Problems.Add(FString::Printf(TEXT("%s: a negative draw"), *Id));
         }
         for (const TPair<EShipRating, double>& Rated : Part.Ratings)
         {
             const FString Rating = RatingName(Rated.Key).ToString();
+            // Every rating is a positive, finite quantity: a watt output or a
+            // want, a charge time, a rate, an acceleration, a range. Zero or
+            // less reads as "more open" on a lower-is-open axis and would give
+            // a jump that never winds or a consumer that supplies; NaN fails
+            // every comparison below and so would pass them all.
+            if (!FMath::IsFinite(Rated.Value) || Rated.Value <= 0.0)
+            {
+                Problems.Add(FString::Printf(TEXT("%s: rates %s at %g; a rating is a positive, finite number"),
+                                             *Id, *Rating, Rated.Value));
+            }
             if (ShipBay::IsAux(Part.Bay))
             {
                 Problems.Add(FString::Printf(TEXT("%s: rates %s; aux parts add verbs, never numbers"), *Id, *Rating));

@@ -266,7 +266,7 @@ character only.
 `FShipRatings` with `static FShipRatings Stock()` -- the table's stock
 numbers as named constants, moved here from `ShipSubsystem.h`
 (`DefaultReactorOutput`, `LightsWant`, `BoostersWant`) and from the CVar
-defaults. `ShipParts::Ratings(const TArray<FShipPartSpec>& Fitted)` starts
+defaults. `ShipParts::RatingsOf(const TArray<FShipPartSpec>& Fitted)` starts
 from `Stock()` and applies each fitted part's ratings. Pure, headless.
 
 **`UShipSubsystem` derives, never stores, the rated values.** On every fit
@@ -1308,7 +1308,7 @@ frame from two places.
 ### New files
 
 - `Ship/ShipParts.h/.cpp` -- `EShipBay`, `EShipRating`, `FShipPartSpec`,
-  `FShipRatings::Stock()`, `ShipParts::Ratings`, `ShipParts::Validate`
+  `FShipRatings::Stock()`, `ShipParts::RatingsOf`, `ShipParts::Validate`
   (decision 7's rules), `ShipParts::Effective`, `ShipBay::DrawKey`;
   `FShipPartState`, `FShipBayState`, `FShipLoadoutState` (slice 1).
 - `Ship/ShipPartCatalogue.h` -- `UShipPartCatalogue`, the soft-pointer list

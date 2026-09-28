@@ -12,17 +12,23 @@ DeepSpace.Ship.Parts.Contract holds the JSON, the assets and
 FShipRatings::Stock() to the same numbers.
 
 The three hand-made modules in Content/Ship/Modules (DA_LifeSupport, DA_Lights
-and DA_Sensors) are today's ship. The script reads their draws before it
-writes anything, and it stops unless they equal the JSON's and sum to 620 W.
-It copies each module to its stock part's path, rewrites the copy from the
-JSON, and deletes the original once the game mode no longer holds it.
+and DA_Sensors) are today's ship. While any of them still exists -- the
+migration, the first run -- the script reads their draws before it writes
+anything, and it stops unless they equal the JSON's and sum to 620 W. It
+copies each module to its stock part's path, rewrites the copy from the
+JSON, and deletes the original once the game mode no longer holds it. Once
+they are gone the check is over: the JSON governs those three draws like
+every other number, and a settled one is written back into it and the
+script re-run (decision 5).
 
 BP_DeepSpaceGameMode today saves no StartingModules of its own: a Blueprint
 saves only what differs from its parent, so it inherits the C++ constructor's
-list. This script gives it its own list, the six stock parts, and from then
+list. This script gives it its own list, the six stock parts in bay order
+(each <Bay>.Stock, found by id, never by position in the JSON), and from then
 on that saved list is what play and Tests/StockShip.h read. A stale saved
 list would leave play on the old modules while every C++ default looked
-right, which is why DeepSpace.Ship.Parts.StockIsToday holds the two equal.
+right, which is why DeepSpace.Ship.Parts.Contract holds the saved list to the
+six stock parts in bay order.
 
 Python has no factory of its own for these assets, so each new one is made
 through DataAssetFactory with its class set. If that returns nothing, the run
@@ -60,6 +66,10 @@ HAND_MADE = {
 }
 HAND_MADE_WATTS = 620.0
 
+# The core bays in ShipBay::All()'s order; each has one stock part,
+# <Bay>.Stock (ShipBay::StockPartId).
+CORE_BAYS = ["Reactor", "Drive", "Boosters", "Lights", "LifeSupport", "Sensors"]
+
 EAL = unreal.EditorAssetLibrary
 log = []
 
@@ -94,21 +104,26 @@ def row_by_id(part_id):
 
 
 def check_hand_made_draws():
-    """Today's three draws, read wherever they are now (the old module, or
-    the stock part a previous run made of it) before anything is written."""
+    """The migration's guard: today's three draws, read from the hand-made
+    modules before anything is written. It runs only while one of them still
+    exists. Once a run has deleted them the JSON is the one source, so a
+    re-run never reads its own previous output back as a constraint."""
+    remaining = {part_id: old for part_id, old in HAND_MADE.items() if EAL.does_asset_exist(old)}
+    if not remaining:
+        note("the hand-made modules are gone: the JSON governs every draw")
+        return
     total = 0.0
-    for part_id, old in HAND_MADE.items():
+    for part_id, old in remaining.items():
         row = row_by_id(part_id)
-        where = old if EAL.does_asset_exist(old) else path_of(row["asset"])
-        if not EAL.does_asset_exist(where):
-            raise RuntimeError(f"{part_id}: neither {old} nor {where} exists, so today's draw cannot be read")
-        watts = EAL.load_asset(where).get_editor_property("power_draw")
-        note(f"{part_id}: {where} draws {watts:.1f} W; the JSON says {row['draw']}")
+        watts = EAL.load_asset(old).get_editor_property("power_draw")
+        note(f"{part_id}: {old} draws {watts:.1f} W; the JSON says {row['draw']}")
         if abs(watts - float(row["draw"])) > 1e-3:
             raise RuntimeError(f"{part_id}: the asset draws {watts} W and the JSON {row['draw']} W; "
                                f"set the JSON's draw to the asset's")
         total += watts
-    if abs(total - HAND_MADE_WATTS) > 1e-3:
+    # The sum is today's ship only while all three are there to add up; a
+    # run interrupted between deletions leaves fewer, each still checked.
+    if len(remaining) == len(HAND_MADE) and abs(total - HAND_MADE_WATTS) > 1e-3:
         raise RuntimeError(f"the hand-made modules draw {total} W together, not {HAND_MADE_WATTS}: "
                            f"today's ship is not the one the spec describes")
 
@@ -167,14 +182,31 @@ def write_catalogue(parts):
     note(f"{CATALOGUE_ASSET}: {len(parts)} parts")
 
 
+def stock_in_bay_order(parts):
+    """The six stock parts, one per core bay in bay order, each found by its
+    id <Bay>.Stock and required to fit that bay."""
+    stock = []
+    for bay in CORE_BAYS:
+        found = [(part, row) for part, row in zip(parts, CATALOGUE["parts"]) if row["id"] == f"{bay}.Stock"]
+        if len(found) != 1:
+            raise RuntimeError(f"ship_parts.json has {len(found)} rows with id {bay}.Stock, not one")
+        part, row = found[0]
+        if row["bay"] != bay:
+            raise RuntimeError(f"{bay}.Stock fits the {row['bay']} bay, not {bay}")
+        stock.append(part)
+    return stock
+
+
 def write_game_mode(stock):
     bp = unreal.load_asset(MODE_BP)
     cdo = unreal.get_default_object(bp.generated_class())
     cdo.set_editor_property("starting_modules", stock)
     unreal.BlueprintEditorLibrary.compile_blueprint(bp)
     cdo = unreal.get_default_object(bp.generated_class())
-    if len(cdo.get_editor_property("starting_modules")) != len(stock):
-        raise RuntimeError("BP_DeepSpaceGameMode.StartingModules did not survive the compile")
+    held = [str(p.get_path_name()) for p in cdo.get_editor_property("starting_modules")]
+    wanted = [str(p.get_path_name()) for p in stock]
+    if held != wanted:
+        raise RuntimeError(f"BP_DeepSpaceGameMode.StartingModules did not survive the compile: {held}")
     if not EAL.save_loaded_asset(bp, False):
         raise RuntimeError("could not save BP_DeepSpaceGameMode")
     note("BP_DeepSpaceGameMode.StartingModules: " + ", ".join(p.get_name() for p in stock))
@@ -196,10 +228,7 @@ def main():
     copy_hand_made()
     parts = [write_part(row) for row in CATALOGUE["parts"]]
     write_catalogue(parts)
-    stock = [part for part, row in zip(parts, CATALOGUE["parts"]) if row["id"].endswith(".Stock")]
-    if len(stock) != 6:
-        raise RuntimeError(f"expected six stock parts, found {len(stock)}")
-    write_game_mode(stock)
+    write_game_mode(stock_in_bay_order(parts))
     delete_hand_made()
     note("DONE")
 
