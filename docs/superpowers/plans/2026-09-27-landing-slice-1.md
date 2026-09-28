@@ -258,6 +258,10 @@ namespace WorldReliefNoise { SimplexValueBound; SimplexGradientBound; Hash16; Si
   - A surviving mutant means the test is strengthened and re-committed, never the mutation weakened.
   - Run `./build.sh` after every mutation run, because its last build held the mutant.
   - Rendered tests mutate with `MUTATE_RUNNER=Tools/eyes.sh`.
+  - Unreal's `RunTests` matches a filter as a substring unless it carries `^` or `$`. A filter that
+    is a prefix of another test's name (`DeepSpace.Surface.Quadtree` of `...QuadtreeAtCubeSeams`,
+    `DeepSpace.Surface.Tile` of `...TileComponent`) is anchored, `'DeepSpace.Surface.Quadtree$'`,
+    or a mutant is judged by the wrong test.
 - **Generated actors and Blueprints.**
   - A change to a generated actor's components means rebuilding the level (`Tools/build_hauler.py`) and then `Tools/verify_level.py`. Only Task 37 (T7) does this (it adds `hauler_ground`); Task 38 (T8) changes `ShipSky`'s code, not `hauler_sky`'s components.
   - Removing a `UPROPERTY`, component or `BlueprintImplementableEvent` means `Tools/check_blueprints.py`. Task 39 (Z) runs it, and none of slice (a) or (c) removes one.
@@ -13815,12 +13819,14 @@ MSG
 Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp '                            bChanged = true;
                             break;' '                            break;' DeepSpace.Surface.QuadtreeAtCubeSeams && \
 Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' DeepSpace.Surface.QuadtreeAtCubeSeams && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' DeepSpace.Surface.Quadtree; \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' 'DeepSpace.Surface.Quadtree$'; \
 ./build.sh
 ```
 
 Expected: the first two `KILLED` by `QuadtreeAtCubeSeams`; the third `SURVIVED` by
-`DeepSpace.Surface.Quadtree` (the `;` before `./build.sh` is deliberate: `mutate.sh` exits non-zero
+`DeepSpace.Surface.Quadtree` alone -- the filter is anchored with `$` because Unreal's RunTests
+matches a filter as a substring, and bare `DeepSpace.Surface.Quadtree` also runs
+`QuadtreeAtCubeSeams`, which kills this mutant, so the leg could never show `SURVIVED` (the `;` before `./build.sh` is deliberate: `mutate.sh` exits non-zero
 on a survivor). The first is the balance stopping after one pass. The second is seam-specific: a
 probe past a face's edge clamped back onto its own face, so neither `EdgeNeighbours` nor the balance
 ever looks across a seam. Within a face nothing changes -- which is why the mid-face sweep survives
@@ -14371,7 +14377,7 @@ FVector2f TerrainTile::UV2Of(const FTileBuild& Tile, int32 Vertex)
 - [ ] **Step 4: Run: PASS; record the build time and the pop**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.Tile; \
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh 'DeepSpace.Surface.Tile$'; \
 grep "split pop" Saved/Logs/DeepSpace.log | tail -1
 ```
 
@@ -14406,8 +14412,8 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'const double H = Ground.HeightAndGradient(D, Grad, Tile.SpacingCm);' 'const double H = Ground.HeightAndGradient(D, Grad, 20.0 * Tile.SpacingCm);' DeepSpace.Surface.Tile && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'Out.Append({ A, C, B, B, C, D });' 'Out.Append({ A, B, C, B, D, C });' DeepSpace.Surface.Tile && \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'const double H = Ground.HeightAndGradient(D, Grad, Tile.SpacingCm);' 'const double H = Ground.HeightAndGradient(D, Grad, 20.0 * Tile.SpacingCm);' 'DeepSpace.Surface.Tile$' && \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'Out.Append({ A, C, B, B, C, D });' 'Out.Append({ A, B, C, B, D, C });' 'DeepSpace.Surface.Tile$' && \
 ./build.sh
 ```
 
@@ -16435,11 +16441,15 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL NX = DX - CarriedX - (Pixel.SX - PD * DX);' 'const WR_REAL NX = DX - (Pixel.SX - PD * DX);' DeepSpace.Surface.GroundShadesAsOrbit && \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL NX = DX - CarriedX - (SX - PD * DX);' 'const WR_REAL NX = DX - (SX - PD * DX);' 'DeepSpace.Surface.GroundShadesAsOrbit$' && \
 ./build.sh
 ```
 
-Expected: `KILLED` (a normal that drops what the vertices carry is not the orbit's). Then the
+Expected: `KILLED` (a normal that drops what the vertices carry is not the orbit's). The mutant is
+the shipped text: `WR_GroundNormal` takes `SX`, `SY`, `SZ` as arguments, and the first draft's
+`Pixel.SX` never existed, so as first written this proof was refused text-not-found. The C++'s
+`WorldReliefShading::Ground` includes the same `.ush` (through `WR64`), so the headless test runs
+the mutated line. Then the
 index, a silent failure in play:
 
 ```bash

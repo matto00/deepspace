@@ -843,8 +843,10 @@ child's finer bands add: at split factor 2 that is about slope / 64
 radians, a few 4K pixels. `DeepSpace.Surface.Tile` computes the largest
 vertex jump at a split in 4K pixels at the split distance, and slice (b)
 reports it. **Measured (Task T4, 2026-09-27): 1.66 4K pixels** at split factor
-2 on the fixture barren world (and the half-float height's rounding, 195 cm
-at most, is 0.07 of a pixel at the handover). Geomorphing (vertices easing between levels) is sign-off item
+2 on the fixture barren world (and the half-float height's rounding PMC's UVs
+would give, 195 cm at most, was 0.07 of a pixel at the handover; since T5 the
+tiles are UTerrainTileComponent's, with full-precision UVs, and the height in
+kilometres rounds to under a millimetre). Geomorphing (vertices easing between levels) is sign-off item
 16.
 
 **Rejected:** `UDynamicMeshComponent` (full half-edge topology, heavier than
@@ -1177,8 +1179,17 @@ deterministic, independent of what the mesh has streamed.
   raised in (b), before anything else).
 - **Cost:** marched **once a frame** per direction, at the frame's first
   substep; each later substep reduces the proven-clear distance by the
-  distance flown along the ray (conservative), and marches again only if
-  the direction has turned by more than a degree. Per substep only the
+  distance flown along the ray, and marches again when the direction has
+  turned by more than a degree. **Amended in review (slice b):** that is
+  conservative only for motion along the ray -- a sinking ship's horizontal
+  ray meets rising ground nearer by the drop over the slope's tangent, and
+  no distance bound covers a ray that only grazed a crest. So the cache is
+  reused only while the clearance the new ray can have lost against the old,
+  (offset across it + the distance left x the turn) x (1 + `MaxSlope`),
+  stays under 1 cm (`ShipFlight::RayReuseToleranceCm`); otherwise it
+  marches again. Flying along the ray it is still once a frame; sinking,
+  sliding or turning it is once a substep
+  (`DeepSpace.Ship.Landing.GroundRayMovedAcross`). Per substep only the
   footprint's eight points are sampled (decision 11). At 3-8 us a sample
   that is about 0.3-0.6 ms a frame at 60 Hz; a 2 s hitch (240 substeps)
   costs 240 x 8 samples, about 10-15 ms, once. Measured in slice (b).

@@ -146,9 +146,10 @@ private:
     TOptional<TerrainQuadtree::FHeightRange> BoundsOf(const FTileKey& Key) const;
 
     /** The mesh component a tile is drawn with, and how a tile gets into it:
-     *  UTerrainTileComponent, the static-path primitive, since the first-day
-     *  gate failed ProceduralMeshComponent (Eyes.TerrainBudget; these two are
-     *  all the swap touched). */
+     *  UTerrainTileComponent, a custom primitive drawn on the dynamic path
+     *  (the static path cached its batch and drew nothing in UE 5.8), since
+     *  the first-day gate failed ProceduralMeshComponent (Eyes.TerrainBudget;
+     *  these two are all the swap touched). */
     UPrimitiveComponent* NewTileComponent();
     void UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst);
 };

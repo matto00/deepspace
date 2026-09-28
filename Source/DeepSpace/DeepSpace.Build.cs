@@ -51,10 +51,13 @@ public class DeepSpace : ModuleRules
 		// triangles that no one should have to draw.
 		PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "AssetRegistry" });
 
-		// ProceduralMeshComponent: the terrain's tiles (landing decision 6) --
-		// pooled runtime mesh sections, rebuilt off the game thread and
-		// uploaded with UpdateMeshSection. Gated on the first day of slice (b)
-		// by Eyes.TerrainBudget; UTerrainTileComponent is the named fallback.
+		// ProceduralMeshComponent: not the terrain's tiles. Landing decision 6
+		// planned them as PMC sections, gated on the first day of slice (b) by
+		// Eyes.TerrainBudget; the gate's verdict was CUSTOM PRIMITIVE, and
+		// AWorldGround draws UTerrainTileComponent. PMC is linked only for
+		// Eyes.TerrainBudget, which still measures it beside the tile component
+		// (and DeepSpace.uproject enables the plugin for it): drop both with
+		// that comparison.
 		PrivateDependencyModuleNames.Add("ProceduralMeshComponent");
 		
 		// Uncomment if you are using online features

@@ -728,7 +728,7 @@ so nothing can be tunnelled through.
 `UShipSubsystem::FloorFor`, the one function that answers it -- over a world
 the larger of `ds.Flight.Floor` (10 km) and `SkyProjection::RenderedFloor`,
 10.2 km over an Earth and 112 km over a Jupiter; over a **solid** world that
-is taken **above its highest peak** (`WorldRelief::MaxHeightCm`, landing
+is taken **above its highest peak** (`FWorldRelief::MaxHeightCm`, landing
 decision 10), so the drive never meets a summit; over a star
 `ds.Flight.StarFloorRadii` of its radius. It is **the drive's** floor. Over
 a solid world cruise and the vertical lever read the ground instead (*Landing*).

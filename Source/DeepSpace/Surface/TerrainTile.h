@@ -65,8 +65,11 @@ namespace TerrainTile
      *  projection's magnification is exactly 1 there. */
     inline constexpr double HandoverAltitudeCm = 5.0e6;
 
-    /** UV2.y carries the height in kilometres: ProceduralMeshComponent's UVs
-     *  are half precision, which cannot hold centimetres to 10 km. */
+    /** UV2.y carries the height in kilometres. The scale was chosen for
+     *  ProceduralMeshComponent, whose half-precision UVs cannot hold
+     *  centimetres to 10 km; UTerrainTileComponent, which draws the tiles,
+     *  keeps full-precision UVs (SetUseFullPrecisionUVs), where a float of
+     *  kilometres holds 10 km to under a millimetre. */
     inline constexpr double HeightUVScaleCm = 1.0e5;
 
     /** The fixed topology every tile shares: grid triangles (a, c, b) and

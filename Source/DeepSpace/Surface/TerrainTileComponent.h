@@ -12,7 +12,8 @@
  * draws on the dynamic path -- the static path cached the batch and drew
  * nothing in UE 5.8 -- which the same gate holds to its budgets. It keeps one
  * FTileBuild when bKeepForTest (AWorldGround sets it on every tile, since the
- * renderer may recreate a proxy on its own), about a quarter of PMC's copies.
+ * renderer may recreate a proxy on its own), about 30% of PMC's copies (T5's
+ * re-measurement: 153.5 MB against 508.4 MB).
  */
 UCLASS(ClassGroup = Rendering)
 class DEEPSPACE_API UTerrainTileComponent : public UMeshComponent
