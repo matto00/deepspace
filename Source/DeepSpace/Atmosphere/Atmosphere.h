@@ -111,8 +111,9 @@ public:
     /**
      * The per-bin coefficients from the star's spectrum through the world's
      * own spectral laws, each its wavelengths' average by AtmosphereBins::
-     * Weight -- exact in the optically thin limit, the gas's extinction
-     * carrying the ozone -- and the star's light in each bin as the fold. The star's temperature is
+     * Weight -- approximate even in the optically thin limit, since the
+     * weight is a scalar and the fold is per channel (AtmosphereBins::
+     * Average); the gas's extinction carries the ozone -- and the star's light in each bin as the fold. The star's temperature is
      * clamped as SkyColour::Blackbody clamps it. The multiple-scattering
      * table is built through the .ush's own AT_MultiScatterCell, and stored
      * through half floats.

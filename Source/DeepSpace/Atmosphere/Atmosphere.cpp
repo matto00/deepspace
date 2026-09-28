@@ -126,8 +126,10 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
     }
 
     // Each bin's air is its wavelengths' own, averaged by AtmosphereBins::
-    // Weight: exact in the thin limit. Deep, one number stands for a spread
-    // of depths; the bins are narrow enough that it does (planning note 13).
+    // Weight. Not exact even thin: the weight is a scalar and the fold is per
+    // channel (AtmosphereBins::Average). Deep, one number also stands for a
+    // spread of depths. The bins are narrow enough that both hold to the
+    // agreement grid's tolerance, thin airs included (planning note 13).
     FSpectrum GasExtinct;
     for (int32 I = 0; I < SkyColour::Spectral::Count; ++I)
     {

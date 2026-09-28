@@ -232,7 +232,8 @@ types, no `mul()`, no implicit vector arithmetic, no `out` parameters;
 every vector spelled a component at a time, every multi-valued result a
 plain struct -- with `AT_`-prefixed shims matching landing's `WR_` ones
 (`AT_floor`, `AT_saturate`, `AT_min`, `AT_max`, `AT_sqrt`, `AT_exp`,
-`AT_log`). `AT_REAL` is `float` in HLSL; in C++ the file is **compiled
+`AT_log`, `AT_cos`, `AT_sin`; the last four have no `WR_` equivalent yet,
+so a shared shim header would carry them too). `AT_REAL` is `float` in HLSL; in C++ the file is **compiled
 twice**, as `WorldRelief.ush` is: once with `AT_REAL` `double`
 (`AtmosphereF64`) and once with `float` (`AtmosphereF32`, the GPU's
 mirror), both in `Source/DeepSpace/Atmosphere/Atmosphere.cpp`, so a change
@@ -262,7 +263,11 @@ aerosol's scattering and extinction, colourless, and the star's light in
 the bin as `FoldR`, `FoldG` and `FoldB`; then the shape, `GasH`,
 `AerosolH`, `AerosolG` and `Top` -- 60 scalars, fifteen float4 (amended
 by atmosphere plan rulings 3 and 6). The multiple-scattering table (below)
-is read through a hook each side defines *before* including the file,
+is read through a hook the file itself defines once per platform, under
+`#if defined(AT_CPP)` and its `#else`, together with `AT_TABLE_PARAM`,
+`AT_TABLE_ARG`, `AT_PRECISE` and `AT_SPLITTER`: C++ defines only `AT_CPP`
+and `AT_REAL` before including it, and a Custom node defines nothing and
+must not supply its own. The hook is
 `AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith
 AT_TABLE_PARAM)`, returning an `AT_Bins`, a value per bin: in HLSL four
 `Load`s of each half of the texture the Custom node is handed, blended in
@@ -501,9 +506,11 @@ the extremes: a 2,500 K star has almost nothing at 440 nm to scatter.
 So when a system loads, for each airy world, `FAtmosphere::Build`
 integrates the star's spectrum through the world's own Rayleigh law
 (lambda^-4 x the column), aerosol law (lambda^-alpha, alpha by mix) and
-absorber band, and averages **per-bin scattering and extinction** exact in
-the optically thin limit, then folds each bin into colour by the star's
-light in it. `LawMatchesReference` (decision 1) is what proves the bins
+absorber band, and averages **per-bin scattering and extinction** by a
+scalar weight per wavelength, then folds each bin into colour by the
+star's light in it. The average is not exact per channel even in the
+optically thin limit, since the fold turns with the wavelength inside the
+wider bins, so the thin airs stay in the agreement grid. `LawMatchesReference` (decision 1) is what proves the bins
 good enough across the angles that matter; the star enters through the
 bins' weights and folds, which C++ computes, so the shader never sees a
 temperature.
@@ -1576,10 +1583,12 @@ first, then D and A in parallel, D merging first; then E.
   bounded (`SheathBound`: the middle of every pane readable) and judged
   after back-to-back landings in slice 4; the alternatives are sign-off
   item 14's.
-- **Three channels may not carry the extremes.** The coefficients are fitted
-  at the nadir column; a long limb path under a 2,500 K star is the worst
-  case. `LawMatchesReference` measures it; the fallback is four or six
-  spectral bins in the shader, folded to RGB at the end.
+- **Eight bins may not carry the extremes.** Three channels, and every
+  four- to six-bin partition, missed the reference (atmosphere plan rulings
+  3 and 6), so the law carries eight spectral bins, averaged per bin and
+  folded to RGB at the end. A long limb path under a 2,500 K star is still
+  the worst case; `LawMatchesReference` measures it, and there is no
+  cheaper fallback left to take -- a miss there means more bins.
 - **The exobase factor is a single number standing for a whole
   thermosphere.** It decides which worlds may hold hydrogen. Its effect is
   visible in the corpus before anyone flies there.

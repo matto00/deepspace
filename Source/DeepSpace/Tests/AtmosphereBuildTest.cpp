@@ -77,7 +77,7 @@ bool FAtmosphereBinnedAirTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("the gas scatters less in every redder bin"), bFalls);
 
     // Each bin is its wavelengths' own air, averaged as AtmosphereBins
-    // averages: exact in the thin limit, per radius.
+    // averages, per radius.
     const AtmosphereReference::FSpectralAir Spectral = AtmosphereReference::Spectral(EarthAir());
     const AtmosphereReference::FSpectrum Star = AtmosphereReference::StarSpectrum(SunK);
     AtmosphereReference::FSpectrum GasTau;

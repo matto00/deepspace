@@ -46,9 +46,14 @@ namespace AtmosphereBins
      *  Positive for every star in SkyColour's range. */
     DEEPSPACE_API double Weight(const AtmosphereReference::FSpectrum& Star, int32 Index);
 
-    /** Value averaged over each bin by Weight: exact in the optically thin
-     *  limit for anything linear in the spectrum -- scattering, an optical
-     *  depth. */
+    /** Value averaged over each bin by Weight, a scalar per wavelength.
+     *  Not exact per channel even in the optically thin limit: the fold
+     *  weights each wavelength by its signed sRGB vector, so the two agree
+     *  only where that vector's direction is the same across the bin -- the
+     *  one-wavelength bins -- or where Value is constant inside it. Across
+     *  400-440, 460-480, 520-540 and 620-700 nm the direction turns, and a
+     *  thin air whose coefficient varies there is carried approximately;
+     *  the agreement grid's thin airs are what measure it. */
     DEEPSPACE_API FBins Average(const AtmosphereReference::FSpectrum& Star, const AtmosphereReference::FSpectrum& Value);
 
     /** The star's light in bin Bin, in linear sRGB at the spectrum's own
