@@ -15,9 +15,11 @@
  * .GroundSkySwatch; this plan's ruling 1): the ground sky at noon and at
  * dusk, through the shipped law, as the deck's fixed exposure will show it,
  * written to Saved/air_swatch_<sky>_<noon|dusk>.png. It fails only if a
- * swatch cannot be written.
+ * swatch cannot be written. Outside DeepSpace., so the default suite does
+ * not run it: a picture generator for the developer's eyes, not a gate, and
+ * six seconds of fisheyes. Run by name: ./test.sh Atmosphere.Full.GroundSkySwatch.
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereGroundSkySwatchTest, "DeepSpace.Atmosphere.GroundSkySwatch",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereGroundSkySwatchTest, "Atmosphere.Full.GroundSkySwatch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereStarColourTest, "DeepSpace.Atmosphere.StarColour",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

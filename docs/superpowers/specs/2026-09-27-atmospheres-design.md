@@ -1335,7 +1335,9 @@ sign-off (ruling 1).
     only; the re-base waits on sign-off item 3.
   - **[1]** `.NadirLegible` (decision 4), through `AirFacts`' ceilings for
     every mix, giants' disc depth included.
-  - **[1]** `.GroundSkySwatch`, a writer like the corpus test: the noon and
+  - **[1]** `Atmosphere.Full.GroundSkySwatch`, a writer like the corpus test, run
+    by name and outside the default suite, since it is a picture for the
+    developer's eyes rather than a gate: the noon and
     dusk ground sky of fixtures R and G (and C), as a fisheye through the
     shipped law in C++, exposed through `ManualExposureBias` at the galley
     EV, to `Saved/air_swatch_*.png`; it fails only if it writes nothing.
@@ -1438,7 +1440,7 @@ rebuild.
 - the corpus reads: `procgen_corpus.py` shows the mixes, pressures and
   noon zenith colours across the 10,000 nearest systems, and the developer
   has seen the spread;
-- **the ground skies, before the ground slices**: `.GroundSkySwatch`'s
+- **the ground skies, before the ground slices**: `Atmosphere.Full.GroundSkySwatch`'s
   noon and dusk fisheyes under fixtures R, G and C are in `Saved/` and
   have gone to the developer, so an honest red-dwarf sky seen *from the
   ground* is judged now, while ruling 2's risk is cheap to act on, and not
@@ -1574,7 +1576,7 @@ first, then D and A in parallel, D merging first; then E.
 - **Honest red-dwarf skies may read as no sky.** Ruled (ruling 2); the risk
   is that the developer, seeing them, wants a floor. The orbit frames do
   not show a sky from the ground, so slice 1's done-when includes
-  `.GroundSkySwatch`: noon and dusk fisheyes of the ground sky under a red
+  `Atmosphere.Full.GroundSkySwatch`: noon and dusk fisheyes of the ground sky under a red
   dwarf, a G star and a CO2 world, through the shipped law, before slice 2
   is started. The ruling stands; the swatch is how the developer sees what
   it produces while acting on it is still cheap.
