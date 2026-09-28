@@ -105,7 +105,11 @@ bool FSunShadowMapTexelsTest::RunTest(const FString& Parameters)
     const FReliefGround Ground(Params);
     const SunShadow::FSunLight Sun = Light();
     const double Steep = SunShadow::SteepestSlope(Params);
-    const FSunShadowMap Map = SunShadowMap::Bake(Ground, Sun, Steep, 128);
+    // 512 columns: a texel of 1.2e-2 rad, a quarter of the march's end
+    // near the terminator, so a profile spans several texels ahead. At 128
+    // the end was under one texel, and a bake that cut every profile short
+    // matched the full one texel for texel.
+    const FSunShadowMap Map = SunShadowMap::Bake(Ground, Sun, Steep, 512);
     if (!TestEqual(TEXT("level 0 holds every texel"), Map.LevelCount() > 0 ? Map.Levels[0].Num() : 0, Map.Width * Map.Rows))
     {
         return false;
@@ -130,7 +134,7 @@ bool FSunShadowMapTexelsTest::RunTest(const FString& Parameters)
         }
     }
     TestEqual(TEXT("every texel is its column's profile, quantised"), Wrong, 0);
-    AddInfo(FString::Printf(TEXT("128 columns x %d rows; of the columns checked, %d texels under half"), Map.Rows, Shaded));
+    AddInfo(FString::Printf(TEXT("512 columns x %d rows; of the columns checked, %d texels under half"), Map.Rows, Shaded));
     TestEqual(TEXT("a whole texel is 65535"), static_cast<int32>(SunShadowMap::Quantise(1.0)), 65535);
     TestEqual(TEXT("a dark one 0"), static_cast<int32>(SunShadowMap::Quantise(0.0)), 0);
     std::atomic<bool> Stop(true);
