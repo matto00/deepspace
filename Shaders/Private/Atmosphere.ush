@@ -1,0 +1,913 @@
+// Atmosphere.ush -- a world's air as light crosses it, written once and
+// compiled twice (atmospheres spec decision 1; ADR 0006 as landing amends
+// it: one text, which a change reaches in both compilers or fails in one).
+//
+// The GPU will include this file into M_SkyBody's Custom node -- and later
+// M_SkyAir, M_SkyAirDome and M_SkyGround -- through the engine's own
+// /Project mapping (landing ruling R2: FEngineLoop::PreInit maps /Project to
+// <project>/Shaders whenever that directory exists; the project maps nothing
+// itself); until orbital slice 1, only the C++ reads it. The
+// C++ includes it into Source/DeepSpace/Atmosphere/Atmosphere.cpp twice: in
+// double (AtmosphereF64), for what the game computes, and in float
+// (AtmosphereF32), the GPU's mirror. A syntax one compiler refuses fails
+// that compiler: ./build.sh for the C++, the rendered Eyes.AtmosphereProbe
+// (orbital slice 1) for the GPU. A Custom node's HLSL error is invisible to
+// the headless suite -- the material ships grey with every test green.
+//
+// The subset is landing's, with AT_ for WR_: valid HLSL and valid C++ at
+// once. No swizzles, no vector or matrix types, no mul(), no implicit vector
+// arithmetic, no out parameters: every vector is spelled out a component at
+// a time, every multi-valued result is a plain struct, and every literal is
+// AT_REAL(...), so the float build computes in float. Only the platform
+// halves step outside it.
+//
+// Units: lengths in radii of the body whose air it is, the surface at R = 1;
+// directions unit, in whichever axes the caller uses consistently.
+// Radiances in the pi convention of M_SkyBody's Lambert face: a white
+// surface lit head-on by the star is 1.
+
+#if defined(AT_CPP)
+// -- C++: the shims ---------------------------------------------------------
+// Atmosphere.cpp includes <cmath>, then this file inside a namespace with
+// AT_REAL defined: once as double, once as float. std:: overloads keep each
+// in its own precision.
+inline AT_REAL AT_floor(AT_REAL X) { return std::floor(X); }
+inline AT_REAL AT_saturate(AT_REAL X) { return X < AT_REAL(0.0) ? AT_REAL(0.0) : (X > AT_REAL(1.0) ? AT_REAL(1.0) : X); }
+inline AT_REAL AT_min(AT_REAL A, AT_REAL B) { return A < B ? A : B; }
+inline AT_REAL AT_max(AT_REAL A, AT_REAL B) { return A > B ? A : B; }
+inline AT_REAL AT_sqrt(AT_REAL X) { return std::sqrt(X); }
+inline AT_REAL AT_exp(AT_REAL X) { return std::exp(X); }
+inline AT_REAL AT_log(AT_REAL X) { return std::log(X); }
+inline AT_REAL AT_cos(AT_REAL X) { return std::cos(X); }
+inline AT_REAL AT_sin(AT_REAL X) { return std::sin(X); }
+#else
+// -- HLSL: the shims --------------------------------------------------------
+#pragma once
+#define AT_REAL float
+#define AT_floor(X) floor(X)
+#define AT_saturate(X) saturate(X)
+#define AT_min(A, B) min(A, B)
+#define AT_max(A, B) max(A, B)
+#define AT_sqrt(X) sqrt(X)
+#define AT_exp(X) exp(X)
+#define AT_log(X) log(X)
+#define AT_cos(X) cos(X)
+#define AT_sin(X) sin(X)
+#endif
+
+// -- Constants ---------------------------------------------------------------
+static const AT_REAL AT_PI = AT_REAL(3.14159265358979);
+
+// The smallest number a logarithm or a divisor here is allowed to see: far
+// under anything physical, and a normal number in float.
+static const AT_REAL AT_TINY = AT_REAL(1.0e-30);
+
+// No optical depth past e^80 is worth carrying: exp(-e^80) is zero in
+// either precision, and the cap keeps an infinity out of every sum.
+static const AT_REAL AT_MAX_EXPONENT = AT_REAL(80.0);
+
+// -- The Chapman function ----------------------------------------------------
+// The airmass of a curved exponential atmosphere: the column along a ray over
+// the column straight up from the same point. X is the point's distance from
+// the centre in scale heights (R / H); CosZenith is the ray's angle to the
+// local vertical. Everything is a logarithm, so float cannot overflow where
+// a sun is below the horizon and the column is e^800 of the vertical one:
+// every transmittance is exp of one combined exponent (decision 1).
+
+// ln of e^(Y^2) erfc(Y), Y >= 0: Numerical Recipes' erfcc with its e^(-Y^2)
+// cancelled, so it neither underflows nor overflows at any Y. Relative error
+// under 1.2e-7.
+AT_REAL AT_LogErfcx(AT_REAL Y)
+{
+    AT_REAL T = AT_REAL(1.0) / (AT_REAL(1.0) + AT_REAL(0.5) * Y);
+    AT_REAL Poly = AT_REAL(-1.26551223) + T * (AT_REAL(1.00002368) + T * (AT_REAL(0.37409196) + T * (AT_REAL(0.09678418)
+        + T * (AT_REAL(-0.18628806) + T * (AT_REAL(0.27886807) + T * (AT_REAL(-1.13520398) + T * (AT_REAL(1.48851587)
+        + T * (AT_REAL(-0.82215223) + T * AT_REAL(0.17087277)))))))));
+    return AT_log(T) + Poly;
+}
+
+// ln Ch(X, z) for a ray at or above the horizon: the leading asymptotic form
+// sqrt(pi X / 2) erfcx(sqrt(X / 2) cos z), times its first correction in
+// 1 / X, 1 + (1 - 0.625 / (1 + Y / 2)^2) / X. The correction is exact to
+// that order at both ends -- 1 / X at the zenith (the column straight up is
+// exactly one scale height of surface density) and 3 / (8 X) at the horizon
+// (Ch = X e^X K1(X)) -- and within 0.035 / X between. Every world that
+// holds its air has X >= 96 (X = 6 lambda^2 for the Jeans lambda, and
+// retention starts at lambda 4), where the whole is within 0.05%.
+AT_REAL AT_LogChapmanUp(AT_REAL X, AT_REAL CosZenith)
+{
+    AT_REAL Y = AT_sqrt(AT_REAL(0.5) * X) * AT_max(CosZenith, AT_REAL(0.0));
+    AT_REAL Q = AT_REAL(1.0) + AT_REAL(0.5) * Y;
+    AT_REAL Correction = AT_REAL(1.0) + (AT_REAL(1.0) - AT_REAL(0.625) / (Q * Q)) / X;
+    return AT_REAL(0.5) * AT_log(AT_REAL(0.5) * AT_PI * X) + AT_LogErfcx(Y) + AT_log(Correction);
+}
+
+// ln Ch for any ray. Below the horizon the ray passes its lowest point, the
+// tangent, at X0 = X sin z, and the column is the whole line through the
+// tangent less the part behind the point:
+//   Ch = 2 Ch(X0, 90 deg) e^(X - X0) - Ch(X, 180 deg - z),
+// exact for an exponential atmosphere. X - X0 is formed as
+// X cos^2 z / (1 + sin z), which float keeps where 1 - sin z would cancel;
+// the grazing column is sqrt(pi X0 / 2) (1 + 3 / (8 X0)).
+AT_REAL AT_LogChapman(AT_REAL X, AT_REAL CosZenith)
+{
+    if (CosZenith >= AT_REAL(0.0))
+    {
+        return AT_LogChapmanUp(X, CosZenith);
+    }
+    AT_REAL Sin = AT_sqrt(AT_max(AT_REAL(1.0) - CosZenith * CosZenith, AT_REAL(0.0)));
+    AT_REAL Rise = X * CosZenith * CosZenith / (AT_REAL(1.0) + Sin);
+    AT_REAL X0 = AT_max(X - Rise, AT_TINY);
+    AT_REAL Grazing = AT_REAL(2.0) * AT_sqrt(AT_REAL(0.5) * AT_PI * X0) * (AT_REAL(1.0) + AT_REAL(0.375) / X0);
+    AT_REAL Behind = AT_exp(AT_LogChapmanUp(X, -CosZenith) - Rise);
+    return Rise + AT_log(AT_max(Grazing - Behind, AT_TINY));
+}
+
+// -- The air -----------------------------------------------------------------
+// The law carries light in AT_BINS spectral bins, not three colour channels
+// (atmosphere plan ruling 3): each bin is a run of the reference's 16
+// wavelengths (AtmosphereBins::First in C++), and within a bin the air is
+// one number. Only at the end is each bin's light folded into linear sRGB,
+// by the star's own light in that bin (Fold), so the shader never sees a
+// temperature and three channels never have to stand for a spectrum.
+static const int AT_BINS = 8;
+// The multiple-scattering table's side, in texels: FAtmosphereTable::Size in
+// C++. The HLSL hook reads its geometry from this and nothing else, and
+// unpacks AT_BINS as two float4 halves, so it holds only for AT_BINS == 8;
+// Atmosphere.cpp static_asserts both, since no headless test runs the HLSL.
+static const int AT_TABLE_SIZE = 32;
+
+// One world's air as the law takes it. Per bin, per radius at the surface,
+// for unit light in the bin: the gas's and the aerosol's scattering and
+// extinction, colourless. Fold: the star's light in each bin in linear
+// sRGB at unit luminance, so the three sums are the star's colour. The gas
+// falls by e every GasH radii, the aerosol every AerosolH; AerosolG is the
+// aerosol's Henyey-Greenstein asymmetry; the air is drawn to Top radii above
+// the surface, and Top 0 is no air.
+struct AT_Air
+{
+    AT_REAL GasScatter[AT_BINS];
+    AT_REAL GasExtinct[AT_BINS];
+    AT_REAL AerosolScatter[AT_BINS];
+    AT_REAL AerosolExtinct[AT_BINS];
+    AT_REAL FoldR[AT_BINS];
+    AT_REAL FoldG[AT_BINS];
+    AT_REAL FoldB[AT_BINS];
+    AT_REAL GasH;
+    AT_REAL AerosolH;
+    AT_REAL AerosolG;
+    AT_REAL Top;
+};
+
+// A value per bin: light, or the fraction of it that survives.
+struct AT_Bins
+{
+    AT_REAL V[AT_BINS];
+};
+
+struct AT_Rgb
+{
+    AT_REAL R;
+    AT_REAL G;
+    AT_REAL B;
+};
+
+// What a view gathers (in-scatter) and what it lets through (T), folded
+// into linear sRGB.
+struct AT_Scatter
+{
+    AT_REAL R;
+    AT_REAL G;
+    AT_REAL B;
+    AT_REAL TR;
+    AT_REAL TG;
+    AT_REAL TB;
+};
+
+struct AT_Columns
+{
+    AT_REAL Gas;
+    AT_REAL Aerosol;
+};
+
+// A ray's part in the air, measured along it from its closest approach to
+// the centre (S = 0 there): the impact parameter B, the closest point C, the
+// direction, and [S0, S1], empty when S1 <= S0.
+struct AT_Ray
+{
+    AT_REAL B;
+    AT_REAL CX;
+    AT_REAL CY;
+    AT_REAL CZ;
+    AT_REAL DX;
+    AT_REAL DY;
+    AT_REAL DZ;
+    AT_REAL S0;
+    AT_REAL S1;
+};
+
+// A march's sums, per bin: in-scatter for unit light in the bin (L), the
+// transmittance (T), and the fraction of light the air scatters along the
+// way (F), which the multiple-scattering table needs.
+struct AT_March
+{
+    AT_REAL L[AT_BINS];
+    AT_REAL T[AT_BINS];
+    AT_REAL F[AT_BINS];
+};
+
+AT_Bins AT_FilledBins(AT_REAL Value)
+{
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = Value;
+    }
+    return Out;
+}
+
+#if defined(AT_CPP)
+// -- C++: the table, and exact products ---------------------------------------
+// The multiple-scattering table travels as a trailing argument (planning note
+// 1 of the atmosphere optics plan): in C++ a reference to FAtmosphereTable,
+// read bilinearly between texel centres; its values have already been
+// through a half float, as the GPU's RGBA16F texture will hold them.
+#define AT_TABLE_PARAM , const FAtmosphereTable& AT_Table
+#define AT_TABLE_ARG , AT_Table
+#define AT_PRECISE
+static const AT_REAL AT_SPLITTER = sizeof(AT_REAL) == 8 ? AT_REAL(134217729.0) : AT_REAL(4097.0);
+inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+{
+    (void)A;
+    double Values[AT_BINS];
+    AT_Table.Sample(double(Altitude01), double(CosSunZenith), Values);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_REAL(Values[K]);
+    }
+    return Out;
+}
+#else
+// -- HLSL: the table, and exact products ----------------------------------------
+// The Custom node hands its texture and sampler down as the trailing
+// arguments: a 2*AT_TABLE_SIZE x AT_TABLE_SIZE RGBA16F texture, bins 0-3 in
+// its left half and 4-7 in its right, each half read as the C++ reads the
+// table -- AT_TABLE_SIZE texels
+// across, 0 and 1 at the first and last centre, the sun's columns crowded
+// toward the horizon as FAtmosphereTable::ColumnOf crowds them.
+// Load, never SampleLevel: the GPU's bilinear weights are 8-bit fixed
+// point, and FAtmosphereTable::Sample blends in full precision, so each
+// half's four texels are loaded and blended in float, as the C++ blends
+// them. The sampler is unused; it stays in the signature because a Custom
+// node's texture input brings one.
+#define AT_TABLE_PARAM , Texture2D AT_Table, SamplerState AT_TableSampler
+#define AT_TABLE_ARG , AT_Table, AT_TableSampler
+#define AT_PRECISE precise
+static const float AT_SPLITTER = 4097.0;
+AT_Bins AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
+{
+    float Cos = clamp(CosSunZenith, -1.0, 1.0);
+    float T = Cos < 0.0 ? -sqrt(-Cos) : sqrt(Cos);
+    float FX = saturate((T + 1.0) * 0.5) * float(AT_TABLE_SIZE - 1);
+    float FY = saturate(Altitude01) * float(AT_TABLE_SIZE - 1);
+    int X0 = min(int(floor(FX)), AT_TABLE_SIZE - 2);
+    int Y0 = min(int(floor(FY)), AT_TABLE_SIZE - 2);
+    int X1 = X0 + AT_TABLE_SIZE;
+    float TX = FX - float(X0);
+    float TY = FY - float(Y0);
+    float4 Low = lerp(lerp(AT_Table.Load(int3(X0, Y0, 0)), AT_Table.Load(int3(X0 + 1, Y0, 0)), TX),
+                      lerp(AT_Table.Load(int3(X0, Y0 + 1, 0)), AT_Table.Load(int3(X0 + 1, Y0 + 1, 0)), TX), TY);
+    float4 High = lerp(lerp(AT_Table.Load(int3(X1, Y0, 0)), AT_Table.Load(int3(X1 + 1, Y0, 0)), TX),
+                       lerp(AT_Table.Load(int3(X1, Y0 + 1, 0)), AT_Table.Load(int3(X1 + 1, Y0 + 1, 0)), TX), TY);
+    AT_Bins Out;
+    Out.V[0] = Low.r;
+    Out.V[1] = Low.g;
+    Out.V[2] = Low.b;
+    Out.V[3] = Low.a;
+    Out.V[4] = High.r;
+    Out.V[5] = High.g;
+    Out.V[6] = High.b;
+    Out.V[7] = High.a;
+    return Out;
+}
+#endif
+
+static const int AT_VIEW_SAMPLES = 12;
+
+// "To infinity": a view with no end stops at the air's top or the ground.
+static const AT_REAL AT_NO_END = AT_REAL(1.0e30);
+
+// -- Columns -----------------------------------------------------------------
+// ln of the column from a point R radii from the centre, Altitude = R - 1
+// above the surface, toward CosZenith, per unit density at the surface, for
+// a constituent that falls by e every H radii:
+// ln H - Altitude / H + ln Ch(R / H, CosZenith). The altitude comes in
+// separately because R - 1 is where float loses a point's height: see
+// AT_Altitude.
+AT_REAL AT_LogColumn(AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith, AT_REAL H)
+{
+    return AT_log(H) - Altitude / H + AT_LogChapman(R / H, CosZenith);
+}
+
+// The altitude of the point S along a ray of impact parameter B,
+// sqrt(B^2 + S^2) - 1, formed as (B - 1) + S^2 / (sqrt(B^2 + S^2) + B).
+// Near the eye of a horizontal view from the ground, S^2 is below float's
+// step at B^2 and sqrt(B^2 + S^2) - 1 cannot see it -- and the view's first
+// optical depth is the difference of two grazing columns 36 scale heights
+// deep, which that lost height shifts by per cent.
+AT_REAL AT_Altitude(AT_REAL B, AT_REAL S)
+{
+    return (B - AT_REAL(1.0)) + S * S / (AT_sqrt(B * B + S * S) + B);
+}
+
+// -- Exact products ----------------------------------------------------------
+// A * B - P exactly, where P is A * B rounded: Dekker's product, split by
+// Veltkamp without a fused multiply-add. Every step is its own statement, and
+// AT_PRECISE (HLSL's precise) in the shader, so no compiler fuses one into
+// the next: a fused split is a wrong split.
+AT_REAL AT_ProductError(AT_REAL A, AT_REAL B, AT_REAL P)
+{
+    AT_PRECISE AT_REAL TA = AT_SPLITTER * A;
+    AT_PRECISE AT_REAL TA2 = TA - A;
+    AT_PRECISE AT_REAL AH = TA - TA2;
+    AT_PRECISE AT_REAL AL = A - AH;
+    AT_PRECISE AT_REAL TB = AT_SPLITTER * B;
+    AT_PRECISE AT_REAL TB2 = TB - B;
+    AT_PRECISE AT_REAL BH = TB - TB2;
+    AT_PRECISE AT_REAL BL = B - BH;
+    AT_PRECISE AT_REAL E1 = AH * BH;
+    AT_PRECISE AT_REAL E2 = E1 - P;
+    AT_PRECISE AT_REAL E3 = AH * BL;
+    AT_PRECISE AT_REAL E4 = E2 + E3;
+    AT_PRECISE AT_REAL E5 = AL * BH;
+    AT_PRECISE AT_REAL E6 = E4 + E5;
+    AT_PRECISE AT_REAL E7 = AL * BL;
+    return E6 + E7;
+}
+
+// A * B - C * D to the precision of the result, not of the products: the
+// rounded difference of the rounded products -- exact by Sterbenz when they
+// are close, which is when it matters -- plus the difference of their exact
+// errors.
+AT_REAL AT_DiffOfProducts(AT_REAL A, AT_REAL B, AT_REAL C, AT_REAL D)
+{
+    AT_PRECISE AT_REAL P = A * B;
+    AT_PRECISE AT_REAL Q = C * D;
+    AT_PRECISE AT_REAL EP = AT_ProductError(A, B, P);
+    AT_PRECISE AT_REAL EQ = AT_ProductError(C, D, Q);
+    AT_PRECISE AT_REAL PQ = P - Q;
+    AT_PRECISE AT_REAL E = EP - EQ;
+    return PQ + E;
+}
+
+// -- The ray -----------------------------------------------------------------
+// The part of a ray inside the air. The closest point C and the impact
+// parameter B come from W = E x D, never from |E|^2 - (E.D)^2: from a
+// distant eye that difference cancels to nothing in float and takes the
+// tangent height with it, where W -- each component a difference of
+// products kept to its own precision -- loses nothing. C = D x W.
+// An eye below the surface (a valley under the datum) is taken to the
+// surface above it: the sky from a valley floor is the sky from the datum.
+// Empty when the ray misses the air, is not going anywhere, or starts on the
+// ground looking into it.
+AT_Ray AT_RayThroughAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ, AT_REAL Length)
+{
+    AT_Ray Ray;
+    Ray.DX = DX;
+    Ray.DY = DY;
+    Ray.DZ = DZ;
+    Ray.S0 = AT_REAL(1.0);
+    Ray.S1 = AT_REAL(0.0);
+    AT_REAL E2 = EX * EX + EY * EY + EZ * EZ;
+    if (E2 < AT_TINY)
+    {
+        // An eye at the centre has no surface above it to be lifted to.
+        return Ray;
+    }
+    if (E2 < AT_REAL(1.0))
+    {
+        AT_REAL Lift = AT_REAL(1.0) / AT_sqrt(E2);
+        EX = EX * Lift;
+        EY = EY * Lift;
+        EZ = EZ * Lift;
+    }
+    AT_REAL WX = AT_DiffOfProducts(EY, DZ, EZ, DY);
+    AT_REAL WY = AT_DiffOfProducts(EZ, DX, EX, DZ);
+    AT_REAL WZ = AT_DiffOfProducts(EX, DY, EY, DX);
+    Ray.CX = DY * WZ - DZ * WY;
+    Ray.CY = DZ * WX - DX * WZ;
+    Ray.CZ = DX * WY - DY * WX;
+    Ray.B = AT_sqrt(WX * WX + WY * WY + WZ * WZ);
+    AT_REAL SE = EX * DX + EY * DY + EZ * DZ;
+    AT_REAL Top = AT_REAL(1.0) + A.Top;
+    if (Ray.B >= Top || !(Length > AT_REAL(0.0)))
+    {
+        return Ray;
+    }
+    AT_REAL Half = AT_sqrt((Top - Ray.B) * (Top + Ray.B));
+    AT_REAL S0 = AT_max(SE, -Half);
+    AT_REAL S1 = AT_min(SE + Length, Half);
+    if (Ray.B < AT_REAL(1.0))
+    {
+        // The ray's line passes through the ground. Heading toward its
+        // closest point (SE < 0), it ends at the near side -- at once, for an
+        // eye on the surface looking down. Heading away (SE >= 0), the eye is
+        // on the far side, never inside, since it was lifted to the surface:
+        // it is not the eye's |E| against the ground's chord that decides,
+        // which rounding makes a coin toss for an eye on the surface looking
+        // along it, but the direction.
+        AT_REAL Ground = AT_sqrt((AT_REAL(1.0) - Ray.B) * (AT_REAL(1.0) + Ray.B));
+        if (SE < -Ground)
+        {
+            S1 = AT_min(S1, -Ground);
+        }
+        else if (SE < AT_REAL(0.0))
+        {
+            S1 = S0;
+        }
+    }
+    Ray.S0 = S0;
+    Ray.S1 = S1;
+    return Ray;
+}
+
+// The two constituents' columns from the point at S on the ray to the top,
+// looking away from the closest point -- always upward, so always the
+// Chapman function's easy branch.
+AT_Columns AT_ColumnsAway(AT_Air A, AT_REAL B, AT_REAL S)
+{
+    AT_REAL R = AT_sqrt(B * B + S * S);
+    AT_REAL Altitude = AT_Altitude(B, S);
+    AT_REAL Cos = AT_max(S, -S) / AT_max(R, AT_TINY);
+    AT_Columns Out;
+    Out.Gas = AT_exp(AT_LogColumn(R, Altitude, Cos, A.GasH));
+    Out.Aerosol = AT_exp(AT_LogColumn(R, Altitude, Cos, A.AerosolH));
+    return Out;
+}
+
+// The columns between SA <= SB along the ray, by differences of upward
+// columns, splitting at the closest point when the span crosses it.
+AT_Columns AT_ColumnsBetween(AT_Air A, AT_REAL B, AT_REAL SA, AT_REAL SB)
+{
+    AT_Columns CA = AT_ColumnsAway(A, B, SA);
+    AT_Columns CB = AT_ColumnsAway(A, B, SB);
+    AT_Columns Out;
+    if (SA >= AT_REAL(0.0))
+    {
+        Out.Gas = CA.Gas - CB.Gas;
+        Out.Aerosol = CA.Aerosol - CB.Aerosol;
+    }
+    else if (SB <= AT_REAL(0.0))
+    {
+        Out.Gas = CB.Gas - CA.Gas;
+        Out.Aerosol = CB.Aerosol - CA.Aerosol;
+    }
+    else
+    {
+        AT_Columns C0 = AT_ColumnsAway(A, B, AT_REAL(0.0));
+        Out.Gas = AT_REAL(2.0) * C0.Gas - CA.Gas - CB.Gas;
+        Out.Aerosol = AT_REAL(2.0) * C0.Aerosol - CA.Aerosol - CB.Aerosol;
+    }
+    Out.Gas = AT_max(Out.Gas, AT_REAL(0.0));
+    Out.Aerosol = AT_max(Out.Aerosol, AT_REAL(0.0));
+    return Out;
+}
+
+// What a pair of columns lets through, per bin.
+AT_Bins AT_Through(AT_Air A, AT_Columns C)
+{
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_exp(-(A.GasExtinct[K] * C.Gas + A.AerosolExtinct[K] * C.Aerosol));
+    }
+    return Out;
+}
+
+// -- The sun -----------------------------------------------------------------
+// The star's light reaching a point R radii out (Altitude above the surface)
+// whose sun is at CosZenith, per bin: 0 in the ground's own shadow (a ray to
+// the star that passes nearer the centre than the surface), else exp of one
+// combined exponent, each depth capped at e^80 so a sun just past the
+// tangent never makes an infinity.
+AT_Bins AT_SunAt(AT_Air A, AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith)
+{
+    AT_Bins Out = AT_FilledBins(AT_REAL(0.0));
+    AT_REAL Sin2 = AT_max(AT_REAL(1.0) - CosZenith * CosZenith, AT_REAL(0.0));
+    if (CosZenith < AT_REAL(0.0) && R * R * Sin2 < AT_REAL(1.0))
+    {
+        return Out;
+    }
+    AT_REAL LogGas = AT_LogColumn(R, Altitude, CosZenith, A.GasH);
+    AT_REAL LogAerosol = AT_LogColumn(R, Altitude, CosZenith, A.AerosolH);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinct[K], AT_TINY)) + LogGas, AT_MAX_EXPONENT))
+                          + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinct[K], AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    }
+    return Out;
+}
+
+// -- Folding the bins into colour ---------------------------------------------
+// Light: each bin's light times the star's light in that bin, summed.
+AT_Rgb AT_FoldLight(AT_Air A, AT_Bins L)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(0.0);
+    Out.G = AT_REAL(0.0);
+    Out.B = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.R = Out.R + A.FoldR[K] * L.V[K];
+        Out.G = Out.G + A.FoldG[K] * L.V[K];
+        Out.B = Out.B + A.FoldB[K] * L.V[K];
+    }
+    return Out;
+}
+
+// A transmittance: what each channel of the star's own light keeps, as 1
+// less what it loses, so that nothing lost is exactly 1. A channel of the
+// star's light floored at 1e-4 of its brightest (a 1,000 K star's
+// near-absent blue), as the reference's ChannelAverage floors it.
+AT_Rgb AT_FoldThrough(AT_Air A, AT_Bins T)
+{
+    AT_REAL OwnR = AT_REAL(0.0);
+    AT_REAL OwnG = AT_REAL(0.0);
+    AT_REAL OwnB = AT_REAL(0.0);
+    AT_REAL LostR = AT_REAL(0.0);
+    AT_REAL LostG = AT_REAL(0.0);
+    AT_REAL LostB = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        AT_REAL Lost = AT_REAL(1.0) - T.V[K];
+        OwnR = OwnR + A.FoldR[K];
+        OwnG = OwnG + A.FoldG[K];
+        OwnB = OwnB + A.FoldB[K];
+        LostR = LostR + A.FoldR[K] * Lost;
+        LostG = LostG + A.FoldG[K] * Lost;
+        LostB = LostB + A.FoldB[K] * Lost;
+    }
+    // AT_TINY, not 0, for an airless world's empty fold: it loses nothing.
+    AT_REAL Floor = AT_max(AT_REAL(1.0e-4) * AT_max(OwnR, AT_max(OwnG, OwnB)), AT_TINY);
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0) - LostR / AT_max(OwnR, Floor);
+    Out.G = AT_REAL(1.0) - LostG / AT_max(OwnG, Floor);
+    Out.B = AT_REAL(1.0) - LostB / AT_max(OwnB, Floor);
+    return Out;
+}
+
+// -- Phase -------------------------------------------------------------------
+AT_REAL AT_RayleighPhase(AT_REAL Cos)
+{
+    return AT_REAL(3.0) / (AT_REAL(16.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);
+}
+
+AT_REAL AT_HenyeyGreenstein(AT_REAL Cos, AT_REAL G)
+{
+    AT_REAL Den = AT_REAL(1.0) + G * G - AT_REAL(2.0) * G * Cos;
+    return (AT_REAL(1.0) - G * G) / (AT_REAL(4.0) * AT_PI * Den * AT_sqrt(Den));
+}
+
+// -- The march ---------------------------------------------------------------
+AT_March AT_EmptyMarch()
+{
+    AT_March M;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        M.L[K] = AT_REAL(0.0);
+        M.T[K] = AT_REAL(1.0);
+        M.F[K] = AT_REAL(0.0);
+    }
+    return M;
+}
+
+// (B - A) / ln(B / A), the logarithmic mean: what a function whose
+// logarithm is linear between A and B averages to, and so, times the
+// length, its exact integral -- for an exponential, however long the
+// length. The mean of A and B where either is 0 (the ground's shadow);
+// near A = B the series, where the quotient would cancel.
+AT_REAL AT_LogMean(AT_REAL A, AT_REAL B)
+{
+    if (!(A > AT_REAL(0.0)) || !(B > AT_REAL(0.0)))
+    {
+        return AT_REAL(0.5) * (A + B);
+    }
+    AT_REAL X = B / A - AT_REAL(1.0);
+    if (AT_max(X, -X) < AT_REAL(0.01))
+    {
+        return A * (AT_REAL(1.0) + X * (AT_REAL(0.5) - X / AT_REAL(12.0)));
+    }
+    return (B - A) / AT_log(B / A);
+}
+
+// What the view gathers at one point, per bin, for unit light in the bin,
+// per unit column of each constituent: its scattering coefficient times
+// the sun's light through the air (Single) and times the table's (Multi),
+// each times the view's transmittance back to the ray's start, S0 (Seen);
+// and the columns from S0 to the point.
+struct AT_Node
+{
+    AT_REAL GasSingle[AT_BINS];
+    AT_REAL AerosolSingle[AT_BINS];
+    AT_REAL GasMulti[AT_BINS];
+    AT_REAL AerosolMulti[AT_BINS];
+    AT_REAL Seen[AT_BINS];
+    AT_REAL GasColumn;
+    AT_REAL AerosolColumn;
+};
+
+AT_Node AT_NodeAt(AT_Air A, AT_Ray Ray, AT_REAL S, AT_REAL SX, AT_REAL SY, AT_REAL SZ,
+                  AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL PX = Ray.CX + S * Ray.DX;
+    AT_REAL PY = Ray.CY + S * Ray.DY;
+    AT_REAL PZ = Ray.CZ + S * Ray.DZ;
+    AT_REAL R = AT_sqrt(Ray.B * Ray.B + S * S);
+    AT_REAL Altitude = AT_Altitude(Ray.B, S);
+    AT_REAL CosSun = (PX * SX + PY * SY + PZ * SZ) / AT_max(R, AT_TINY);
+    AT_Columns Behind = AT_ColumnsBetween(A, Ray.B, Ray.S0, S);
+    AT_Bins Seen = AT_Through(A, Behind);
+    AT_Bins Sun = AT_SunAt(A, R, Altitude, CosSun);
+    AT_Bins Multi = AT_MultiScatter(A, AT_saturate(Altitude / A.Top), CosSun AT_TABLE_ARG);
+    AT_Node Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        AT_REAL Gas = A.GasScatter[K] * Seen.V[K];
+        AT_REAL Aerosol = A.AerosolScatter[K] * Seen.V[K];
+        Out.GasSingle[K] = Gas * GasPhase * Sun.V[K];
+        Out.AerosolSingle[K] = Aerosol * AerosolPhase * Sun.V[K];
+        Out.GasMulti[K] = Gas * SunOn * Multi.V[K];
+        Out.AerosolMulti[K] = Aerosol * SunOn * Multi.V[K];
+        Out.Seen[K] = Seen.V[K];
+    }
+    Out.GasColumn = Behind.Gas;
+    Out.AerosolColumn = Behind.Aerosol;
+    return Out;
+}
+
+// The single scattering between two nodes, per bin: each constituent's
+// column there -- exact, from the Chapman columns the nodes hold -- times
+// the logarithmic mean of what it gathers per unit column.
+AT_Bins AT_SingleBetween(AT_Node P, AT_Node Q)
+{
+    AT_REAL Gas = AT_max(Q.GasColumn - P.GasColumn, P.GasColumn - Q.GasColumn);
+    AT_REAL Aerosol = AT_max(Q.AerosolColumn - P.AerosolColumn, P.AerosolColumn - Q.AerosolColumn);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = Gas * AT_LogMean(P.GasSingle[K], Q.GasSingle[K]) + Aerosol * AT_LogMean(P.AerosolSingle[K], Q.AerosolSingle[K]);
+    }
+    return Out;
+}
+
+// The single scattering over a span, P at SP to Q at SQ. The logarithmic
+// mean is exact for light that falls exponentially, but sunlight climbing
+// out of a grazing column rises faster than that -- its optical depth
+// itself falls exponentially -- and the ground's shadow ends it in a step.
+// Where the ends differ by more than e^4, either way, the mean all but loses
+// the brighter end's approach, and the span takes a node of its own halfway.
+AT_Bins AT_SingleSpan(AT_Air A, AT_Ray Ray, AT_Node P, AT_Node Q, AT_REAL SP, AT_REAL SQ,
+                      AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL LightP = AT_REAL(0.0);
+    AT_REAL LightQ = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        LightP = LightP + P.GasSingle[K] + P.AerosolSingle[K];
+        LightQ = LightQ + Q.GasSingle[K] + Q.AerosolSingle[K];
+    }
+    AT_REAL Steep = AT_REAL(54.6);   // e^4
+    if (!(LightP > Steep * LightQ) && !(LightQ > Steep * LightP))
+    {
+        return AT_SingleBetween(P, Q);
+    }
+    AT_Node M = AT_NodeAt(A, Ray, AT_REAL(0.5) * (SP + SQ), SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    AT_Bins First = AT_SingleBetween(P, M);
+    AT_Bins Second = AT_SingleBetween(M, Q);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = First.V[K] + Second.V[K];
+    }
+    return Out;
+}
+
+// The light between two nodes: the multiple scattering and the fraction
+// scattered by the logarithmic mean over the span, the single scattering by
+// AT_SingleSpan.
+AT_March AT_Span(AT_Air A, AT_Ray Ray, AT_Node P, AT_Node Q, AT_REAL SP, AT_REAL SQ, AT_March Sum,
+                 AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL Gas = AT_max(Q.GasColumn - P.GasColumn, P.GasColumn - Q.GasColumn);
+    AT_REAL Aerosol = AT_max(Q.AerosolColumn - P.AerosolColumn, P.AerosolColumn - Q.AerosolColumn);
+    AT_Bins Single = AT_SingleSpan(A, Ray, P, Q, SP, SQ, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    AT_March Out = Sum;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.L[K] = Out.L[K] + Single.V[K] + Gas * AT_LogMean(P.GasMulti[K], Q.GasMulti[K]) + Aerosol * AT_LogMean(P.AerosolMulti[K], Q.AerosolMulti[K]);
+        Out.F[K] = Out.F[K] + (Gas * A.GasScatter[K] + Aerosol * A.AerosolScatter[K]) * AT_LogMean(P.Seen[K], Q.Seen[K]);
+    }
+    return Out;
+}
+
+// N >= 2 nodes from Low (the end nearest the closest point, where the air
+// is densest) to Far, spaced as u^2 so they crowd where the density is, and
+// the light of each span between them. A midpoint rule is not exact where a
+// constituent's scale height or its optical depth is short against the
+// spacing (the haze's 1 km under a gas of 55 km; a horizon through thick
+// air), or where the density is curved along the ray (a limb); this is.
+AT_March AT_MarchPiece(AT_Air A, AT_Ray Ray, AT_REAL Low, AT_REAL Far, int N,
+                       AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL PhaseGas, AT_REAL PhaseAerosol, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_March Out = AT_EmptyMarch();
+    AT_REAL Span = Far - Low;
+    AT_REAL GasPhase = AT_PI * PhaseGas * SunOn;
+    AT_REAL AerosolPhase = AT_PI * PhaseAerosol * SunOn;
+    AT_REAL Last = Low;
+    AT_Node Previous = AT_NodeAt(A, Ray, Low, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    for (int I = 1; I < N; ++I)
+    {
+        AT_REAL U = AT_REAL(I) / AT_REAL(N - 1);
+        AT_REAL S = Low + Span * U * U;
+        AT_Node Next = AT_NodeAt(A, Ray, S, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+        Out = AT_Span(A, Ray, Previous, Next, Last, S, Out, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+        Previous = Next;
+        Last = S;
+    }
+    return Out;
+}
+
+// The whole view: its path through the air split at the closest point, the
+// 12 samples shared between the two sides by length, and the transmittance of
+// the whole path. No star (a zero Sun) means no light, never a sun on the
+// horizon.
+AT_March AT_MarchAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
+                     AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM)
+{
+    AT_March Out = AT_EmptyMarch();
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    AT_Ray Ray = AT_RayThroughAir(A, EX, EY, EZ, DX, DY, DZ, Length);
+    if (Ray.S1 <= Ray.S0)
+    {
+        return Out;
+    }
+    AT_REAL SunOn = (SX * SX + SY * SY + SZ * SZ) > AT_REAL(0.25) ? AT_REAL(1.0) : AT_REAL(0.0);
+    AT_REAL CosView = SX * DX + SY * DY + SZ * DZ;
+    AT_REAL PhaseGas = AT_RayleighPhase(CosView);
+    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(CosView, A.AerosolG);
+    AT_March First = AT_EmptyMarch();
+    AT_March Second = AT_EmptyMarch();
+    if (Ray.S0 >= AT_REAL(0.0))
+    {
+        First = AT_MarchPiece(A, Ray, Ray.S0, Ray.S1, AT_VIEW_SAMPLES, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    else if (Ray.S1 <= AT_REAL(0.0))
+    {
+        First = AT_MarchPiece(A, Ray, Ray.S1, Ray.S0, AT_VIEW_SAMPLES, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    else
+    {
+        AT_REAL Share = AT_floor(AT_REAL(AT_VIEW_SAMPLES) * (-Ray.S0) / (Ray.S1 - Ray.S0) + AT_REAL(0.5));
+        int Before = int(AT_min(AT_max(Share, AT_REAL(2.0)), AT_REAL(AT_VIEW_SAMPLES - 2)));
+        First = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S0, Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+        Second = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S1, AT_VIEW_SAMPLES - Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    AT_Bins Whole = AT_Through(A, AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1));
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.L[K] = First.L[K] + Second.L[K];
+        Out.F[K] = First.F[K] + Second.F[K];
+        Out.T[K] = Whole.V[K];
+    }
+    return Out;
+}
+
+// -- The entry points (decision 1) ------------------------------------------
+// The light the air adds between an eye E and Length along D, under a star
+// toward S, and what it lets through, in linear sRGB.
+AT_Scatter AT_InScatter(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
+                        AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM)
+{
+    AT_March M = AT_MarchAir(A, EX, EY, EZ, DX, DY, DZ, Length, SX, SY, SZ AT_TABLE_ARG);
+    AT_Bins L;
+    AT_Bins T;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        L.V[K] = M.L[K];
+        T.V[K] = M.T[K];
+    }
+    AT_Rgb Light = AT_FoldLight(A, L);
+    AT_Rgb Through = AT_FoldThrough(A, T);
+    AT_Scatter Out;
+    Out.R = Light.R;
+    Out.G = Light.G;
+    Out.B = Light.B;
+    Out.TR = Through.R;
+    Out.TG = Through.G;
+    Out.TB = Through.B;
+    return Out;
+}
+
+// What the air lets through between F and Length along D.
+AT_Rgb AT_Transmittance(AT_Air A, AT_REAL FX, AT_REAL FY, AT_REAL FZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ, AT_REAL Length)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0);
+    Out.G = AT_REAL(1.0);
+    Out.B = AT_REAL(1.0);
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    AT_Ray Ray = AT_RayThroughAir(A, FX, FY, FZ, DX, DY, DZ, Length);
+    if (Ray.S1 <= Ray.S0)
+    {
+        return Out;
+    }
+    return AT_FoldThrough(A, AT_Through(A, AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1)));
+}
+
+// The star's light reaching P, per channel, relative to its own. An airless
+// world passes all of it whatever the star (the disc's Lambert, not an air,
+// darkens a night side); with an air, no star passes none.
+AT_Rgb AT_SunThrough(AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ, AT_REAL SX, AT_REAL SY, AT_REAL SZ)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0);
+    Out.G = AT_REAL(1.0);
+    Out.B = AT_REAL(1.0);
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    if (SX * SX + SY * SY + SZ * SZ < AT_REAL(0.25))
+    {
+        Out.R = AT_REAL(0.0);
+        Out.G = AT_REAL(0.0);
+        Out.B = AT_REAL(0.0);
+        return Out;
+    }
+    AT_REAL Length = AT_sqrt(PX * PX + PY * PY + PZ * PZ);
+    AT_REAL Cos = (PX * SX + PY * SY + PZ * SZ) / AT_max(Length, AT_TINY);
+    return AT_FoldThrough(A, AT_SunAt(A, AT_max(Length, AT_REAL(1.0)), AT_max(Length - AT_REAL(1.0), AT_REAL(0.0)), Cos));
+}
+
+// -- The multiple-scattering table (decision 11) -------------------------------
+// The sphere of directions as rings of equal step in T, cos(zenith) = T |T|,
+// crowded toward the horizon -- where a ray's path through the air is longest
+// and most of the light at low altitude comes from -- by segments of equal
+// azimuth over half the circle: the texel's sun lies in the X-Z plane, so the
+// light field is mirror-symmetric in azimuth and the other half is the same.
+// A Fibonacci sphere of 64, 128 or 256 points gives this integral 10% apart
+// from itself (the thin band of long horizontal paths falls between its
+// points differently each time); 32 rings are within 6% of a 192-ring
+// integral at the ground, where it converges slowest.
+static const int AT_SPHERE_RINGS = 32;
+static const int AT_SPHERE_SEGMENTS = 8;
+
+// One texel (Hillaire 2020): at Altitude01 of the air's depth under a sun at
+// CosSunZenith, per bin, the light the air sends every way after one
+// scattering, averaged over the sphere, and grown by the geometric series of
+// the fraction F each scattering hands on: Psi = L1 / (1 - F). The bins are
+// colourless, so the star's colour enters once, where the bins are folded.
+// Built in C++ when a system loads, never in a frame, and read from an empty
+// table while it is built.
+AT_Bins AT_MultiScatterCell(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+{
+    AT_REAL R = AT_REAL(1.0) + AT_saturate(Altitude01) * A.Top;
+    AT_REAL SX = AT_sqrt(AT_max(AT_REAL(1.0) - CosSunZenith * CosSunZenith, AT_REAL(0.0)));
+    AT_Bins L = AT_FilledBins(AT_REAL(0.0));
+    AT_Bins F = AT_FilledBins(AT_REAL(0.0));
+    for (int I = 0; I < AT_SPHERE_RINGS; ++I)
+    {
+        AT_REAL T = AT_REAL(-1.0) + (AT_REAL(2.0) * AT_REAL(I) + AT_REAL(1.0)) / AT_REAL(AT_SPHERE_RINGS);
+        AT_REAL AbsT = AT_max(T, -T);
+        AT_REAL Mu = T * AbsT;
+        // The share of the sphere one direction stands for, its mirror image
+        // included: 2 x (2 |T| dT)(dPhi) / 4 pi, dT = 2 / RINGS, dPhi =
+        // pi / SEGMENTS.
+        AT_REAL Weight = AT_REAL(2.0) * AbsT / AT_REAL(AT_SPHERE_RINGS * AT_SPHERE_SEGMENTS);
+        AT_REAL Ring = AT_sqrt(AT_max(AT_REAL(1.0) - Mu * Mu, AT_REAL(0.0)));
+        for (int J = 0; J < AT_SPHERE_SEGMENTS; ++J)
+        {
+            AT_REAL Phi = AT_PI * (AT_REAL(J) + AT_REAL(0.5)) / AT_REAL(AT_SPHERE_SEGMENTS);
+            AT_March M = AT_MarchAir(A, AT_REAL(0.0), AT_REAL(0.0), R, Ring * AT_cos(Phi), Ring * AT_sin(Phi), Mu,
+                                     AT_NO_END, SX, AT_REAL(0.0), CosSunZenith AT_TABLE_ARG);
+            for (int K = 0; K < AT_BINS; ++K)
+            {
+                L.V[K] = L.V[K] + Weight * M.L[K];
+                F.V[K] = F.V[K] + Weight * M.F[K];
+            }
+        }
+    }
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = L.V[K] / AT_max(AT_REAL(1.0) - F.V[K], AT_REAL(0.001));
+    }
+    return Out;
+}

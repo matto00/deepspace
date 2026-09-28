@@ -5,7 +5,7 @@
 **Goal:** Build the part of the atmospheres spec that may start before landing slice (a) merges: the pure C++ optics (a brute-force spectral reference and the shipped law in `Shaders/Private/Atmosphere.ush`, compiled into C++ twice), `SkyColour::ThroughFilter`, the ground-sky swatches the developer rules on, and procgen's air (the two draws, their guarantees, the fixture worlds and the corpus). Each piece is held by headless tests. It stops at the boundary where `M_SkyBody` needs landing (a)'s Custom-node route.
 
 **Architecture:**
-- **Track O, optics (starts now).** `SkyColour` gains the spectral integral that its one blackbody has so far approximated. `AtmosphereReference` is the slow truth: 16 wavelengths, exact columns by numerical integration, and second-order scattering by brute force. `Atmosphere.ush` is the law the GPU will run. It is written in landing's scalar subset (the `AT_` prefix for landing's `WR_`), in the log domain so that float cannot overflow, and it is compiled into `Atmosphere.cpp` as `AtmosphereF64` and as `AtmosphereF32`, the GPU's mirror. `FAtmosphere::Build` averages the air into eight spectral bins, with the star's light in each bin as its fold back to colour (atmosphere plan rulings 3 and 6), and builds the 32 x 32 multiple-scattering table, a value per bin. `.GroundSkySwatch` writes noon and dusk fisheyes of the ground sky through the shipped law, which is what the red-dwarf ruling is made from. Pure tests hold the law to the reference and float to double.
+- **Track O, optics (starts now).** `SkyColour` gains the spectral integral that its one blackbody has so far approximated. `AtmosphereReference` is the slow truth: 16 wavelengths, exact columns by numerical integration, and second-order scattering by brute force. `Atmosphere.ush` is the law the GPU will run. It is written in landing's scalar subset (the `AT_` prefix for landing's `WR_`), in the log domain so that float cannot overflow, and it is compiled into `Atmosphere.cpp` as `AtmosphereF64` and as `AtmosphereF32`, the GPU's mirror. `FAtmosphere::Build` averages the air into eight spectral bins, with the star's light in each bin as its fold back to colour (atmosphere plan rulings 3 and 6), and builds the 32 x 32 multiple-scattering table, a value per bin. `Atmosphere.Full.GroundSkySwatch` writes noon and dusk fisheyes of the ground sky through the shipped law, which is what the red-dwarf ruling is made from; it is a picture for the developer's eyes, not a gate, so it is run by name and not by the default suite. Pure tests hold the law to the reference and float to double.
 - **Track G, procgen's air.** `AirFacts` (pure, new files, starts now) holds the derived facts and the Jeans and nadir-haze guarantees. The two draws land on `FPlanet` (landing's track P, which owned every generator file, has merged), with the spec's fixture worlds found by its rules and the corpus's four air facts. After track O has also merged, `PlanetAir` adapts a planet's facts to the optics, `.NadirLegible` holds the guarantee, and a writer outside the default suite gives every temperate world of the corpus its noon sky.
 - Nothing in this plan touches `M_SkyBody`, `setup_sky_materials.py`, the material contract, `SkySystem.*`, `SkyProjection.*`, `ShipSky.*`, `DeepSpace.Build.cs` or any `.uasset`.
 
@@ -71,6 +71,7 @@
 - **The pressure ceiling is smooth:** `P = 1 / (P_draw^-4 + P_max^-4)^(1/4)`. A giant's disc is where the air above reaches `MaxNadirTau450`.
 - **The default suite stays fast.** `./test.sh` with no argument runs every `DeepSpace.*` test, in every worktree, one at a time behind `Tools/ue_lock.sh`: landing's and wear's trees pay for every test this plan adds to it (CLAUDE.md measures the whole suite at about 15 s). A test whose full grid takes more than a few seconds keeps a small grid under `DeepSpace.` and names its full grid `Atmosphere.Full.<Name>`, which the `DeepSpace` filter does not match. The full grids are run explicitly (`./test.sh Atmosphere.Full.<Name>`) in their task and before each merge, as `Eyes.*` is run through `Tools/eyes.sh`. The seconds each new test takes are measured in its task (*Conventions*) and written into its commit message.
   - **The total, not only each test.** Tasks 4-8 add to the default suite about 14 s over start-up, estimated from the harness at `-O2`: `.MultiScatterTable` 4.1 s, `.LawMatchesReference` 3.6 s, `.SingleScatteringMatchesReference` about 2.9 s with the 2,400 K star, `.StarColour`'s 27 noon-only builds about 2.4 s, `.FloatMatchesDouble` about 1.4 s with the thin airs, the rest under a second together. That roughly doubles CLAUDE.md's 15 s, and landing's trees pay it behind the one lock. **The budget is 15 s over start-up for this plan's additions.** Task 8, Step 5 times the whole suite in `air-optics` and on `main` and writes `Measured: the default suite grew by N s.` into Task 8's commit. Over 15 s, stop and report with the per-test times, so that the developer chooses which to move under `Atmosphere.Full.`.
+  - **Measured, and brought under (2026-09-28, the orchestrator's decision).** Measured from the log's `Test Started` and `Test Completed` stamps, `DeepSpace.Atmosphere.*` came to 23.5 s, `.GroundSkySwatch` alone 6.03 s, over the 5 s cap. Two changes, and no coverage cut: the swatch, a picture generator rather than a gate, is `Atmosphere.Full.GroundSkySwatch`, run by name; and the tests that build the same fixture air under the same star -- Earth's air under the Sun with a full table (`.MultiScatterTable`, and `AtmosphereLawTest.cpp`'s shared `Earth()`), its noon-only table (`.MultiScatterTable`, `.StarColour`), and the reference airs `.SingleScatteringMatchesReference`, `.LawMatchesReference` and `.MultiScatterTable` share -- ask `Tests/AtmosphereTestCache.h`, which builds each once per run, lazily, read-only, keyed on every input. No tolerance, grid or sample count moved, and each test still builds what it needs when run alone. After both, measured the same way twice: **15.96 s, still 0.96 s over**, no test over the cap (`.LawMatchesReference` 3.07, `.MultiScatterTable` 3.02, `.StarColour` 2.65, `.SingleScatteringMatchesReference` 2.56, `.BacklitRing` 2.52, `.FloatMatchesDouble` 1.29, the rest 0.85 together). What remains is distinct work, each piece now built once -- four full tables (Earth's air and N2/O2 at 0.05 bar under the Sun, CO2 at its ceiling under each star), 43 noon-only tables and the reference's second-order traces -- so no further sharing is left, and which test moves under `Atmosphere.Full.` is the developer's choice. **Settled (2026-09-28):** the budget for this plan's default-suite additions is raised to 16.5 s rather than move a real agreement check out of the default suite; the 5 s per-test cap stands.
 - **Project rules:**
   - All logic lives in C++ (ADR 0002). Randomness uses the distribution that describes the thing (log-normal pressure, categorical mix, shaped rather than rejected: ADR 0008).
   - Build and test only through `./build.sh`, `./test.sh` and `Tools/mutate.sh`, behind `Tools/ue_lock.sh`, with the editor closed. Use at most 3-4 workers and `nice -n 19` for any local sweep.
@@ -282,7 +283,8 @@ Track O (now, no landing dependency):
          Atmosphere.Full.LawMatchesReference, Atmosphere.Full.MultipleScatteringGap), float against
          double, the homothety; the spec's shim rows
   -> MERGE feat/air-optics into main (touches no landing file): when Tasks 1-8 are committed,
-     ./test.sh is green and both Atmosphere.Full.* grids are green
+     ./test.sh is green, both Atmosphere.Full.* grids are green, and
+     Atmosphere.Full.GroundSkySwatch writes its six swatches
 
 Track G:
   9 (G1) AirFacts, pure (now: new files only)
@@ -4815,7 +4817,7 @@ double FAtmosphereTable::CosOfColumn(int32 Column)
 - [ ] **Step 4: Build and run; expect PASS.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T in MultiScatterTable TerminatorReddens CrescentAtHighPhase BacklitRing GroundSkySwatch; do ./test.sh DeepSpace.Atmosphere.$T || break; done
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T in MultiScatterTable TerminatorReddens CrescentAtHighPhase BacklitRing; do ./test.sh DeepSpace.Atmosphere.$T || break; done && ./test.sh Atmosphere.Full.GroundSkySwatch
 cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh DeepSpace.Atmosphere.MultiScatterTable && time ./test.sh DeepSpace.Sky.Colour
 ```
 
@@ -4891,7 +4893,7 @@ Then `.StarColour`: rulings 1 and 4 are recorded (2026-09-27), so its gate passe
 - [ ] **Step 1: The swatches through the bins, to the developer.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.GroundSkySwatch; grep -h "swatch " Saved/Logs/DeepSpace.log | tail -6; ls -l Saved/air_swatch_*.png
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh Atmosphere.Full.GroundSkySwatch; grep -h "swatch " Saved/Logs/DeepSpace.log | tail -6; ls -l Saved/air_swatch_*.png
 ```
 
 Expected: `passed: 1`, six `swatch` lines, six fresh PNGs. Report them through the orchestrator to the developer: the six paths in `.worktrees/air-optics/Saved/` and the six `swatch` lines, marked "the same skies through the eight-bin law; for information, no ruling asked". Nothing is committed: the test's code did not change.
@@ -4899,7 +4901,7 @@ Expected: `passed: 1`, six `swatch` lines, six fresh PNGs. Report them through t
 - [ ] **Step 2: Prove the swatch can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'FPaths::Combine(FPaths::ProjectSavedDir(), ' 'FPaths::Combine(FPaths::ProjectDir(), TEXT("DeepSpace.uproject"), ' DeepSpace.Atmosphere.GroundSkySwatch
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'FPaths::Combine(FPaths::ProjectSavedDir(), ' 'FPaths::Combine(FPaths::ProjectDir(), TEXT("DeepSpace.uproject"), ' Atmosphere.Full.GroundSkySwatch
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && git status --short && test -f DeepSpace.uproject
 ```
 
@@ -6663,7 +6665,7 @@ bool FAtmosphereFixtureWorldsTest::RunTest(const FString& Parameters)
  * The atmospheres spec's fixture worlds (*Fixture worlds*), found by its
  * rules among the systems nearest home: the one statement of those rules,
  * which DeepSpace.Atmosphere.FixtureWorlds prints into the spec's table and
- * DeepSpace.Atmosphere.GroundSkySwatch draws. Tests/ only. Each role is the
+ * Atmosphere.Full.GroundSkySwatch draws. Tests/ only. Each role is the
  * first world, nearest home first and in orbit order, that its rule admits.
  */
 namespace AirFixtureWorlds
@@ -7742,7 +7744,7 @@ Expected: `passed: 1` twice, every `DeepSpace.Universe.*` green (`.Gases` and `.
   - In `FAtmosphereGroundSkySwatchTest::RunTest`, after `    const TArray<FSky> All = Skies();`, add `    TestEqual(TEXT("three skies to judge: the fixtures R, G and C as drawn"), All.Num(), 3);`.
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-procgen && ./build.sh && ./test.sh DeepSpace.Atmosphere.GroundSkySwatch && ./test.sh DeepSpace.Atmosphere.FixtureWorlds; grep -hE "swatch |fixture [RGCNJ]:" Saved/Logs/DeepSpace.log | tail -11; ls -l Saved/air_swatch_[RGC]_*.png
+cd /home/matt/Development/deepspace/.worktrees/air-procgen && ./build.sh && ./test.sh Atmosphere.Full.GroundSkySwatch && ./test.sh DeepSpace.Atmosphere.FixtureWorlds; grep -hE "swatch |fixture [RGCNJ]:" Saved/Logs/DeepSpace.log | tail -11; ls -l Saved/air_swatch_[RGC]_*.png
 ```
 
   Expected: `passed: 1` twice, six `swatch` lines naming the drawn worlds, and their six PNGs. If Step 5 lowered the guarantee, refresh the spec's *The fixtures as drawn* rows from the five `fixture` lines (same fields, same order). The six swatches go to the developer with Task 13's spread: slice 1's done-when asks that the drawn R, G and C skies "have gone to the developer".
@@ -7766,7 +7768,7 @@ NadirLegible holds decision 4's guarantee as a number, as atmosphere plan
 ruling 2 states it: an albedo 0.1 and 0.3 surface under an overhead G star,
 seen from 400 km through the shipped law, for every mix at its ceiling and
 every giant at its disc. The spec's decision 4 and its Tests item say the
-same. DeepSpace.Atmosphere.GroundSkySwatch now draws the fixtures R, G and
+same. Atmosphere.Full.GroundSkySwatch now draws the fixtures R, G and
 C as drawn (AirFixtureWorlds), each under its own star.
 
 Measured: DeepSpace.Atmosphere.PlanetAir costs N s over start-up.
@@ -7783,7 +7785,7 @@ MSG
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-procgen && Tools/mutate.sh Source/DeepSpace/Atmosphere/PlanetAir.cpp 'Spec.GasTau550 = AirFacts::RayleighTau550(Planet.AirMix, Planet.SurfacePressureBar, Gravity);' 'Spec.GasTau550 = AirFacts::RayleighTau550(Planet.AirMix, Planet.SurfacePressureBar, 1.0);' DeepSpace.Atmosphere.PlanetAir
 cd /home/matt/Development/deepspace/.worktrees/air-procgen && Tools/mutate.sh Source/DeepSpace/Universe/GenPriors.h "$(grep -o 'inline constexpr double MaxNadirTau450 = [0-9.]*;' Source/DeepSpace/Universe/GenPriors.h)" 'inline constexpr double MaxNadirTau450 = 3.0;' DeepSpace.Atmosphere.NadirLegible
-cd /home/matt/Development/deepspace/.worktrees/air-procgen && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp '            if (Role.bFound && (Name == TEXT("R") || Name == TEXT("G") || Name == TEXT("C")))' '            if (Role.bFound && (Name == TEXT("R") || Name == TEXT("G")))' DeepSpace.Atmosphere.GroundSkySwatch
+cd /home/matt/Development/deepspace/.worktrees/air-procgen && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp '            if (Role.bFound && (Name == TEXT("R") || Name == TEXT("G") || Name == TEXT("C")))' '            if (Role.bFound && (Name == TEXT("R") || Name == TEXT("G")))' Atmosphere.Full.GroundSkySwatch
 cd /home/matt/Development/deepspace/.worktrees/air-procgen && ./build.sh
 ```
 
