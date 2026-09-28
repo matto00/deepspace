@@ -64,7 +64,7 @@ int32 TerrainTile::GridOf(int32 Vertex)
     return Vertex < GridVerts ? Vertex : TerrainTileLocal::Ring()[Vertex - GridVerts];
 }
 
-FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key)
+FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow, const std::atomic<bool>* Cancel)
 {
     using namespace TerrainTileLocal;
     const double Start = FPlatformTime::Seconds();
@@ -112,6 +112,24 @@ FTileBuild TerrainTile::Build(const IGroundField& Ground, const FTileKey& Key)
             }
         }
     }
+
+    // The cast shadow at every grid vertex, from its own height at the
+    // tile's spacing: the heights just read are the march's starting point.
+    const double ShadowStart = FPlatformTime::Seconds();
+    Tile.SunVisible.Init(1.0f, GridVerts);
+    if (Shadow.Sun.IsSet())
+    {
+        for (int32 V = 0; V < GridVerts; ++V)
+        {
+            if (Cancel && V % (Cells + 1) == 0 && Cancel->load(std::memory_order_relaxed))
+            {
+                return Tile;   // let go: nobody reads this tile
+            }
+            Tile.SunVisible[V] = static_cast<float>(SunShadow::Visible(Ground, Tile.Directions[V], Shadow.Sun, Tile.SpacingCm,
+                Shadow.SteepestSlope, Shadow.Samples, Tile.Heights[V]).Visible);
+        }
+    }
+    Tile.ShadowSeconds = FPlatformTime::Seconds() - ShadowStart;
 
     // The edges' own interpolation error, measured at every segment's middle.
     for (int32 R0 = 0; R0 + 1 < Ring().Num(); ++R0)
@@ -198,4 +216,10 @@ FVector2f TerrainTile::UV1Of(const FTileBuild& Tile, int32 Vertex)
 FVector2f TerrainTile::UV2Of(const FTileBuild& Tile, int32 Vertex)
 {
     return FVector2f(Tile.Normals[Vertex].Z, static_cast<float>(Tile.Heights[GridOf(Vertex)] / HeightUVScaleCm));
+}
+
+FVector2f TerrainTile::UV0Of(const FTileBuild& Tile, int32 Vertex)
+{
+    const int32 G = GridOf(Vertex);
+    return FVector2f(Tile.SunVisible.IsValidIndex(G) ? Tile.SunVisible[G] : 1.0f, 0.0f);
 }

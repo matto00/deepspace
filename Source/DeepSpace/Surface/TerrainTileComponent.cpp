@@ -41,7 +41,8 @@ namespace
                 const FVector3f TangentY = FVector3f::CrossProduct(Normal, TangentX);
                 Buffers.PositionVertexBuffer.VertexPosition(V) = Tile.Positions[V];
                 Buffers.StaticMeshVertexBuffer.SetVertexTangents(V, TangentX, TangentY, Normal);
-                Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, FVector2f::ZeroVector);
+                // UV0.x: the vertex's cast shadow (TerrainTile::UV0Of).
+                Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, TerrainTile::UV0Of(Tile, V));
                 Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 1, TerrainTile::UV1Of(Tile, V));
                 Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 2, TerrainTile::UV2Of(Tile, V));
                 Buffers.ColorVertexBuffer.VertexColor(V) = FColor::White;

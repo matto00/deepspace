@@ -832,15 +832,7 @@ double UShipSubsystem::GearClearance()
     return FMath::Max(0.0f, CVarGearClearance.GetValueOnGameThread());
 }
 
-namespace
-{
-    bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
-    {
-        return A.SeedOffset == B.SeedOffset && A.RadiusCm == B.RadiusCm && A.PeakCm == B.PeakCm
-            && A.Cratering == B.Cratering && A.Ground == B.Ground;
-    }
-}
-
+// SameRelief is WorldReliefParams.h's, the one the ground and the sky use too.
 FGroundFieldRef UShipSubsystem::GroundFor(const FSkyBody& Body)
 {
     if (GroundCache.Num() > 64)

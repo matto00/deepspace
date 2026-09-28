@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Surface/GroundField.h"
@@ -80,6 +82,21 @@ public:
      *  body's look into it, this actor writes Morph. */
     UMaterialInstanceDynamic* GetGroundMaterialInstance() const { return Material; }
 
+    /** The light, steepest slope and samples every tile of this ground is
+     *  built under: the sky's own light for the world (SkyProjection::
+     *  SunLightOf), unset while ds.Terrain.Shadows is 0. */
+    const TerrainTile::FTileShadow& GetTileShadow() const { return TileShadow; }
+
+    /** Builds in flight, and builds let go by a restart that have not yet
+     *  finished: together never more than ds.Terrain.BuildTasks. */
+    int32 GetBuildingCount() const { return InFlight.Num(); }
+    int32 GetDrainingCount() const { return Draining.Num(); }
+
+    /** The bytes the resident cut's vertex shadows hold on the CPU, read
+     *  from the arrays: each resident tile's, and each pooled component's
+     *  kept copy (bKeepForTest, for proxy recreation). */
+    int64 GetTileShadowBytes() const;
+
     /** The cut per level -- drawn, resident, building -- the cap, the morph. */
     FString Describe() const;
 
@@ -120,6 +137,18 @@ private:
 
     FGroundFieldRef Ground;
     FWorldReliefParams GroundParams;
+
+    TerrainTile::FTileShadow TileShadow;
+
+    /** Builds let go by Release or EndPlay: cancelled, never waited on, and
+     *  counted against ds.Terrain.BuildTasks until they finish. Their
+     *  lambdas hold only the field, the key, the light and the flag -- never
+     *  this -- so the actor may go before they do. */
+    TArray<UE::Tasks::TTask<FTileBuild>> Draining;
+    TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> BuildCancel;
+
+    /** Cancel and let go of every build in flight. */
+    void Detach();
     FName Body;
     FUniversePosition Centre;
     double Radius = 0.0;

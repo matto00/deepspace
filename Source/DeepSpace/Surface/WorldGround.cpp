@@ -10,8 +10,10 @@
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
+#include "Sky/SkyProjection.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkySystem.h"
+#include "Surface/SunShadow.h"
 #include "Surface/TerrainTileComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWorldGround, Log, All);
@@ -45,14 +47,38 @@ namespace
         TEXT("0 hides the ground and gives the world back to the sky's proxy, for comparison."),
         ECVF_Default);
 
+    TAutoConsoleVariable<int32> CVarShadows(
+        TEXT("ds.Terrain.Shadows"), 1,
+        TEXT("1: every tile's vertices carry the cast shadow, computed as the tile is built, off the game thread; 0 builds them without it. Changing it rebuilds the ground."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowSamples(
+        TEXT("ds.Terrain.ShadowSamples"), SunShadow::DefaultSamples,
+        TEXT("How many samples each vertex's march toward the sun takes (2-64). Changing it rebuilds the ground."),
+        ECVF_Default);
+
+    /** What this frame's tiles are built under: the sky's light for the
+     *  world, its ground's steepest slope, the samples; nothing when off. */
+    TerrainTile::FTileShadow ShadowFor(const FSkySystem& System, int32 Index)
+    {
+        TerrainTile::FTileShadow Shadow;
+        if (CVarShadows.GetValueOnGameThread() != 0)
+        {
+            Shadow.Sun = SkyProjection::SunLightOf(System, Index);
+            Shadow.SteepestSlope = SunShadow::SteepestSlope(System.Bodies[Index].Relief);
+            Shadow.Samples = FMath::Clamp(CVarShadowSamples.GetValueOnGameThread(), 2, 64);
+        }
+        return Shadow;
+    }
+
+    bool SameShadow(const TerrainTile::FTileShadow& A, const TerrainTile::FTileShadow& B)
+    {
+        return A.Sun.Direction == B.Sun.Direction && A.Sun.AngularRadius == B.Sun.AngularRadius
+            && A.SteepestSlope == B.SteepestSlope && A.Samples == B.Samples;
+    }
+
     /** The handover's hysteresis: taken under 50 km, given back over 55. */
     constexpr double HandbackFactor = 1.1;
-
-    bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
-    {
-        return A.SeedOffset == B.SeedOffset && A.RadiusCm == B.RadiusCm && A.PeakCm == B.PeakCm
-            && A.Cratering == B.Cratering && A.Ground == B.Ground;
-    }
 
     void DescribeGround(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
     {
@@ -107,11 +133,9 @@ void AWorldGround::BeginPlay()
 
 void AWorldGround::EndPlay(const EEndPlayReason::Type Reason)
 {
-    for (FPending& Pending : InFlight)
-    {
-        Pending.Task.Wait();
-    }
-    InFlight.Reset();
+    // Let go, never waited on: the builds hold no this, and stop within a row.
+    Detach();
+    Draining.Reset();
     Super::EndPlay(Reason);
 }
 
@@ -144,9 +168,11 @@ void AWorldGround::SyncTo(const FSkySystem& System, bool bInTransit)
 
     // The nearest solid world within the prefetch range: the ground there.
     const FSkyBody* Near = nullptr;
+    int32 NearIndex = INDEX_NONE;
     double NearAltitude = TNumericLimits<double>::Max();
-    for (const FSkyBody& Candidate : System.Bodies)
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
     {
+        const FSkyBody& Candidate = System.Bodies[Index];
         if (Candidate.Ground == EGround::Solid)
         {
             const double Altitude = ShipAt.DistanceTo(Candidate.Position) - Candidate.Radius;
@@ -154,6 +180,7 @@ void AWorldGround::SyncTo(const FSkySystem& System, bool bInTransit)
             {
                 NearAltitude = Altitude;
                 Near = &Candidate;
+                NearIndex = Index;
             }
         }
     }
@@ -162,13 +189,16 @@ void AWorldGround::SyncTo(const FSkySystem& System, bool bInTransit)
         Release();
         return;
     }
-    // A new world, or this one reloaded with new priors: start again.
-    if (Near->Id != Body || !Ground.IsValid() || !SameRelief(Near->Relief, GroundParams))
+    // A new world, this one reloaded with new priors, or its tiles' shadow
+    // switched, resampled or lit otherwise: start again.
+    const TerrainTile::FTileShadow Shadow = ShadowFor(System, NearIndex);
+    if (Near->Id != Body || !Ground.IsValid() || !SameRelief(Near->Relief, GroundParams) || !SameShadow(Shadow, TileShadow))
     {
         Release();
         Body = Near->Id;
         GroundParams = Near->Relief;
         Ground = ShipGround::FromRelief(Near->Relief);
+        TileShadow = Shadow;
     }
     Centre = Near->Position;
     Radius = Near->Radius;
@@ -210,11 +240,7 @@ void AWorldGround::SyncTo(const FSkySystem& System, bool bInTransit)
 
 void AWorldGround::Release()
 {
-    for (FPending& Pending : InFlight)
-    {
-        Pending.Task.Wait();
-    }
-    InFlight.Reset();
+    Detach();
     Finished.Reset();
     for (const TPair<FTileKey, FResident>& Pair : Resident)
     {
@@ -288,7 +314,9 @@ TSet<FTileKey> AWorldGround::NeededKeys() const
 
 void AWorldGround::Launch()
 {
-    const int32 Slots = FMath::Max(1, CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num();
+    // What a restart let go still holds a worker until it finishes.
+    Draining.RemoveAll([](const UE::Tasks::TTask<FTileBuild>& Task) { return Task.IsCompleted(); });
+    const int32 Slots = FMath::Max(1, CVarBuildTasks.GetValueOnGameThread()) - InFlight.Num() - Draining.Num();
     if (Slots <= 0 || !Ground.IsValid())
     {
         return;
@@ -325,8 +353,15 @@ void AWorldGround::Launch()
     {
         const FTileKey Key = Candidates[Index];
         const FGroundFieldRef Field = Ground;
+        const TerrainTile::FTileShadow Shadow = TileShadow;
+        if (!BuildCancel.IsValid())
+        {
+            BuildCancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+        }
+        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = BuildCancel;
         InFlight.Add(FPending{ Key, UE::Tasks::Launch(UE_SOURCE_LOCATION,
-            [Field, Key]() { return TerrainTile::Build(*Field, Key); }, UE::Tasks::ETaskPriority::BackgroundNormal) });
+            [Field, Key, Shadow, Cancel]() { return TerrainTile::Build(*Field, Key, Shadow, Cancel.Get()); },
+            UE::Tasks::ETaskPriority::BackgroundNormal) });
     }
 }
 
@@ -513,6 +548,12 @@ TOptional<double> AWorldGround::DrawnHeightUnderShip() const
 
 void AWorldGround::FlushBuildsForTest()
 {
+    // Tests only: what a restart let go finishes before the cut is timed.
+    for (UE::Tasks::TTask<FTileBuild>& Task : Draining)
+    {
+        Task.Wait();
+    }
+    Draining.Reset();
     for (int32 Round = 0; Round < 4096; ++Round)
     {
         bResidencyChanged = true;
@@ -549,6 +590,9 @@ FString AWorldGround::Describe() const
     FString Out = FString::Printf(TEXT("ds.Terrain: %s, %s the body, morph %.3f, %d drawn, %d resident, %d building%s\n"),
         *Body.ToString(), bDrawsBody ? TEXT("drawing") : TEXT("not drawing"), Morph, Drawn.Num(), Resident.Num(), InFlight.Num(),
         bCapBinding ? TEXT(", the tile cap BINDING") : TEXT(""));
+    Out += FString::Printf(TEXT("  cast shadow: %s, sun %.3f deg in radius, %d samples, day exit %.1f deg\n"),
+        TileShadow.Sun.IsSet() ? TEXT("on") : TEXT("off"), FMath::RadiansToDegrees(TileShadow.Sun.AngularRadius), TileShadow.Samples,
+        FMath::RadiansToDegrees(FMath::Atan(TileShadow.SteepestSlope)));
     for (const TPair<int32, FIntVector>& Level : PerLevel)
     {
         Out += FString::Printf(TEXT("  level %2d: %4d drawn, %4d resident, %2d building\n"), Level.Key, Level.Value.X, Level.Value.Y, Level.Value.Z);
@@ -571,4 +615,38 @@ UPrimitiveComponent* AWorldGround::NewTileComponent()
 void AWorldGround::UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst)
 {
     CastChecked<UTerrainTileComponent>(Component)->SetTile(Tile);
+}
+
+void AWorldGround::Detach()
+{
+    // Before the shadow a build was ~5 ms, and waiting was cheap. With it, a
+    // build is 16-70 ms, and Release runs on every fold opened near a world.
+    if (BuildCancel.IsValid())
+    {
+        BuildCancel->store(true, std::memory_order_relaxed);
+    }
+    BuildCancel.Reset();
+    for (FPending& Pending : InFlight)
+    {
+        Draining.Add(MoveTemp(Pending.Task));
+    }
+    InFlight.Reset();
+}
+
+int64 AWorldGround::GetTileShadowBytes() const
+{
+    int64 Bytes = 0;
+    for (const TPair<FTileKey, FResident>& Pair : Resident)
+    {
+        Bytes += Pair.Value.Tile.SunVisible.GetAllocatedSize();
+    }
+    for (const TObjectPtr<UPrimitiveComponent>& Pooled : Pool)
+    {
+        const UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pooled.Get());
+        if (const FTileBuild* Kept = Tile ? Tile->GetTileForTest() : nullptr)
+        {
+            Bytes += Kept->SunVisible.GetAllocatedSize();
+        }
+    }
+    return Bytes;
 }

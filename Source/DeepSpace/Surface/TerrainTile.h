@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
+
 #include "CoreMinimal.h"
 #include "Surface/GroundField.h"
 #include "Surface/TerrainQuadtree.h"
+#include "Surface/SunShadow.h"
 
 /** One built tile (landing decision 6): what the mesh gets and what the
  *  LOD, the tests and the drawn-height check read. Built off the game
@@ -50,6 +53,16 @@ struct DEEPSPACE_API FTileBuild
     /** How far the skirt hangs: 1.5 x (edge error + omitted bands) + 1 cm. */
     double SkirtDepthCm = 0.0;
 
+    /** Each grid vertex's share of its star's disc seen past the ground --
+     *  the cast shadow, SunShadow::Visible at the vertex's own height and the
+     *  tile's spacing (the developer's ruling on slice (b)'s build: baked,
+     *  not marched) -- 1 everywhere for a tile built without a light. The
+     *  skirt's vertices carry their grid vertex's (UV0Of). */
+    TArray<float> SunVisible;
+
+    /** How much of BuildSeconds the shadow took. */
+    double ShadowSeconds = 0.0;
+
     double BuildSeconds = 0.0;
 };
 
@@ -77,11 +90,26 @@ namespace TerrainTile
      *  the skirt, each edge traversed with the tile's outside on its right. */
     DEEPSPACE_API const TArray<int32>& Indices();
 
+    /** The light a tile's shadow is cast by, the day exit's slope and the
+     *  march's samples: AWorldGround's, from SkyProjection::SunLightOf and
+     *  SunShadow::SteepestSlope. An unset light casts nothing. */
+    struct FTileShadow
+    {
+        SunShadow::FSunLight Sun;
+        double SteepestSlope = 0.0;
+        int32 Samples = SunShadow::DefaultSamples;
+    };
+
     /** The tile for Key: heights at the tile's own spacing as the footprint,
      *  so a coarse tile never samples fine bands into vertex noise; normals
-     *  from the analytic gradient of the same band-limited height. Pure and
-     *  thread-safe given a thread-safe Ground. */
-    DEEPSPACE_API FTileBuild Build(const IGroundField& Ground, const FTileKey& Key);
+     *  from the analytic gradient of the same band-limited height; and each
+     *  grid vertex's cast shadow under Shadow's light. Pure and thread-safe
+     *  given a thread-safe Ground. Cancel, if given, is polled once a grid
+     *  row of the shadow; set, the build returns at once with the shadow
+     *  unfinished -- a tile only a let-go build makes, whose result nobody
+     *  reads (AWorldGround::Detach). */
+    DEEPSPACE_API FTileBuild Build(const IGroundField& Ground, const FTileKey& Key, const FTileShadow& Shadow = FTileShadow(),
+                                   const std::atomic<bool>* Cancel = nullptr);
 
     /** M (decision 7): a smoothstep of the altitude over the datum, 0 at the
      *  handover and above, 1 at the drive floor and under. */
@@ -104,6 +132,11 @@ namespace TerrainTile
      *  and the height in km. */
     DEEPSPACE_API FVector2f UV1Of(const FTileBuild& Tile, int32 Vertex);
     DEEPSPACE_API FVector2f UV2Of(const FTileBuild& Tile, int32 Vertex);
+
+    /** UV0: the vertex's cast shadow in x (M_SkyGround's per-vertex shadow),
+     *  0 in y. UV0 was allocated full-precision and unused, so the shadow
+     *  costs the mesh no memory. */
+    DEEPSPACE_API FVector2f UV0Of(const FTileBuild& Tile, int32 Vertex);
 
     /** The grid vertex a skirt vertex hangs from; V itself for a grid vertex. */
     DEEPSPACE_API int32 GridOf(int32 Vertex);
