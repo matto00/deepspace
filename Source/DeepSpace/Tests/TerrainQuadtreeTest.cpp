@@ -16,7 +16,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeTest, "DeepSpace.Surface.Quadtr
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeSeamsTest, "DeepSpace.Surface.QuadtreeAtCubeSeams",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainCutBuildsAncestorsTest, "DeepSpace.Surface.CutBuildsItsAncestors",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainCoarseResidentTest, "DeepSpace.Surface.CoarseResidentPastTheBalance",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace TerrainQuadtreeLocal
@@ -338,12 +338,14 @@ bool FTerrainQuadtreeSeamsTest::RunTest(const FString& Parameters)
  * stopped at because it was not resident can be replaced by its children and
  * wanted by nothing else. Built from resident sets as streaming leaves them:
  * the ship's chain and its siblings resident, one level-8 neighbour X not.
- * X is split by the balance, and BuildOrder must build it -- before its
- * children -- or the cut asks for X's split forever and the handover, which
- * waits on every wanted leaf's level-8 ancestor, never comes above the drive
- * floor.
+ * The balance splits X; X is never built; and the handover, which waits on
+ * the coarse cut, must still come above the drive floor once every tile the
+ * cut wants is built -- it once walked each leaf to its level-8 ancestor and
+ * waited on X forever. (Building X instead was tried: the cut then refines
+ * X's region, frees what it no longer needs, and streaming cycles between
+ * two cuts without end, DeepSpace.Surface.GroundActor's flush with it.)
  */
-bool FTerrainCutBuildsAncestorsTest::RunTest(const FString& Parameters)
+bool FTerrainCoarseResidentTest::RunTest(const FString& Parameters)
 {
     using namespace TerrainQuadtreeLocal;
     const double Radius = 6.0e8;
@@ -402,24 +404,23 @@ bool FTerrainCutBuildsAncestorsTest::RunTest(const FString& Parameters)
         return false;
     }
 
-    const TArray<FTileKey> Order = BuildOrder(Cut.Prefetch, Cut.Leaves, D, [&](const FTileKey& Key) { return !Resident.Contains(Key); });
-    const int32 XAt = Order.IndexOfByKey(X);
-    TestTrue(TEXT("X is built"), XAt != INDEX_NONE);
-    int32 Missing = 0;
-    int32 Early = 0;
+    // Every build the cut asks for lands: the leaves and the prefetch. X
+    // itself is wanted by nothing -- the cut asks for its children -- so it
+    // is never built, and the coarse cut must count as resident without it.
+    TSet<FTileKey> Landed(Resident);
+    Landed.Append(Cut.Leaves);
+    Landed.Append(Cut.Prefetch);
+    TestFalse(TEXT("X is not among the builds"), Landed.Contains(X));
+    TestTrue(TEXT("with every wanted tile built, the coarse cut is resident, X or no X"),
+             CoarseResident(Cut.Prefetch, Cut.Leaves, [&](const FTileKey& Key) { return Landed.Contains(Key); }));
+    FTileKey Hole = X;
     for (const FTileKey& Leaf : Cut.Leaves)
     {
-        for (FTileKey Key = Leaf; Key.Level > 0; Key = Key.Parent())
-        {
-            const int32 At = Order.IndexOfByKey(Key);
-            Missing += !Resident.Contains(Key) && At == INDEX_NONE ? 1 : 0;
-            const int32 ParentAt = Order.IndexOfByKey(Key.Parent());
-            Early += At != INDEX_NONE && ParentAt != INDEX_NONE && ParentAt > At ? 1 : 0;
-        }
+        Hole = X.Contains(Leaf) && Leaf != X ? Leaf : Hole;
     }
-    TestEqual(TEXT("every unbuilt leaf and ancestor of a leaf is in the order"), Missing, 0);
-    TestEqual(TEXT("and every parent comes before its children"), Early, 0);
-    TestFalse(TEXT("nothing resident is built again"), Order.ContainsByPredicate([&](const FTileKey& Key) { return Resident.Contains(Key); }));
+    Landed.Remove(Hole);
+    TestFalse(TEXT("but a wanted tile under X not yet built still holds it off"),
+              CoarseResident(Cut.Prefetch, Cut.Leaves, [&](const FTileKey& Key) { return Landed.Contains(Key); }));
     return true;
 }
 

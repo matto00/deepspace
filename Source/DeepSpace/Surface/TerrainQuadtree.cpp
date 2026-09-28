@@ -308,42 +308,27 @@ TerrainQuadtree::FCut TerrainQuadtree::SelectCut(const FVector3d& ShipFromCentre
     return Cut;
 }
 
-TArray<FTileKey> TerrainQuadtree::BuildOrder(TConstArrayView<FTileKey> Prefetch, TConstArrayView<FTileKey> Leaves,
-                                             const FVector3d& Nadir, TFunctionRef<bool(const FTileKey&)> NeedsBuild)
+bool TerrainQuadtree::CoarseResident(TConstArrayView<FTileKey> Prefetch, TConstArrayView<FTileKey> Leaves,
+                                     TFunctionRef<bool(const FTileKey&)> IsResident)
 {
-    TSet<FTileKey> Seen;
-    TArray<FTileKey> Order;
-    const auto Consider = [&](const FTileKey& Key)
-    {
-        bool bAlready = false;
-        Seen.Add(Key, &bAlready);
-        if (!bAlready && NeedsBuild(Key))
-        {
-            Order.Add(Key);
-        }
-        return bAlready;
-    };
     for (const FTileKey& Key : Prefetch)
     {
-        Consider(Key);
+        if (!IsResident(Key))
+        {
+            return false;
+        }
     }
     for (const FTileKey& Leaf : Leaves)
     {
-        for (FTileKey Key = Leaf;; Key = Key.Parent())
+        FTileKey Coarse = Leaf;
+        while (Coarse.Level > PrefetchLevel)
         {
-            if (Consider(Key) || Key.Level == 0)
-            {
-                break;
-            }
+            Coarse = Coarse.Parent();
+        }
+        if (!IsResident(Coarse) && !IsResident(Leaf))
+        {
+            return false;
         }
     }
-    Order.Sort([&](const FTileKey& A, const FTileKey& B)
-    {
-        if (A.Level != B.Level)
-        {
-            return A.Level < B.Level;
-        }
-        return FVector3d::DotProduct(CentreDirection(A), Nadir) > FVector3d::DotProduct(CentreDirection(B), Nadir);
-    });
-    return Order;
+    return !Leaves.IsEmpty();
 }

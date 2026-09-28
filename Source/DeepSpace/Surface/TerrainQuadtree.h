@@ -169,13 +169,14 @@ namespace TerrainQuadtree
     DEEPSPACE_API bool Balanced(TConstArrayView<FTileKey> Leaves);
 
     /**
-     * What to build, in order: every key of Prefetch, and every leaf with each
-     * of its ancestors, for which NeedsBuild says so -- coarsest first, then
-     * nearest Nadir. The ancestors are the point: the 2:1 rule splits a leaf
-     * whether or not it is built, so a leaf's parent can be wanted by nothing
-     * but its children, and until it is resident they cannot be bounded and
-     * the handover waits on it (AWorldGround::CoarseResident).
+     * Whether the coarse cut is resident, for the handover (decision 7):
+     * every Prefetch key, and for every leaf its ancestor at PrefetchLevel
+     * (or the leaf itself, above it). The 2:1 rule splits a leaf whether or
+     * not it is built, so a node at PrefetchLevel can be wanted by nothing
+     * but its children and never be built: there the leaf itself must be
+     * resident instead -- its area is drawn then by it or by a coarser
+     * ancestor, and a rule that waited on the node would wait forever.
      */
-    DEEPSPACE_API TArray<FTileKey> BuildOrder(TConstArrayView<FTileKey> Prefetch, TConstArrayView<FTileKey> Leaves,
-                                              const FVector3d& Nadir, TFunctionRef<bool(const FTileKey&)> NeedsBuild);
+    DEEPSPACE_API bool CoarseResident(TConstArrayView<FTileKey> Prefetch, TConstArrayView<FTileKey> Leaves,
+                                      TFunctionRef<bool(const FTileKey&)> IsResident);
 }
