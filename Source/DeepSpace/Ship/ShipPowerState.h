@@ -146,6 +146,10 @@ namespace ShipPower
      *  not a step. */
     inline constexpr double HoldRampCm = 1.0e5;
 
+    /** ds.Boosters.StarvedSink's default, m/s: the most a hold that gets
+     *  nothing lets the ship sink, and never while it is asked to climb. */
+    inline constexpr float DefaultStarvedSinkMetresPerSecond = 2.0f;
+
     /** WattsPerG x min(g / g_E, 3), ramped over the first kilometre under the
      *  floor; 0 at or above the floor, and 0 landed (bAirborne false). */
     DEEPSPACE_API float HoldWant(double GravityCmS2, double DepthUnderFloorCm, float WattsPerG, bool bAirborne);

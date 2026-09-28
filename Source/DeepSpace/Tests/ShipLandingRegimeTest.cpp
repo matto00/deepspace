@@ -21,6 +21,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSkimAndLookTest, "DeepSpace.Ship.Landin
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSinkOntoFloorSphereTest, "DeepSpace.Ship.Landing.SinkOntoFloorSphere",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingVerticalCatchSpeedTest, "DeepSpace.Ship.Landing.VerticalCatchSpeed",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace LandingRegimeLocal
 {
@@ -326,6 +328,69 @@ bool FLandingSinkOntoFloorSphereTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("braked by the boosters all the way: no velocity step past them (worst %.3f of them)"), WorstStep),
              WorstStep <= 1.0 + 1.0e-6);
     TestFalse(TEXT("and there is no ground altitude: oceans keep the floor"), State.GetGroundAltitude().IsSet());
+    return true;
+}
+
+/*
+ * What a press at HOVER catches (the 2026-09-26 ruling, carried to the
+ * vertical lever): the rate the lever itself set, never the starved sink's
+ * bias, which the flight adds to any sink again, and never the radial part of
+ * cruise's or the drive's motion where the lever is not live.
+ */
+bool FLandingVerticalCatchSpeedTest::RunTest(const FString& Parameters)
+{
+    using namespace LandingRegimeLocal;
+    const double R = 0.9 * UniverseUnits::CmPerEarthRadius;
+    const double Top = ShipVerticalLever::DefaultTopCmPerSecond;
+
+    // Starved at HOVER under the floor: sinking at the bias alone, 2 m/s,
+    // and a C catches nothing -- the lever stays at HOVER.
+    {
+        FFlight Flight(Swells(R), 3.0e4, 1.0);
+        FShipFlightLimits Limits = Flight.State.GetLimits();
+        Limits.SinkBias = 200.0;
+        Flight.State.SetLimits(Limits);
+        Flight.Command(0.0, 0.0);
+        for (double T = 0.0; T < 3.0; T += Dt)
+        {
+            Flight.State.Step(Dt);
+        }
+        const double Catch = Flight.State.GetVerticalCatchSpeed();
+        TestTrue(FString::Printf(TEXT("sinking on the bias alone (%.2f m/s)"), -Flight.State.GetVerticalSpeed() / 100.0),
+                 FMath::IsNearlyEqual(Flight.State.GetVerticalSpeed(), -200.0, 2.0));
+        TestTrue(FString::Printf(TEXT("the catch reads no rate of the lever's (%.3f cm/s)"), Catch),
+                 FMath::Abs(Catch) < ShipVerticalLever::FloorCmPerSecond);
+        TestEqual(TEXT("so a C at HOVER catches nothing: the next C is the sweep's"),
+                  ShipVerticalLever::Catch(0.0, 0, 1, Catch, Top), 0.0);
+
+        // Asked 5 m/s down, starved: 7 m/s, of which the catch reads the 5.
+        Flight.Command(0.0, ShipVerticalLever::LeverOf(-500.0, Top));
+        for (double T = 0.0; T < 3.0; T += Dt)
+        {
+            Flight.State.Step(Dt);
+        }
+        TestTrue(FString::Printf(TEXT("a lever sink of 5 m/s, starved, reads 5 m/s to the catch (%.2f of %.2f)"),
+                                 -Flight.State.GetVerticalCatchSpeed() / 100.0, -Flight.State.GetVerticalSpeed() / 100.0),
+                 FMath::IsNearlyEqual(Flight.State.GetVerticalCatchSpeed(), -500.0, 5.0)
+                 && FMath::IsNearlyEqual(Flight.State.GetVerticalSpeed(), -700.0, 7.0));
+    }
+
+    // Above the regime, cruise at 2 km/s nose down onto the world: the
+    // radial speed is cruise's, and the lever is not live, so there is
+    // nothing to catch.
+    {
+        FFlight Flight(Swells(R), 2.0e7, 1.0, FQuat(FVector::RightVector, FMath::DegreesToRadians(60.0)));
+        Flight.Command(ThrottleFor(2.0e5), 0.0);
+        for (double T = 0.0; T < 2.0; T += Dt)
+        {
+            Flight.State.Step(Dt);
+        }
+        TestTrue(FString::Printf(TEXT("above the regime, closing on the world at %.0f m/s"), -Flight.State.GetVerticalSpeed() / 100.0),
+                 !Flight.State.IsVerticalLive() && Flight.State.GetVerticalSpeed() < -1.0e4);
+        TestEqual(TEXT("where the lever is not live the catch reads nothing"), Flight.State.GetVerticalCatchSpeed(), 0.0);
+        TestEqual(TEXT("so a C at HOVER there leaves it at HOVER, not a full sink"),
+                  ShipVerticalLever::Catch(0.0, 0, 1, Flight.State.GetVerticalCatchSpeed(), Top), 0.0);
+    }
     return true;
 }
 

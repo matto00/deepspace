@@ -127,6 +127,7 @@ void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
     RegimeSurface = INDEX_NONE;
     bDriveBelowFloor = false;
     RayCache.Reset();
+    AheadProof.Reset();
 }
 
 void FShipFlightState::SetSurfaces(TArray<FFlightSurface> NewSurfaces)
@@ -453,33 +454,51 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
         const double LeastLean = 1.0 / FMath::Sqrt(1.0 + FMath::Square(World->Ground->MaxSlope()));
         double Keep = 1.0;
         double KeptGap = 0.0;
-        for (const ShipLanding::FFootprintHeight& Point : Heights)
+        // Read each normal where the point will be at the substep's end,
+        // which is where its contact is met: first as if nothing were kept
+        // back, then where what that keeps puts it -- read only where the
+        // unslowed motion goes, a point slowed short of there met a slightly
+        // different slope, and closed on it a hair over the law.
+        auto KeepFor = [&](const FVector& Trial)
         {
-            const double Above = FMath::Max(Point.Above, 0.0);
-            if (ShipFlight::GroundApproachSpeed(Above * LeastLean, Limits.LinearAcceleration, Limits.ApproachSeconds,
-                                                Limits.TouchdownSpeed, FixedStep) >= Asked)
+            for (const ShipLanding::FFootprintHeight& Point : Heights)
             {
-                continue;
+                const double Above = FMath::Max(Point.Above, 0.0);
+                if (ShipFlight::GroundApproachSpeed(Above * LeastLean, Limits.LinearAcceleration, Limits.ApproachSeconds,
+                                                    Limits.TouchdownSpeed, FixedStep) >= Asked)
+                {
+                    continue;
+                }
+                const FVector Next = Point.FromCentre + Trial * FixedDelta;
+                const FVector Normal(ShipGround::NormalAt(*World->Ground, FVector3d(Next.GetSafeNormal())));
+                // A point on the ground (within the centimetre the contact
+                // is counted at) is not let slide on the slope one normal
+                // reads: the ground under a moving foot is only known
+                // where it was sampled, and a foot at 0 has no room for
+                // what lies between. It is held as if the slope rose into
+                // it as steeply as the ground can.
+                const double Steepest = Above < 1.0 ? Across.Size() * LeastLean * World->Ground->MaxSlope() : 0.0;
+                const double Into = FMath::Max(-(Across | Normal), Steepest);
+                if (Into <= 0.0)
+                {
+                    continue;
+                }
+                const double Gap = Above * FMath::Clamp(Normal | Up, 0.0, 1.0);
+                const double MayClose = ShipFlight::GroundApproachSpeed(Gap, Limits.LinearAcceleration, Limits.ApproachSeconds,
+                                                                        Limits.TouchdownSpeed, FixedStep);
+                const double Sinking = -((Up * (Target | Up)) | Normal);
+                const double Allowed = FMath::Clamp((MayClose - Sinking) / Into, 0.0, 1.0);
+                if (Allowed < Keep)
+                {
+                    Keep = Allowed;
+                    KeptGap = Gap;
+                }
             }
-            // Read where the point will be at the substep's end, which is
-            // where its contact is met.
-            const FVector Next = Point.FromCentre + Target * FixedDelta;
-            const FVector Normal(ShipGround::NormalAt(*World->Ground, FVector3d(Next.GetSafeNormal())));
-            const double Into = -(Across | Normal);
-            if (Into <= 0.0)
-            {
-                continue;
-            }
-            const double Gap = Above * FMath::Clamp(Normal | Up, 0.0, 1.0);
-            const double MayClose = ShipFlight::GroundApproachSpeed(Gap, Limits.LinearAcceleration, Limits.ApproachSeconds,
-                                                                    Limits.TouchdownSpeed, FixedStep);
-            const double Sinking = -((Up * (Target | Up)) | Normal);
-            const double Allowed = FMath::Clamp((MayClose - Sinking) / Into, 0.0, 1.0);
-            if (Allowed < Keep)
-            {
-                Keep = Allowed;
-                KeptGap = Gap;
-            }
+        };
+        KeepFor(Target);
+        if (Keep < 1.0)
+        {
+            KeepFor(Target - Across * (1.0 - Keep));
         }
         if (Keep < 1.0)
         {
@@ -837,6 +856,20 @@ double FShipFlightState::GetVerticalSpeed() const
     return Velocity | (Position - Surfaces[Index].Centre).GetSafeNormal();
 }
 
+double FShipFlightState::GetVerticalCatchSpeed() const
+{
+    if (!IsVerticalLive())
+    {
+        return 0.0;
+    }
+    const double Speed = GetVerticalSpeed();
+    if (Speed < 0.0 && GetDepthUnderDriveFloor() > 0.0)
+    {
+        return FMath::Min(0.0, Speed + FMath::Max(Limits.SinkBias, 0.0));
+    }
+    return Speed;
+}
+
 void FShipFlightState::UpdateDriveBelowFloor()
 {
     if (!Command.bDrive)
@@ -881,9 +914,15 @@ TOptional<double> FShipFlightState::CachedRay(int32 Slot, int32 SurfaceIndex, co
     {
         return Entry.Slot == Slot && Entry.Surface == SurfaceIndex;
     });
-    if (Cache && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
+    // The along-ground ray (slot 1) is level at the feet, so a ship that has
+    // sunk or slid off it since the frame's march is flying a lower line the
+    // march never saw: it marches again, which its proof makes cheap -- only
+    // ground the old balls do not cover costs a fresh sample.
+    const FVector Moved = Cache ? FVector(Position - Cache->From) : FVector::ZeroVector;
+    const bool bOnTheRay = !Cache || Slot != 1 || (Moved - Cache->Direction * (Moved | Cache->Direction)).Size() <= 1.0;
+    if (Cache && bOnTheRay && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
     {
-        const double Flown = FMath::Max(0.0, (Position - Cache->From) | Cache->Direction);
+        const double Flown = FMath::Max(0.0, Moved | Cache->Direction);
         if (Cache->Hit)
         {
             return FMath::Max(0.0, *Cache->Hit - Flown);
@@ -903,6 +942,7 @@ TOptional<double> FShipFlightState::CachedRay(int32 Slot, int32 SurfaceIndex, co
     Cache->From = Position;
     Cache->Frame = FrameCount;
     Cache->SeenTo = Lookahead;
-    Cache->Hit = ShipFlight::RayToGround(Surfaces[SurfaceIndex], Position, U, Clearance, Lookahead);
+    Cache->Hit = ShipFlight::RayToGround(Surfaces[SurfaceIndex], Position, U, Clearance, Lookahead, nullptr,
+                                         Slot == 1 ? &AheadProof : nullptr);
     return Cache->Hit;
 }

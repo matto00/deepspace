@@ -175,7 +175,7 @@ TOptional<double> ShipFlight::GroundAt(const FFlightSurface& Surface, const FUni
 
 TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const FUniversePosition& From,
                                           const FVector& Direction, double ClearanceCm, double MaxDistanceCm,
-                                          int32* OutSteps)
+                                          int32* OutSteps, FGroundRayProof* Proof)
 {
     if (OutSteps)
     {
@@ -198,8 +198,11 @@ TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const F
         const FVector3d D(Start / StartR);
         if (StartR - Surface.Radius - Ground.Height(D, 0.0) - Clear <= 0.0)
         {
-            // Under already: it may always climb, and may not descend.
-            return FVector::DotProduct(U, FVector(D)) > 0.0 ? TOptional<double>() : TOptional<double>(0.0);
+            // Under already: it may always climb, and may not descend -- nor
+            // go level: a level ray (the along-ground ray is one by
+            // construction) has a sign of U . D that is rounding, and read
+            // as a climb it let a ship whose feet were on the ground slide.
+            return FVector::DotProduct(U, FVector(D)) > UnderClimbSine ? TOptional<double>() : TOptional<double>(0.0);
         }
     }
 
@@ -224,19 +227,94 @@ TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const F
     const double End = FMath::Min(Exit, MaxDistanceCm);
     const double Lipschitz = FMath::Sqrt(1.0 + FMath::Square(Ground.MaxSlope()));
 
+    // An earlier march's balls are facts about this ground only if it is the
+    // same ground, in the same place, at the same clearance.
+    TArray<FVector> OldPoints;
+    TArray<double> OldRadii;
+    if (Proof)
+    {
+        if (Proof->Ground == Surface.Ground && Proof->Centre == Surface.Centre && Proof->Radius == Surface.Radius
+            && Proof->ClearanceCm == Clear)
+        {
+            OldPoints = MoveTemp(Proof->Points);
+            OldRadii = MoveTemp(Proof->Radii);
+        }
+        Proof->Reset();
+        Proof->Ground = Surface.Ground;
+        Proof->Centre = Surface.Centre;
+        Proof->Radius = Surface.Radius;
+        Proof->ClearanceCm = Clear;
+    }
+    int32 LastKept = INDEX_NONE;
+    auto Keep = [&](const FVector& Point, double Radius)
+    {
+        if (Proof)
+        {
+            Proof->Points.Add(Point);
+            Proof->Radii.Add(Radius);
+        }
+    };
+
     double T = FMath::Max(0.0, Along - Half);
     double Step = 0.0;
-    for (int32 I = 0; I < GroundMarchSteps; ++I)
+    int32 Fresh = 0;
+    int32 Cursor = 0;
+    while (true)
     {
-        if (OutSteps)
-        {
-            *OutSteps = I + 1;
-        }
         if (T >= End)
         {
             return {};
         }
         const FVector P = Start + U * T;
+
+        // Inside an old ball the ray is clear to the ball's far side. The
+        // balls lie in the order the old ray met them, so only the few about
+        // where this one has reached can hold it.
+        while (Cursor < OldPoints.Num() && ((OldPoints[Cursor] - Start) | U) + OldRadii[Cursor] < T)
+        {
+            ++Cursor;
+        }
+        double Reach = T;
+        int32 Ball = INDEX_NONE;
+        for (int32 K = Cursor; K < FMath::Min(Cursor + 4, OldPoints.Num()); ++K)
+        {
+            const FVector W = P - OldPoints[K];
+            const double C = W.SizeSquared() - FMath::Square(OldRadii[K]);
+            if (C < 0.0)
+            {
+                const double B = W | U;
+                const double Far = T - B + FMath::Sqrt(B * B - C);
+                if (Far > Reach)
+                {
+                    Reach = Far;
+                    Ball = K;
+                }
+            }
+        }
+        if (Reach > T + 1.0)
+        {
+            if (Ball != LastKept)
+            {
+                if (Proof && Proof->Points.Num() >= FGroundRayProof::MaxBalls)
+                {
+                    return T;
+                }
+                Keep(OldPoints[Ball], OldRadii[Ball]);
+                LastKept = Ball;
+            }
+            T = Reach;
+            continue;
+        }
+
+        if (Fresh >= GroundMarchSteps || (Proof && Proof->Points.Num() >= FGroundRayProof::MaxBalls))
+        {
+            return T; // exhausted: a hit at the last proven-clear distance, never "no hit"
+        }
+        ++Fresh;
+        if (OutSteps)
+        {
+            *OutSteps = Fresh;
+        }
         const double R = P.Size();
         const FVector3d D(P / R);
         const double Footprint = 0.5 * Step;
@@ -246,9 +324,10 @@ TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const F
             return T;
         }
         Step = Above / Lipschitz;
+        Keep(P, Step);
+        LastKept = INDEX_NONE;
         T += Step;
     }
-    return T; // exhausted: a hit at the last proven-clear distance, never "no hit"
 }
 
 double ShipFlight::GroundApproachSpeed(double D, double BrakingAccel, double ApproachSeconds,

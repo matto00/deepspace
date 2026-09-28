@@ -188,7 +188,7 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarStarvedSink(
-        TEXT("ds.Boosters.StarvedSink"), 2.0f,
+        TEXT("ds.Boosters.StarvedSink"), ShipPower::DefaultStarvedSinkMetresPerSecond,
         TEXT("m/s the ship sinks at when the hold gets nothing, only under a solid world's drive floor, never while climbing."),
         ECVF_Default);
 
@@ -978,7 +978,7 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const bool bVerticalUp = Helm.bVerticalUpHeld && !bVerticalUpHoldSpent;
     const bool bVerticalDown = Helm.bVerticalDownHeld && !bVerticalDownHoldSpent;
     const double Top = FlightState.GetLimits().VerticalTop;
-    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalSpeed(), Top);
+    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalCatchSpeed(), Top);
     Command.Vertical = ShipVerticalLever::Sweep(Command.Vertical, bVerticalUp, bVerticalDown, VerticalUps, VerticalDowns,
                                                 DeltaSeconds, FMath::Max(0.0f, CVarVerticalSweep.GetValueOnGameThread()));
     FlightState.SetCommand(Command);

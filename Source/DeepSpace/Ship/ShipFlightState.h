@@ -329,6 +329,15 @@ public:
      *  (or the nearest world); 0 with none. */
     double GetVerticalSpeed() const;
 
+    /** The ship's radial speed as the vertical lever's catch reads it (a
+     *  press at HOVER catches the ship where it is, the 2026-09-26 ruling),
+     *  cm/s: 0 wherever the lever is not live -- above the regime, or in the
+     *  drive, the radial part of cruise's or the drive's motion is no rate
+     *  the lever set -- and without the starved sink's bias, which is the
+     *  boosters', not the lever's, and which the flight adds again to any
+     *  sink the lever asks. */
+    double GetVerticalCatchSpeed() const;
+
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
      *  it was chopped into frames. */
@@ -558,6 +567,13 @@ private:
         int32 Frame = -1;
     };
     TArray<FGroundRayCache, TInlineAllocator<4>> RayCache;
+
+    /** What the along-ground ray (slot 1) has proven clear, carried from
+     *  frame to frame: facts about the ground, so SetSurfaces keeps it and
+     *  RayToGround discards it for another ground. Level at the feet, that
+     *  ray proves only about an eighth of the clearance a sample on real
+     *  relief, and without this a low hover saw a few metres ahead. */
+    ShipFlight::FGroundRayProof AheadProof;
     int32 FrameCount = 0;
 
     TOptional<double> CachedRay(int32 Slot, int32 SurfaceIndex, const FVector& Direction, double Clearance, double Lookahead);

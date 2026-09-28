@@ -175,6 +175,11 @@ namespace ShipFlight
     inline constexpr double DefaultSkimSeconds = 2.5;
     inline constexpr double DefaultSkimFloor = 2000.0;
 
+    /** From under the ground a ray may leave only climbing by more than
+     *  this sine of the horizon (about 0.06 degrees): a level one is a hit
+     *  at 0, never "no hit" by the sign of a rounding. */
+    inline constexpr double UnderClimbSine = 1.0e-3;
+
     /** The ground march's step budget: an exhausted march is a hit. */
     inline constexpr int32 GroundMarchSteps = 64;
 
@@ -210,10 +215,48 @@ namespace ShipFlight
      *   see past. OutSteps, if given, gets the steps used.
      *
      * Pure and deterministic, independent of what the mesh has streamed.
+     *
+     * Proof, if given, carries what earlier marches proved into this one:
+     * each of their samples is a fact about the ground, not the ship -- a
+     * ball of radius Above / sqrt(1 + MaxSlope^2) about the sampled point
+     * inside which nothing is under ground + ClearanceCm -- so wherever this
+     * ray runs inside one, it passes to the ball's far side for nothing, and
+     * only its fresh samples count against GroundMarchSteps. A level ray at
+     * a low hover proves only about an eighth of its clearance a sample on
+     * the real relief; without the proof 64 samples see a few metres ahead,
+     * and with it a march that runs out picks up, next frame, where the last
+     * stopped. On return Proof holds the balls this march passed through.
+     * A proof for another ground, centre or clearance is discarded.
      */
+    struct FGroundRayProof;
     DEEPSPACE_API TOptional<double> RayToGround(const FFlightSurface& Surface, const FUniversePosition& From,
                                                 const FVector& Direction, double ClearanceCm, double MaxDistanceCm,
-                                                int32* OutSteps = nullptr);
+                                                int32* OutSteps = nullptr, FGroundRayProof* Proof = nullptr);
+
+    /** What marches along a line proved clear of the ground, for the next
+     *  march along about the same line (RayToGround). */
+    struct FGroundRayProof
+    {
+        /** The most balls a proof keeps; a march that would need more is
+         *  exhausted there, a hit. */
+        static constexpr int32 MaxBalls = 4096;
+
+        FGroundFieldRef Ground;
+        FUniversePosition Centre;
+        double Radius = 0.0;
+        double ClearanceCm = 0.0;
+        /** Centre-relative sample points, and the radius each is proven
+         *  clear about, cm, in the order the march met them. */
+        TArray<FVector> Points;
+        TArray<double> Radii;
+
+        void Reset()
+        {
+            Ground.Reset();
+            Points.Reset();
+            Radii.Reset();
+        }
+    };
 
     /**
      * The approach law (decision 10), cm/s, D cm from the ground:
