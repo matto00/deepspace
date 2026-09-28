@@ -455,10 +455,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
         double Keep = 1.0;
         double KeptGap = 0.0;
         // Read each normal where the point will be at the substep's end,
-        // which is where its contact is met: first as if nothing were kept
-        // back, then where what that keeps puts it -- read only where the
-        // unslowed motion goes, a point slowed short of there met a slightly
-        // different slope, and closed on it a hair over the law.
+        // which is where its contact is met.
         auto KeepFor = [&](const FVector& Trial)
         {
             for (const ShipLanding::FFootprintHeight& Point : Heights)
@@ -496,10 +493,6 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
             }
         };
         KeepFor(Target);
-        if (Keep < 1.0)
-        {
-            KeepFor(Target - Across * (1.0 - Keep));
-        }
         if (Keep < 1.0)
         {
             Target -= Across * (1.0 - Keep);
