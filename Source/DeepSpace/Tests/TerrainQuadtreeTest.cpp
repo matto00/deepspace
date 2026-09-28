@@ -14,6 +14,8 @@
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeTest, "DeepSpace.Surface.Quadtree",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainQuadtreeSeamsTest, "DeepSpace.Surface.QuadtreeAtCubeSeams",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace TerrainQuadtreeLocal
 {
@@ -193,6 +195,132 @@ bool FTerrainQuadtreeTest::RunTest(const FString& Parameters)
             bCoarseFirst &= Cut.SplitFactorByLevel[Level] >= Cut.SplitFactorByLevel[Level - 1];
         }
         TestTrue(TEXT("lowering the coarsest levels' split factor first"), bCoarseFirst);
+    }
+    return true;
+}
+
+bool FTerrainQuadtreeSeamsTest::RunTest(const FString& Parameters)
+{
+    using namespace TerrainQuadtreeLocal;
+    const double Earth = UniverseUnits::CmPerEarthRadius;
+    FRandomStream Random(23);
+    // Two corners (three faces meet) and the middle of an edge (two do).
+    const FVector3d Nadirs[] = { FVector3d(1.0, 1.0, 1.0).GetSafeNormal(), FVector3d(-1.0, 1.0, -1.0).GetSafeNormal(),
+                                 FVector3d(1.0, 0.0, 1.0).GetSafeNormal() };
+    for (const FVector3d& Nadir : Nadirs)
+    {
+        for (const double Altitude : { 150.0, 1.0e5, 5.0e6 })
+        {
+            FCutParams Params;
+            Params.RadiusCm = Earth;
+            Params.MaxLevel = MaxLevel(Earth);
+            Params.MaxTiles = 1000000;
+            Params.OccluderRadiusCm = Earth;
+            Params.GroundAltitudeCm = Altitude;
+            const FCut Cut = SelectCut(Nadir * (Earth + Altitude), Params, [&](const FTileKey&) { return TOptional<FHeightRange>(Peaks); });
+            const TSet<FTileKey> Leaves(Cut.Leaves);
+            const FString At = FString::Printf(TEXT("(%.2f, %.2f, %.2f) at %.0f m"), Nadir.X, Nadir.Y, Nadir.Z, Altitude / 100.0);
+
+            bool bNoOverlap = true;
+            for (const FTileKey& Leaf : Cut.Leaves)
+            {
+                for (FTileKey Up = Leaf; Up.Level > 0;)
+                {
+                    Up = Up.Parent();
+                    bNoOverlap &= !Leaves.Contains(Up);
+                }
+            }
+            TestTrue(At + TEXT(": no leaf overlaps another"), bNoOverlap);
+            TestTrue(At + TEXT(": 2:1 between neighbours, across the faces"), Balanced(Cut.Leaves));
+
+            const double Horizon = FMath::Acos(Earth / (Earth + Altitude));
+            int32 Uncovered = 0;
+            for (int32 Sample = 0; Sample < 2000; ++Sample)
+            {
+                const FVector3d Tangent = FVector3d::CrossProduct(Nadir, FVector3d(Random.GetUnitVector())).GetSafeNormal();
+                const double Angle = Horizon * FMath::Sqrt(Random.FRand()) * 0.999;
+                const FVector3d D = Nadir * FMath::Cos(Angle) + Tangent * FMath::Sin(Angle);
+                Uncovered += LeafAt(Leaves, D, Params.MaxLevel).IsSet() ? 0 : 1;
+            }
+            TestEqual(At + TEXT(": every direction inside the horizon is drawn"), Uncovered, 0);
+            if (Altitude < ChainFullAltitudeCm)
+            {
+                TestTrue(At + TEXT(": the ship's own chain reaches MaxLevel"), Leaves.Contains(KeyAt(Nadir, Params.MaxLevel)));
+            }
+
+            // An oracle that shares nothing with KeyAt or EdgeProbe: only the
+            // leaves and GridDirection. Every leaf edge on its face's border,
+            // well inside the horizon, must meet the leaves of the other face
+            // vertex for vertex -- all 33 directions (a neighbour as fine or
+            // finer) or exactly the 17 even ones (a neighbour one level
+            // coarser). Fewer is a crack; every fourth is a 2:1 break.
+            TMap<uint8, TSet<FVector3d>> BorderOf;
+            const auto BorderEdges = [](const FTileKey& Leaf, TArray<TArray<FVector3d>>& Out)
+            {
+                const uint32 Last = (1u << Leaf.Level) - 1u;
+                for (int32 Side = 0; Side < 4; ++Side)
+                {
+                    const bool bOnBorder = Side == 0 ? Leaf.Y == 0 : Side == 1 ? Leaf.X == Last : Side == 2 ? Leaf.Y == Last : Leaf.X == 0;
+                    if (!bOnBorder)
+                    {
+                        continue;
+                    }
+                    TArray<FVector3d>& Edge = Out.AddDefaulted_GetRef();
+                    for (int32 K = 0; K <= CellsPerTile; ++K)
+                    {
+                        Edge.Add(Side == 0 ? GridDirection(Leaf, K, 0) : Side == 1 ? GridDirection(Leaf, CellsPerTile, K)
+                                 : Side == 2 ? GridDirection(Leaf, K, CellsPerTile) : GridDirection(Leaf, 0, K));
+                    }
+                }
+            };
+            for (const FTileKey& Leaf : Cut.Leaves)
+            {
+                TArray<TArray<FVector3d>> Edges;
+                BorderEdges(Leaf, Edges);
+                for (const TArray<FVector3d>& Edge : Edges)
+                {
+                    BorderOf.FindOrAdd(Leaf.Face).Append(Edge);
+                }
+            }
+            int32 SeamEdges = 0;
+            int32 Broken = 0;
+            for (const FTileKey& Leaf : Cut.Leaves)
+            {
+                TArray<TArray<FVector3d>> Edges;
+                BorderEdges(Leaf, Edges);
+                for (const TArray<FVector3d>& Edge : Edges)
+                {
+                    bool bInside = true;
+                    for (const FVector3d& D : Edge)
+                    {
+                        bInside &= FMath::Acos(FMath::Clamp(FVector3d::DotProduct(D, Nadir), -1.0, 1.0)) < 0.9 * Horizon;
+                    }
+                    if (!bInside)
+                    {
+                        continue;
+                    }
+                    ++SeamEdges;
+                    int32 Met = 0;
+                    int32 EvenMet = 0;
+                    for (int32 K = 0; K <= CellsPerTile; ++K)
+                    {
+                        bool bFound = false;
+                        for (const TPair<uint8, TSet<FVector3d>>& Other : BorderOf)
+                        {
+                            bFound |= Other.Key != Leaf.Face && Other.Value.Contains(Edge[K]);
+                        }
+                        Met += bFound ? 1 : 0;
+                        EvenMet += bFound && K % 2 == 0 ? 1 : 0;
+                    }
+                    const bool bWhole = Met == CellsPerTile + 1;
+                    const bool bHalf = EvenMet == CellsPerTile / 2 + 1 && Met == EvenMet;
+                    Broken += bWhole || bHalf ? 0 : 1;
+                }
+            }
+            TestTrue(At + FString::Printf(TEXT(": the cut has seam edges inside the horizon to check (%d)"), SeamEdges), SeamEdges > 0);
+            TestEqual(At + TEXT(": across every seam the other face's leaves meet each border edge vertex for vertex, at most one level apart"),
+                      Broken, 0);
+        }
     }
     return true;
 }
