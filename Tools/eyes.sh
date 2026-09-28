@@ -7,7 +7,8 @@
 # never runs them: under -nullrhi there is no GPU. This runs one the way it
 # must be run -- through the machine-wide lock (Tools/ue_lock.sh),
 # -RenderOffScreen, never -nullrhi -- and reads the verdict from the log as
-# ./test.sh does. Exits non-zero unless at least one test ran and none failed.
+# ./test.sh does, dirty-log gate included. Exits non-zero unless at least one
+# test ran, none failed, and the log is clean.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,3 +35,15 @@ if [[ -n $fail ]]; then
     exit 1
 fi
 [[ ${pass:-0} -gt 0 ]] || { echo "no tests ran -- check $LOG"; exit 1; }
+
+# The same gate as ./test.sh's: green is not enough. A world torn down while
+# still playing skips every EndPlay, and a console variable found by name on
+# every tick is a lookup the engine calls a performance problem; runs whose
+# every test passed have left both.
+dirty=$(grep -E "missing call to EndPlay|Performance warning: Console object" "$LOG" \
+        | grep -v "LogAutomationController" || true)
+if [[ -n $dirty ]]; then
+    echo "LOG NOT CLEAN:"
+    echo "$dirty"
+    exit 1
+fi
