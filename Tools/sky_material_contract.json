@@ -19,15 +19,22 @@
     "probe_select":    { "name": "ProbeSelect",    "type": "vector" },
     "probe_bias":      { "name": "ProbeBias",      "type": "vector" },
     "interior_light":  { "name": "InteriorLight",  "type": "scalar" },
-    "veil":            { "name": "Veil",           "type": "scalar" }
+    "veil":            { "name": "Veil",           "type": "scalar" },
+    "morph":             { "name": "Morph",           "type": "scalar" },
+    "band_limit":        { "name": "BandLimit",       "type": "scalar", "custom_primitive_data": 0 },
+    "tile_pivot":        { "name": "TilePivot",       "type": "vector", "custom_primitive_data": 1 },
+    "vertex_band_limit": { "name": "VertexBandLimit", "type": "scalar" }
   },
   "materials": {
     "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "body_axis_x", "body_axis_y", "brightness", "point_blend", "mottle", "detail", "banding", "relief_scale", "cratering"] },
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
     "M_SkyGlass":     { "parameters": [] },
-    "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] }
+    "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] },
+    "M_SkyGround":      { "parameters": ["colour", "light_direction", "surface_seed", "brightness", "mottle", "detail", "cratering", "relief_scale", "morph", "band_limit", "tile_pivot"] },
+    "M_SkyGroundProbe": { "parameters": ["surface_seed", "cratering", "relief_scale", "vertex_band_limit", "probe_footprint", "probe_bias"] }
   },
+  "ground_comment": "M_SkyGround: unlit, M_SkyBody's own law (the light, the colour, the brightness, the 1.5 disc gain, the terminator's smoothstep, the face clamp) and M_SkyBody's own face, composed by the same surface() graph from the shared file's terms; its normal is the tile's vertex normal (UV1.xy, UV2.x, universe axes) plus the pixel's slope of only the bands the vertices do not carry (WR_GroundNormal). BandLimit (the tile's spacing over R) and TilePivot (the tile's pivot from the world's centre, cm) are custom primitive data, so one instance serves every tile. World Position Offset lowers each vertex by (1 - Morph) x its height (UV2.y, km) along its direction: the relief grows in between the handover and the drive floor. No rim: the sky is black.",
   "shared_relief": {
     "comment": "M_SkyBody's face as one Custom node over Shaders/Private/WorldRelief.ush, the file the C++ compiles too (landing decision 1). SkyMaterialContract.h holds the same include, entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them, and the file's tables to this file's constants.",
     "include": "/Project/Private/WorldRelief.ush",

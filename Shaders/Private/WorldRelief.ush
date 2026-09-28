@@ -677,3 +677,35 @@ WR_Terms WR_SurfaceTerms(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint,
     T.CraterSlopeZ = Craters.GZ;
     return T;
 }
+
+// -- The ground's per-pixel normal (landing decision 9) ----------------------
+// Composed exactly as the orbit's is, normalize(D - s_t), from two parts: the
+// slope a tile's vertex normal carries, recovered from that normal (it was
+// built as normalize(D - s_v,t), so s_v,t = D - Nv / (Nv . D)), and the
+// pixel's own slope S -- which the material formed from only the bands the
+// vertices do not carry -- taken along the ground.
+struct WR_GroundNormalOut
+{
+    WR_REAL NX;
+    WR_REAL NY;
+    WR_REAL NZ;
+};
+
+WR_GroundNormalOut WR_GroundNormal(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL VX, WR_REAL VY, WR_REAL VZ,
+                                   WR_REAL SX, WR_REAL SY, WR_REAL SZ)
+{
+    const WR_REAL VD = WR_max(VX * DX + VY * DY + VZ * DZ, WR_REAL(1.0e-3));
+    const WR_REAL CarriedX = DX - VX / VD;
+    const WR_REAL CarriedY = DY - VY / VD;
+    const WR_REAL CarriedZ = DZ - VZ / VD;
+    const WR_REAL PD = SX * DX + SY * DY + SZ * DZ;
+    const WR_REAL NX = DX - CarriedX - (SX - PD * DX);
+    const WR_REAL NY = DY - CarriedY - (SY - PD * DY);
+    const WR_REAL NZ = DZ - CarriedZ - (SZ - PD * DZ);
+    const WR_REAL NL = WR_sqrt(NX * NX + NY * NY + NZ * NZ);
+    WR_GroundNormalOut Out;
+    Out.NX = NX / NL;
+    Out.NY = NY / NL;
+    Out.NZ = NZ / NL;
+    return Out;
+}

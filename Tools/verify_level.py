@@ -154,6 +154,7 @@ def main():
 
     failures += check_counter_frame(every)
     failures += check_sky(every)
+    failures += check_ground(every)
     failures += check_glass(ship, every, actors)
     failures += check_nav_screen(ship, every, actors)
     failures += check_map_screen(ship, every, actors)
@@ -250,6 +251,22 @@ def check_sky(every):
         for actor in of_class(every, cls):
             failures.append("%s (%s) remains; the sky owns the only light from outside"
                             % (actor.get_actor_label(), cls.__name__))
+    return failures
+
+
+def check_ground(every):
+    """One AWorldGround, on M_SkyGround, tagged PL.GROUND_TAG (Sky.Ground):
+    the tiles' material, and the tag the level's own checks find it by."""
+    failures = []
+    grounds = of_class(every, unreal.WorldGround)
+    if len(grounds) != 1:
+        failures.append("%d grounds, want exactly one" % len(grounds))
+    for ground in grounds[:1]:
+        got = path_of(ground.get_editor_property("ground_material"))
+        if got != PL.sky_asset("M_SkyGround"):
+            failures.append("ground ground_material is %s, not %s" % (got, PL.sky_asset("M_SkyGround")))
+        if PL.GROUND_TAG not in [str(tag) for tag in ground.tags]:
+            failures.append("the ground is not tagged %s" % PL.GROUND_TAG)
     return failures
 
 

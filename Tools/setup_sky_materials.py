@@ -436,6 +436,159 @@ def relief_probe(asset, terms):
     finish(material, asset)
 
 
+def custom_node(g, code, inputs, output_type):
+    """A Custom node calling the shared file: one body of HLSL text, its
+    inputs by name. The include path is the engine's own /Project mapping
+    of Shaders/, so the text here is only the call."""
+    node = g.node(unreal.MaterialExpressionCustom)
+    node.set_editor_property("code", code)
+    node.set_editor_property("output_type", output_type)
+    node.set_editor_property("include_file_paths", [SHARED["include"]])
+    entries = []
+    for input_name, _ in inputs:
+        entry = unreal.CustomInput()
+        entry.set_editor_property("input_name", input_name)
+        entries.append(entry)
+    node.set_editor_property("inputs", entries)
+    for input_name, source in inputs:
+        g.link(source, node, input_name)
+    return node
+
+
+def primitive_parameter(node, index):
+    """A parameter read from the component's custom primitive data: per
+    tile, with one material instance for all of them."""
+    node.set_editor_property("use_custom_primitive_data", True)
+    node.set_editor_property("primitive_data_index", index)
+    return node
+
+
+# The ground's normal: the tile's vertex normal (UV1.xy, UV2.x) and the
+# pixel's slope, composed by the shared file.
+GROUND_NORMAL_CODE = (
+    "WR_GroundNormalOut N = WR_GroundNormal(D.x, D.y, D.z, NormalXY.x, NormalXY.y, NormalZH.x, Slope.x, Slope.y, Slope.z);\n"
+    "return float3(N.NX, N.NY, N.NZ);\n")
+
+# The probe's: a flat vertex, its normal D itself.
+GROUND_PROBE_CODE = (
+    "WR_GroundNormalOut N = WR_GroundNormal(D.x, D.y, D.z, D.x, D.y, D.z, Slope.x, Slope.y, Slope.z);\n"
+    "return float3(N.NX, N.NY, N.NZ);\n")
+
+
+def ground_direction(g, pivot):
+    """D, the unit direction from the world's centre to the pixel in
+    universe axes (worlds do not spin): normalize(TilePivot + LocalPosition),
+    and its footprint, max(|ddx D|, |ddy D|) * filter_pixels, as the orbit's."""
+    local = g.node(unreal.MaterialExpressionLocalPosition)
+    direction = g.unary(unreal.MaterialExpressionNormalize, g.add(mask(g, pivot, "rgb"), local))
+    ddx = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDX, direction))
+    ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
+    footprint = g.mul(g.binary(unreal.MaterialExpressionMax, ddx, ddy), g.constant(CONSTANTS["filter_pixels"]))
+    return local, direction, footprint
+
+
+def sky_ground():
+    """The ground, drawn by AWorldGround's tiles (landing decision 9).
+
+        D, footprint = ground_direction(TilePivot)            (universe axes)
+        face, slope  = surface(the look, D, footprint,
+                               shared_terms(..., BandLimit))  (M_SkyBody's own graph)
+        N            = WR_GroundNormal(D, the vertex normal, slope)
+        shaded       = gain * saturate(N.L) * smoothstep(-w, w, N.L), N in world space
+        emissive     = Colour * Brightness * shaded * face
+        WPO          = (Morph - 1) * h * D, carried to world space
+
+    M_SkyBody's own law, so the handover at 50 km has no brightness step: the
+    same light direction, colour and brightness (AShipSky copies the body's
+    look into this material's one instance), the same face, and a normal that
+    is the orbit's band for band wherever the tiles are finer than the pixels.
+    """
+    asset = "M_SkyGround"
+    material = fresh_material(asset)
+    g = Graph(material)
+
+    colour = g.vector("colour", (1.0, 1.0, 1.0, 1.0))
+    light = g.vector("light_direction", (0.0, 0.0, 1.0, 0.0))
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
+    brightness = g.scalar("brightness", 1.0)
+    mottle = g.scalar("mottle", 0.35)
+    detail = g.scalar("detail", 0.3)
+    cratering = g.scalar("cratering", 0.0)
+    relief_scale = g.scalar("relief_scale", 0.0)
+    morph = g.scalar("morph", 1.0)
+    # The indices are the contract's, as the names are (SkyMaterialContract.h's
+    # BandLimitPrimitiveIndex and TilePivotPrimitiveIndex, which WorldGround writes).
+    parameters = CONTRACT["parameters"]
+    band_limit = primitive_parameter(g.scalar("band_limit", 1.0), parameters["band_limit"]["custom_primitive_data"])
+    pivot = primitive_parameter(g.vector("tile_pivot", (0.0, 0.0, 0.0, 0.0)), parameters["tile_pivot"]["custom_primitive_data"])
+
+    local, direction, footprint = ground_direction(g, pivot)
+    # Ground is never banded: the knobs' banding is 0, so the stretch is 1.
+    knobs = (mottle, detail, g.constant(0.0), relief_scale, cratering)
+    factor, slope = surface(g, knobs, seed, direction, footprint,
+                            lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, band_limit))
+    uv1 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
+    uv2 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=2)
+    normal_local = custom_node(g, GROUND_NORMAL_CODE,
+                               [("D", direction), ("NormalXY", uv1), ("NormalZH", uv2), ("Slope", slope)],
+                               unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+
+    to_world = g.node(unreal.MaterialExpressionTransform,
+                      transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
+                      transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    g.link(normal_local, to_world)
+    normal = g.unary(unreal.MaterialExpressionNormalize, to_world)
+    n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
+    lambert = g.unary(unreal.MaterialExpressionSaturate, n_dot_l)
+    width = float(CONSTANTS["terminator_width"])
+    soft = g.node(unreal.MaterialExpressionSmoothStep, const_min=-width, const_max=width)
+    g.link(n_dot_l, soft, "Value")
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    g.emissive(g.mul(g.mul(colour, brightness), g.mul(shaded, factor)))
+
+    # The morph: every vertex lowered by (1 - Morph) x its height along its
+    # own direction -- the sphere at the handover, the whole relief at the
+    # drive floor. The height rides UV2.y in km (PMC's UVs are half floats).
+    height = g.mul(mask(g, uv2, "g"), g.constant(1.0e5))
+    offset = g.mul(direction, g.mul(g.add(morph, g.constant(-1.0)), height))
+    wpo = g.node(unreal.MaterialExpressionTransform,
+                 transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
+                 transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    g.link(offset, wpo)
+    unreal.MaterialEditingLibrary.connect_material_property(wpo, "", unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+    finish(material, asset)
+
+
+def sky_ground_probe():
+    """Eyes.WorldReliefParity's ground case: M_SkyGround's per-pixel normal
+    over the probe patch (probe_direction), a flat vertex carrying
+    VertexBandLimit's bands, at ProbeFootprint, untonemapped. The face is not
+    drawn: it is surface()'s composition of the terms M_SkyReliefProbe
+    already holds to the C++, and VertexBandLimit moves only the slopes.
+
+        pixel = ProbeBias.rgb + WR_GroundNormal(D, D, slope)"""
+    asset = "M_SkyGroundProbe"
+    material = fresh_material(asset)
+    # A normal is signed, and the template clamps emissive at 0 unless told
+    # otherwise -- as relief_probe found.
+    material.set_editor_property("allow_negative_emissive_color", True)
+    g = Graph(material)
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
+    cratering = g.scalar("cratering", 0.0)
+    relief_scale = g.scalar("relief_scale", 0.0)
+    limit = g.scalar("vertex_band_limit", 1.0)
+    footprint = g.scalar("probe_footprint", 0.0)
+    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
+    direction = probe_direction(g)
+    knobs = (g.constant(0.35), g.constant(0.3), g.constant(0.0), relief_scale, cratering)
+    _, slope = surface(g, knobs, seed, direction, footprint,
+                       lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, limit))
+    normal = custom_node(g, GROUND_PROBE_CODE, [("D", direction), ("Slope", slope)],
+                         unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    g.emissive(g.add(normal, mask(g, bias, "rgb")))
+    finish(material, asset)
+
+
 def relief_normal(g, direction, slope, axes):
     """The world-space normal of the relief: the sphere's own normal, D --
     exact at every pixel, so no facet of the mesh can show in the shading --
@@ -664,6 +817,8 @@ def main():
     sky_starfield()
     sky_glass(collections)
     relief_probe("M_SkyReliefProbe", shared_terms)
+    sky_ground()
+    sky_ground_probe()
     log("ok")
 
 

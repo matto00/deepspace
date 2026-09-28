@@ -10,6 +10,7 @@
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
+#include "Sky/SkyMaterialContract.h"
 #include "Sky/SkySystem.h"
 #include "Surface/TerrainTileComponent.h"
 
@@ -46,8 +47,6 @@ namespace
 
     /** The handover's hysteresis: taken under 50 km, given back over 55. */
     constexpr double HandbackFactor = 1.1;
-
-    const FName MorphName(TEXT("Morph"));
 
     bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
     {
@@ -204,7 +203,7 @@ void AWorldGround::SyncTo(const FSkySystem& System, bool bInTransit)
     Morph = TerrainTile::MorphFraction(NearAltitude, DriveFloorAltitude);
     if (Material)
     {
-        Material->SetScalarParameterValue(MorphName, static_cast<float>(Morph));
+        Material->SetScalarParameterValue(SkyMaterial::Morph, static_cast<float>(Morph));
     }
     Place();
 }
@@ -381,8 +380,8 @@ void AWorldGround::Upload(const FTileBuild& Tile)
     UploadTo(Component, Tile, bFirst);
     // The band limit and the pivot, per tile, as custom primitive data: one
     // material instance serves every tile (decision 6).
-    Component->SetCustomPrimitiveDataFloat(0, static_cast<float>(Tile.SpacingCm / Radius));
-    Component->SetCustomPrimitiveDataVector3(1, FVector(Tile.Pivot));
+    Component->SetCustomPrimitiveDataFloat(SkyMaterial::BandLimitPrimitiveIndex, static_cast<float>(Tile.SpacingCm / Radius));
+    Component->SetCustomPrimitiveDataVector3(SkyMaterial::TilePivotPrimitiveIndex, FVector(Tile.Pivot));
     Resident.Add(Tile.Key, FResident{ Tile, Index });
     ++UploadsLastFrame;
     bResidencyChanged = true;

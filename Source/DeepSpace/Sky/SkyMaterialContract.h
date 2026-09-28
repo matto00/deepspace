@@ -38,6 +38,22 @@ namespace SkyMaterial
     inline const FName ProbeSelect = TEXT("ProbeSelect");       // vector: one-hot, which terms the pixel carries
     inline const FName ProbeBias = TEXT("ProbeBias");           // vector: added to the pixel; the pipe check
 
+    // The ground (landing decision 9): M_SkyGround, drawn by AWorldGround's
+    // tiles, and M_SkyGroundProbe, Eyes.WorldReliefParity's ground case.
+    inline const TCHAR* const GroundPath = TEXT("/Game/Materials/Sky/M_SkyGround.M_SkyGround");
+    inline const TCHAR* const GroundProbePath = TEXT("/Game/Materials/Sky/M_SkyGroundProbe.M_SkyGroundProbe");
+    inline const FName Morph = TEXT("Morph");                     // scalar: the relief's growth, 0 at 50 km to 1 at the drive floor
+    inline const FName BandLimit = TEXT("BandLimit");             // scalar, custom primitive data: the tile's spacing over R
+    inline const FName TilePivot = TEXT("TilePivot");             // vector, custom primitive data: the tile's pivot, cm
+    inline const FName VertexBandLimit = TEXT("VertexBandLimit"); // scalar, the probe's: what the vertices carry
+
+    /** Where BandLimit and TilePivot sit in a tile's custom primitive data. A
+     *  wrong index fails as silently as a misspelt name -- every tile reads 0
+     *  -- so the index is contract too: here, in the JSON's
+     *  custom_primitive_data, and on M_SkyGround's parameter nodes. */
+    inline constexpr int32 BandLimitPrimitiveIndex = 0;
+    inline constexpr int32 TilePivotPrimitiveIndex = 1;               // 1..3
+
     // The shared file as a Custom node reaches it: its include, the function
     // it calls, and its pins, in order.
     inline const TCHAR* const WorldReliefInclude = TEXT("/Project/Private/WorldRelief.ush");
@@ -93,6 +109,10 @@ namespace SkyMaterial
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
     inline TArray<FName> ProbeScalars() { return { Banding, ProbeFootprint }; }
     inline TArray<FName> ProbeVectors() { return { SurfaceSeed, ProbeSelect, ProbeBias }; }
+    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit }; }
+    inline TArray<FName> GroundVectors() { return { Colour, LightDirection, SurfaceSeed, TilePivot }; }
+    inline TArray<FName> GroundProbeScalars() { return { Cratering, ReliefScale, VertexBandLimit, ProbeFootprint }; }
+    inline TArray<FName> GroundProbeVectors() { return { SurfaceSeed, ProbeBias }; }
 
     /**
      * M_SkyBody's shaded term is this times saturate(N.L). A Lambert sphere's

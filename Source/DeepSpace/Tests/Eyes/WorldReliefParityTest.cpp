@@ -15,6 +15,7 @@
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkySystem.h"
 #include "Universe/UniverseSubsystem.h"
+#include "Surface/TerrainQuadtree.h"
 #include "Surface/WorldRelief.h"
 #include "Tests/SkyTestWorld.h"
 
@@ -540,6 +541,86 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         }
     }
 
+    // -- The ground's normal (landing decision 9, Task T7) -------------------
+    // M_SkyGroundProbe draws M_SkyGround's per-pixel normal over the same
+    // patch, for a flat vertex (its normal D itself) carrying the bands of
+    // the tile level the cut uses at 50 km over Baemsekai IV; the C++ is
+    // WorldReliefShading::Ground on the same D. With
+    // DeepSpace.Surface.GroundShadesAsOrbit (the ground's normal is the
+    // orbit's on the CPU) this holds the ground's normal on the GPU.
+    double WorstGroundNormal = 0.0;
+    {
+        UMaterial* GroundShared = LoadObject<UMaterial>(nullptr, SkyMaterial::GroundProbePath);
+        if (!TestNotNull(TEXT("M_SkyGroundProbe is built (Tools/setup_sky_materials.py)"), GroundShared))
+        {
+            return false;
+        }
+        UMaterialInstanceDynamic* GroundProbe = UMaterialInstanceDynamic::Create(GroundShared, Test.World);
+        const double VertexBandLimit = TerrainQuadtree::SpacingCm(9, Fourth.Relief.RadiusCm) / Fourth.Relief.RadiusCm;
+        GroundProbe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::Cratering, static_cast<float>(Fourth.Relief.Cratering));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::ReliefScale, static_cast<float>(Ground.SlopeScale()));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::VertexBandLimit, static_cast<float>(VertexBandLimit));
+        const FLinearColor NoBias(0.0f, 0.0f, 0.0f, 0.0f);
+        // Both probes draw probe_direction's patch: the relief probe's
+        // Direction pass is the D each ground pixel was shaded at.
+        const TArray<FVector3d> Directions = Draw(Test.World, Target, Probe, Selecting(EPass::Direction), NoBias);
+        const FVector3d& Offset = Fourth.Relief.SeedOffset;
+        const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
+        for (int32 Row = 0; Row < static_cast<int32>(UE_ARRAY_COUNT(Footprints)); ++Row)
+        {
+            const double FootprintD = Footprints[Row].Table.Footprint;
+            const float Footprint = static_cast<float>(FootprintD);
+            GroundProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
+            const TArray<FVector3d> GroundNormals = Draw(Test.World, Target, GroundProbe, NoBias, NoBias);
+            double Gap = 0.0;
+            int32 LeftOut = 0;
+            int32 NotFinite = 0;
+            TArray<int32> LeftOutByBand;
+            LeftOutByBand.Init(0, CraterBands);
+            for (int32 Index = 0; Index < Side * Side; ++Index)
+            {
+                const FVector3d& D = Directions[Index];
+                if (!IsFinite(D) || !IsFinite(GroundNormals[Index]))
+                {
+                    ++NotFinite;
+                    continue;
+                }
+                bool bOnStep = false;
+                for (int32 Band = 0; Band < CraterBands; ++Band)
+                {
+                    if (WorldReliefNoise::CraterBandMargin(D, Footprint, Offset, Band) < StepMarginCells)
+                    {
+                        ++LeftOutByBand[Band];
+                        bOnStep = true;
+                    }
+                }
+                if (bOnStep)
+                {
+                    ++LeftOut;
+                    continue;
+                }
+                const FVector3d Held = WorldReliefShading::Ground(Fourth.Relief, D, D, static_cast<double>(Footprint), VertexBandLimit).Normal;
+                Gap = FGap::Wider(Gap, FGap::AbsMax(Held - GroundNormals[Index]));
+            }
+            double MostInABand = 0.0;
+            for (int32 Band = 0; Band < CraterBands; ++Band)
+            {
+                MostInABand = FMath::Max(MostInABand, static_cast<double>(LeftOutByBand[Band]) / (Side * Side));
+            }
+            const FString At = FString::Printf(TEXT("Baemsekai IV's ground normal, footprint 1/%.0f"), 1.0 / FootprintD);
+            TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
+            TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%.3f%%)"), *At, 100.0 * MostInABand),
+                MostInABand <= MaxLeftOutPerBand);
+            TestTrue(FString::Printf(TEXT("%s: WorldReliefShading::Ground computes what the GPU drew, to 1e-3 a component (%.2e)"), *At, Gap),
+                Gap <= 1.0e-3);
+            WorstGroundNormal = FMath::Max(WorstGroundNormal, Gap);
+            Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out, %d not finite"), *At, Side * Side - LeftOut - NotFinite, LeftOut, NotFinite));
+            Report.Add(FString::Printf(TEXT("  ground normal C++ vs GPU:          %.2e"), Gap));
+        }
+    }
+
+    Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));
     Report.Add(FString::Printf(TEXT("SUMMARY C++-vs-GPU %.2e, float-C++-vs-GPU %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
         WorstReliefShared, WorstFloatShared, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes") / TEXT("WorldReliefParity");

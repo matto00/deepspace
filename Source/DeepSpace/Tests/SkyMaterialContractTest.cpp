@@ -24,6 +24,7 @@
 #include "Materials/MaterialExpressionObjectPositionWS.h"
 #include "Materials/MaterialExpressionParameter.h"
 #include "Materials/MaterialExpressionPixelDepth.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionScreenPosition.h"
 #include "Materials/MaterialExpressionTextureBase.h"
 #include "Materials/MaterialExpressionViewSize.h"
@@ -80,6 +81,10 @@ namespace
             { TEXT("probe_bias"), SkyMaterial::ProbeBias, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
+            { TEXT("morph"), SkyMaterial::Morph, TEXT("scalar") },
+            { TEXT("band_limit"), SkyMaterial::BandLimit, TEXT("scalar") },
+            { TEXT("tile_pivot"), SkyMaterial::TilePivot, TEXT("vector") },
+            { TEXT("vertex_band_limit"), SkyMaterial::VertexBandLimit, TEXT("scalar") },
         };
     }
 
@@ -810,6 +815,8 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {} },
         { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {} },
         { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
+        { TEXT("M_SkyGround"), SkyMaterial::GroundPath, SkyMaterial::GroundScalars(), SkyMaterial::GroundVectors() },
+        { TEXT("M_SkyGroundProbe"), SkyMaterial::GroundProbePath, SkyMaterial::GroundProbeScalars(), SkyMaterial::GroundProbeVectors() },
     };
 
     const TSharedPtr<FJsonObject> JsonMaterials = Contract->GetObjectField(TEXT("materials"));
@@ -857,6 +864,52 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         }
         TestEqual(FString::Printf(TEXT("%s has one node per parameter"), Expected.Asset),
             ParameterNodes, JsonScalars.Num() + JsonVectors.Num());
+
+        // Custom primitive data: the index is contract as much as the name.
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material->GetExpressions())
+        {
+            bool bPrimitive = false;
+            int32 Index = -1;
+            FName Name;
+            if (const UMaterialExpressionScalarParameter* Scalar = Cast<UMaterialExpressionScalarParameter>(Expression))
+            {
+                bPrimitive = Scalar->bUseCustomPrimitiveData;
+                Index = Scalar->PrimitiveDataIndex;
+                Name = Scalar->ParameterName;
+            }
+            else if (const UMaterialExpressionVectorParameter* Vector = Cast<UMaterialExpressionVectorParameter>(Expression))
+            {
+                bPrimitive = Vector->bUseCustomPrimitiveData;
+                Index = Vector->PrimitiveDataIndex;
+                Name = Vector->ParameterName;
+            }
+            if (!bPrimitive)
+            {
+                continue;
+            }
+            int32 JsonIndex = -1;
+            for (const auto& Role : JsonParameters->Values)
+            {
+                const TSharedPtr<FJsonObject> Parameter = Role.Value->AsObject();
+                if (FName(*Parameter->GetStringField(TEXT("name"))) == Name && Parameter->HasField(TEXT("custom_primitive_data")))
+                {
+                    JsonIndex = static_cast<int32>(Parameter->GetNumberField(TEXT("custom_primitive_data")));
+                }
+            }
+            TestEqual(FString::Printf(TEXT("%s: %s reads the custom primitive data the JSON says"), Expected.Asset, *Name.ToString()), Index, JsonIndex);
+            if (Name == SkyMaterial::BandLimit)
+            {
+                TestEqual(TEXT("BandLimit's index is the header's, which WorldGround writes"), Index, SkyMaterial::BandLimitPrimitiveIndex);
+            }
+            else if (Name == SkyMaterial::TilePivot)
+            {
+                TestEqual(TEXT("TilePivot's index is the header's, which WorldGround writes"), Index, SkyMaterial::TilePivotPrimitiveIndex);
+            }
+            else
+            {
+                AddError(FString::Printf(TEXT("%s: %s reads custom primitive data the header names no index for"), Expected.Asset, *Name.ToString()));
+            }
+        }
 
         const TArray<FString> Errors = TranslationErrors(const_cast<UMaterial*>(Material));
         TestTrue(FString::Printf(TEXT("%s translates: %s"), Expected.Asset, *FString::Join(Errors, TEXT("; "))), Errors.IsEmpty());
