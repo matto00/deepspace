@@ -104,10 +104,46 @@ bool FAirFactsTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and always under both the draw and the ceiling"), bUnder);
     TestEqual(TEXT("no ceiling, no air"), AirFacts::SmoothCeiling(1.0, 0.0), 0.0);
 
+    // -- Decision 5's table: what comes with each mix --------------------------------
+    // Pinned here, where they are defined, rather than first in the sky's
+    // spec: nothing on the procgen side reads the aerosol's shape or the
+    // absorber, so a changed constant would otherwise pass unseen until the
+    // sky drew it. Moving one is moving the spec's table: move both.
+    struct FExpected
+    {
+        EAirMix Mix;
+        double Mu, Rayleigh, Tau550, HeightKm, Angstrom, Asymmetry, Albedo450, Albedo650, Ozone600;
+    };
+    const FExpected Table[] = {
+        {EAirMix::NitrogenOxygen, 28.97, 1.0, 0.05, 1.2, 1.0, 0.76, 0.95, 0.95, 0.0415},
+        {EAirMix::CarbonDioxide, 44.0, 2.4, 0.08, 2.0, 0.3, 0.70, 0.85, 0.95, 0.0},
+        {EAirMix::HydrogenHelium, 2.3, 0.2, 0.01, 1.0, 1.0, 0.70, 0.99, 0.99, 0.0},
+    };
+    for (const FExpected& Row : Table)
+    {
+        const FAirMixFacts& Facts = AirFacts::Facts(Row.Mix);
+        const double Got[] = {Facts.MeanMolecularWeight, Facts.RayleighPerAir, Facts.AerosolTau550PerBar, Facts.AerosolScaleHeightKm,
+            Facts.AerosolAngstrom, Facts.AerosolAsymmetry, Facts.AerosolAlbedo450, Facts.AerosolAlbedo650, Facts.OzoneTau600PerBar};
+        const double Want[] = {Row.Mu, Row.Rayleigh, Row.Tau550, Row.HeightKm, Row.Angstrom, Row.Asymmetry, Row.Albedo450, Row.Albedo650, Row.Ozone600};
+        const TCHAR* Field[] = {TEXT("mean molecular weight"), TEXT("Rayleigh per air"), TEXT("aerosol tau550 per bar"), TEXT("aerosol scale height"),
+            TEXT("aerosol Angstrom alpha"), TEXT("aerosol asymmetry"), TEXT("aerosol albedo at 450"), TEXT("aerosol albedo at 650"), TEXT("ozone tau600 per bar")};
+        for (int32 F = 0; F < UE_ARRAY_COUNT(Got); ++F)
+        {
+            TestEqual(FString::Printf(TEXT("%s's %s is decision 5's"), AirFacts::Name(Row.Mix), Field[F]), Got[F], Want[F]);
+        }
+    }
+    TestTrue(TEXT("N2/O2's ozone goes with the column: 0.0415 per bar at 1 g, twice at 2 bar, half at 2 g"),
+        FMath::Abs(AirFacts::OzoneTau600(EAirMix::NitrogenOxygen, 1.0, 1.0) - 0.0415) < 1.0e-12
+            && FMath::Abs(AirFacts::OzoneTau600(EAirMix::NitrogenOxygen, 2.0, 1.0) - 0.083) < 1.0e-12
+            && FMath::Abs(AirFacts::OzoneTau600(EAirMix::NitrogenOxygen, 1.0, 2.0) - 0.02075) < 1.0e-12);
+    TestEqual(TEXT("CO2 has no ozone"), AirFacts::OzoneTau600(EAirMix::CarbonDioxide, 1.0, 1.0), 0.0);
+    TestEqual(TEXT("nor H2/He"), AirFacts::OzoneTau600(EAirMix::HydrogenHelium, 1.0, 1.0), 0.0);
+
     // -- No air ---------------------------------------------------------------------------
     TestEqual(TEXT("no mix has no scale height"), AirFacts::ScaleHeightKm(EAirMix::None, 255.0, 1.0), 0.0);
     TestEqual(TEXT("nor any depth"), AirFacts::NadirTau450(EAirMix::None, 1.0, 1.0), 0.0);
     TestEqual(TEXT("nor any retention"), AirFacts::Retention(EAirMix::None, 1.0, 1.0, 255.0), 0.0);
+    TestEqual(TEXT("nor any ozone"), AirFacts::OzoneTau600(EAirMix::None, 1.0, 1.0), 0.0);
     TestEqual(TEXT("and is called none"), FString(AirFacts::Name(EAirMix::None)), FString(TEXT("none")));
     return true;
 }

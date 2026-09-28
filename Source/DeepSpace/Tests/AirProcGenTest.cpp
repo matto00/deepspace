@@ -16,9 +16,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     "DeepSpace.Universe.Air",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-/** The atmospheres spec's fixture roles, found by its rules (AirFixtureWorlds):
- *  its log fills the spec's *Fixture worlds* table. Fails if a role has no
- *  world within AirFixtureWorlds::SearchSystems of home. */
+/** The atmospheres spec's fixture roles, found by its rules (AirFixtureWorlds)
+ *  and held to the spec's *The fixtures as drawn* table: fails if a role has
+ *  no world within AirFixtureWorlds::SearchSystems of home, or finds a world,
+ *  mix or pressure other than the table's. Its log reprints the table. */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FAtmosphereFixtureWorldsTest,
     "DeepSpace.Atmosphere.FixtureWorlds",
@@ -77,6 +78,7 @@ bool FAirProcGenTest::RunTest(const FString& Parameters)
     int32 Giants = 0;
     int32 OverCeiling = 0;
     int32 AtCeiling = 0;
+    int32 PartlyHeld = 0;
     int32 ByMix[4] = {0, 0, 0, 0};
     for (const FStarSystem& System : Systems)
     {
@@ -136,6 +138,21 @@ bool FAirProcGenTest::RunTest(const FString& Parameters)
             {
                 Break(TEXT("never over the ceiling"));
             }
+            // The pressure law, from its inputs and not from the draw's own
+            // ceiling: the ceiling is the guarantee's at this gravity scaled
+            // by how much of the mix the world retains, and the pressure is
+            // the drawn one bent under it. A ceiling that dropped the
+            // retention, or a pressure scaled or clipped, breaks here.
+            const double Ceiling = AirFacts::PressureCeilingBar(Planet.AirMix, G, Retained);
+            const double Law = AirFacts::SmoothCeiling(Draw.DrawnBar, Ceiling);
+            if (FMath::Abs(Planet.SurfacePressureBar / Law - 1.0) > 1.0e-12)
+            {
+                Break(TEXT("the pressure is SmoothCeiling(drawn, PressureCeilingBar(mix, g, retention))"));
+            }
+            if (Retained < 1.0 && Draw.DrawnBar > 0.1 * Ceiling)
+            {
+                ++PartlyHeld;
+            }
             OverCeiling += Draw.DrawnBar > Draw.CeilingBar ? 1 : 0;
             AtCeiling += Planet.SurfacePressureBar / Draw.CeilingBar > 0.99999 ? 1 : 0;
         }
@@ -145,6 +162,8 @@ bool FAirProcGenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("every world keeps the rules: ") + FirstBreak, FirstBreak.IsEmpty());
     TestTrue(TEXT("the mixes spread: N2/O2 and CO2 both occur"), ByMix[1] > 0 && ByMix[2] > 0);
     TestTrue(TEXT("the ceiling bends some worlds (else the next check proves nothing)"), OverCeiling > 0);
+    AddInfo(FString::Printf(TEXT("%d worlds only partly hold their mix and drew near enough their ceiling for it to show"), PartlyHeld));
+    TestTrue(TEXT("some world only partly holds its mix, near its ceiling (else the law's retention goes unchecked)"), PartlyHeld > 0);
     TestTrue(TEXT("the smooth ceiling leaves no spike: under a tenth as many at the cap as drew past it"), 10 * AtCeiling < OverCeiling);
 
     // -- The draws come from the two named streams ---------------------------------
@@ -178,11 +197,13 @@ bool FAirProcGenTest::RunTest(const FString& Parameters)
             FGenStream PressureStream(GenSeed::Derive(Seed, GenSeed::Label("air.pressure")));
             const double DrawnByHand = PressureStream.LogNormal(Median, Priors.AirPressureSigma);
             const FAirDraw Draw = FStarSystemGenerator::GenerateAir(Seed, Planet, Priors);
-            StreamMisses += (Planet.AirMix != ByHand || Draw.DrawnBar != DrawnByHand) ? 1 : 0;
+            const double ByHandBar = AirFacts::SmoothCeiling(DrawnByHand,
+                AirFacts::PressureCeilingBar(ByHand, Planet.SurfaceGravityEarth(), AirFacts::Retention(ByHand, Planet.MassEarth, Planet.RadiusEarth, Planet.EquilibriumK)));
+            StreamMisses += (Planet.AirMix != ByHand || Draw.DrawnBar != DrawnByHand || FMath::Abs(Planet.SurfacePressureBar / ByHandBar - 1.0) > 1.0e-12) ? 1 : 0;
         }
     }
     TestEqual(TEXT("50 temperate worlds checked against their named streams"), StreamsChecked, 50);
-    TestEqual(TEXT("every mix is its air.mix stream's and every drawn pressure its air.pressure stream's"), StreamMisses, 0);
+    TestEqual(TEXT("every mix is its air.mix stream's, every drawn pressure its air.pressure stream's, and every pressure that draw under its ceiling"), StreamMisses, 0);
 
     // -- The draws off: the air moves nothing else about any world ----------------
     // The spec's comparison. Each of the 500 nearest systems generated again
@@ -296,17 +317,62 @@ bool FAirProcGenTest::RunTest(const FString& Parameters)
     return true;
 }
 
+namespace AirProcGenTestLocal
+{
+    /** The spec's *The fixtures as drawn* table, row for row. The rules
+     *  find the worlds; this pins what they found, so a change to a prior,
+     *  a stream or the generator that moves a role to another world, or
+     *  changes its air, fails here (*Fixture worlds*: "fails loudly rather
+     *  than testing somewhere else") instead of quietly testing another
+     *  world. If the move is meant, the spec's table and this one change
+     *  together, from this test's log. Pressure to the table's four figures. */
+    struct FPinnedFixture
+    {
+        const TCHAR* Role;
+        const TCHAR* Designation;
+        int64 SectorX, SectorY, SectorZ;
+        int32 Slot, Index;
+        EAirMix Mix;
+        double PressureBar;
+    };
+    const FPinnedFixture Pinned[] = {
+        {TEXT("R"), TEXT("Gelaes III"), -2, -1, 0, 0, 2, EAirMix::NitrogenOxygen, 1.393},
+        {TEXT("G"), TEXT("Sova V"), 0, -2, 1, 0, 4, EAirMix::NitrogenOxygen, 0.5235},
+        {TEXT("C"), TEXT("Baemsekai V"), -1, -1, 0, 0, 4, EAirMix::CarbonDioxide, 0.6639},
+        {TEXT("N"), TEXT("Baemsekai I"), -1, -1, 0, 0, 0, EAirMix::None, 0.0},
+        {TEXT("J"), TEXT("Krothmertas VII"), -2, -5, 1, 0, 6, EAirMix::HydrogenHelium, 0.6273},
+    };
+}
+
 bool FAtmosphereFixtureWorldsTest::RunTest(const FString& Parameters)
 {
+    using namespace AirProcGenTestLocal;
     const FGenPriors Priors = GetDefault<UProcGenPriorsConfig>()->ToPriors();
-    for (const AirFixtureWorlds::FFixture& Role : AirFixtureWorlds::Find(AirFixtureWorlds::UniverseSeed, Priors, AirFixtureWorlds::SearchSystems))
+    const TArray<AirFixtureWorlds::FFixture> Roles = AirFixtureWorlds::Find(AirFixtureWorlds::UniverseSeed, Priors, AirFixtureWorlds::SearchSystems);
+    TestEqual(TEXT("one pinned row per role"), Roles.Num(), static_cast<int32>(UE_ARRAY_COUNT(Pinned)));
+    for (int32 R = 0; R < Roles.Num(); ++R)
     {
+        const AirFixtureWorlds::FFixture& Role = Roles[R];
         if (!TestTrue(FString::Printf(TEXT("fixture %s is found within %d systems of home"), Role.Role, AirFixtureWorlds::SearchSystems), Role.bFound))
         {
             continue;
         }
         const FPlanet& Planet = Role.Planet();
         const double G = Planet.SurfaceGravityEarth();
+        if (R < static_cast<int32>(UE_ARRAY_COUNT(Pinned)))
+        {
+            const FPinnedFixture& Want = Pinned[R];
+            const FSystemId& Id = Role.System.Stub.Id;
+            TestEqual(TEXT("the roles come in the table's order"), FString(Role.Role), FString(Want.Role));
+            TestTrue(FString::Printf(TEXT("fixture %s is still the spec's %s at sector (%lld, %lld, %lld) slot %d, orbit index %d (found %s at (%lld, %lld, %lld) slot %d, index %d)"),
+                         Want.Role, Want.Designation, static_cast<long long>(Want.SectorX), static_cast<long long>(Want.SectorY), static_cast<long long>(Want.SectorZ), Want.Slot, Want.Index,
+                         *Planet.Designation, static_cast<long long>(Id.Sector.X), static_cast<long long>(Id.Sector.Y), static_cast<long long>(Id.Sector.Z), Id.Slot, Role.Index),
+                Planet.Designation == Want.Designation && Id.Sector.X == Want.SectorX && Id.Sector.Y == Want.SectorY && Id.Sector.Z == Want.SectorZ
+                    && Id.Slot == Want.Slot && Role.Index == Want.Index);
+            TestEqual(FString::Printf(TEXT("fixture %s still draws %s"), Want.Role, AirFacts::Name(Want.Mix)), FString(AirFacts::Name(Planet.AirMix)), FString(AirFacts::Name(Want.Mix)));
+            TestTrue(FString::Printf(TEXT("fixture %s's pressure is still the table's %.4g bar (%.4g)"), Want.Role, Want.PressureBar, Planet.SurfacePressureBar),
+                Want.PressureBar == 0.0 ? Planet.SurfacePressureBar == 0.0 : FMath::Abs(Planet.SurfacePressureBar / Want.PressureBar - 1.0) < 5.0e-4);
+        }
         AddInfo(FString::Printf(TEXT("fixture %s: %s | sector (%lld, %lld, %lld) slot %d, orbit index %d | %s | %.4g bar | %.3f g | tau450 %.3f | %.2f M_E | star %.0f K | %.2f ly"),
             Role.Role, *Planet.Designation,
             static_cast<long long>(Role.System.Stub.Id.Sector.X), static_cast<long long>(Role.System.Stub.Id.Sector.Y), static_cast<long long>(Role.System.Stub.Id.Sector.Z),
