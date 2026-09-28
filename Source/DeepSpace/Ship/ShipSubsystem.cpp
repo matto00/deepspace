@@ -375,6 +375,9 @@ void UShipSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Collection.InitializeDependency<UUniverseSubsystem>();
     Super::Initialize(Collection);
 
+    // Every bay, empty: each reads the stock part until something is fitted.
+    Loadout = ShipParts::EmptyLoadout();
+
     // Today's ship until a part says otherwise: an empty bay reads the stock
     // part (wear and upgrades decision 3), so a bare test world is exactly
     // the bare test world it always was.
@@ -855,6 +858,159 @@ bool UShipSubsystem::RemoveModule(UShipModuleDataAsset* Module)
     return true;
 }
 
+bool UShipSubsystem::Register(UShipModuleDataAsset* Part)
+{
+    if (!Part || Part->Bay == EShipBay::None || Part->ModuleId.IsNone())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Ship: refused %s: a part needs a bay and an id."),
+               Part ? *Part->GetName() : TEXT("nothing"));
+        return false;
+    }
+    const TObjectPtr<UShipModuleDataAsset>* Known = KnownParts.Find(Part->ModuleId);
+    if (Known && Known->Get() != Part)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Ship: refused %s: %s already names %s."),
+               *Part->GetName(), *Part->ModuleId.ToString(), *(*Known)->GetName());
+        return false;
+    }
+    KnownParts.Add(Part->ModuleId, Part);
+    return true;
+}
+
+TOptional<EShipBay> UShipSubsystem::SlotFor(const UShipModuleDataAsset& Part) const
+{
+    if (ShipBay::IsCore(Part.Bay))
+    {
+        return Part.Bay;
+    }
+    if (!ShipBay::IsAux(Part.Bay))
+    {
+        return {};
+    }
+    // One of a kind (decision 8, rule 3): the slot already holding this part
+    // is the one it goes in, so the two slots never hold it twice.
+    for (const EShipBay Aux : { EShipBay::Aux1, EShipBay::Aux2 })
+    {
+        if (ShipParts::FindBay(Loadout, Aux)->Part.PartId == Part.ModuleId)
+        {
+            return Aux;
+        }
+    }
+    for (const EShipBay Aux : { EShipBay::Aux1, EShipBay::Aux2 })
+    {
+        if (ShipParts::FindBay(Loadout, Aux)->Part.PartId.IsNone())
+        {
+            return Aux;
+        }
+    }
+    return EShipBay::Aux1;
+}
+
+bool UShipSubsystem::FitPart(UShipModuleDataAsset* Part)
+{
+    if (!Register(Part))
+    {
+        return false;
+    }
+    const TOptional<EShipBay> Slot = SlotFor(*Part);
+    if (!Slot)
+    {
+        return false;
+    }
+    if (ShipParts::FindBay(Loadout, *Slot)->Part.PartId == Part->ModuleId)
+    {
+        // Already fitted: nothing to swap, and no spare to make of it.
+        return true;
+    }
+    FShipPartState Fresh;
+    Fresh.PartId = Part->ModuleId;
+    FitState(*Slot, Fresh);
+    return true;
+}
+
+void UShipSubsystem::FitState(EShipBay Bay, const FShipPartState& Part)
+{
+    const FShipPartState Displaced = ShipParts::FindBay(Loadout, Bay)->Part;
+    if (!Displaced.PartId.IsNone())
+    {
+        Loadout.Spares.Add(Displaced);
+    }
+    SetBayPart(Bay, Part);
+}
+
+bool UShipSubsystem::RemovePart(EShipBay Bay)
+{
+    if (!ShipBay::IsAux(Bay))
+    {
+        return false;
+    }
+    const FShipPartState Removed = ShipParts::FindBay(Loadout, Bay)->Part;
+    if (Removed.PartId.IsNone())
+    {
+        return false;
+    }
+    Loadout.Spares.Add(Removed);
+    SetBayPart(Bay, FShipPartState());
+    return true;
+}
+
+void UShipSubsystem::SetBayPart(EShipBay Bay, const FShipPartState& Part)
+{
+    ShipParts::FindBay(Loadout, Bay)->Part = Part;
+
+    // Booked by bay, never by part (decision 4): a swap is one key's
+    // RemoveDraw and AddDraw, so two parts in one bay can never both draw.
+    const FName Key = ShipBay::DrawKey(Bay);
+    PowerState.RemoveDraw(Key);
+    const UShipModuleDataAsset* Fitted = GetFittedPart(Bay);
+    if (Fitted && Fitted->PowerDraw > 0.0f)
+    {
+        PowerState.AddDraw(Key, Fitted->PowerDraw);
+    }
+    PushRatings();
+}
+
+void UShipSubsystem::PushRatings()
+{
+    const FShipRatings Rated = GetRatings();
+    PowerState.SetReactorOutput(static_cast<float>(Rated.ReactorWatts));
+    if (bLightsOn)
+    {
+        PowerState.SetWant(ShipPower::Lights, static_cast<float>(Rated.LightsWant));
+    }
+    // Not the boosters' want: ApplyAllocation is its one writer (sign-off
+    // 29), and writes it from these ratings on its next pass.
+}
+
+UShipModuleDataAsset* UShipSubsystem::GetFittedPart(EShipBay Bay) const
+{
+    const FShipBayState* Entry = ShipParts::FindBay(Loadout, Bay);
+    const TObjectPtr<UShipModuleDataAsset>* Part = Entry ? KnownParts.Find(Entry->Part.PartId) : nullptr;
+    return Part ? Part->Get() : nullptr;
+}
+
+const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const
+{
+    return Loadout;
+}
+
+const TArray<FShipPartState>& UShipSubsystem::GetSpares() const
+{
+    return Loadout.Spares;
+}
+
+void UShipSubsystem::AddLoad(FName Name, float Watts)
+{
+    const FName Key(*(FString(TEXT("Load.")) + Name.ToString()));
+    PowerState.RemoveDraw(Key);
+    PowerState.AddDraw(Key, FMath::Max(0.0f, Watts));
+}
+
+bool UShipSubsystem::RemoveLoad(FName Name)
+{
+    return PowerState.RemoveDraw(FName(*(FString(TEXT("Load.")) + Name.ToString())));
+}
+
 float UShipSubsystem::GetPowerDraw() const
 {
     return PowerState.GetTotalDraw();
@@ -1263,7 +1419,15 @@ double UShipSubsystem::GetJumpConeRadians() const
 
 FShipRatings UShipSubsystem::GetRatings() const
 {
-    return FShipRatings::Stock();
+    FShipRatings Ratings = FShipRatings::Stock();
+    for (const FShipBayState& Entry : Loadout.Bays)
+    {
+        if (const TObjectPtr<UShipModuleDataAsset>* Part = KnownParts.Find(Entry.Part.PartId))
+        {
+            ShipParts::Apply(Ratings, (*Part)->Ratings);
+        }
+    }
+    return Ratings;
 }
 
 float UShipSubsystem::GetWindingWant() const

@@ -88,6 +88,51 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Ship")
     bool RemoveModule(UShipModuleDataAsset* Module);
 
+    // -- parts: one per bay (the wear and upgrades spec) -----------------------
+
+    /**
+     * Fits a new Part into the bay it declares -- an aux part into the first
+     * free auxiliary slot, or Aux1 when both are full -- and the part it
+     * displaces joins the spares, so every swap can be undone (decision 1).
+     * The supply and the lights' want follow at once; the boosters' want on
+     * the next ApplyAllocation, its one writer (sign-off 29).
+     *
+     * True with nothing changed when the bay already holds this part, and
+     * when an aux part is already in the other slot (one of a kind). False,
+     * and nothing changed, for null, a part whose Bay is None, a part with no
+     * id (None in a bay means empty), and a different asset under an id this
+     * ship already knows.
+     */
+    bool FitPart(UShipModuleDataAsset* Part);
+
+    /** An auxiliary slot's part to the spares. Refused for a core bay: a core
+     *  part is only ever swapped, so there is never a frame without a
+     *  reactor (decision 3). */
+    bool RemovePart(EShipBay Bay);
+
+    /** The part in Bay; null for an empty bay, which reads the stock part's
+     *  ratings and draws nothing. */
+    UShipModuleDataAsset* GetFittedPart(EShipBay Bay) const;
+
+    /** Every bay and every spare, plain and serialisable (decision 11): what
+     *  the save will write. Ask rather than keep a copy. */
+    const FShipLoadoutState& GetLoadoutState() const;
+
+    /** The spares aboard, each one particular part. */
+    const TArray<FShipPartState>& GetSpares() const;
+
+    /**
+     * A seam for tests, not a part (decision 8): a standing draw off the top
+     * under "Load.<Name>", replaced if Name already draws. No console
+     * command, no nameplate, no save -- as ds.Nav.FoldDraw books a draw
+     * that is not a part. The hog tests starve the ship through it, because
+     * a standing draw is exactly what an aux part may not have.
+     */
+    void AddLoad(FName Name, float Watts);
+
+    /** False if Name was not drawing. */
+    bool RemoveLoad(FName Name);
+
     UFUNCTION(BlueprintPure, Category = "Ship")
     float GetPowerDraw() const;
 
@@ -430,6 +475,36 @@ private:
 
     UPROPERTY()
     TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
+
+    /** The fitted parts and the spares: the one truth about what is aboard,
+     *  plain and serialisable (decision 11). Every bay is listed. */
+    UPROPERTY()
+    FShipLoadoutState Loadout;
+
+    /** Every part asset this ship has fitted or been given, by id: what a
+     *  PartId in Loadout resolves to. A part made in code resolves exactly
+     *  as a catalogue part does, and nothing fitted is ever collected. */
+    UPROPERTY()
+    TMap<FName, TObjectPtr<UShipModuleDataAsset>> KnownParts;
+
+    /** Refuses null, a None bay, no id, and a different asset under a known
+     *  id; otherwise remembers Part under its id. */
+    bool Register(UShipModuleDataAsset* Part);
+
+    /** Where Part goes: its core bay, or the aux slot already holding it,
+     *  else the first free aux slot, else Aux1. */
+    TOptional<EShipBay> SlotFor(const UShipModuleDataAsset& Part) const;
+
+    /** Part into Bay; whatever was there becomes a spare. */
+    void FitState(EShipBay Bay, const FShipPartState& Part);
+
+    /** Part into Bay, its draw re-booked under the bay's key, the ratings
+     *  pushed. The one place a bay changes. */
+    void SetBayPart(EShipBay Bay, const FShipPartState& Part);
+
+    /** The supply and the lights' want, from the ratings. Never the
+     *  boosters' want: ApplyAllocation writes that. */
+    void PushRatings();
 
     /** Decides; holds no current system. */
     FShipNavState NavState;
