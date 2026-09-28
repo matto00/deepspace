@@ -144,8 +144,12 @@ public:
      * - an unknown part, or a part in the wrong bay: the bay's stock part;
      * - a core bay State lacks: its stock part;
      * - a bay this ship has not got: ignored;
+     * - a bay named twice: the first entry is restored, the rest ignored;
+     * - an aux part in both aux slots: the first slot keeps it, the second
+     *   is left empty (one of a kind, decision 8);
      * - a spare with an unknown id: dropped.
-     * Returns how many entries fell back, each also logged by name.
+     * Returns how many entries fell back, each also logged by name. State
+     * may be this ship's own GetLoadoutState(): it is copied first.
      */
     int32 RestoreLoadout(const FShipLoadoutState& State);
 

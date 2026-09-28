@@ -16,12 +16,20 @@
 // does should run on this.
 namespace StockShip
 {
+    /** BP_DeepSpaceGameMode, the class play runs; null if it fails to load.
+     *  A test that claims to read the Blueprint's list asserts this first,
+     *  since Modules() quietly reads C++ without it. */
+    inline UClass* BlueprintMode()
+    {
+        return LoadClass<ADeepSpaceGameMode>(
+            nullptr, TEXT("/Game/Blueprints/BP_DeepSpaceGameMode.BP_DeepSpaceGameMode_C"));
+    }
+
     /** The Blueprint game mode's starting parts -- what play uses, which may
      *  override the C++ list -- falling back to C++. */
     inline TArray<UShipModuleDataAsset*> Modules()
     {
-        const UClass* ModeClass = LoadClass<ADeepSpaceGameMode>(
-            nullptr, TEXT("/Game/Blueprints/BP_DeepSpaceGameMode.BP_DeepSpaceGameMode_C"));
+        const UClass* ModeClass = BlueprintMode();
         const ADeepSpaceGameMode* Mode = ModeClass
             ? ModeClass->GetDefaultObject<ADeepSpaceGameMode>()
             : GetDefault<ADeepSpaceGameMode>();

@@ -1,4 +1,6 @@
 #include "Algo/Reverse.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/TextBlock.h"
 #include "Core/DeepSpaceGameMode.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -8,6 +10,7 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
+#include "Ship/ShipConsole.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipNavState.h"
@@ -381,7 +384,13 @@ bool FShipPartsStockIsTodayTest::RunTest(const FString& Parameters)
     }
     Test.BeginPlay();
 
-    // The C++ list and the Blueprint's are the same six, so neither can be stale.
+    // The C++ list and the Blueprint's are the same six, so neither can be
+    // stale. Without the Blueprint, StockShip::Modules() reads C++, and the
+    // comparison below would hold C++ to itself.
+    if (!TestNotNull(TEXT("BP_DeepSpaceGameMode loads, so its list is the one read"), StockShip::BlueprintMode()))
+    {
+        return false;
+    }
     TArray<FString> Cpp;
     for (const TSoftObjectPtr<UShipModuleDataAsset>& Soft : GetDefault<ADeepSpaceGameMode>()->GetStartingModules())
     {
@@ -654,6 +663,12 @@ bool FShipPartsNameplatesAreFactsTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // Spawned before play begins, as every screen must be.
+    const AShipConsole* ConsoleActor = Test.World->SpawnActor<AShipConsole>(FVector(0.0, 0.0, -10000.0), FRotator::ZeroRotator);
+    if (!TestNotNull(TEXT("the console actor spawns"), ConsoleActor))
+    {
+        return false;
+    }
     Test.BeginPlay();
     TestEqual(TEXT("the stock ship fits"), StockShip::Install(Ship), 6);
     Ship->Tick(0.01f);
@@ -745,6 +760,35 @@ bool FShipPartsNameplatesAreFactsTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("and no headroom"), Numbers(Corner).Contains(Headroom));
     TestTrue(TEXT("only the reactor's rating"),
              Numbers(Corner).Num() == 1 && Numbers(Corner)[0] == FMath::RoundToDouble(Ship->GetReactorOutput()));
+    // And what the HUD actually draws, not just the helper: a HUD built and
+    // ticked on this ship, every text block read.
+    {
+        UShipHUDWidget* HUD = NewObject<UShipHUDWidget>(Test.World);
+        HUD->Initialize();
+        HUD->TakeWidget();
+        HUD->NativeTick(FGeometry(), 0.016f);
+        bool bCornerDrawn = false;
+        HUD->WidgetTree->ForEachWidget([&](UWidget* Widget)
+        {
+            if (const UTextBlock* Block = Cast<UTextBlock>(Widget))
+            {
+                const FString Text = Block->GetText().ToString();
+                bCornerDrawn |= Text == Corner;
+                TestFalse(FString::Printf(TEXT("the ticked HUD's '%s' says no SPARE"), *Text), Text.Contains(TEXT("SPARE")));
+            }
+        });
+        TestTrue(FString::Printf(TEXT("and the ticked HUD draws the corner '%s'"), *Corner), bCornerDrawn);
+    }
+
+    // The console actor's own readout, which BP_ShipConsole may still call:
+    // the reactor's plate, and neither total.
+    {
+        const FString Readout = ConsoleActor->GetReadout().ToString();
+        TestEqual(TEXT("AShipConsole::GetReadout is the reactor's nameplate"), Readout,
+                  UEngineeringConsoleWidget::Nameplate(EShipBay::Reactor, *Ship->GetFittedPart(EShipBay::Reactor)));
+        TestFalse(TEXT("with no DRAW or SPARE"), Readout.Contains(TEXT("DRAW")) || Readout.Contains(TEXT("SPARE")));
+        TestFalse(TEXT("and neither the total drawn nor the headroom"), Numbers(Readout).Contains(Drawn) || Numbers(Readout).Contains(Headroom));
+    }
     TestTrue(TEXT("the load comes off"), Ship->RemoveLoad(TEXT("Test.Hog")));
 
     // No console variable moves a plate.
@@ -912,7 +956,11 @@ bool FShipPartsCommandsTest::RunTest(const FString& Parameters)
 
     const FString Described = Run(World, TEXT("ds.Ship.Describe"), {});
     TestTrue(TEXT("ds.Ship.Describe names what is in each bay"), Described.Contains(TEXT("Reactor.TwinCore")) && Described.Contains(TEXT("Sensors.Stock")));
-    TestTrue(TEXT("and says an empty slot reads stock"), Described.Contains(TEXT("Aux1")) && Described.Contains(TEXT("empty")));
+    TArray<FString> DescribedLines;
+    Described.ParseIntoArrayLines(DescribedLines);
+    const FString* Aux1Line = DescribedLines.FindByPredicate([](const FString& Line) { return Line.StartsWith(TEXT("Aux1")); });
+    TestTrue(TEXT("and says an empty aux slot is empty, with no stock part to read (decision 2)"),
+             Aux1Line && Aux1Line->Contains(TEXT("empty")) && !Aux1Line->Contains(TEXT("stock")));
     return true;
 }
 
@@ -969,6 +1017,25 @@ bool FShipPartsStateRoundTripsTest::RunTest(const FString& Parameters)
         Struct->SerializeItem(Archive, &Read, nullptr);
     }
     TestTrue(TEXT("written and read back, every field is equal"), Struct->CompareScriptStruct(&Written, &Read, PPF_None));
+    // CompareScriptStruct walks only reflected fields, so a field that lost
+    // its UPROPERTY would be skipped by the serialiser and the comparison
+    // alike. Each wear field is read back by value.
+    if (TestEqual(TEXT("read back, two spares"), Read.Spares.Num(), 2))
+    {
+        const FShipPartState& Back = Read.Spares[0];
+        TestEqual(TEXT("AgeJumps travels"), Back.AgeJumps, 12.5);
+        TestEqual(TEXT("LifeJumps travels"), Back.LifeJumps, 151.25);
+        TestTrue(TEXT("bHasLife travels"), Back.bHasLife);
+        TestEqual(TEXT("Symptom travels"), Back.Symptom, FName(TEXT("Reactor.Stutter")));
+        TestEqual(TEXT("Repairs travels"), Back.Repairs, 2);
+        TestTrue(TEXT("bOriginal travels"), Back.bOriginal);
+        TestEqual(TEXT("PartId travels"), Back.PartId, Written.Spares[0].PartId);
+    }
+    {
+        const FShipBayState* Reactor = ShipParts::FindBay(Read, EShipBay::Reactor);
+        TestTrue(TEXT("LivesDrawn travels"), Reactor && Reactor->LivesDrawn == 3);
+        TestTrue(TEXT("and the reactor bay's part"), Reactor && Reactor->Part.PartId == FName(TEXT("Reactor.TwinCore")));
+    }
 
     // -- restored by name, in any order -----------------------------------------------
     {
@@ -979,6 +1046,41 @@ bool FShipPartsStateRoundTripsTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("and is the loadout that was written"), Struct->CompareScriptStruct(&Second.Ship->GetLoadoutState(), &Read, PPF_None));
         TestEqual(TEXT("the twin core runs the ship"), Second.Ship->GetReactorOutput(), 1800.0f);
         TestEqual(TEXT("and today's 620 W is drawn"), Draws(*Second.Ship), 620.0f, 1e-2f);
+
+        // Its own state, handed straight back: the argument aliases the
+        // loadout it resets, and the spares must survive it.
+        TestEqual(TEXT("the ship's own state restores with nothing falling back"),
+                  Second.Ship->RestoreLoadout(Second.Ship->GetLoadoutState()), 0);
+        TestTrue(TEXT("and is still the loadout that was written, spares and all"),
+                 Struct->CompareScriptStruct(&Second.Ship->GetLoadoutState(), &Read, PPF_None));
+        TestEqual(TEXT("both spares are still aboard"), Second.Ship->GetSpares().Num(), 2);
+    }
+
+    // -- a bay named twice, and an aux part in both slots -----------------------------
+    {
+        FSkyWorld Fourth(TEXT("RoundTripFourthWorld"));
+        // An aux part the ship knows, so its id resolves (no aux part is in
+        // the catalogue in slice 1).
+        UShipModuleDataAsset* Scope = MakePart(TEXT("Aux.Scope"), EShipBay::Aux1, 0.0f, {});
+        TestTrue(TEXT("an aux part fits"), Fourth.Ship->FitPart(Scope));
+        Fourth.Ship->ClearSpares();
+
+        FShipLoadoutState Twice = Read;
+        FShipBayState SecondReactor;
+        SecondReactor.Bay = ShipBay::Name(EShipBay::Reactor);
+        SecondReactor.Part.PartId = TEXT("Reactor.Stock");
+        SecondReactor.LivesDrawn = 9;
+        Twice.Bays.Add(SecondReactor);
+        ShipParts::FindBay(Twice, EShipBay::Aux1)->Part.PartId = TEXT("Aux.Scope");
+        ShipParts::FindBay(Twice, EShipBay::Aux2)->Part.PartId = TEXT("Aux.Scope");
+
+        TestEqual(TEXT("two entries fall back: the reactor bay's second entry, and the aux part's second slot"),
+                  Fourth.Ship->RestoreLoadout(Twice), 2);
+        const UShipModuleDataAsset* Reactor = Fourth.Ship->GetFittedPart(EShipBay::Reactor);
+        TestTrue(TEXT("the reactor bay's first entry is the one restored"), Reactor && Reactor->ModuleId == FName(TEXT("Reactor.TwinCore")));
+        TestEqual(TEXT("with its own lives drawn"), ShipParts::FindBay(Fourth.Ship->GetLoadoutState(), EShipBay::Reactor)->LivesDrawn, 3);
+        TestTrue(TEXT("the aux part is in the first aux slot"), Fourth.Ship->GetFittedPart(EShipBay::Aux1) == Scope);
+        TestTrue(TEXT("and one of a kind: never in the second too (decision 8)"), Fourth.Ship->GetFittedPart(EShipBay::Aux2) == nullptr);
     }
 
     // -- what a state cannot name falls back to stock, by name -----------------------

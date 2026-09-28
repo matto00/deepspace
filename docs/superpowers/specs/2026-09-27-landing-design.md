@@ -551,8 +551,10 @@ redistributed):
 
 At the default split **the lights stay whole while hovering**: the hold
 comes out of the boosters' share, not the lights'. What the pilot sees is
-the allocation screen's boosters line (`BOOSTERS 480 W of 585 W`) and the
-HUD's `SPARE` at zero: effort as watts, never as a percentage. Manoeuvre
+the allocation screen's boosters line (`BOOSTERS 480 W of 585 W`): effort
+as watts, never as a percentage. (This once named the HUD's `SPARE` at zero
+too; the wear plan removed `SPARE` from the HUD, ruled 2026-09-27, so the
+boosters line is the cue.) Manoeuvre
 thrust falling to 0.76 or 0.25 changes acceleration only (2 km/s^2 to 1.5
 or 0.5), which near the ground is imperceptible; the top is never lowered
 by thrust (below).

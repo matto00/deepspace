@@ -28,8 +28,15 @@ namespace
     // settled 45 s and 380 W live in the catalogue now (Tools/ship_parts.json,
     // FShipRatings::Stock), and the ship's four getters are the one place the
     // rule is applied (ShipParts::Effective). Unlike the rest of this block,
-    // a value play settles for these four is written back into the part's
-    // row in Tools/ship_parts.json, never here: -1 stays their default.
+    // a value play settles for these four is never written back here: -1
+    // stays their default. A settled *stock* number lives in four places,
+    // moved together, since an empty bay reads the constant and the tests
+    // hold them equal: the stock row in Tools/ship_parts.json (then re-run
+    // Tools/setup_ship_parts.py), its ShipParts::Stock* constant in
+    // ShipParts.h (DeepSpace.Ship.Parts.Contract), and, for the charge and
+    // the response, FShipFlightState::JumpChargeSeconds and
+    // ShipDriveLever::DefaultResponse (DeepSpace.Ship.Parts.Arithmetic). An
+    // upgrade's number is its own row in the JSON alone.
     TAutoConsoleVariable<float> CVarChargeSeconds(
         TEXT("ds.Nav.ChargeSeconds"), -1.0f,
         TEXT("Seconds for the jump to wind from cold with the engine fully fed. -1: the drive part's."),
@@ -465,9 +472,14 @@ namespace
                     Line += FString::Printf(TEXT("  %s %s"), *ShipParts::RatingName(Rated.Key).ToString(), *FString::SanitizeFloat(Rated.Value));
                 }
             }
-            else
+            else if (ShipBay::IsCore(Bay))
             {
                 Line += TEXT("empty: reads the stock part, draws nothing");
+            }
+            else
+            {
+                // An aux slot has no stock part (decision 2): empty is empty.
+                Line += TEXT("empty: no part, rates nothing, draws nothing");
             }
             Out.Log(Line);
         }
@@ -1184,9 +1196,14 @@ void UShipSubsystem::ClearSpares()
     Loadout.Spares.Reset();
 }
 
-int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& State)
+int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& Given)
 {
+    // A copy, because Given may be this ship's own loadout
+    // (RestoreLoadout(GetLoadoutState())): the spares are reset below, and
+    // through the alias they would be read back empty.
+    const FShipLoadoutState State = Given;
     int32 Fallbacks = 0;
+    TSet<FName> BaysSeen;
     for (const FShipBayState& Entry : State.Bays)
     {
         if (!ShipBay::FromName(Entry.Bay))
@@ -1194,9 +1211,18 @@ int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& State)
             UE_LOG(LogTemp, Warning, TEXT("Ship: a loadout names a bay this ship has not got, %s; ignored."), *Entry.Bay.ToString());
             ++Fallbacks;
         }
+        else if (BaysSeen.Contains(Entry.Bay))
+        {
+            // The first entry of a bay is the one restored, below.
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a loadout names the %s bay twice; the second, %s, is ignored."),
+                   *Entry.Bay.ToString(), *Entry.Part.PartId.ToString());
+            ++Fallbacks;
+        }
+        BaysSeen.Add(Entry.Bay);
     }
 
     Loadout.Spares.Reset();
+    TSet<FName> AuxRestored;
     for (int32 Index = 0; Index < ShipBay::All().Num(); ++Index)
     {
         const EShipBay Bay = ShipBay::All()[Index];
@@ -1210,9 +1236,19 @@ int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& State)
             UShipModuleDataAsset* Asset = PartFor(Part.PartId);
             const bool bFits = Asset && Register(Asset)
                 && (ShipBay::IsAux(Bay) ? ShipBay::IsAux(Asset->Bay) : Asset->Bay == Bay);
+            // One of a kind (decision 8, rule 3), as SlotFor keeps it for a
+            // fit: the aux slot restored first keeps the part, and the other
+            // is left empty.
+            const bool bTwice = bFits && ShipBay::IsAux(Bay) && AuxRestored.Contains(Part.PartId);
             if (!bFits)
             {
                 UE_LOG(LogTemp, Warning, TEXT("Ship: %s cannot be in the %s bay; its stock part is fitted instead."),
+                       *Part.PartId.ToString(), *ShipBay::Name(Bay).ToString());
+                bFellBack = true;
+            }
+            else if (bTwice)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Ship: %s is in both aux slots; the %s slot is left empty."),
                        *Part.PartId.ToString(), *ShipBay::Name(Bay).ToString());
                 bFellBack = true;
             }
@@ -1228,6 +1264,10 @@ int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& State)
             }
         }
         SetBayPart(Bay, Part);
+        if (ShipBay::IsAux(Bay) && !Part.PartId.IsNone())
+        {
+            AuxRestored.Add(Part.PartId);
+        }
         ShipParts::FindBay(Loadout, Bay)->LivesDrawn = Entry ? Entry->LivesDrawn : 0;
     }
 
