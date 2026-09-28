@@ -1239,7 +1239,7 @@ tests that assert it.
 | `ds.Land.Regime` | 50 km (leaves over 55 km) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultRegimeCm` |
 | `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
-| `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
+| `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g, counted to 3 g and ramped in over the first km under the floor; 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp`, from `ShipPower::DefaultHoldWattsPerG` and `DefaultStarvedSinkMetresPerSecond` (`ShipPowerState.h`), beside the named constants `HoldGCap` (3 g) and `HoldRampCm` (1 km) |
 | `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`, from `TerrainQuadtree` |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |

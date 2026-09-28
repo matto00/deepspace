@@ -229,8 +229,9 @@ private:
 namespace ShipSky
 {
     /** A giant's cloud tops, which have no ground: the fixed billow the orbit
-     *  had before landing (ds.Sky.Relief's 0.2 x relief_giant's 0.33), kept
-     *  as a look, not a height. Oceans draw none: water is flat. */
+     *  had before landing (the retired ds.Sky.Relief's 0.2 x the retired
+     *  relief_giant's 0.33), kept as a look, not a height, and set here
+     *  alone: no contract constant feeds it. Oceans draw none: water is flat. */
     inline constexpr double GiantReliefScale = 0.066;
 
     /** The relief a body's face is shaded with: its ground's own slope scale
