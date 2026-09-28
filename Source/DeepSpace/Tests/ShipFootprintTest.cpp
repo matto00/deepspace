@@ -48,7 +48,8 @@ bool FShipFootprintTest::RunTest(const FString& Parameters)
     }
     TestTrue(FString::Printf(TEXT("pitched, the lowest point sets it (%.2f vs %.2f cm)"), Tilted.Least, Lowest),
              FMath::IsNearlyEqual(Tilted.Least, Lowest, 0.05));
-    TestTrue(TEXT("and it is an aft point"), ShipLanding::FootprintPoints(Gear)[Tilted.Point].X < 0.0);
+    const TArray<FVector, TFixedAllocator<8>> Points = ShipLanding::FootprintPoints(Gear);
+    TestTrue(TEXT("and it is an aft point"), Points.IsValidIndex(Tilted.Point) && Points[Tilted.Point].X < 0.0);
 
     FFlightSurface Sphere = World;
     Sphere.Ground.Reset();
