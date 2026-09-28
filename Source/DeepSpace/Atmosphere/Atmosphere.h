@@ -97,3 +97,40 @@ private:
     FAtmosphereTable Table;
     FVector3d StarColour = FVector3d::ZeroVector;
 };
+
+/** What one view gathers and lets through, per channel: linear sRGB in the
+ *  pi convention for a star of unit luminance, and the fraction of the
+ *  star's own light that survives the path. */
+struct FAtmosphereScatter
+{
+    FVector3d InScatter = FVector3d::ZeroVector;
+    FVector3d Transmittance = FVector3d::OneVector;
+};
+
+/**
+ * The .ush's entry points, in double and in the GPU's float. Positions in
+ * radii of the body, its centre at the origin; directions unit; Sun toward
+ * the star, or the zero vector for no star. Length is how far the view goes
+ * (NoEnd: to the air's top or the ground).
+ */
+namespace AtmosphereLaw
+{
+    inline constexpr int32 ViewSamples = 12;
+    inline constexpr double NoEnd = 1.0e30;
+
+    DEEPSPACE_API FAtmosphereScatter InScatterF64(const FAtmosphereAir& Air, const FAtmosphereTable& Table,
+        const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun);
+    DEEPSPACE_API FAtmosphereScatter InScatterF32(const FAtmosphereAir& Air, const FAtmosphereTable& Table,
+        const FVector3f& Eye, const FVector3f& Direction, float Length, const FVector3f& Sun);
+
+    DEEPSPACE_API FVector3d TransmittanceF64(const FAtmosphereAir& Air, const FVector3d& From, const FVector3d& Direction, double Length);
+    DEEPSPACE_API FVector3d TransmittanceF32(const FAtmosphereAir& Air, const FVector3f& From, const FVector3f& Direction, float Length);
+
+    DEEPSPACE_API FVector3d SunThroughF64(const FAtmosphereAir& Air, const FVector3d& Point, const FVector3d& Sun);
+    DEEPSPACE_API FVector3d SunThroughF32(const FAtmosphereAir& Air, const FVector3f& Point, const FVector3f& Sun);
+
+    /** |Eye x Direction| as the law takes it: each component a difference
+     *  of products kept to its own precision. */
+    DEEPSPACE_API double ImpactParameterF64(const FVector3d& Eye, const FVector3d& Direction);
+    DEEPSPACE_API float ImpactParameterF32(const FVector3f& Eye, const FVector3f& Direction);
+}

@@ -22,6 +22,48 @@ namespace AtmosphereF32
 }
 #undef AT_CPP
 
+namespace AtmosphereLocal
+{
+    /** FAtmosphereAir as one precision's AT_Air. */
+    template <typename TAir, typename TReal>
+    TAir ToAir(const FAtmosphereAir& In)
+    {
+        TAir A;
+        A.GasScatterR = TReal(In.GasScatter.X);
+        A.GasScatterG = TReal(In.GasScatter.Y);
+        A.GasScatterB = TReal(In.GasScatter.Z);
+        A.GasExtinctR = TReal(In.GasExtinct.X);
+        A.GasExtinctG = TReal(In.GasExtinct.Y);
+        A.GasExtinctB = TReal(In.GasExtinct.Z);
+        A.AerosolScatterR = TReal(In.AerosolScatter.X);
+        A.AerosolScatterG = TReal(In.AerosolScatter.Y);
+        A.AerosolScatterB = TReal(In.AerosolScatter.Z);
+        A.AerosolExtinctR = TReal(In.AerosolExtinct.X);
+        A.AerosolExtinctG = TReal(In.AerosolExtinct.Y);
+        A.AerosolExtinctB = TReal(In.AerosolExtinct.Z);
+        A.GasH = TReal(In.GasH);
+        A.AerosolH = TReal(In.AerosolH);
+        A.AerosolG = TReal(In.AerosolG);
+        A.Top = TReal(In.Top);
+        return A;
+    }
+
+    template <typename TScatter>
+    FAtmosphereScatter ToScatter(const TScatter& S)
+    {
+        FAtmosphereScatter Out;
+        Out.InScatter = FVector3d(S.R, S.G, S.B);
+        Out.Transmittance = FVector3d(S.TR, S.TG, S.TB);
+        return Out;
+    }
+
+    template <typename TRgb>
+    FVector3d ToVector(const TRgb& C)
+    {
+        return FVector3d(C.R, C.G, C.B);
+    }
+}
+
 double AtmosphereLaw::LogChapmanF64(double X, double CosZenith)
 {
     return AtmosphereF64::AT_LogChapman(X, CosZenith);
@@ -103,4 +145,62 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK)
         Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
     }
     return Out;
+}
+
+FAtmosphereScatter AtmosphereLaw::InScatterF64(const FAtmosphereAir& Air, const FAtmosphereTable& Table,
+    const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun)
+{
+    const AtmosphereF64::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Air);
+    return AtmosphereLocal::ToScatter(AtmosphereF64::AT_InScatter(A, Eye.X, Eye.Y, Eye.Z, Direction.X, Direction.Y, Direction.Z,
+        Length, Sun.X, Sun.Y, Sun.Z, Table));
+}
+
+FAtmosphereScatter AtmosphereLaw::InScatterF32(const FAtmosphereAir& Air, const FAtmosphereTable& Table,
+    const FVector3f& Eye, const FVector3f& Direction, float Length, const FVector3f& Sun)
+{
+    const AtmosphereF32::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF32::AT_Air, float>(Air);
+    return AtmosphereLocal::ToScatter(AtmosphereF32::AT_InScatter(A, Eye.X, Eye.Y, Eye.Z, Direction.X, Direction.Y, Direction.Z,
+        Length, Sun.X, Sun.Y, Sun.Z, Table));
+}
+
+FVector3d AtmosphereLaw::TransmittanceF64(const FAtmosphereAir& Air, const FVector3d& From, const FVector3d& Direction, double Length)
+{
+    const AtmosphereF64::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Air);
+    return AtmosphereLocal::ToVector(AtmosphereF64::AT_Transmittance(A, From.X, From.Y, From.Z, Direction.X, Direction.Y, Direction.Z, Length));
+}
+
+FVector3d AtmosphereLaw::TransmittanceF32(const FAtmosphereAir& Air, const FVector3f& From, const FVector3f& Direction, float Length)
+{
+    const AtmosphereF32::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF32::AT_Air, float>(Air);
+    return AtmosphereLocal::ToVector(AtmosphereF32::AT_Transmittance(A, From.X, From.Y, From.Z, Direction.X, Direction.Y, Direction.Z, Length));
+}
+
+FVector3d AtmosphereLaw::SunThroughF64(const FAtmosphereAir& Air, const FVector3d& Point, const FVector3d& Sun)
+{
+    const AtmosphereF64::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Air);
+    return AtmosphereLocal::ToVector(AtmosphereF64::AT_SunThrough(A, Point.X, Point.Y, Point.Z, Sun.X, Sun.Y, Sun.Z));
+}
+
+FVector3d AtmosphereLaw::SunThroughF32(const FAtmosphereAir& Air, const FVector3f& Point, const FVector3f& Sun)
+{
+    const AtmosphereF32::AT_Air A = AtmosphereLocal::ToAir<AtmosphereF32::AT_Air, float>(Air);
+    return AtmosphereLocal::ToVector(AtmosphereF32::AT_SunThrough(A, Point.X, Point.Y, Point.Z, Sun.X, Sun.Y, Sun.Z));
+}
+
+double AtmosphereLaw::ImpactParameterF64(const FVector3d& Eye, const FVector3d& Direction)
+{
+    using namespace AtmosphereF64;
+    const double WX = AT_DiffOfProducts(Eye.Y, Direction.Z, Eye.Z, Direction.Y);
+    const double WY = AT_DiffOfProducts(Eye.Z, Direction.X, Eye.X, Direction.Z);
+    const double WZ = AT_DiffOfProducts(Eye.X, Direction.Y, Eye.Y, Direction.X);
+    return std::sqrt(WX * WX + WY * WY + WZ * WZ);
+}
+
+float AtmosphereLaw::ImpactParameterF32(const FVector3f& Eye, const FVector3f& Direction)
+{
+    using namespace AtmosphereF32;
+    const float WX = AT_DiffOfProducts(Eye.Y, Direction.Z, Eye.Z, Direction.Y);
+    const float WY = AT_DiffOfProducts(Eye.Z, Direction.X, Eye.X, Direction.Z);
+    const float WZ = AT_DiffOfProducts(Eye.X, Direction.Y, Eye.Y, Direction.X);
+    return std::sqrt(WX * WX + WY * WY + WZ * WZ);
 }

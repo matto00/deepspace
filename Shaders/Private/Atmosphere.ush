@@ -122,3 +122,529 @@ AT_REAL AT_LogChapman(AT_REAL X, AT_REAL CosZenith)
     AT_REAL Behind = AT_exp(AT_LogChapmanUp(X, -CosZenith) - Rise);
     return Rise + AT_log(AT_max(Grazing - Behind, AT_TINY));
 }
+
+// -- The air -----------------------------------------------------------------
+// One world's air as the law takes it: per radius at the surface, three
+// channels that already fold in the star's spectrum (FAtmosphere::Build).
+// Scatter is in the star's own colour at unit luminance; extinction is
+// relative to the star's own light. The gas falls by e every GasH radii,
+// the aerosol every AerosolH; AerosolG is the aerosol's Henyey-Greenstein
+// asymmetry; the air is drawn to Top radii above the surface, and Top 0 is
+// no air.
+struct AT_Air
+{
+    AT_REAL GasScatterR;
+    AT_REAL GasScatterG;
+    AT_REAL GasScatterB;
+    AT_REAL GasExtinctR;
+    AT_REAL GasExtinctG;
+    AT_REAL GasExtinctB;
+    AT_REAL AerosolScatterR;
+    AT_REAL AerosolScatterG;
+    AT_REAL AerosolScatterB;
+    AT_REAL AerosolExtinctR;
+    AT_REAL AerosolExtinctG;
+    AT_REAL AerosolExtinctB;
+    AT_REAL GasH;
+    AT_REAL AerosolH;
+    AT_REAL AerosolG;
+    AT_REAL Top;
+};
+
+struct AT_Rgb
+{
+    AT_REAL R;
+    AT_REAL G;
+    AT_REAL B;
+};
+
+// What a view gathers (in-scatter) and what it lets through (T), per channel.
+struct AT_Scatter
+{
+    AT_REAL R;
+    AT_REAL G;
+    AT_REAL B;
+    AT_REAL TR;
+    AT_REAL TG;
+    AT_REAL TB;
+};
+
+struct AT_Columns
+{
+    AT_REAL Gas;
+    AT_REAL Aerosol;
+};
+
+// A ray's part in the air, measured along it from its closest approach to
+// the centre (S = 0 there): the impact parameter B, the closest point C, the
+// direction, and [S0, S1], empty when S1 <= S0.
+struct AT_Ray
+{
+    AT_REAL B;
+    AT_REAL CX;
+    AT_REAL CY;
+    AT_REAL CZ;
+    AT_REAL DX;
+    AT_REAL DY;
+    AT_REAL DZ;
+    AT_REAL S0;
+    AT_REAL S1;
+};
+
+// A march's sums: in-scatter, transmittance, and the fraction of light the
+// air scatters along the way (F), which the multiple-scattering table needs.
+struct AT_March
+{
+    AT_REAL R;
+    AT_REAL G;
+    AT_REAL B;
+    AT_REAL TR;
+    AT_REAL TG;
+    AT_REAL TB;
+    AT_REAL FR;
+    AT_REAL FG;
+    AT_REAL FB;
+};
+
+#if defined(AT_CPP)
+// -- C++: the table, and exact products ---------------------------------------
+// The multiple-scattering table travels as a trailing argument (planning note
+// 1 of the atmosphere optics plan): in C++ a reference to FAtmosphereTable,
+// read bilinearly between texel centres; its values have already been
+// through a half float, as the GPU's RGBA16F texture will hold them.
+#define AT_TABLE_PARAM , const FAtmosphereTable& AT_Table
+#define AT_TABLE_ARG , AT_Table
+#define AT_PRECISE
+static const AT_REAL AT_SPLITTER = sizeof(AT_REAL) == 8 ? AT_REAL(134217729.0) : AT_REAL(4097.0);
+inline AT_Rgb AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+{
+    (void)A;
+    double R = 0.0;
+    double G = 0.0;
+    double B = 0.0;
+    AT_Table.Sample(double(Altitude01), double(CosSunZenith), R, G, B);
+    AT_Rgb Out;
+    Out.R = AT_REAL(R);
+    Out.G = AT_REAL(G);
+    Out.B = AT_REAL(B);
+    return Out;
+}
+#else
+// -- HLSL: the table, and exact products ----------------------------------------
+// The Custom node hands its texture and sampler down as the trailing
+// arguments. Texel centres as the C++ reads them: 32 texels, 0 and 1 at the
+// first and last centre.
+#define AT_TABLE_PARAM , Texture2D AT_Table, SamplerState AT_TableSampler
+#define AT_TABLE_ARG , AT_Table, AT_TableSampler
+#define AT_PRECISE precise
+static const float AT_SPLITTER = 4097.0;
+AT_Rgb AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
+{
+    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 32.0;
+    float V = (saturate(Altitude01) * 31.0 + 0.5) / 32.0;
+    float4 Texel = AT_Table.SampleLevel(AT_TableSampler, float2(U, V), 0.0);
+    AT_Rgb Out;
+    Out.R = Texel.r;
+    Out.G = Texel.g;
+    Out.B = Texel.b;
+    return Out;
+}
+#endif
+
+static const int AT_VIEW_SAMPLES = 12;
+
+// "To infinity": a view with no end stops at the air's top or the ground.
+static const AT_REAL AT_NO_END = AT_REAL(1.0e30);
+
+// -- Columns -----------------------------------------------------------------
+// ln of the column from a point R radii from the centre, Altitude = R - 1
+// above the surface, toward CosZenith, per unit density at the surface, for
+// a constituent that falls by e every H radii:
+// ln H - Altitude / H + ln Ch(R / H, CosZenith). The altitude comes in
+// separately because R - 1 is where float loses a point's height: see
+// AT_Altitude.
+AT_REAL AT_LogColumn(AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith, AT_REAL H)
+{
+    return AT_log(H) - Altitude / H + AT_LogChapman(R / H, CosZenith);
+}
+
+// The altitude of the point S along a ray of impact parameter B,
+// sqrt(B^2 + S^2) - 1, formed as (B - 1) + S^2 / (sqrt(B^2 + S^2) + B).
+// Near the eye of a horizontal view from the ground, S^2 is below float's
+// step at B^2 and sqrt(B^2 + S^2) - 1 cannot see it -- and the view's first
+// optical depth is the difference of two grazing columns 36 scale heights
+// deep, which that lost height shifts by per cent.
+AT_REAL AT_Altitude(AT_REAL B, AT_REAL S)
+{
+    return (B - AT_REAL(1.0)) + S * S / (AT_sqrt(B * B + S * S) + B);
+}
+
+// -- Exact products ----------------------------------------------------------
+// A * B - P exactly, where P is A * B rounded: Dekker's product, split by
+// Veltkamp without a fused multiply-add. Every step is its own statement, and
+// AT_PRECISE (HLSL's precise) in the shader, so no compiler fuses one into
+// the next: a fused split is a wrong split.
+AT_REAL AT_ProductError(AT_REAL A, AT_REAL B, AT_REAL P)
+{
+    AT_PRECISE AT_REAL TA = AT_SPLITTER * A;
+    AT_PRECISE AT_REAL TA2 = TA - A;
+    AT_PRECISE AT_REAL AH = TA - TA2;
+    AT_PRECISE AT_REAL AL = A - AH;
+    AT_PRECISE AT_REAL TB = AT_SPLITTER * B;
+    AT_PRECISE AT_REAL TB2 = TB - B;
+    AT_PRECISE AT_REAL BH = TB - TB2;
+    AT_PRECISE AT_REAL BL = B - BH;
+    AT_PRECISE AT_REAL E1 = AH * BH;
+    AT_PRECISE AT_REAL E2 = E1 - P;
+    AT_PRECISE AT_REAL E3 = AH * BL;
+    AT_PRECISE AT_REAL E4 = E2 + E3;
+    AT_PRECISE AT_REAL E5 = AL * BH;
+    AT_PRECISE AT_REAL E6 = E4 + E5;
+    AT_PRECISE AT_REAL E7 = AL * BL;
+    return E6 + E7;
+}
+
+// A * B - C * D to the precision of the result, not of the products: the
+// rounded difference of the rounded products -- exact by Sterbenz when they
+// are close, which is when it matters -- plus the difference of their exact
+// errors.
+AT_REAL AT_DiffOfProducts(AT_REAL A, AT_REAL B, AT_REAL C, AT_REAL D)
+{
+    AT_PRECISE AT_REAL P = A * B;
+    AT_PRECISE AT_REAL Q = C * D;
+    AT_PRECISE AT_REAL EP = AT_ProductError(A, B, P);
+    AT_PRECISE AT_REAL EQ = AT_ProductError(C, D, Q);
+    AT_PRECISE AT_REAL PQ = P - Q;
+    AT_PRECISE AT_REAL E = EP - EQ;
+    return PQ + E;
+}
+
+// -- The ray -----------------------------------------------------------------
+// The part of a ray inside the air. The closest point C and the impact
+// parameter B come from W = E x D, never from |E|^2 - (E.D)^2: from a
+// distant eye that difference cancels to nothing in float and takes the
+// tangent height with it, where W -- each component a difference of
+// products kept to its own precision -- loses nothing. C = D x W.
+// An eye below the surface (a valley under the datum) is taken to the
+// surface above it: the sky from a valley floor is the sky from the datum.
+// Empty when the ray misses the air, is not going anywhere, or starts on the
+// ground looking into it.
+AT_Ray AT_RayThroughAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ, AT_REAL Length)
+{
+    AT_Ray Ray;
+    Ray.DX = DX;
+    Ray.DY = DY;
+    Ray.DZ = DZ;
+    Ray.S0 = AT_REAL(1.0);
+    Ray.S1 = AT_REAL(0.0);
+    AT_REAL E2 = EX * EX + EY * EY + EZ * EZ;
+    if (E2 < AT_TINY)
+    {
+        // An eye at the centre has no surface above it to be lifted to.
+        return Ray;
+    }
+    if (E2 < AT_REAL(1.0))
+    {
+        AT_REAL Lift = AT_REAL(1.0) / AT_sqrt(E2);
+        EX = EX * Lift;
+        EY = EY * Lift;
+        EZ = EZ * Lift;
+    }
+    AT_REAL WX = AT_DiffOfProducts(EY, DZ, EZ, DY);
+    AT_REAL WY = AT_DiffOfProducts(EZ, DX, EX, DZ);
+    AT_REAL WZ = AT_DiffOfProducts(EX, DY, EY, DX);
+    Ray.CX = DY * WZ - DZ * WY;
+    Ray.CY = DZ * WX - DX * WZ;
+    Ray.CZ = DX * WY - DY * WX;
+    Ray.B = AT_sqrt(WX * WX + WY * WY + WZ * WZ);
+    AT_REAL SE = EX * DX + EY * DY + EZ * DZ;
+    AT_REAL Top = AT_REAL(1.0) + A.Top;
+    if (Ray.B >= Top || !(Length > AT_REAL(0.0)))
+    {
+        return Ray;
+    }
+    AT_REAL Half = AT_sqrt((Top - Ray.B) * (Top + Ray.B));
+    AT_REAL S0 = AT_max(SE, -Half);
+    AT_REAL S1 = AT_min(SE + Length, Half);
+    if (Ray.B < AT_REAL(1.0))
+    {
+        // The ray's line passes through the ground. Heading toward its
+        // closest point (SE < 0), it ends at the near side -- at once, for an
+        // eye on the surface looking down. Heading away (SE >= 0), the eye is
+        // on the far side, never inside, since it was lifted to the surface:
+        // it is not the eye's |E| against the ground's chord that decides,
+        // which rounding makes a coin toss for an eye on the surface looking
+        // along it, but the direction.
+        AT_REAL Ground = AT_sqrt((AT_REAL(1.0) - Ray.B) * (AT_REAL(1.0) + Ray.B));
+        if (SE < -Ground)
+        {
+            S1 = AT_min(S1, -Ground);
+        }
+        else if (SE < AT_REAL(0.0))
+        {
+            S1 = S0;
+        }
+    }
+    Ray.S0 = S0;
+    Ray.S1 = S1;
+    return Ray;
+}
+
+// The two constituents' columns from the point at S on the ray to the top,
+// looking away from the closest point -- always upward, so always the
+// Chapman function's easy branch.
+AT_Columns AT_ColumnsAway(AT_Air A, AT_REAL B, AT_REAL S)
+{
+    AT_REAL R = AT_sqrt(B * B + S * S);
+    AT_REAL Altitude = AT_Altitude(B, S);
+    AT_REAL Cos = AT_max(S, -S) / AT_max(R, AT_TINY);
+    AT_Columns Out;
+    Out.Gas = AT_exp(AT_LogColumn(R, Altitude, Cos, A.GasH));
+    Out.Aerosol = AT_exp(AT_LogColumn(R, Altitude, Cos, A.AerosolH));
+    return Out;
+}
+
+// The columns between SA <= SB along the ray, by differences of upward
+// columns, splitting at the closest point when the span crosses it.
+AT_Columns AT_ColumnsBetween(AT_Air A, AT_REAL B, AT_REAL SA, AT_REAL SB)
+{
+    AT_Columns CA = AT_ColumnsAway(A, B, SA);
+    AT_Columns CB = AT_ColumnsAway(A, B, SB);
+    AT_Columns Out;
+    if (SA >= AT_REAL(0.0))
+    {
+        Out.Gas = CA.Gas - CB.Gas;
+        Out.Aerosol = CA.Aerosol - CB.Aerosol;
+    }
+    else if (SB <= AT_REAL(0.0))
+    {
+        Out.Gas = CB.Gas - CA.Gas;
+        Out.Aerosol = CB.Aerosol - CA.Aerosol;
+    }
+    else
+    {
+        AT_Columns C0 = AT_ColumnsAway(A, B, AT_REAL(0.0));
+        Out.Gas = AT_REAL(2.0) * C0.Gas - CA.Gas - CB.Gas;
+        Out.Aerosol = AT_REAL(2.0) * C0.Aerosol - CA.Aerosol - CB.Aerosol;
+    }
+    Out.Gas = AT_max(Out.Gas, AT_REAL(0.0));
+    Out.Aerosol = AT_max(Out.Aerosol, AT_REAL(0.0));
+    return Out;
+}
+
+// -- The sun -----------------------------------------------------------------
+// The star's light reaching a point R radii out (Altitude above the surface)
+// whose sun is at CosZenith, per channel: 0 in the ground's own shadow (a ray
+// to the star that passes nearer the centre than the surface), else exp of
+// one combined exponent, each depth capped at e^80 so a sun just past the
+// tangent never makes an infinity.
+AT_Rgb AT_SunAt(AT_Air A, AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(0.0);
+    Out.G = AT_REAL(0.0);
+    Out.B = AT_REAL(0.0);
+    AT_REAL Sin2 = AT_max(AT_REAL(1.0) - CosZenith * CosZenith, AT_REAL(0.0));
+    if (CosZenith < AT_REAL(0.0) && R * R * Sin2 < AT_REAL(1.0))
+    {
+        return Out;
+    }
+    AT_REAL LogGas = AT_LogColumn(R, Altitude, CosZenith, A.GasH);
+    AT_REAL LogAerosol = AT_LogColumn(R, Altitude, CosZenith, A.AerosolH);
+    Out.R = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctR, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
+                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctR, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    Out.G = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctG, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
+                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctG, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    Out.B = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctB, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
+                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctB, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    return Out;
+}
+
+// -- Phase -------------------------------------------------------------------
+AT_REAL AT_RayleighPhase(AT_REAL Cos)
+{
+    return AT_REAL(3.0) / (AT_REAL(16.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);
+}
+
+AT_REAL AT_HenyeyGreenstein(AT_REAL Cos, AT_REAL G)
+{
+    AT_REAL Den = AT_REAL(1.0) + G * G - AT_REAL(2.0) * G * Cos;
+    return (AT_REAL(1.0) - G * G) / (AT_REAL(4.0) * AT_PI * Den * AT_sqrt(Den));
+}
+
+// -- The march ---------------------------------------------------------------
+AT_March AT_EmptyMarch()
+{
+    AT_March M;
+    M.R = AT_REAL(0.0);
+    M.G = AT_REAL(0.0);
+    M.B = AT_REAL(0.0);
+    M.TR = AT_REAL(1.0);
+    M.TG = AT_REAL(1.0);
+    M.TB = AT_REAL(1.0);
+    M.FR = AT_REAL(0.0);
+    M.FG = AT_REAL(0.0);
+    M.FB = AT_REAL(0.0);
+    return M;
+}
+
+// N samples from Low (the end nearest the closest point, where the air is
+// densest) toward Far, spaced as u^2 so they crowd where the density is.
+// Each gathers single scattering (pi times the phase times the sun's light
+// through the air) and the multiple-scattering table's term, both through
+// the view's transmittance back to the ray's start, S0.
+AT_March AT_MarchPiece(AT_Air A, AT_Ray Ray, AT_REAL Low, AT_REAL Far, int N,
+                       AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL PhaseGas, AT_REAL PhaseAerosol, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_March Out = AT_EmptyMarch();
+    AT_REAL Span = Far - Low;
+    AT_REAL AbsSpan = AT_max(Span, -Span);
+    AT_REAL GasSingle = AT_PI * PhaseGas * SunOn;
+    AT_REAL AerosolSingle = AT_PI * PhaseAerosol * SunOn;
+    for (int I = 0; I < N; ++I)
+    {
+        AT_REAL U = (AT_REAL(I) + AT_REAL(0.5)) / AT_REAL(N);
+        AT_REAL S = Low + Span * U * U;
+        AT_REAL DS = AbsSpan * AT_REAL(2.0) * U / AT_REAL(N);
+        AT_REAL PX = Ray.CX + S * Ray.DX;
+        AT_REAL PY = Ray.CY + S * Ray.DY;
+        AT_REAL PZ = Ray.CZ + S * Ray.DZ;
+        AT_REAL R = AT_sqrt(Ray.B * Ray.B + S * S);
+        AT_REAL Altitude = AT_Altitude(Ray.B, S);
+        AT_REAL CosSun = (PX * SX + PY * SY + PZ * SZ) / AT_max(R, AT_TINY);
+        AT_REAL GasDensity = AT_exp(-Altitude / A.GasH);
+        AT_REAL AerosolDensity = AT_exp(-Altitude / A.AerosolH);
+        AT_Columns Behind = AT_ColumnsBetween(A, Ray.B, Ray.S0, S);
+        AT_REAL TR = AT_exp(-(A.GasExtinctR * Behind.Gas + A.AerosolExtinctR * Behind.Aerosol));
+        AT_REAL TG = AT_exp(-(A.GasExtinctG * Behind.Gas + A.AerosolExtinctG * Behind.Aerosol));
+        AT_REAL TB = AT_exp(-(A.GasExtinctB * Behind.Gas + A.AerosolExtinctB * Behind.Aerosol));
+        AT_Rgb Sun = AT_SunAt(A, R, Altitude, CosSun);
+        AT_Rgb Multi = AT_MultiScatter(A, AT_saturate(Altitude / A.Top), CosSun AT_TABLE_ARG);
+        Out.R = Out.R + (A.GasScatterR * GasDensity * (GasSingle * Sun.R + SunOn * Multi.R)
+                         + A.AerosolScatterR * AerosolDensity * (AerosolSingle * Sun.R + SunOn * Multi.R)) * TR * DS;
+        Out.G = Out.G + (A.GasScatterG * GasDensity * (GasSingle * Sun.G + SunOn * Multi.G)
+                         + A.AerosolScatterG * AerosolDensity * (AerosolSingle * Sun.G + SunOn * Multi.G)) * TG * DS;
+        Out.B = Out.B + (A.GasScatterB * GasDensity * (GasSingle * Sun.B + SunOn * Multi.B)
+                         + A.AerosolScatterB * AerosolDensity * (AerosolSingle * Sun.B + SunOn * Multi.B)) * TB * DS;
+        Out.FR = Out.FR + (A.GasScatterR * GasDensity + A.AerosolScatterR * AerosolDensity) * TR * DS;
+        Out.FG = Out.FG + (A.GasScatterG * GasDensity + A.AerosolScatterG * AerosolDensity) * TG * DS;
+        Out.FB = Out.FB + (A.GasScatterB * GasDensity + A.AerosolScatterB * AerosolDensity) * TB * DS;
+    }
+    return Out;
+}
+
+// The whole view: its path through the air split at the closest point, the
+// 12 samples shared between the two sides by length, and the transmittance of
+// the whole path. No star (a zero Sun) means no light, never a sun on the
+// horizon.
+AT_March AT_MarchAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
+                     AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM)
+{
+    AT_March Out = AT_EmptyMarch();
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    AT_Ray Ray = AT_RayThroughAir(A, EX, EY, EZ, DX, DY, DZ, Length);
+    if (Ray.S1 <= Ray.S0)
+    {
+        return Out;
+    }
+    AT_REAL SunOn = (SX * SX + SY * SY + SZ * SZ) > AT_REAL(0.25) ? AT_REAL(1.0) : AT_REAL(0.0);
+    AT_REAL CosView = SX * DX + SY * DY + SZ * DZ;
+    AT_REAL PhaseGas = AT_RayleighPhase(CosView);
+    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(CosView, A.AerosolG);
+    AT_March First = AT_EmptyMarch();
+    AT_March Second = AT_EmptyMarch();
+    if (Ray.S0 >= AT_REAL(0.0))
+    {
+        First = AT_MarchPiece(A, Ray, Ray.S0, Ray.S1, AT_VIEW_SAMPLES, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    else if (Ray.S1 <= AT_REAL(0.0))
+    {
+        First = AT_MarchPiece(A, Ray, Ray.S1, Ray.S0, AT_VIEW_SAMPLES, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    else
+    {
+        AT_REAL Share = AT_floor(AT_REAL(AT_VIEW_SAMPLES) * (-Ray.S0) / (Ray.S1 - Ray.S0) + AT_REAL(0.5));
+        int Before = int(AT_min(AT_max(Share, AT_REAL(1.0)), AT_REAL(AT_VIEW_SAMPLES - 1)));
+        First = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S0, Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+        Second = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S1, AT_VIEW_SAMPLES - Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
+    }
+    AT_Columns Whole = AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1);
+    Out.R = First.R + Second.R;
+    Out.G = First.G + Second.G;
+    Out.B = First.B + Second.B;
+    Out.FR = First.FR + Second.FR;
+    Out.FG = First.FG + Second.FG;
+    Out.FB = First.FB + Second.FB;
+    Out.TR = AT_exp(-(A.GasExtinctR * Whole.Gas + A.AerosolExtinctR * Whole.Aerosol));
+    Out.TG = AT_exp(-(A.GasExtinctG * Whole.Gas + A.AerosolExtinctG * Whole.Aerosol));
+    Out.TB = AT_exp(-(A.GasExtinctB * Whole.Gas + A.AerosolExtinctB * Whole.Aerosol));
+    return Out;
+}
+
+// -- The entry points (decision 1) ------------------------------------------
+// The light the air adds between an eye E and Length along D, under a star
+// toward S, and what it lets through.
+AT_Scatter AT_InScatter(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
+                        AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM)
+{
+    AT_March M = AT_MarchAir(A, EX, EY, EZ, DX, DY, DZ, Length, SX, SY, SZ AT_TABLE_ARG);
+    AT_Scatter Out;
+    Out.R = M.R;
+    Out.G = M.G;
+    Out.B = M.B;
+    Out.TR = M.TR;
+    Out.TG = M.TG;
+    Out.TB = M.TB;
+    return Out;
+}
+
+// What the air lets through between F and Length along D.
+AT_Rgb AT_Transmittance(AT_Air A, AT_REAL FX, AT_REAL FY, AT_REAL FZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ, AT_REAL Length)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0);
+    Out.G = AT_REAL(1.0);
+    Out.B = AT_REAL(1.0);
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    AT_Ray Ray = AT_RayThroughAir(A, FX, FY, FZ, DX, DY, DZ, Length);
+    if (Ray.S1 <= Ray.S0)
+    {
+        return Out;
+    }
+    AT_Columns Whole = AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1);
+    Out.R = AT_exp(-(A.GasExtinctR * Whole.Gas + A.AerosolExtinctR * Whole.Aerosol));
+    Out.G = AT_exp(-(A.GasExtinctG * Whole.Gas + A.AerosolExtinctG * Whole.Aerosol));
+    Out.B = AT_exp(-(A.GasExtinctB * Whole.Gas + A.AerosolExtinctB * Whole.Aerosol));
+    return Out;
+}
+
+// The star's light reaching P, per channel, relative to its own. An airless
+// world passes all of it whatever the star (the disc's Lambert, not an air,
+// darkens a night side); with an air, no star passes none.
+AT_Rgb AT_SunThrough(AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ, AT_REAL SX, AT_REAL SY, AT_REAL SZ)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0);
+    Out.G = AT_REAL(1.0);
+    Out.B = AT_REAL(1.0);
+    if (A.Top <= AT_REAL(0.0))
+    {
+        return Out;
+    }
+    if (SX * SX + SY * SY + SZ * SZ < AT_REAL(0.25))
+    {
+        Out.R = AT_REAL(0.0);
+        Out.G = AT_REAL(0.0);
+        Out.B = AT_REAL(0.0);
+        return Out;
+    }
+    AT_REAL Length = AT_sqrt(PX * PX + PY * PY + PZ * PZ);
+    AT_REAL Cos = (PX * SX + PY * SY + PZ * SZ) / AT_max(Length, AT_TINY);
+    return AT_SunAt(A, AT_max(Length, AT_REAL(1.0)), AT_max(Length - AT_REAL(1.0), AT_REAL(0.0)), Cos);
+}
