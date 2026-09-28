@@ -19,6 +19,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingHoverAndSinkTest, "DeepSpace.Ship.Landi
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSkimAndLookTest, "DeepSpace.Ship.Landing.SkimAndLook",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSinkOntoFloorSphereTest, "DeepSpace.Ship.Landing.SinkOntoFloorSphere",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace LandingRegimeLocal
 {
@@ -283,6 +285,47 @@ bool FLandingSkimAndLookTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("and the ship goes where it points, in plan, at the lever's speed"),
                  FMath::IsNearlyEqual(Flight.Horizontal(), 5.0e3, 50.0));
     }
+    return true;
+}
+
+bool FLandingSinkOntoFloorSphereTest::RunTest(const FString& Parameters)
+{
+    using namespace LandingRegimeLocal;
+    // An ocean: a world with no ground, which keeps its floor sphere 10 km up.
+    FFlightSurface Ocean;
+    Ocean.Centre = Somewhere();
+    Ocean.Radius = 0.9 * UniverseUnits::CmPerEarthRadius;
+    Ocean.Floor = 1.0e6;
+    Ocean.bWorld = true;
+    const FVector3d D = FVector3d(0.002, -0.001, 1.0).GetSafeNormal();
+    FShipFlightState State;
+    State.SetSurfaces({ Ocean });
+    State.SetWells({ WellOf(Ocean, 0.84) });
+    State.SetUniverseTransform(Ocean.Centre + FVector(D) * (Ocean.Radius + Ocean.Floor + 2.0e5), Level(D));
+    FShipFlightCommand Command = State.GetCommand();
+    Command.Vertical = -1.0;
+    State.SetCommand(Command);
+
+    FVector Previous = State.GetVelocity();
+    double WorstStep = 0.0;
+    double Least = TNumericLimits<double>::Max();
+    bool bLive = false;
+    for (double T = 0.0; T < 120.0; T += Dt)
+    {
+        State.Step(Dt);
+        bLive |= State.IsVerticalLive();
+        WorstStep = FMath::Max(WorstStep, (State.GetVelocity() - Previous).Size() / (State.GetLimits().LinearAcceleration * Dt));
+        Previous = State.GetVelocity();
+        Least = FMath::Min(Least, ShipFlight::FloorClearance(Ocean, State.GetUniversePosition()));
+    }
+    const double Clear = ShipFlight::FloorClearance(Ocean, State.GetUniversePosition());
+    TestTrue(TEXT("2 km over an ocean's floor the vertical lever is live"), bLive);
+    TestTrue(FString::Printf(TEXT("a full sink comes to rest on the floor sphere (%.1f cm over it, %.2f cm/s)"), Clear, State.GetSpeed()),
+             Clear >= -1.0 && Clear < 100.0 && State.GetSpeed() < 1.0);
+    TestTrue(FString::Printf(TEXT("never under it (least %.2f cm)"), Least), Least >= -1.0);
+    TestTrue(FString::Printf(TEXT("braked by the boosters all the way: no velocity step past them (worst %.3f of them)"), WorstStep),
+             WorstStep <= 1.0 + 1.0e-6);
+    TestFalse(TEXT("and there is no ground altitude: oceans keep the floor"), State.GetGroundAltitude().IsSet());
     return true;
 }
 

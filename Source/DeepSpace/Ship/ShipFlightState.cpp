@@ -414,6 +414,21 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
         }
     }
 
+    // Over a world with no ground (an ocean, a giant) the floor sphere is
+    // what the descent meets: cruise's own braking curve to it, as cruise has
+    // always braked for a floor, so the vertical lever sinks onto it and
+    // never into the sphere hard stop at speed.
+    if (W > 0.0 && World && !World->HasGround())
+    {
+        const double Sinking = -(Target | Up);
+        const double MaySink = ShipFlight::MaySpeed(FMath::Max(ShipFlight::FloorClearance(*World, Position), 0.0),
+                                                    Limits.LinearAcceleration, 0.0, FixedStep);
+        if (Sinking > MaySink)
+        {
+            Target += Up * (Sinking - MaySink);
+        }
+    }
+
     // Velocity, chasing the target, as a vector (a turn cannot cheat
     // acceleration out of the model by changing direction).
     const FVector VelocityError = Target - Velocity;
