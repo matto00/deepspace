@@ -5,6 +5,7 @@
 #include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipGravity.h"
 #include "Ship/ShipLanding.h"
+#include "Ship/ShipVerticalLever.h"
 #include "Universe/UniversePosition.h"
 
 /**
@@ -74,6 +75,34 @@ struct DEEPSPACE_API FShipFlightLimits
      *  rest, and how far below the origin the gear's feet are. */
     double GearClearanceCm = ShipLanding::DefaultGearClearanceCm;
 
+    /** ds.Land.TouchdownSpeed, cm/s: the approach law's floor, contact speed. */
+    double TouchdownSpeed = ShipFlight::DefaultTouchdownSpeed;
+
+    /** ds.Land.ApproachSeconds: the approach law's ease; clamped where read. */
+    double ApproachSeconds = ShipFlight::DefaultApproachSeconds;
+
+    /** ds.Land.SkimSeconds and .SkimFloor (cm/s): the skim cap. */
+    double SkimSeconds = ShipFlight::DefaultSkimSeconds;
+    double SkimFloor = ShipFlight::DefaultSkimFloor;
+
+    /** ds.Land.Regime, cm: the near regime's reach over a world's cruise floor. */
+    double RegimeCm = ShipFlight::DefaultRegimeCm;
+
+    /** ds.Vertical.Top (cm/s) and .HeavyFloor: the lever's top and the climb
+     *  top's floor on heavy worlds. */
+    double VerticalTop = ShipVerticalLever::DefaultTopCmPerSecond;
+    double VerticalHeavyFloor = ShipVerticalLever::DefaultHeavyFloor;
+
+    /**
+     * The starved sink, cm/s (decision 5): ds.Boosters.StarvedSink x (1 -
+     * HoldFed), computed by the subsystem from the split. Added to the
+     * vertical lever's asked rate only under a solid world's drive floor and
+     * only while the lever asks HOVER or a sink -- a starved ship always
+     * lifts. The one sanctioned change with time in the power model, bounded,
+     * ending at rest on the ground.
+     */
+    double SinkBias = 0.0;
+
     static FShipFlightLimits Cruise();
 };
 
@@ -113,6 +142,13 @@ struct DEEPSPACE_API FShipFlightCommand
      *  a drive set to 0.1 c, left for a look round in cruise, is at 0.1 c
      *  again the moment F is pressed. */
     int32 DriveNotch = 0;
+
+    /** The vertical lever, -1..1 (landing decision 8): a climb or sink rate
+     *  on ShipVerticalLever's log scale, the boosters holding it against
+     *  gravity. At zero the ship hovers, and keeps hovering with nobody at
+     *  the helm. Persistent, like both other levers: carry it over from
+     *  GetCommand() when building a command. */
+    double Vertical = 0.0;
 };
 
 /** Which lever the ship is answering. */
@@ -256,6 +292,27 @@ public:
 
     const FGroundLog& GetGroundLog() const;
     void ResetGroundLog();
+
+    /** In the near regime (decision 8): within Limits.RegimeCm of the
+     *  nearest world's cruise floor -- the ground over a solid world, the
+     *  floor sphere otherwise -- entering under it and leaving over 1.1 x it. */
+    bool IsInNearRegime() const;
+
+    /** 1 at 40 km and under, 0 at 50 km and over: how far cruise flies the
+     *  plan view and the vertical lever counts. 0 outside the regime. */
+    double GetRegimeWeight() const;
+
+    /** The vertical lever moves the ship: in the regime with the weight
+     *  above 0, and cruise's lever flying (Cruise, or DriveBelowFloor). */
+    bool IsVerticalLive() const;
+
+    /** What the vertical lever asks, cm/s, + climbing, after the climb top:
+     *  the HUD's CLIMB / SINK / HOVER. The starved sink is not in it. */
+    double GetVerticalLeverRate() const;
+
+    /** The ship's radial speed, cm/s, + climbing, over the regime's world
+     *  (or the nearest world); 0 with none. */
+    double GetVerticalSpeed() const;
 
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
@@ -448,6 +505,21 @@ private:
      *  speed the substep a lowest point first comes within a centimetre. */
     void LogGround(const ShipLanding::FFootprintClearance& Foot);
 
+    /** Once a substep: which world is near, the regime with its hysteresis,
+     *  and the blend weight. */
+    void UpdateRegime();
+
+    /** The cruise floor's clearance over one surface, cm. */
+    double CruiseFloorClearance(const FFlightSurface& Surface) const;
+
+    /** What the plan asks radially, cm/s: the lever's rate, the climb top,
+     *  and the starved sink under the floor at HOVER or sinking. */
+    double AskedVerticalRate() const;
+
+    /** The ground ahead of the ship's origin along a horizontal Heading at
+     *  its own height, less the hull's reach, for the along-ground cap. */
+    TOptional<double> GroundAhead(int32 SurfaceIndex, const FVector& Heading, double Speed);
+
     FUniversePosition Position;
     FQuat   Orientation = FQuat::Identity;
     FVector Velocity = FVector::ZeroVector;        // cm/s, universe frame
@@ -477,6 +549,10 @@ private:
 
     FGroundLog GroundLog;
     double LastFootprintLeast = TNumericLimits<double>::Max();
+
+    bool bInRegime = false;
+    double RegimeWeight = 0.0;
+    int32 RegimeSurface = INDEX_NONE;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;

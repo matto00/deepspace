@@ -41,6 +41,7 @@ void FShipFlightState::SetCommand(const FShipFlightCommand& NewCommand)
         FMath::Clamp(NewCommand.AttitudeRate.Y, -1.0, 1.0),
         FMath::Clamp(NewCommand.AttitudeRate.Z, -1.0, 1.0));
     Command.DriveNotch = FMath::Clamp(NewCommand.DriveNotch, 0, GetDriveNotchCount() - 1);
+    Command.Vertical = FMath::Clamp(NewCommand.Vertical, -1.0, 1.0);
     Command.bDrive = NewCommand.bDrive;
 
     if (!bWasDrive && Command.bDrive)
@@ -114,6 +115,10 @@ void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
     bSpoolingDown = false;
     LastHold = EFlightHold::Free;
     LastHeldFraction = 0.0;
+    Command.Vertical = 0.0;
+    bInRegime = false;
+    RegimeWeight = 0.0;
+    RegimeSurface = INDEX_NONE;
 }
 
 void FShipFlightState::SetSurfaces(TArray<FFlightSurface> NewSurfaces)
@@ -238,6 +243,8 @@ void FShipFlightState::SubStep(double FixedDelta)
         Orientation.Normalize();
     }
 
+    UpdateRegime();
+
     if ((Command.bDrive || bSpoolingDown) && DriveSubStep(FixedDelta))
     {
         return;
@@ -327,59 +334,97 @@ void FShipFlightState::RecordHold(double D, double HeldSpeed, double LeverSpeed)
 
 void FShipFlightState::CruiseSubStep(double FixedDelta)
 {
-    // The cap sets the assist's target, not the velocity (decision 5): along
-    // the commanded direction -- the nose, or aft astern -- the target speed
-    // is held to what that direction's path may have, so a cruising ship
-    // brakes to rest on a floor under its own inertia. Far from anything
-    // this is exactly the cruise there always was.
+    const FVector Nose = Orientation.GetForwardVector();
     const double Want = CruiseLeverSpeed();
-    const FVector Along = Orientation.GetForwardVector() * (Want < 0.0 ? -1.0 : 1.0);
-    double TargetSpeed = FMath::Abs(Want);
+    const FVector Along = Nose * (Want < 0.0 ? -1.0 : 1.0);
+    const double Speed = FMath::Abs(Want);
+    const double W = RegimeWeight;
     LastHold = EFlightHold::Free;
     LastHeldFraction = 0.0;
-    if (TargetSpeed > 0.0)
+
+    // Above the regime, and fading out across its top: along the nose, held
+    // to the braking curve by whatever the path meets -- the ground over a
+    // solid world, the sphere otherwise (decision 5, unchanged far out).
+    FVector Classic = FVector::ZeroVector;
+    if (W < 1.0 && Speed > 0.0)
     {
-        if (const TOptional<double> D = NearestOnCruisePath(Along, TargetSpeed))
+        double Held = Speed;
+        if (const TOptional<double> D = NearestOnCruisePath(Along, Speed))
         {
-            // The braking curve alone, not the hold: cruise has inertia, and
-            // its boosters must deliver whatever slowing the target asks. The
-            // hold's d / N falls at v / N, which above the knee is more than
-            // the boosters have -- ten times more at a quarter thrust from
-            // cruise's top -- and the ship would meet the hard stop at speed.
-            // The braking curve asks for 80% of them and no more: a full-
-            // thrust ship at cruise's 20 km/s starts braking 125 km up, a
-            // starved one 500 km up (decision 5).
             const double May = ShipFlight::MaySpeed(*D, Limits.LinearAcceleration, 0.0, FixedStep);
-            if (May < TargetSpeed)
+            if (May < Held)
             {
-                TargetSpeed = May;
-                RecordHold(*D, May, FMath::Abs(GetLeverSpeed()));
+                Held = May;
+                RecordHold(*D, May, Speed);
             }
+        }
+        Classic = Along * Held;
+    }
+
+    // In the regime (decision 8): the nose's horizontal projection at the
+    // cruise lever's speed, plus up at the vertical lever's rate, so looking
+    // down never dives the ship and zero is hover for any cruise setting.
+    // Over solid ground the horizontal part is held to the skim cap and to
+    // the ground ahead at the ship's height.
+    FVector Plan = FVector::ZeroVector;
+    FVector Up = FVector::ZeroVector;
+    const FFlightSurface* World = Surfaces.IsValidIndex(RegimeSurface) ? &Surfaces[RegimeSurface] : nullptr;
+    if (W > 0.0 && World)
+    {
+        Up = (Position - World->Centre).GetSafeNormal();
+        const FVector Flat = Along - Up * (Along | Up);
+        const double FlatSize = Flat.Size();
+        const FVector Heading = FlatSize > 1.0e-6 ? Flat / FlatSize : FVector::ZeroVector;
+        double Horizontal = FlatSize > 1.0e-6 ? Speed : 0.0;
+        if (World->HasGround() && Horizontal > 0.0)
+        {
+            const double Skim = ShipFlight::SkimCap(ShipFlight::GroundAt(*World, Position).Get(0.0), Limits.SkimSeconds, Limits.SkimFloor);
+            if (Skim < Horizontal)
+            {
+                Horizontal = Skim;
+                RecordHold(TNumericLimits<double>::Max(), Skim, Speed);
+            }
+            if (const TOptional<double> D = GroundAhead(RegimeSurface, Heading, Horizontal))
+            {
+                const double May = ShipFlight::GroundApproachSpeed(*D, Limits.LinearAcceleration, Limits.ApproachSeconds,
+                                                                   Limits.TouchdownSpeed, FixedStep);
+                if (May < Horizontal)
+                {
+                    Horizontal = May;
+                    RecordHold(*D, May, Speed);
+                }
+            }
+        }
+        Plan = Heading * Horizontal + Up * AskedVerticalRate();
+    }
+    FVector Target = Classic * (1.0 - W) + Plan * W;
+
+    // Down (decision 10): whatever the levers and the starved sink ask, the
+    // descent is held to the approach law over the footprint's least
+    // clearance, so the ground always catches, gently.
+    if (W > 0.0 && World && World->HasGround())
+    {
+        const double Down = -(Target | Up);
+        const double Clear = ShipLanding::FootprintClearance(*World, Position, Orientation, Limits.GearClearanceCm).Least;
+        const double May = ShipFlight::GroundApproachSpeed(FMath::Max(Clear, 0.0), Limits.LinearAcceleration,
+                                                           Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);
+        if (Down > May)
+        {
+            Target += Up * (Down - May);
         }
     }
 
-    // Velocity, chasing the target. Limiting the change as a vector rather
-    // than per axis means a turn cannot cheat extra acceleration out of the
-    // model by changing direction.
-    const FVector TargetVelocity = Along * TargetSpeed;
-    const FVector VelocityError = TargetVelocity - Velocity;
+    // Velocity, chasing the target, as a vector (a turn cannot cheat
+    // acceleration out of the model by changing direction).
+    const FVector VelocityError = Target - Velocity;
     const double MaxVelocityChange = Limits.LinearAcceleration * FixedDelta;
     const FVector VelocityChange = VelocityError.SizeSquared() <= FMath::Square(MaxVelocityChange)
         ? VelocityError
         : VelocityError.GetSafeNormal() * MaxVelocityChange;
-
     Velocity += VelocityChange;
     LastLinearAcceleration = VelocityChange / FixedDelta;
 
-    // The hard stop. Cruise can slide after a turn, so its velocity need not
-    // be along the path the cap read; no substep may end inside a floor all
-    // the same. A velocity that would carry the ship in loses its inward
-    // part at the sphere, and the ship ends the substep on it and slides:
-    // on it, not where it was, since it would have reached it inside the
-    // substep, and at 20 km/s a substep is 167 m -- a ship left where it
-    // was would slide along that far above its floor. Under a floor already
-    // -- the floor raised in play -- it may climb and may not descend, and
-    // is never lifted: a ship does not teleport because a number changed.
+    // The sphere hard stop, as it always was, for surfaces with no ground.
     FUniversePosition Next = Position + Velocity * FixedDelta;
     for (const FFlightSurface& Surface : Surfaces)
     {
@@ -613,4 +658,87 @@ void FShipFlightState::LogGround(const ShipLanding::FFootprintClearance& Foot)
         ++GroundLog.Contacts;
     }
     LastFootprintLeast = Foot.Least;
+}
+
+double FShipFlightState::CruiseFloorClearance(const FFlightSurface& Surface) const
+{
+    const TOptional<double> Ground = ShipFlight::GroundAt(Surface, Position);
+    return Ground ? *Ground - Limits.GearClearanceCm : ShipFlight::FloorClearance(Surface, Position);
+}
+
+void FShipFlightState::UpdateRegime()
+{
+    int32 Best = INDEX_NONE;
+    double Least = TNumericLimits<double>::Max();
+    for (int32 Index = 0; Index < Surfaces.Num(); ++Index)
+    {
+        if (Surfaces[Index].bWorld && !Surfaces[Index].bInsideOut)
+        {
+            const double Clear = CruiseFloorClearance(Surfaces[Index]);
+            if (Clear < Least)
+            {
+                Least = Clear;
+                Best = Index;
+            }
+        }
+    }
+    const double Enter = FMath::Max(Limits.RegimeCm, 1.0);
+    if (Best == INDEX_NONE)
+    {
+        bInRegime = false;
+    }
+    else if (!bInRegime && Least < Enter)
+    {
+        bInRegime = true;
+    }
+    else if (bInRegime && Least > Enter * ShipFlight::RegimeExitFactor)
+    {
+        bInRegime = false;
+    }
+    RegimeSurface = Best;
+    RegimeWeight = bInRegime ? FMath::Clamp((Enter - Least) / (Enter * ShipFlight::RegimeBlendFraction), 0.0, 1.0) : 0.0;
+}
+
+double FShipFlightState::GetVerticalLeverRate() const
+{
+    const double Rate = ShipVerticalLever::Rate(Command.Vertical, Limits.VerticalTop);
+    return FMath::Min(Rate, ShipVerticalLever::ClimbTop(Limits.VerticalTop, GetLocalGravity().Size(), Limits.VerticalHeavyFloor));
+}
+
+double FShipFlightState::AskedVerticalRate() const
+{
+    double Rate = GetVerticalLeverRate();
+    if (Rate <= 0.0 && GetDepthUnderDriveFloor() > 0.0)
+    {
+        Rate -= FMath::Max(Limits.SinkBias, 0.0);
+    }
+    return Rate;
+}
+
+TOptional<double> FShipFlightState::GroundAhead(int32 SurfaceIndex, const FVector& Heading, double Speed)
+{
+    const double Reach = ShipLanding::ReachCm(Limits.GearClearanceCm);
+    const double Braking = 2.0 * ShipFlight::BrakingMargin * FMath::Max(Limits.LinearAcceleration, 1.0);
+    const double Lookahead = 1.5 * (Speed * Speed / Braking + Speed * FMath::Max(Limits.ApproachSeconds, ShipFlight::MinApproachSeconds))
+                           + Reach + 1.0e3;
+    const TOptional<double> D = ShipFlight::RayToGround(Surfaces[SurfaceIndex], Position, Heading, Limits.GearClearanceCm, Lookahead);
+    return D ? TOptional<double>(FMath::Max(0.0, *D - Reach)) : TOptional<double>();
+}
+
+bool FShipFlightState::IsInNearRegime() const { return bInRegime; }
+double FShipFlightState::GetRegimeWeight() const { return RegimeWeight; }
+
+bool FShipFlightState::IsVerticalLive() const
+{
+    return RegimeWeight > 0.0 && !Command.bDrive && !bSpoolingDown;
+}
+
+double FShipFlightState::GetVerticalSpeed() const
+{
+    int32 Index = RegimeSurface;
+    if (!Surfaces.IsValidIndex(Index))
+    {
+        return 0.0;
+    }
+    return Velocity | (Position - Surfaces[Index].Centre).GetSafeNormal();
 }

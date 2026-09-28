@@ -46,6 +46,11 @@ bool FLandingCruiseUnderDriveFloorTest::RunTest(const FString& Parameters)
 
     FShipFlightState Flight;
     Flight.SetSurfaces({ World });
+    // Above the regime cruise still flies along the nose; with no regime at
+    // all this is the two floors alone -- the sphere is not cruise's floor.
+    FShipFlightLimits NoRegime = Flight.GetLimits();
+    NoRegime.RegimeCm = 0.0;
+    Flight.SetLimits(NoRegime);
     Flight.SetUniverseTransform(Above(World, D, 5.0e5), NoseDown(Level(D), 30.0));
     FShipFlightCommand Command;
     Command.Throttle = ThrottleFor(2.0e5);
@@ -72,6 +77,20 @@ bool FLandingCruiseUnderDriveFloorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and a point of it within a few metres of it"), Clear.IsSet() && *Clear <= 5.0e2);
     TestTrue(TEXT("the room is the ground's, less the gear's clearance"),
              FMath::IsNearlyEqual(Flight.GetRoom(), FMath::Max(*Agl - ShipLanding::DefaultGearClearanceCm, 0.0), 1.0e-6));
+    FShipFlightState OnC;
+    OnC.SetSurfaces({ World });
+    OnC.SetUniverseTransform(Above(World, D, 5.0e5), Level(D));
+    FShipFlightCommand Sink;
+    Sink.Vertical = -1.0;
+    OnC.SetCommand(Sink);
+    double Rested = 0.0;
+    for (double T = 0.0; T < 200.0 && Rested < 2.0; T += 1.0 / 60.0)
+    {
+        OnC.Step(1.0 / 60.0);
+        Rested = OnC.GetSpeed() < 0.5 ? Rested + 1.0 / 60.0 : 0.0;
+    }
+    TestTrue(TEXT("at 5 km, C brings a cruising ship down through the drive floor to rest on the ground"),
+             Rested >= 2.0 && FMath::Abs(OnC.GetFootprintClearance().Get(-1.0e9)) < 1.0 && OnC.GetGroundLog().LeastClearance >= -1.0);
     return true;
 }
 
