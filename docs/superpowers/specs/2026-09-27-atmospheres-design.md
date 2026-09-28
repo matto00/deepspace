@@ -86,6 +86,8 @@ past them, it says so and is on the sign-off list.
 
 **Atmosphere plan ruling 7 (2026-09-28):** as the plan proposes: the law is held at 5% or 1e-3 to the reference with its second scattering made isotropic; the gap from that to the full second order is pinned at 25% or 1e-3; the `Shown` clamp (negative channels to zero on both sides before comparing) is allowed (planning notes 16, 17).
 
+**Ruling 6, the partition corrected by measurement (2026-09-28):** still eight bins, now {0, 3, 5, 6, 8, 9, 10, 11, 16}. The first partition missed `BinsCarryTheSpectrum` at 2,400 K, procgen's coolest star (1.012 of the allowance: CO2 at its ceiling, 88 degrees, green). A search of all 6,435 eight-bin partitions found two that pass at every star, and this one is worst at 0.767 across 2,400-15,000 K. If the law's other agreement tests (single scattering, `LawMatchesReference`) fail with it, the question goes back to the developer.
+
 ## Context
 
 ### What exists, and what does not
