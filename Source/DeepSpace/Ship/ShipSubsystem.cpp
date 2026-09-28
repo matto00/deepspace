@@ -1184,6 +1184,69 @@ void UShipSubsystem::ClearSpares()
     Loadout.Spares.Reset();
 }
 
+int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& State)
+{
+    int32 Fallbacks = 0;
+    for (const FShipBayState& Entry : State.Bays)
+    {
+        if (!ShipBay::FromName(Entry.Bay))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a loadout names a bay this ship has not got, %s; ignored."), *Entry.Bay.ToString());
+            ++Fallbacks;
+        }
+    }
+
+    Loadout.Spares.Reset();
+    for (int32 Index = 0; Index < ShipBay::All().Num(); ++Index)
+    {
+        const EShipBay Bay = ShipBay::All()[Index];
+        // By name, never by position: a bay added to EShipBay later shifts
+        // nothing saved (decision 11).
+        const FShipBayState* Entry = State.Bays.FindByPredicate([Bay](const FShipBayState& Candidate) { return Candidate.Bay == ShipBay::Name(Bay); });
+        FShipPartState Part = Entry ? Entry->Part : FShipPartState();
+        bool bFellBack = !Entry && ShipBay::IsCore(Bay);
+        if (!Part.PartId.IsNone())
+        {
+            UShipModuleDataAsset* Asset = PartFor(Part.PartId);
+            const bool bFits = Asset && Register(Asset)
+                && (ShipBay::IsAux(Bay) ? ShipBay::IsAux(Asset->Bay) : Asset->Bay == Bay);
+            if (!bFits)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Ship: %s cannot be in the %s bay; its stock part is fitted instead."),
+                       *Part.PartId.ToString(), *ShipBay::Name(Bay).ToString());
+                bFellBack = true;
+            }
+        }
+        if (bFellBack)
+        {
+            ++Fallbacks;
+            Part = FShipPartState();
+            UShipModuleDataAsset* Stock = ShipBay::IsCore(Bay) ? PartFor(ShipBay::StockPartId(Bay)) : nullptr;
+            if (Stock && Register(Stock))
+            {
+                Part.PartId = Stock->ModuleId;
+            }
+        }
+        SetBayPart(Bay, Part);
+        ShipParts::FindBay(Loadout, Bay)->LivesDrawn = Entry ? Entry->LivesDrawn : 0;
+    }
+
+    for (const FShipPartState& Spare : State.Spares)
+    {
+        UShipModuleDataAsset* Asset = PartFor(Spare.PartId);
+        if (Asset && Register(Asset))
+        {
+            Loadout.Spares.Add(Spare);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a spare names no part, %s; dropped."), *Spare.PartId.ToString());
+            ++Fallbacks;
+        }
+    }
+    return Fallbacks;
+}
+
 const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const
 {
     return Loadout;

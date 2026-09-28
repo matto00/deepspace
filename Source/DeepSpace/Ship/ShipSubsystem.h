@@ -138,6 +138,18 @@ public:
     void ClearSpares();
 
     /**
+     * Sets the whole loadout from State (decision 11), as slice 3's save
+     * will. Bays are found by name, never position. Whatever State cannot
+     * name falls back and is counted:
+     * - an unknown part, or a part in the wrong bay: the bay's stock part;
+     * - a core bay State lacks: its stock part;
+     * - a bay this ship has not got: ignored;
+     * - a spare with an unknown id: dropped.
+     * Returns how many entries fell back, each also logged by name.
+     */
+    int32 RestoreLoadout(const FShipLoadoutState& State);
+
+    /**
      * A seam for tests, not a part (decision 8): a standing draw off the top
      * under "Load.<Name>", replaced if Name already draws. No console
      * command, no nameplate, no save -- as ds.Nav.FoldDraw books a draw

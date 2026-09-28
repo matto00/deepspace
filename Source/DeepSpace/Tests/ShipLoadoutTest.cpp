@@ -1,9 +1,13 @@
+#include "Algo/Reverse.h"
 #include "Core/DeepSpaceGameMode.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDevice.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipNavState.h"
@@ -909,6 +913,102 @@ bool FShipPartsCommandsTest::RunTest(const FString& Parameters)
     const FString Described = Run(World, TEXT("ds.Ship.Describe"), {});
     TestTrue(TEXT("ds.Ship.Describe names what is in each bay"), Described.Contains(TEXT("Reactor.TwinCore")) && Described.Contains(TEXT("Sensors.Stock")));
     TestTrue(TEXT("and says an empty slot reads stock"), Described.Contains(TEXT("Aux1")) && Described.Contains(TEXT("empty")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsStateRoundTripsTest, "DeepSpace.Ship.Parts.StateRoundTrips",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/*
+ * Decision 11: the loadout is plain and serialisable from slice 1, so the
+ * save (slice 3) is a slice and not a rewrite. It goes through Unreal's own
+ * struct serialiser and back equal, wear fields included. It restores by bay
+ * name, never position, so a state in any order is the same loadout. And
+ * what a state cannot name -- an unknown part, a part in the wrong bay, a
+ * bay the ship has not got, a bay it lacks -- falls back to stock, counted.
+ */
+bool FShipPartsStateRoundTripsTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    UScriptStruct* Struct = FShipLoadoutState::StaticStruct();
+
+    FShipLoadoutState Written;
+    {
+        FSkyWorld First(TEXT("RoundTripFirstWorld"));
+        TestEqual(TEXT("the stock ship fits"), StockShip::Install(First.Ship), 6);
+        TestTrue(TEXT("the twin core fits"), First.Ship->FitPartById(TEXT("Reactor.TwinCore")));
+        TestTrue(TEXT("and a spare quick lever is aboard"), First.Ship->AddSpare(TEXT("Drive.QuickLever")));
+        Written = First.Ship->GetLoadoutState();
+    }
+    // The wear fields are slice 4's, but the struct carries them now: give
+    // them values, so the round trip proves they travel.
+    if (!TestEqual(TEXT("two spares: the stock reactor and the quick lever"), Written.Spares.Num(), 2))
+    {
+        return false;
+    }
+    Written.Spares[0].AgeJumps = 12.5;
+    Written.Spares[0].LifeJumps = 151.25;
+    Written.Spares[0].bHasLife = true;
+    Written.Spares[0].Symptom = TEXT("Reactor.Stutter");
+    Written.Spares[0].Repairs = 2;
+    Written.Spares[0].bOriginal = true;
+    ShipParts::FindBay(Written, EShipBay::Reactor)->LivesDrawn = 3;
+
+    // -- through the struct serialiser and back ----------------------------------
+    TArray<uint8> Bytes;
+    {
+        FMemoryWriter Writer(Bytes);
+        FObjectAndNameAsStringProxyArchive Archive(Writer, false);
+        Struct->SerializeItem(Archive, &Written, nullptr);
+    }
+    FShipLoadoutState Read;
+    {
+        FMemoryReader Reader(Bytes);
+        FObjectAndNameAsStringProxyArchive Archive(Reader, false);
+        Struct->SerializeItem(Archive, &Read, nullptr);
+    }
+    TestTrue(TEXT("written and read back, every field is equal"), Struct->CompareScriptStruct(&Written, &Read, PPF_None));
+
+    // -- restored by name, in any order -----------------------------------------------
+    {
+        FShipLoadoutState Shuffled = Read;
+        Algo::Reverse(Shuffled.Bays);
+        FSkyWorld Second(TEXT("RoundTripSecondWorld"));
+        TestEqual(TEXT("a state with its bays in any order restores with nothing falling back"), Second.Ship->RestoreLoadout(Shuffled), 0);
+        TestTrue(TEXT("and is the loadout that was written"), Struct->CompareScriptStruct(&Second.Ship->GetLoadoutState(), &Read, PPF_None));
+        TestEqual(TEXT("the twin core runs the ship"), Second.Ship->GetReactorOutput(), 1800.0f);
+        TestEqual(TEXT("and today's 620 W is drawn"), Draws(*Second.Ship), 620.0f, 1e-2f);
+    }
+
+    // -- what a state cannot name falls back to stock, by name -----------------------
+    {
+        FShipLoadoutState Odd = Read;
+        ShipParts::FindBay(Odd, EShipBay::Reactor)->Part.PartId = TEXT("Reactor.Nonesuch");
+        ShipParts::FindBay(Odd, EShipBay::Drive)->Part.PartId = TEXT("Reactor.TwinCore");
+        Odd.Bays.RemoveAll([](const FShipBayState& Entry) { return Entry.Bay == ShipBay::Name(EShipBay::Lights); });
+        FShipBayState Galley;
+        Galley.Bay = TEXT("Galley");
+        Odd.Bays.Add(Galley);
+        FShipPartState Unknown;
+        Unknown.PartId = TEXT("Aux.Nonesuch");
+        Odd.Spares.Add(Unknown);
+
+        FSkyWorld Third(TEXT("RoundTripThirdWorld"));
+        TestEqual(TEXT("five entries fall back: an unknown part, a part in the wrong bay, a missing bay, an unknown bay, an unknown spare"),
+                  Third.Ship->RestoreLoadout(Odd), 5);
+        const auto Holds = [&](EShipBay Bay, const TCHAR* Id)
+        {
+            const UShipModuleDataAsset* Part = Third.Ship->GetFittedPart(Bay);
+            return Part && Part->ModuleId == FName(Id);
+        };
+        TestTrue(TEXT("the unknown reactor becomes the stock reactor"), Holds(EShipBay::Reactor, TEXT("Reactor.Stock")));
+        TestTrue(TEXT("the reactor in the drive bay becomes the stock drive"), Holds(EShipBay::Drive, TEXT("Drive.Stock")));
+        TestTrue(TEXT("the missing lights bay gets the stock lights"), Holds(EShipBay::Lights, TEXT("Lights.Stock")));
+        TestEqual(TEXT("the spares keep what they can name, with their state"), SpareIds(*Third.Ship), FString(TEXT("Reactor.Stock,Drive.QuickLever")));
+        TestEqual(TEXT("and the wear fields came with them"), Third.Ship->GetSpares()[0].AgeJumps, 12.5);
+        TestEqual(TEXT("the ship draws today's 620 W"), Draws(*Third.Ship), 620.0f, 1e-2f);
+    }
     return true;
 }
 
