@@ -128,7 +128,7 @@ TConstArrayView<FFlightSurface> FShipFlightState::GetSurfaces() const
 
 double FShipFlightState::GetRoom() const
 {
-    return ShipFlight::Room(Surfaces, Position);
+    return ShipFlight::Room(Surfaces, Position, Limits.GearClearanceCm);
 }
 
 void FShipFlightState::SetWells(TArray<FGravityWell> NewWells)
@@ -339,7 +339,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     LastHeldFraction = 0.0;
     if (TargetSpeed > 0.0)
     {
-        if (const TOptional<double> D = NearestOnPath(Along))
+        if (const TOptional<double> D = NearestOnCruisePath(Along, TargetSpeed))
         {
             // The braking curve alone, not the hold: cruise has inertia, and
             // its boosters must deliver whatever slowing the target asks. The
@@ -383,6 +383,10 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     FUniversePosition Next = Position + Velocity * FixedDelta;
     for (const FFlightSurface& Surface : Surfaces)
     {
+        if (Surface.HasGround())
+        {
+            continue;   // cruise's floor over a solid world is the ground, below
+        }
         const double After = ShipFlight::FloorClearance(Surface, Next);
         if (After >= 0.0)
         {
@@ -402,6 +406,7 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
         }
     }
     Position = Next;
+    GroundHardStop();
 }
 
 FUniversePosition FShipFlightState::GetUniversePosition() const { return Position; }
@@ -470,4 +475,142 @@ void FShipFlightState::SetUniverseTransform(const FUniversePosition& NewPosition
 {
     Position = NewPosition.Normalised();
     Orientation = NewOrientation.GetNormalized();
+}
+
+TOptional<double> FShipFlightState::NearestOnCruisePath(const FVector& Direction, double Speed)
+{
+    const double Braking = 2.0 * ShipFlight::BrakingMargin * FMath::Max(Limits.LinearAcceleration, 1.0);
+    const double Reach = ShipLanding::ReachCm(Limits.GearClearanceCm);
+    const double Lookahead = 1.5 * (Speed * Speed / Braking + Speed * FixedStep) + Reach + 1.0e5;
+    TOptional<double> Nearest;
+    for (int32 Index = 0; Index < Surfaces.Num(); ++Index)
+    {
+        const FFlightSurface& Surface = Surfaces[Index];
+        TOptional<double> D;
+        if (Surface.HasGround())
+        {
+            D = ShipFlight::RayToGround(Surface, Position, Direction, Limits.GearClearanceCm, Lookahead);
+            if (D)
+            {
+                D = FMath::Max(0.0, *D - Reach);   // the hull reaches ahead of its origin
+            }
+        }
+        else
+        {
+            D = ShipFlight::RayToFloor(Surface, Position, Direction);
+        }
+        if (D && (!Nearest || *D < *Nearest))
+        {
+            Nearest = D;
+        }
+    }
+    return Nearest;
+}
+
+int32 FShipFlightState::NearestGround() const
+{
+    int32 Best = INDEX_NONE;
+    double Least = TNumericLimits<double>::Max();
+    for (int32 Index = 0; Index < Surfaces.Num(); ++Index)
+    {
+        if (const TOptional<double> Agl = ShipFlight::GroundAt(Surfaces[Index], Position))
+        {
+            if (*Agl < Least)
+            {
+                Least = *Agl;
+                Best = Index;
+            }
+        }
+    }
+    return Best;
+}
+
+TOptional<double> FShipFlightState::GetGroundAltitude() const
+{
+    const int32 Index = NearestGround();
+    return Index == INDEX_NONE ? TOptional<double>() : ShipFlight::GroundAt(Surfaces[Index], Position);
+}
+
+TOptional<double> FShipFlightState::GetFootprintClearance() const
+{
+    const int32 Index = NearestGround();
+    if (Index == INDEX_NONE)
+    {
+        return {};
+    }
+    return ShipLanding::FootprintClearance(Surfaces[Index], Position, Orientation, Limits.GearClearanceCm).Least;
+}
+
+double FShipFlightState::GetDepthUnderDriveFloor() const
+{
+    double Depth = 0.0;
+    for (const FFlightSurface& Surface : Surfaces)
+    {
+        if (Surface.HasGround())
+        {
+            Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));
+        }
+    }
+    return Depth;
+}
+
+const FGroundLog& FShipFlightState::GetGroundLog() const
+{
+    return GroundLog;
+}
+
+void FShipFlightState::ResetGroundLog()
+{
+    GroundLog = FGroundLog();
+    LastFootprintLeast = TNumericLimits<double>::Max();
+}
+
+void FShipFlightState::GroundHardStop()
+{
+    const double Reach = ShipLanding::ReachCm(Limits.GearClearanceCm);
+    for (const FFlightSurface& Surface : Surfaces)
+    {
+        if (!Surface.HasGround())
+        {
+            continue;
+        }
+        const FVector Out = Position - Surface.Centre;
+        if (Out.Size() > Surface.Radius + Surface.Ground->MaxHeightCm() + Reach)
+        {
+            continue;   // above every peak by more than the hull reaches
+        }
+        ShipLanding::FFootprintClearance Foot = ShipLanding::FootprintClearance(Surface, Position, Orientation, Limits.GearClearanceCm);
+        if (Foot.Least < -HardStopToleranceCm)
+        {
+            ++GroundLog.HardStops;
+            const double Into = Velocity | Foot.GroundNormal;
+            if (Into < 0.0)
+            {
+                Velocity -= Foot.GroundNormal * Into;
+            }
+            const FVector Up = Out.GetSafeNormal();
+            for (int32 Pass = 0; Pass < 4 && Foot.Least < 0.0; ++Pass)
+            {
+                Position += Up * -Foot.Least;
+                Foot = ShipLanding::FootprintClearance(Surface, Position, Orientation, Limits.GearClearanceCm);
+            }
+            Position = Position.Normalised();
+        }
+        LogGround(Foot);
+    }
+}
+
+void FShipFlightState::LogGround(const ShipLanding::FFootprintClearance& Foot)
+{
+    GroundLog.LeastClearance = FMath::Min(GroundLog.LeastClearance, Foot.Least);
+    if (Foot.Least < 1.0 && LastFootprintLeast >= 1.0 && Foot.Point != INDEX_NONE)
+    {
+        // The lowest point's own velocity: the ship's, and the turn's lever
+        // arm to it (body rates about body axes, turned into universe axes).
+        const FVector Arm = ShipLanding::FootprintPoints(Limits.GearClearanceCm)[Foot.Point];
+        const FVector PointVelocity = Velocity + Orientation.RotateVector(FVector::CrossProduct(AngularVelocity, Arm));
+        GroundLog.WorstContactSpeed = FMath::Max(GroundLog.WorstContactSpeed, -(PointVelocity | Foot.GroundNormal));
+        ++GroundLog.Contacts;
+    }
+    LastFootprintLeast = Foot.Least;
 }
