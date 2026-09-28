@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightSurface.h"
+#include "Ship/ShipGravity.h"
 #include "Universe/UniversePosition.h"
 
 /**
@@ -197,6 +198,25 @@ public:
      *  reads the ray, not this. 0 with no surfaces, as between stars. */
     double GetRoom() const;
 
+    /**
+     * Every body's pull, as wells (landing decision 4): the subsystem hands
+     * them over once a frame beside the surfaces, and none in transit. The
+     * flight law never adds g dt to the velocity -- the boosters hold every
+     * lever against gravity, so the levers mean what they say anywhere --
+     * and gravity is felt only as effort, which the subsystem reads here.
+     */
+    void SetWells(TArray<FGravityWell> NewWells);
+    TConstArrayView<FGravityWell> GetWells() const;
+
+    /** The pull where the ship is, cm/s^2, universe axes: the sum over every
+     *  well. Asked, never stored. */
+    FVector GetLocalGravity() const;
+
+    /** The boosters' proper acceleration, cm/s^2: what the ship did
+     *  (GetLinearAcceleration, kinematic, which the hum's "changing" term
+     *  keeps reading) less what gravity would have done. */
+    FVector GetThrustAcceleration() const;
+
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
      *  it was chopped into frames. */
@@ -389,6 +409,7 @@ private:
     double LastHeldFraction = 0.0;
 
     TArray<FFlightSurface> Surfaces;
+    TArray<FGravityWell> Wells;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;

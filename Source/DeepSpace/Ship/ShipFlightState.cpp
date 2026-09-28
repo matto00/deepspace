@@ -131,6 +131,26 @@ double FShipFlightState::GetRoom() const
     return ShipFlight::Room(Surfaces, Position);
 }
 
+void FShipFlightState::SetWells(TArray<FGravityWell> NewWells)
+{
+    Wells = MoveTemp(NewWells);
+}
+
+TConstArrayView<FGravityWell> FShipFlightState::GetWells() const
+{
+    return Wells;
+}
+
+FVector FShipFlightState::GetLocalGravity() const
+{
+    return ShipFlight::GravityAt(Wells, Position);
+}
+
+FVector FShipFlightState::GetThrustAcceleration() const
+{
+    return LastLinearAcceleration - GetLocalGravity();
+}
+
 TOptional<double> FShipFlightState::NearestOnPath(const FVector& Direction) const
 {
     TOptional<double> Nearest;

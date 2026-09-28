@@ -145,3 +145,15 @@ Two things that look like write paths and are not new ones:
 dome could reappear spun by up to 180°. The second keeps roll but still turns
 the dome by up to the cone's 8° in one frame, visibly. And neither buys
 anything: nothing needs the star centred, and the pilot can centre it.
+
+## Amendment, 2026-09-27: gravity is held, never integrated (landing slice b)
+
+Every body pulls, inverse-square at real masses (`ShipFlight::GravityAt`, summed from
+`FGravityWell`s the subsystem builds beside the surfaces). The flight state reports the pull
+(`GetLocalGravity`) and the boosters' proper acceleration (`GetThrustAcceleration`, the kinematic
+acceleration less the pull), and **never adds g dt to the velocity**: the boosters hold every
+lever against gravity, so a lever means the same thing beside a 3 g world as between stars, and
+at rest the ship stays put anywhere. Gravity is felt as effort -- watts, the hiss, slower climbs,
+a starved sink the ground catches -- and only under a solid world's drive floor (landing decision
+5). `JumpTo` zeroes the velocity at every arrival; the earlier text of this ADR that says
+otherwise predates flight-feel decision 4.
