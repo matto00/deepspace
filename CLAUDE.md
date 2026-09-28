@@ -50,6 +50,7 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 ./rebuild.sh --force --launch   # close the editor, rebuild, reopen it
 ./launch.sh         # open DeepSpace: rebuilds first only if C++ is stale; focuses an open editor
 unreal-editor DeepSpace.uproject    # open the project
+Tools/eyes.sh Eyes.WorldReliefParity   # a rendered check (Eyes.*): outside ./test.sh, through the lock, never -nullrhi
 
 # Regenerate IDE project files (after moving files or adding modules)
 ~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
@@ -92,7 +93,8 @@ tree built green and the same code committed failed, and four worktrees that
 were each green broke together at the merge. Off, green in a worktree means
 green merged.
 
-**Prove a test can fail with `Tools/mutate.sh`** before trusting it. It
+**Prove a test can fail with `Tools/mutate.sh`** before trusting it. A rendered check is proven the same way with
+`MUTATE_RUNNER=Tools/eyes.sh`. It
 checks everything that has made a mutation silently prove nothing here -- the
 text not found, the mutant not compiling, the library not rebuilt -- before
 reading a verdict, and restores the file. Rebuild afterwards: its last build
@@ -147,6 +149,10 @@ been abandoned. Say so.
   interaction trace.
 - `Source/DeepSpace/Universe/` — procgen: pure generators behind
   `UUniverseSubsystem`, the one authority on what exists (*The universe*).
+- `Source/DeepSpace/Surface/` — the ground: `FWorldRelief`, pure, the one
+  height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
+  compiles too (the engine maps `/Project` to `Shaders/` by itself);
+  `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -543,6 +549,20 @@ lock):
     "$PWD/DeepSpace.uproject" -run=pythonscript -script="$PWD/Tools/setup_sky_materials.py" \
     -unattended -nopause -nosplash -NoLiveCoding      # report: Saved/setup_sky_materials.txt
 ```
+
+**`M_SkyBody`'s face is one shared file.** Every band is
+`Shaders/Private/WorldRelief.ush` -- the noise the C++ ground compiles too
+(`Surface/WorldRelief.*`, landing decision 1) -- reached through one Custom
+node as `/Project/Private/WorldRelief.ush`, a path the engine maps to the
+project's `Shaders/` by itself at start-up (no project module does it;
+`DeepSpace.Surface.ShaderMapping` holds the mapping). **A Custom node's HLSL
+error is invisible headless**: the translator passes, no shader compiles
+under `-nullrhi`, and every world draws grey with every test green.
+`Tools/eyes.sh Eyes.WorldReliefParity` is what renders it: run it after any
+edit to the `.ush`, and after re-authoring the sky's materials. It holds the
+GPU's float to the same file in double at the measured float floor; a
+mutant that only folds away in the shader compiler (`(x + c) - c`) proves
+nothing there, since the GPU never sees it.
 
 The materials are unlit, and the sun lights only the ship. The glass casts no
 shadow, and its `M_SkyGlass` reflects the lit room through `MPC_Sky`'s

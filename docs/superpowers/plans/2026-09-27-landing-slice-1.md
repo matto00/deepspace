@@ -5,14 +5,14 @@
 **Goal:** Fly down and set down. From a solid world's 10 km drive floor the pilot brings the ship down on a third lever, the vertical lever (Space up, C down). The ship passes a seamless 50 km handover onto real, streamed terrain made from one height function, under real gravity felt as effort, and the ground catches it gently whatever the levers do. It settles onto the slope on three feet and reads LANDED. The pilot can walk the ship, and a fresh Space lifts it off. Each of the three slices is playable on its own: (a) the orbital look unchanged, (b) hover over real ground, (c) touchdown.
 
 **Architecture:**
-- **Slice (a).** `Shaders/Private/WorldRelief.ush` is written once, in a subset that is both HLSL and C++. It compiles into the pure C++ `FWorldRelief` and, through one Custom node, into `M_SkyBody`; the `DeepSpaceShaders` module maps `/Project` at `PostConfigInit`. The rendered `Eyes.WorldReliefParity` proves the two equal. Procgen draws each world's relief and hands `FSkyBody` its ground facts.
+- **Slice (a).** `Shaders/Private/WorldRelief.ush` is written once, in a subset that is both HLSL and C++. It compiles into the pure C++ `FWorldRelief` and, through one Custom node, into `M_SkyBody`; the engine maps `/Project` to `Shaders/` itself (the `DeepSpaceShaders` module the tasks below create was removed at R2 -- RULINGS AFTER PLANNING). The rendered `Eyes.WorldReliefParity` proves the two equal. Procgen draws each world's relief and hands `FSkyBody` its ground facts.
 - **Slice (b), the flight.** Gravity is summed from every body and held, never integrated. The ground is an `IGroundField` on `FFlightSurface`, and the flight reads it analytically: a ray march, an eight-point footprint, the approach law and the skim cap. The vertical lever is ship state in `FShipFlightCommand`.
 - **Slice (b), the terrain.** A pure cube-sphere quadtree and a pure tile builder sit under `AWorldGround`, which streams pooled mesh tiles onto the counter-frame. `M_SkyGround` shades them with `M_SkyBody`'s own graph, and the sky hands the body to the ground below 50 km, morphing the relief in.
 - **Slice (c).** `EGroundContact` lives in `FShipFlightState`: the rest plane and its tripod, the settle, the LANDED latch, take-off, and the fold held while settling.
 
 All logic is C++. Blueprints and materials only carry assets and parameters.
 
-**Tech Stack:** Unreal Engine 5.8.2 C++ (module `DeepSpace`, new module `DeepSpaceShaders`); HLSL in a material Custom node; `ProceduralMeshComponent` (a custom primitive is the gated fallback); `UE::Tasks`; Python editor scripting (`Tools/setup_sky_materials.py`, `setup_flight_input.py`, `build_hauler.py`, `verify_level.py`); automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`) run through `./test.sh`, rendered checks through `Tools/eyes.sh`, and mutation proofs through `Tools/mutate.sh`.
+**Tech Stack:** Unreal Engine 5.8.2 C++ (module `DeepSpace`; the planned `DeepSpaceShaders` module was removed at R2); HLSL in a material Custom node; `ProceduralMeshComponent` (a custom primitive is the gated fallback); `UE::Tasks`; Python editor scripting (`Tools/setup_sky_materials.py`, `setup_flight_input.py`, `build_hauler.py`, `verify_level.py`); automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`) run through `./test.sh`, rendered checks through `Tools/eyes.sh`, and mutation proofs through `Tools/mutate.sh`.
 
 **Spec:** /home/matt/Development/deepspace/docs/superpowers/specs/2026-09-27-landing-design.md (approved 2026-09-27, every sign-off item as recommended). Decision numbers below are the spec's.
 
@@ -71,7 +71,7 @@ These are the five classes of input the spec implies that no planner's tests exe
 |---|---|---|---|
 | a | orchestrator (main checkout) | 1 (A0) | git only |
 | a | **P: procgen**, `.worktrees/landing-a-procgen`, `feat/landing-a-procgen` | 2-5 (P1-P4) | `Surface/WorldReliefParams.h` (first: the seam header), `Universe/*`, `GenPriors.*`, `Config/DefaultGame.ini`, the corpus files, `Sky/SkySystem.*` |
-| a | **R: relief**, `.worktrees/landing-a-relief`, `feat/landing-a-relief` | 6-12 (R1, R1-F1, R1-F2, R2-R5) | `Shaders/`, `Source/DeepSpaceShaders/`, `DeepSpace.uproject`, `Surface/WorldRelief.*`, `Tests/Eyes/WorldReliefParityTest.cpp`, `Tools/eyes.sh`, `Tools/mutate.sh`'s runner hook, `rebuild.sh`/`launch.sh`; in slice (a) also `setup_sky_materials.py`, `SkyMaterialContract.h`, `sky_material_contract.json` |
+| a | **R: relief**, `.worktrees/landing-a-relief`, `feat/landing-a-relief` | 6-12 (R1, R1-F1, R1-F2, R2-R5) | `Shaders/`, `Source/DeepSpaceShaders/` (created, then removed at R2), `DeepSpace.uproject`, `Surface/WorldRelief.*`, `Tests/Eyes/WorldReliefParityTest.cpp`, `Tools/eyes.sh`, `Tools/mutate.sh`'s runner hook, `rebuild.sh`/`launch.sh`; in slice (a) also `setup_sky_materials.py`, `SkyMaterialContract.h`, `sky_material_contract.json` |
 | b | orchestrator | 13 (B0), 39 (Z) | git; the 4K frame test; the *Landing* section of CLAUDE.md |
 | b | **F: flight**, `.worktrees/landing-b-f`, `feat/landing-b-f` | 15-22 (F1-F8) | `Ship/ShipFlightState.*`, `ShipFlightSurface.*`, `ShipVerticalLever.*`, `ShipLanding.*`, `ShipGravity.*`, `Surface/GroundField.*`, their pure tests, `Tests/GroundFixtures.h`, `Tools/hauler_layout.py` (`GEAR`, `BELLY`), `Tools/test_placement.py` |
 | b | **S: subsystem, power, input, HUD**, `.worktrees/landing-b-s`, `feat/landing-b-s` | 23-30 (S1-S8) | `ShipSubsystem.*` (including `UpdateSurfaces`), `ShipPowerState.*`, `ShipHum*`, `DeepSpaceCharacter.*`, `setup_flight_input.py`, `UI/ShipHUDWidget.*`, `UI/TargetMarker.*`, the Playtest tests |
@@ -4730,8 +4730,10 @@ Expected: FAIL: `the JSON lists exactly the header's materials` (the JSON still 
     `terms is shared_terms: the shared file.`
   - Asset: `git -C /home/matt/Development/deepspace/.worktrees/landing-a-relief rm Content/Materials/Sky/M_SkyReliefProbeLegacy.uasset`
   - Parity test: delete `Legacy`, `OldProbe`, `Old`, `NewVsOld`, `CppVsOld`, `WorstNewOld`,
-    `WorstCppOld` and every line using them; delete the giant case (it had only the engine to
-    be held to) and the `GiantOffset` constant; the loop keeps, per footprint, `CppVsNew`
+    `WorstCppOld` and every line using them; ~~delete the giant case (it had only the engine to
+    be held to) and the `GiantOffset` constant~~ (superseded after review: since R4 the giant
+    is held to the file in double, `FaceF64` at stretch 6, which needs no engine nodes; it
+    stays, held to its own recorded engine floor, `GiantEngineFloor`, from R4's closing run); the loop keeps, per footprint, `CppVsNew`
     (asserted) and `FloatVsNew` (reported). The `SUMMARY` line becomes
     `FString::Printf(TEXT("SUMMARY C++-vs-GPU %.2e, float-C++-vs-GPU %.2e, left out at most %.3f%%"), WorstCppNew, WorstFloatNew, 100.0 * MostLeftOut)`.
     In the header comment replace the bullets `- to M_SkyReliefProbeLegacy, ...` and

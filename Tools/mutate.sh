@@ -2,6 +2,7 @@
 # Prove a test can fail: break the code it covers and watch it go red.
 #
 #   Tools/mutate.sh FILE 'exact old text' 'new text' TESTFILTER
+#   MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh FILE OLD NEW Eyes.<Name>   (a rendered check)
 #
 # Exits 0 if the mutant was killed (a test in TESTFILTER completed with a
 # failure), 1 if it SURVIVED -- the test is vacuous -- and 2 if the mutation
@@ -71,7 +72,8 @@ if ! forced_build Saved/mutant-build.log; then
     fi
     restore; exit 2
 fi
-if ./test.sh "$FILTER" > Saved/mutant-test.log 2>&1; then
+# MUTATE_RUNNER=Tools/eyes.sh proves a rendered check (Eyes.*) the same way.
+if "${MUTATE_RUNNER:-./test.sh}" "$FILTER" > Saved/mutant-test.log 2>&1; then
     echo "SURVIVED: $FILTER stayed GREEN under the mutant  <-- vacuous"
     verdict=1
 elif grep -qE "Test Completed\. Result=\{(Fail|Error)" Saved/Logs/DeepSpace.log; then

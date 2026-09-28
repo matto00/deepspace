@@ -135,3 +135,30 @@ and anything else that is a plan resolved rather than a draw, such as the
 kick band on the walls. **It does not cover a new seeded generator.** Anything
 that draws from a seed is C++ running at startup from its first line, however
 convenient Python would be for the first version.
+
+## Amendment, 2026-09-27: one generator compiled twice (landing)
+
+A world's ground -- what the flight stops on, what the terrain meshes, what
+`M_SkyBody` shades from orbit -- is `Shaders/Private/WorldRelief.ush`: one
+file, in a subset of syntax that is both HLSL and C++. The C++ includes it
+(`Source/DeepSpace/Surface/WorldRelief.cpp`, in double for the ground and in
+float as the GPU's mirror); `M_SkyBody` includes it through one Custom node,
+by the `/Project` shader path the engine maps to the project's `Shaders/`
+by itself at start-up (`DeepSpace.Surface.ShaderMapping` holds it; no
+project module does the mapping). That is still one generator: one text,
+which a change reaches in both compilers or fails in one. It is not a
+second implementation held to the first by test vectors, which is what this
+ADR refuses.
+
+What the shared text cannot prove by itself -- what the GPU's float
+arithmetic makes of it -- is measured, not assumed: `Eyes.WorldReliefParity`
+(`Tools/eyes.sh`, outside `./test.sh`, never `-nullrhi`) renders the file's
+terms and holds them to `FWorldRelief` at five footprints, at the measured
+float floor. Before landing slice (a) merged it also held them to the
+engine's own noise nodes, which the file replaced; the spike's verdict is in
+that test's header, and the engine's last measured distance from double is
+the floor it still holds the GPU to.
+
+A Custom node's HLSL error is invisible to the headless suite -- the material
+ships grey with every test green -- so any change to the `.ush` runs the
+rendered test before it merges.
