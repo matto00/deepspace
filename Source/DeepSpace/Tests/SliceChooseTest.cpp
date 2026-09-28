@@ -86,7 +86,7 @@ namespace SliceChooseTestLocal
      *  what winding asks for (plan conflict 8). */
     float ExpectedFeed(const UShipSubsystem& Ship)
     {
-        const float Want = CVarFloat(TEXT("ds.Nav.WindingWant"));
+        const float Want = Ship.GetWindingWant();
         return Want > 0.0f ? FMath::Clamp(Ship.GetConsumerShare(ShipPower::Engine) / Want, 0.0f, 1.0f) : 0.0f;
     }
 
@@ -448,7 +448,7 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         {
             if (UShipModuleDataAsset* Module = Soft.LoadSynchronous())
             {
-                Test.Ship->InstallModule(Module);
+                Test.Ship->FitPart(Module);
             }
         }
     }

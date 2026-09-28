@@ -5293,7 +5293,12 @@ a different number, never a different model.
   `ds.Nav.ChargeSeconds`, `ds.Nav.WindingWant` and `ds.Drive.Response` default
   to `-1`, the part's. 0 or more overrides it for the session
   (`ShipParts::Effective`, applied only in the ship's getters). Wherever this
-  file quotes one of them as a number, read the fitted part's rating.
+  file quotes one of them as a number, read the fitted part's rating. A
+  settled *stock* number moves in every place that holds it, since an empty
+  bay reads the constant: the stock row in the JSON, its `ShipParts::Stock*`
+  in `ShipParts.h` (`.Contract` holds them equal), and for the charge and the
+  response `FShipFlightState::JumpChargeSeconds` and
+  `ShipDriveLever::DefaultResponse` (`.Arithmetic`).
 - **The console's nameplates**: one line per fitted part,
   `BAY  Name  figure  Words`, each figure the part's own. No CVar or live
   value moves a plate, and an empty slot has no line
@@ -5332,10 +5337,10 @@ Replace the four rows:
 with, each in its own place:
 
 ```markdown
-| `ds.Nav.ChargeSeconds` | -1: the drive part's (stock 45 s, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
-| `ds.Nav.WindingWant` | -1: the drive part's (stock 380 W, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
-| `ds.Nav.RangeLy` | -1: the sensors part's (stock 12 ly) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
-| `ds.Drive.Response` | -1: the drive part's (stock 3 notches/s at full thrust) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json` |
+| `ds.Nav.ChargeSeconds` | -1: the drive part's (stock 45 s, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json`, and stock's also in `ShipParts::StockChargeSeconds` (`ShipParts.h`) and `FShipFlightState::JumpChargeSeconds`, moved together |
+| `ds.Nav.WindingWant` | -1: the drive part's (stock 380 W, settled 2026-09-26) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json`, and stock's also in `ShipParts::StockWindingWant` (`ShipParts.h`) |
+| `ds.Nav.RangeLy` | -1: the sensors part's (stock 12 ly) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json`, and stock's also in `ShipParts::StockRangeLy` (`ShipParts.h`) |
+| `ds.Drive.Response` | -1: the drive part's (stock 3 notches/s at full thrust) | `ShipSubsystem.cpp`; the part's number is in `Tools/ship_parts.json`, and stock's also in `ShipParts::StockDriveResponse` (`ShipParts.h`) and `ShipDriveLever::DefaultResponse`, moved together |
 ```
 
 In the *Tunables that are not CVars* paragraph, replace:

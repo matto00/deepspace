@@ -352,7 +352,7 @@ UNavigationWidget::FAskedAt UNavigationWidget::FAskedAt::Now(const UShipSubsyste
     Asked.PlottedWorld = Ship.GetPlottedWorld();
     Asked.Position = Ship.GetFlightState().GetUniversePosition();
     Asked.Orientation = Ship.GetFlightState().GetUniverseOrientation();
-    Asked.RangeLy = UShipSubsystem::GetChartRangeLy();
+    Asked.RangeLy = Ship.GetChartRangeLy();
     Asked.ConeRadians = Ship.GetJumpConeRadians();
 
     // ds.Universe.ReloadPriors changes every system without telling anyone,

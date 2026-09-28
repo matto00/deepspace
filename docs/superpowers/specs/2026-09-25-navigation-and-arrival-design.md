@@ -760,7 +760,9 @@ can find out without a rebuild.
   them. *Cost:* netcode needs a commander argument, as `SetFlightCommand`
   already has.
 - **Jump range is the flat 12 ly chart radius.** *Cost:* making range an
-  upgrade means a different number, not a different model.
+  upgrade means a different number, not a different model. *Paid* (wear and
+  upgrades slice 1, 2026-09-27): the Sensors bay rates `RangeLy`
+  (`docs/superpowers/specs/2026-09-27-ship-wear-and-upgrades-design.md`).
 - **The fold draw, if adopted, is a draw that comes and goes.** The power
   model's draws are meant to be installed modules. *Cost:* if it stays, it
   becomes the drive module's own draw when modules gain states.

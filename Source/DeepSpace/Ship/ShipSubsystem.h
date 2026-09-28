@@ -4,6 +4,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Ship/ShipFlightState.h"
 #include "Ship/ShipNavState.h"
+#include "Ship/ShipParts.h"
 #include "Ship/ShipPowerState.h"
 #include "ShipSubsystem.generated.h"
 
@@ -44,7 +45,7 @@ struct DEEPSPACE_API FHelmInput
  * automatically, globally reachable without a singleton, and unable to
  * accidentally acquire a transform and become a god-actor.
  */
-UCLASS()
+UCLASS(Config = Game)
 class DEEPSPACE_API UShipSubsystem : public UTickableWorldSubsystem
 {
     GENERATED_BODY()
@@ -76,16 +77,93 @@ public:
     virtual void Tick(float DeltaTime) override;
     virtual TStatId GetStatId() const override;
 
-    /** Returns false if the module is null or already installed. */
-    UFUNCTION(BlueprintCallable, Category = "Ship")
-    bool InstallModule(UShipModuleDataAsset* Module);
+    /** Every fitted part, in bay order: a read-only view, for tests. The
+     *  loadout itself is GetLoadoutState. */
+    TArray<UShipModuleDataAsset*> GetInstalledModules() const;
 
-    /** What is installed, as installed; ask rather than keep a copy. */
-    const TArray<TObjectPtr<UShipModuleDataAsset>>& GetInstalledModules() const { return InstalledModules; }
+    // -- parts: one per bay (the wear and upgrades spec) -----------------------
 
-    /** Returns false if the module is null or was not installed. */
-    UFUNCTION(BlueprintCallable, Category = "Ship")
-    bool RemoveModule(UShipModuleDataAsset* Module);
+    /**
+     * Fits a new Part into the bay it declares -- an aux part into the first
+     * free auxiliary slot, or Aux1 when both are full -- and the part it
+     * displaces joins the spares, so every swap can be undone (decision 1).
+     * The supply and the lights' want follow at once; the boosters' want on
+     * the next ApplyAllocation, its one writer (sign-off 29).
+     *
+     * True with nothing changed when the bay already holds this part, and
+     * when an aux part is already in the other slot (one of a kind). False,
+     * and nothing changed, for null, a part whose Bay is None, a part with no
+     * id (None in a bay means empty), and a different asset under an id this
+     * ship already knows.
+     */
+    bool FitPart(UShipModuleDataAsset* Part);
+
+    /** An auxiliary slot's part to the spares. Refused for a core bay: a core
+     *  part is only ever swapped, so there is never a frame without a
+     *  reactor (decision 3). */
+    bool RemovePart(EShipBay Bay);
+
+    /** The catalogue's part with this id, loaded on first ask through the
+     *  CatalogueAsset ini line (decision 5); null for an id it does not
+     *  hold. Works in a bare world with no game mode and no asset scan. */
+    UShipModuleDataAsset* FindPart(FName PartId) const;
+
+    /** Every part the catalogue holds, in its order. */
+    TArray<UShipModuleDataAsset*> GetCatalogue() const;
+
+    /**
+     * ds.Ship.Install's path (decision 10): the first spare with this id,
+     * fitted as it is, else a new one from the catalogue (FitPart). True with
+     * nothing changed when the bay already holds it and no spare of it is
+     * aboard; false for an id that names no part.
+     */
+    bool FitPartById(FName PartId);
+
+    /** The part in Bay; null for an empty bay, which reads the stock part's
+     *  ratings and draws nothing. */
+    UShipModuleDataAsset* GetFittedPart(EShipBay Bay) const;
+
+    /** Every bay and every spare, plain and serialisable (decision 11): what
+     *  the save will write. Ask rather than keep a copy. */
+    const FShipLoadoutState& GetLoadoutState() const;
+
+    /** The spares aboard, each one particular part. */
+    const TArray<FShipPartState>& GetSpares() const;
+
+    /** A new spare of the part with this id, aboard (ds.Ship.Spares give).
+     *  False for an id that names no part. */
+    bool AddSpare(FName PartId);
+
+    /** No spares aboard (ds.Ship.Spares clear). */
+    void ClearSpares();
+
+    /**
+     * Sets the whole loadout from State (decision 11), as slice 3's save
+     * will. Bays are found by name, never position. Whatever State cannot
+     * name falls back and is counted:
+     * - an unknown part, or a part in the wrong bay: the bay's stock part;
+     * - a core bay State lacks: its stock part;
+     * - a bay this ship has not got: ignored;
+     * - a bay named twice: the first entry is restored, the rest ignored;
+     * - an aux part in both aux slots: the first slot keeps it, the second
+     *   is left empty (one of a kind, decision 8);
+     * - a spare with an unknown id: dropped.
+     * Returns how many entries fell back, each also logged by name. State
+     * may be this ship's own GetLoadoutState(): it is copied first.
+     */
+    int32 RestoreLoadout(const FShipLoadoutState& State);
+
+    /**
+     * A seam for tests, not a part (decision 8): a standing draw off the top
+     * under "Load.<Name>", replaced if Name already draws. No console
+     * command, no nameplate, no save -- as ds.Nav.FoldDraw books a draw
+     * that is not a part. The hog tests starve the ship through it, because
+     * a standing draw is exactly what an aux part may not have.
+     */
+    void AddLoad(FName Name, float Watts);
+
+    /** False if Name was not drawing. */
+    bool RemoveLoad(FName Name);
 
     UFUNCTION(BlueprintPure, Category = "Ship")
     float GetPowerDraw() const;
@@ -337,16 +415,30 @@ public:
      *  jump and the HUD's "dead ahead" ask the same number. */
     double GetJumpConeRadians() const;
 
-    /** Watts the engine asks for while the jump winds, ds.Nav.WindingWant as
-     *  tuned now; never negative. What the hum measures the engine's share
-     *  against (plan conflict 8), asked here rather than of the console by
-     *  name, so the one tunable has one reader and no per-frame lookup. */
-    static float GetWindingWant();
+    /** The ship's rated values: every fitted part's ratings over the stock
+     *  part's (wear and upgrades decision 2), derived on every call and
+     *  stored nowhere. An empty bay reads stock (decision 3). */
+    FShipRatings GetRatings() const;
 
-    /** How far the chart reaches, light years: ds.Nav.RangeLy as tuned now,
-     *  never negative. GetChart's radius, for anything that must know when
-     *  the chart's answer can have changed. */
-    static float GetChartRangeLy();
+    /** Watts the engine asks for while the jump winds: the drive part's
+     *  WindingWant, or ds.Nav.WindingWant when that is 0 or more (decision
+     *  6); never negative. What the hum measures the engine's share against
+     *  (plan conflict 8), asked here so the one number has one reader. */
+    float GetWindingWant() const;
+
+    /** Seconds for a full charge from cold at full feed: the drive part's
+     *  ChargeSeconds, or ds.Nav.ChargeSeconds when set. Never on a screen:
+     *  no screen shows the jump's charge. */
+    float GetChargeSeconds() const;
+
+    /** Notches a second the drive's ease may move at full thrust: the drive
+     *  part's DriveResponse, or ds.Drive.Response when set. */
+    float GetDriveResponse() const;
+
+    /** How far the chart reaches, light years: the sensors part's RangeLy, or
+     *  ds.Nav.RangeLy when set. GetChart's radius, for anything that must know
+     *  when the chart's answer can have changed. */
+    float GetChartRangeLy() const;
 
     bool HasVisited(const FSystemId& Id) const;
 
@@ -413,8 +505,44 @@ private:
     /** Weak: the subsystem must not keep a pawn alive. */
     TWeakObjectPtr<APawn> Pilot;
 
+    /** The fitted parts and the spares: the one truth about what is aboard,
+     *  plain and serialisable (decision 11). Every bay is listed. */
     UPROPERTY()
-    TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
+    FShipLoadoutState Loadout;
+
+    /** Every part asset this ship has fitted or been given, by id: what a
+     *  PartId in Loadout resolves to. A part made in code resolves exactly
+     *  as a catalogue part does, and nothing fitted is ever collected. */
+    UPROPERTY()
+    TMap<FName, TObjectPtr<UShipModuleDataAsset>> KnownParts;
+
+    /** The catalogue, as DefaultGame.ini names it. Empty by default, on
+     *  purpose: a section that fails to load finds nothing rather than the
+     *  wrong catalogue. */
+    UPROPERTY(Config)
+    FSoftObjectPath CatalogueAsset;
+
+    /** A part this ship already knows by id, else the catalogue's. */
+    UShipModuleDataAsset* PartFor(FName PartId) const;
+
+    /** Refuses null, a None bay, no id, and a different asset under a known
+     *  id; otherwise remembers Part under its id. */
+    bool Register(UShipModuleDataAsset* Part);
+
+    /** Where Part goes: its core bay, or the aux slot already holding it,
+     *  else the first free aux slot, else Aux1. */
+    TOptional<EShipBay> SlotFor(const UShipModuleDataAsset& Part) const;
+
+    /** Part into Bay; whatever was there becomes a spare. */
+    void FitState(EShipBay Bay, const FShipPartState& Part);
+
+    /** Part into Bay, its draw re-booked under the bay's key, the ratings
+     *  pushed. The one place a bay changes. */
+    void SetBayPart(EShipBay Bay, const FShipPartState& Part);
+
+    /** The supply and the lights' want, from the ratings. Never the
+     *  boosters' want: ApplyAllocation writes that. */
+    void PushRatings();
 
     /** Decides; holds no current system. */
     FShipNavState NavState;
@@ -495,35 +623,6 @@ private:
     float FoldDrawWatts = 0.0f;
 
     bool bLightsOn = true;
-
-    /**
-     * Placeholder reactor rating. Becomes a module later. Sized so the stock
-     * ship is whole at rest: its modules (620 W) plus the lights (300) and
-     * the boosters (450) come to 1370 W, so at the default split nothing is
-     * dimmed while nothing is being asked of the ship. The split bites when
-     * the jump winds or a module is added -- the first playtest found the
-     * lights at 63% on a quiet ship under the old 1000 W, which read as
-     * broken rather than strained (developer's ruling, 2026-09-26).
-     * DeepSpace.Ship.JumpCanWindAtFullSpeed holds it.
-     */
-    static constexpr float DefaultReactorOutput = 1400.0f;
-
-    /**
-     * What each consumer would use given everything it asked for. They sum
-     * to more than the reactor makes, deliberately: if everything could be
-     * fed at once the split would never be a choice, and a choice with no
-     * cost is not one.
-     *
-     * The engine is not here: it wants ds.Nav.WindingWant while the jump
-     * winds and nothing otherwise, so an idle drive costs the ship nothing
-     * and staying put is never taxed (nav decision 4). Because an idle want
-     * of zero reads as full satisfaction, anything that wants to follow the
-     * winding -- the hum, in slice 2 -- reads watts delivered,
-     * GetConsumerShare(ShipPower::Engine) over ds.Nav.WindingWant, and never
-     * satisfaction (plan conflict 8).
-     */
-    static constexpr float LightsWant = 300.0f;
-    static constexpr float BoostersWant = 450.0f;
 
     /**
      * How hard a completely starved set of boosters still pushes, as a

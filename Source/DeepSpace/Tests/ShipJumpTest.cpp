@@ -231,7 +231,7 @@ bool FShipJumpTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("with a course the jump engages"), Ship->SetJumpEngaged(true));
     Ship->Tick(0.1f);
     TestEqual(TEXT("and winds"), static_cast<int32>(Ship->GetJumpState()), static_cast<int32>(EJumpState::Winding));
-    TestEqual(TEXT("wanting ds.Nav.WindingWant"), Ship->GetConsumerWant(ShipPower::Engine), UShipSubsystem::GetWindingWant());
+    TestEqual(TEXT("wanting ds.Nav.WindingWant"), Ship->GetConsumerWant(ShipPower::Engine), Ship->GetWindingWant());
 
     // What the split does to the lights while it winds is measured in
     // DeepSpace.Ship.JumpCanWindAtFullSpeed; this ship carries the stock

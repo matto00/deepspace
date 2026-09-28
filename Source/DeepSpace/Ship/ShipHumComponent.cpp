@@ -87,12 +87,12 @@ EShipHumKind UShipHumComponent::GetKind() const
 FShipHumInputs UShipHumComponent::AskShip(const UShipSubsystem& Ship)
 {
     FShipHumInputs Inputs;
-    Inputs.EngineFeed = ShipHum::EngineFeed(Ship.GetConsumerShare(ShipPower::Engine), UShipSubsystem::GetWindingWant());
+    Inputs.EngineFeed = ShipHum::EngineFeed(Ship.GetConsumerShare(ShipPower::Engine), Ship.GetWindingWant());
 
     // Rated, not current: the subsystem's GetLinearAcceleration is already
-    // the rating scaled by the boosters' allocation, which is the fraction
-    // the hiss thins by.
-    const float Rated = static_cast<float>(FShipFlightLimits::Cruise().LinearAcceleration);
+    // the boosters part's rating scaled by their allocation, which is the
+    // fraction the hiss thins by.
+    const float Rated = static_cast<float>(Ship.GetRatings().LinearAcceleration);
     const FShipFlightState& Flight = Ship.GetFlightState();
 
     // The live lever's travel, 0..1: how hard the ship is being asked to go.

@@ -284,13 +284,9 @@ void UShipHUDWidget::Refresh(float DeltaSeconds, APlayerController* Controller)
         return;
     }
 
-    // Watts, not percentages: a proportion invites optimising, a quantity
-    // just says what is so (docs/vision.md, the anti-chore principle).
     if (PowerLine)
     {
-        PowerLine->SetText(FText::FromString(FString::Printf(
-            TEXT("%.0f W  SPARE %.0f W"),
-            ShipState->GetReactorOutput(), FMath::Max(0.0f, ShipState->GetPowerHeadroom()))));
+        PowerLine->SetText(PowerLineText(*ShipState));
     }
 
     if (MotionInk && MotionDim)
@@ -416,6 +412,16 @@ bool UShipHUDWidget::ShowsNoseCaret(const UShipSubsystem& ShipState, const APawn
 FVector UShipHUDWidget::NoseCaretWorldPoint(const FVector& CameraLocation)
 {
     return CameraLocation + FVector::ForwardVector * CaretDistance;
+}
+
+FText UShipHUDWidget::PowerLineText(const UShipSubsystem& Ship)
+{
+    // Watts, not percentages: a proportion invites optimising, a quantity
+    // just says what is so (docs/vision.md, the anti-chore principle). The
+    // reactor's rating and nothing more: no SPARE, which is a budget waiting
+    // to be spent and grows with every reactor (ruled on the wear plan,
+    // 2026-09-27, with the console's sign-off 11).
+    return FText::FromString(FString::Printf(TEXT("%.0f W"), Ship.GetReactorOutput()));
 }
 
 FText UShipHUDWidget::JumpLineText(const UShipSubsystem& ShipState, const UUniverseSubsystem* Universe)

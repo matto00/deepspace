@@ -1,3 +1,11 @@
 #include "Ship/ShipModuleDataAsset.h"
 
-// Pure data; no implementation beyond the translation unit.
+FShipPartSpec UShipModuleDataAsset::GetSpec() const
+{
+    FShipPartSpec Spec;
+    Spec.Id = ModuleId;
+    Spec.Bay = Bay;
+    Spec.Draw = PowerDraw;
+    Spec.Ratings = Ratings;
+    return Spec;
+}

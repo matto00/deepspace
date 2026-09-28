@@ -413,13 +413,9 @@ bool FChartLayoutTest::RunTest(const FString& Parameters)
         const FString Class = Widest(Classes, Font);
         const EStarClass WidestClass = EStarClass(Classes.IndexOfByKey(Class));
 
-        const IConsoleVariable* Range = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Nav.RangeLy"));
-        if (!TestNotNull(TEXT("ds.Nav.RangeLy is registered"), Range))
-        {
-            return false;
-        }
+        const float RangeLy = Test.Ship->GetChartRangeLy();
         TArray<FString> Distances;
-        for (int32 Tenths = 0; Tenths <= FMath::CeilToInt(10.0 * Range->GetFloat()); ++Tenths)
+        for (int32 Tenths = 0; Tenths <= FMath::CeilToInt(10.0 * RangeLy); ++Tenths)
         {
             Distances.Add(NavText::Distance(0.1 * Tenths * UniverseUnits::CmPerLightYear));
         }

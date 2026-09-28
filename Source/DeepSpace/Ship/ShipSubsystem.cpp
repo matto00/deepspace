@@ -6,6 +6,7 @@
 #include "Misc/OutputDevice.h"
 #include "Ship/NavStart.h"
 #include "Ship/ShipModuleDataAsset.h"
+#include "Ship/ShipPartCatalogue.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
@@ -21,19 +22,29 @@ namespace
     // constant would make each nudge a rebuild (nav decision 6). The defaults
     // are the starting values, to be written back once play has settled them.
 
+    // The four numbers a fitted part rates (wear and upgrades decision 6):
+    // -1, the default, means "the part's", and 0 or more overrides it for
+    // the session, so a playtest still moves each with no rebuild. The
+    // settled 45 s and 380 W live in the catalogue now (Tools/ship_parts.json,
+    // FShipRatings::Stock), and the ship's four getters are the one place the
+    // rule is applied (ShipParts::Effective). Unlike the rest of this block,
+    // a value play settles for these four is never written back here: -1
+    // stays their default. A settled *stock* number lives in four places,
+    // moved together, since an empty bay reads the constant and the tests
+    // hold them equal: the stock row in Tools/ship_parts.json (then re-run
+    // Tools/setup_ship_parts.py), its ShipParts::Stock* constant in
+    // ShipParts.h (DeepSpace.Ship.Parts.Contract), and, for the charge and
+    // the response, FShipFlightState::JumpChargeSeconds and
+    // ShipDriveLever::DefaultResponse (DeepSpace.Ship.Parts.Arithmetic). An
+    // upgrade's number is its own row in the JSON alone.
     TAutoConsoleVariable<float> CVarChargeSeconds(
-        TEXT("ds.Nav.ChargeSeconds"), static_cast<float>(FShipFlightState::JumpChargeSeconds),
-        TEXT("Seconds for the jump to wind from cold with the engine fully fed."),
+        TEXT("ds.Nav.ChargeSeconds"), -1.0f,
+        TEXT("Seconds for the jump to wind from cold with the engine fully fed. -1: the drive part's."),
         ECVF_Default);
 
-    // 380 W: small enough that an engine-first split winds at full speed on
-    // the stock hauler, which has 780 W left once its modules draw off the
-    // top. At the old 800 W against a 1000 W reactor the best any split
-    // reached was 48% fed, and ds.Nav.ChargeSeconds was a number no player
-    // could ever see. DeepSpace.Ship.JumpCanWindAtFullSpeed holds it there.
     TAutoConsoleVariable<float> CVarWindingWant(
-        TEXT("ds.Nav.WindingWant"), 380.0f,
-        TEXT("Watts the engine asks for while the jump winds. It asks for nothing otherwise."),
+        TEXT("ds.Nav.WindingWant"), -1.0f,
+        TEXT("Watts the engine asks for while the jump winds; it asks for nothing otherwise. -1: the drive part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarStarvedRate(
@@ -67,8 +78,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarRangeLy(
-        TEXT("ds.Nav.RangeLy"), 12.0f,
-        TEXT("How far the chart reaches, light years."),
+        TEXT("ds.Nav.RangeLy"), -1.0f,
+        TEXT("How far the chart reaches, light years. -1: the sensors part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarPlaceAtStart(
@@ -86,8 +97,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarDriveResponse(
-        TEXT("ds.Drive.Response"), static_cast<float>(ShipDriveLever::DefaultResponse),
-        TEXT("Notches a second the drive's speed may move at full thrust. Thin boosters slow the whole ease, never this."),
+        TEXT("ds.Drive.Response"), -1.0f,
+        TEXT("Notches a second the drive's speed may move at full thrust. Thin boosters slow the whole ease, never this. -1: the drive part's."),
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarDriveSweep(
@@ -149,7 +160,7 @@ namespace
         const TArray<FStarSystemStub> Chart = Ship->GetChart();
         const TOptional<FSystemId> Plotted = Ship->GetPlottedSystem();
         Out.Logf(TEXT("%d systems within %.1f ly. Plot one with ds.Nav.Plot <n>."),
-                 Chart.Num(), UShipSubsystem::GetChartRangeLy());
+                 Chart.Num(), Ship->GetChartRangeLy());
         for (int32 Index = 0; Index < Chart.Num(); ++Index)
         {
             const FStarSystemStub& Stub = Chart[Index];
@@ -355,6 +366,134 @@ namespace
     FAutoConsoleCommandWithWorldArgsAndOutputDevice NavChargeCommand(
         TEXT("ds.Nav.Charge"), TEXT("Fill the jump's charge on the next tick, for running the loop in seconds."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&NavCharge));
+
+    // -- parts, from the console, until landing and a sourcing spec exist ------
+    // (wear and upgrades ruling 8). Developer's lines, not screens in the ship:
+    // ds.Ship.Describe may print what no player sees.
+
+    /** A catalogue part by id or display name, case-blind; the args are split
+     *  on spaces, so "Twin-core reactor" arrives as two. */
+    UShipModuleDataAsset* PartNamed(const UShipSubsystem& Ship, const TArray<FString>& Args)
+    {
+        const FString Wanted = FString::Join(Args, TEXT(" "));
+        for (UShipModuleDataAsset* Part : Ship.GetCatalogue())
+        {
+            if (Wanted.Equals(Part->ModuleId.ToString(), ESearchCase::IgnoreCase)
+                || Wanted.Equals(Part->DisplayName.ToString(), ESearchCase::IgnoreCase))
+            {
+                return Part;
+            }
+        }
+        return nullptr;
+    }
+
+    FString CatalogueIds(const UShipSubsystem& Ship)
+    {
+        TArray<FString> Ids;
+        for (const UShipModuleDataAsset* Part : Ship.GetCatalogue())
+        {
+            Ids.Add(Part->ModuleId.ToString());
+        }
+        return FString::Join(Ids, TEXT(", "));
+    }
+
+    void ShipInstall(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Install"));
+        if (!Ship)
+        {
+            return;
+        }
+        const UShipModuleDataAsset* Part = Args.IsEmpty() ? nullptr : PartNamed(*Ship, Args);
+        if (!Part)
+        {
+            Out.Logf(TEXT("ds.Ship.Install <part>: an id or a name, one of %s"), *CatalogueIds(*Ship));
+            return;
+        }
+        if (Ship->FitPartById(Part->ModuleId))
+        {
+            Out.Logf(TEXT("%s is fitted (%s)."), *Part->DisplayName.ToString(), *Part->ModuleId.ToString());
+        }
+        else
+        {
+            Out.Logf(TEXT("%s cannot be fitted."), *Part->ModuleId.ToString());
+        }
+    }
+
+    void ShipSpares(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Spares"));
+        if (!Ship)
+        {
+            return;
+        }
+        if (!Args.IsEmpty() && Args[0].Equals(TEXT("clear"), ESearchCase::IgnoreCase))
+        {
+            Ship->ClearSpares();
+            Out.Log(TEXT("No spares aboard."));
+            return;
+        }
+        if (!Args.IsEmpty() && Args[0].Equals(TEXT("give"), ESearchCase::IgnoreCase))
+        {
+            TArray<FString> Rest = Args;
+            Rest.RemoveAt(0);
+            const UShipModuleDataAsset* Part = Rest.IsEmpty() ? nullptr : PartNamed(*Ship, Rest);
+            if (!Part || !Ship->AddSpare(Part->ModuleId))
+            {
+                Out.Logf(TEXT("ds.Ship.Spares give <part>: an id or a name, one of %s"), *CatalogueIds(*Ship));
+                return;
+            }
+            Out.Logf(TEXT("A spare %s is aboard."), *Part->DisplayName.ToString());
+            return;
+        }
+        const TArray<FShipPartState>& Spares = Ship->GetSpares();
+        Out.Logf(TEXT("%d spares aboard. ds.Ship.Install <part> fits one; ds.Ship.Spares give <part> | clear."), Spares.Num());
+        for (int32 Index = 0; Index < Spares.Num(); ++Index)
+        {
+            Out.Logf(TEXT("%2d  %s"), Index, *Spares[Index].PartId.ToString());
+        }
+    }
+
+    void ShipDescribe(const TArray<FString>& Args, UWorld* World, FOutputDevice& Out)
+    {
+        const UShipSubsystem* Ship = ShipIn(World, Out, TEXT("ds.Ship.Describe"));
+        if (!Ship)
+        {
+            return;
+        }
+        for (const EShipBay Bay : ShipBay::All())
+        {
+            FString Line = FString::Printf(TEXT("%-12s "), *ShipBay::Name(Bay).ToString());
+            if (const UShipModuleDataAsset* Part = Ship->GetFittedPart(Bay))
+            {
+                Line += FString::Printf(TEXT("%s  draw %.0f W"), *Part->ModuleId.ToString(), Part->PowerDraw);
+                for (const TPair<EShipRating, double>& Rated : Part->Ratings)
+                {
+                    Line += FString::Printf(TEXT("  %s %s"), *ShipParts::RatingName(Rated.Key).ToString(), *FString::SanitizeFloat(Rated.Value));
+                }
+            }
+            else if (ShipBay::IsCore(Bay))
+            {
+                Line += TEXT("empty: reads the stock part, draws nothing");
+            }
+            else
+            {
+                // An aux slot has no stock part (decision 2): empty is empty.
+                Line += TEXT("empty: no part, rates nothing, draws nothing");
+            }
+            Out.Log(Line);
+        }
+    }
+
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipInstallCommand(
+        TEXT("ds.Ship.Install"), TEXT("'ds.Ship.Install <part>': fit a part by id or name; a spare with that id first, else a new one. The displaced part becomes a spare."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipInstall));
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipSparesCommand(
+        TEXT("ds.Ship.Spares"), TEXT("'ds.Ship.Spares': the spares aboard. 'give <part>' adds one; 'clear' empties them."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipSpares));
+    FAutoConsoleCommandWithWorldArgsAndOutputDevice ShipDescribeCommand(
+        TEXT("ds.Ship.Describe"), TEXT("Every bay: its part, draw and ratings. A developer's line, not a screen in the ship."),
+        FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&ShipDescribe));
 }
 
 UShipSubsystem* UShipSubsystem::Get(const UObject* WorldContext)
@@ -371,14 +510,22 @@ void UShipSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Collection.InitializeDependency<UUniverseSubsystem>();
     Super::Initialize(Collection);
-    PowerState.SetReactorOutput(DefaultReactorOutput);
+
+    // Every bay, empty: each reads the stock part until something is fitted.
+    Loadout = ShipParts::EmptyLoadout();
+
+    // Today's ship until a part says otherwise: an empty bay reads the stock
+    // part (wear and upgrades decision 3), so a bare test world is exactly
+    // the bare test world it always was.
+    const FShipRatings Stock = FShipRatings::Stock();
+    PowerState.SetReactorOutput(static_cast<float>(Stock.ReactorWatts));
 
     // An even split to start with, which is a starting point and not a
     // recommendation: every split is viable and none is correct. The engine
     // starts idle, wanting nothing, and so takes part in no split until the
     // jump is engaged.
-    PowerState.SetConsumer(ShipPower::Lights, LightsWant, 1.0f);
-    PowerState.SetConsumer(ShipPower::Boosters, BoostersWant, 1.0f);
+    PowerState.SetConsumer(ShipPower::Lights, static_cast<float>(Stock.LightsWant), 1.0f);
+    PowerState.SetConsumer(ShipPower::Boosters, static_cast<float>(Stock.BoostersWant), 1.0f);
     PowerState.SetConsumer(ShipPower::Engine, 0.0f, 1.0f);
 }
 
@@ -455,7 +602,7 @@ void UShipSubsystem::SetLightsOn(bool bOn)
 
     // Want, not weight: the player's weight for the lights is a preference
     // and survives them being switched off and back on.
-    PowerState.SetWant(ShipPower::Lights, bOn ? LightsWant : 0.0f);
+    PowerState.SetWant(ShipPower::Lights, bOn ? static_cast<float>(GetRatings().LightsWant) : 0.0f);
 }
 
 float UShipSubsystem::GetJumpCharge() const
@@ -470,6 +617,9 @@ float UShipSubsystem::GetLinearAcceleration() const
 
 void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
 {
+    // The fitted parts' numbers, derived now and never stored (wear decision 2).
+    const FShipRatings Ratings = GetRatings();
+
     // The engine asks for power only while the jump winds. Idle, holding
     // disengaged, or charged and waiting on alignment it wants nothing, so
     // it takes part in no split and an idle drive costs the ship nothing.
@@ -481,6 +631,16 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     }
     SetFoldDraw(bWinding ? FMath::Max(0.0f, CVarFoldDraw.GetValueOnGameThread()) : 0.0f);
 
+    // The boosters' want has one writer, here (wear sign-off 29): the fitted
+    // part's rating. A fit changes the ratings and this pass writes the want
+    // from them, so a fit and anything else that adds to the want -- landing's
+    // hold -- never write it from two places in one frame.
+    const float BoostersWantNow = static_cast<float>(Ratings.BoostersWant);
+    if (PowerState.GetWant(ShipPower::Boosters) != BoostersWantNow)
+    {
+        PowerState.SetWant(ShipPower::Boosters, BoostersWantNow);
+    }
+
     // Asked for fresh every frame and never stored. A cached satisfaction is
     // how two things that read the same allocation start disagreeing.
     const float BoosterFeed = PowerState.GetSatisfaction(ShipPower::Boosters);
@@ -488,8 +648,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed;
 
     FShipFlightLimits Limits = FlightState.GetLimits();
-    const FShipFlightLimits Rated = FShipFlightLimits::Cruise();
-    Limits.LinearAcceleration = Rated.LinearAcceleration * Thrust;
+    Limits.LinearAcceleration = Ratings.LinearAcceleration * Thrust;
 
     // Thin boosters slow the drive's whole ease by the fraction they soften
     // cruise (decision 4): a quarter thrust takes four times as long to reach
@@ -497,7 +656,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // scaling it as well would slow a starved ship sixteen times -- and the
     // top is never touched, so nothing ever reads as lost potential.
     Limits.DriveThrust = Thrust;
-    Limits.DriveResponse = FMath::Max(0.0f, CVarDriveResponse.GetValueOnGameThread());
+    Limits.DriveResponse = GetDriveResponse();
     Limits.HoldSeconds = CVarHoldSeconds.GetValueOnGameThread();
 
     // In c, and never above 0.1 c: the ruled top (the 2026-09-27 ruling).
@@ -513,7 +672,7 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     // it is: nothing decays while the player is away. A starved engine still
     // winds at StarvedRate, because a drive that cannot finish is a failure
     // state and systems here degrade rather than fail.
-    const double ChargeSeconds = CVarChargeSeconds.GetValueOnGameThread();
+    const double ChargeSeconds = GetChargeSeconds();
     if (NavState.IsEngaged() && !NavState.IsInTransit())
     {
         const double Starved = FMath::Clamp(CVarStarvedRate.GetValueOnGameThread(), 0.0f, 1.0f);
@@ -807,32 +966,347 @@ void UShipSubsystem::LetGoOfNearWorldCourse()
     }
 }
 
-bool UShipSubsystem::InstallModule(UShipModuleDataAsset* Module)
+bool UShipSubsystem::Register(UShipModuleDataAsset* Part)
 {
-    if (!Module)
+    if (!Part || Part->Bay == EShipBay::None || Part->ModuleId.IsNone())
     {
+        UE_LOG(LogTemp, Warning, TEXT("Ship: refused %s: a part needs a bay and an id."),
+               Part ? *Part->GetName() : TEXT("nothing"));
         return false;
     }
-    if (!PowerState.AddDraw(Module->ModuleId, Module->PowerDraw))
+    const TObjectPtr<UShipModuleDataAsset>* Known = KnownParts.Find(Part->ModuleId);
+    if (Known && Known->Get() != Part)
     {
+        UE_LOG(LogTemp, Warning, TEXT("Ship: refused %s: %s already names %s."),
+               *Part->GetName(), *Part->ModuleId.ToString(), *(*Known)->GetName());
         return false;
     }
-    InstalledModules.Add(Module);
+    KnownParts.Add(Part->ModuleId, Part);
     return true;
 }
 
-bool UShipSubsystem::RemoveModule(UShipModuleDataAsset* Module)
+TOptional<EShipBay> UShipSubsystem::SlotFor(const UShipModuleDataAsset& Part) const
 {
-    if (!Module)
+    if (ShipBay::IsCore(Part.Bay))
+    {
+        return Part.Bay;
+    }
+    if (!ShipBay::IsAux(Part.Bay))
+    {
+        return {};
+    }
+    // One of a kind (decision 8, rule 3): the slot already holding this part
+    // is the one it goes in, so the two slots never hold it twice.
+    for (const EShipBay Aux : { EShipBay::Aux1, EShipBay::Aux2 })
+    {
+        if (ShipParts::FindBay(Loadout, Aux)->Part.PartId == Part.ModuleId)
+        {
+            return Aux;
+        }
+    }
+    for (const EShipBay Aux : { EShipBay::Aux1, EShipBay::Aux2 })
+    {
+        if (ShipParts::FindBay(Loadout, Aux)->Part.PartId.IsNone())
+        {
+            return Aux;
+        }
+    }
+    return EShipBay::Aux1;
+}
+
+bool UShipSubsystem::FitPart(UShipModuleDataAsset* Part)
+{
+    if (!Register(Part))
     {
         return false;
     }
-    if (!PowerState.RemoveDraw(Module->ModuleId))
+    const TOptional<EShipBay> Slot = SlotFor(*Part);
+    if (!Slot)
     {
         return false;
     }
-    InstalledModules.Remove(Module);
+    if (ShipParts::FindBay(Loadout, *Slot)->Part.PartId == Part->ModuleId)
+    {
+        // Already fitted: nothing to swap, and no spare to make of it.
+        return true;
+    }
+    FShipPartState Fresh;
+    Fresh.PartId = Part->ModuleId;
+    FitState(*Slot, Fresh);
     return true;
+}
+
+void UShipSubsystem::FitState(EShipBay Bay, const FShipPartState& Part)
+{
+    const FShipPartState Displaced = ShipParts::FindBay(Loadout, Bay)->Part;
+    if (!Displaced.PartId.IsNone())
+    {
+        Loadout.Spares.Add(Displaced);
+    }
+    SetBayPart(Bay, Part);
+}
+
+bool UShipSubsystem::RemovePart(EShipBay Bay)
+{
+    if (!ShipBay::IsAux(Bay))
+    {
+        return false;
+    }
+    const FShipPartState Removed = ShipParts::FindBay(Loadout, Bay)->Part;
+    if (Removed.PartId.IsNone())
+    {
+        return false;
+    }
+    Loadout.Spares.Add(Removed);
+    SetBayPart(Bay, FShipPartState());
+    return true;
+}
+
+void UShipSubsystem::SetBayPart(EShipBay Bay, const FShipPartState& Part)
+{
+    ShipParts::FindBay(Loadout, Bay)->Part = Part;
+
+    // Booked by bay, never by part (decision 4): a swap is one key's
+    // RemoveDraw and AddDraw, so two parts in one bay can never both draw.
+    const FName Key = ShipBay::DrawKey(Bay);
+    PowerState.RemoveDraw(Key);
+    const UShipModuleDataAsset* Fitted = GetFittedPart(Bay);
+    if (Fitted && Fitted->PowerDraw > 0.0f)
+    {
+        PowerState.AddDraw(Key, Fitted->PowerDraw);
+    }
+    PushRatings();
+}
+
+void UShipSubsystem::PushRatings()
+{
+    const FShipRatings Rated = GetRatings();
+    PowerState.SetReactorOutput(static_cast<float>(Rated.ReactorWatts));
+    if (bLightsOn)
+    {
+        PowerState.SetWant(ShipPower::Lights, static_cast<float>(Rated.LightsWant));
+    }
+    // Not the boosters' want: ApplyAllocation is its one writer (sign-off
+    // 29), and writes it from these ratings on its next pass.
+}
+
+UShipModuleDataAsset* UShipSubsystem::GetFittedPart(EShipBay Bay) const
+{
+    const FShipBayState* Entry = ShipParts::FindBay(Loadout, Bay);
+    const TObjectPtr<UShipModuleDataAsset>* Part = Entry ? KnownParts.Find(Entry->Part.PartId) : nullptr;
+    return Part ? Part->Get() : nullptr;
+}
+
+TArray<UShipModuleDataAsset*> UShipSubsystem::GetInstalledModules() const
+{
+    TArray<UShipModuleDataAsset*> Fitted;
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        if (UShipModuleDataAsset* Part = GetFittedPart(Bay))
+        {
+            Fitted.Add(Part);
+        }
+    }
+    return Fitted;
+}
+
+TArray<UShipModuleDataAsset*> UShipSubsystem::GetCatalogue() const
+{
+    TArray<UShipModuleDataAsset*> Parts;
+    const UShipPartCatalogue* Catalogue = Cast<UShipPartCatalogue>(CatalogueAsset.TryLoad());
+    if (!Catalogue)
+    {
+        return Parts;
+    }
+    for (const TSoftObjectPtr<UShipModuleDataAsset>& Soft : Catalogue->Parts)
+    {
+        if (UShipModuleDataAsset* Part = Soft.LoadSynchronous())
+        {
+            Parts.Add(Part);
+        }
+    }
+    return Parts;
+}
+
+UShipModuleDataAsset* UShipSubsystem::FindPart(FName PartId) const
+{
+    if (PartId.IsNone())
+    {
+        return nullptr;
+    }
+    for (UShipModuleDataAsset* Part : GetCatalogue())
+    {
+        if (Part->ModuleId == PartId)
+        {
+            return Part;
+        }
+    }
+    return nullptr;
+}
+
+UShipModuleDataAsset* UShipSubsystem::PartFor(FName PartId) const
+{
+    if (const TObjectPtr<UShipModuleDataAsset>* Known = KnownParts.Find(PartId))
+    {
+        return Known->Get();
+    }
+    return FindPart(PartId);
+}
+
+bool UShipSubsystem::FitPartById(FName PartId)
+{
+    UShipModuleDataAsset* Part = PartFor(PartId);
+    if (!Part || !Register(Part))
+    {
+        return false;
+    }
+    const TOptional<EShipBay> Slot = SlotFor(*Part);
+    if (!Slot)
+    {
+        return false;
+    }
+    const int32 Spare = Loadout.Spares.IndexOfByPredicate([PartId](const FShipPartState& State) { return State.PartId == PartId; });
+    if (Spare == INDEX_NONE)
+    {
+        return FitPart(Part);
+    }
+    // A spare is one particular part, fitted as it is (decision 10): it keeps
+    // its own state, and the part it displaces keeps its.
+    const FShipPartState State = Loadout.Spares[Spare];
+    Loadout.Spares.RemoveAt(Spare);
+    FitState(*Slot, State);
+    return true;
+}
+
+bool UShipSubsystem::AddSpare(FName PartId)
+{
+    UShipModuleDataAsset* Part = PartFor(PartId);
+    if (!Part || !Register(Part))
+    {
+        return false;
+    }
+    FShipPartState Spare;
+    Spare.PartId = PartId;
+    Loadout.Spares.Add(Spare);
+    return true;
+}
+
+void UShipSubsystem::ClearSpares()
+{
+    Loadout.Spares.Reset();
+}
+
+int32 UShipSubsystem::RestoreLoadout(const FShipLoadoutState& Given)
+{
+    // A copy, because Given may be this ship's own loadout
+    // (RestoreLoadout(GetLoadoutState())): the spares are reset below, and
+    // through the alias they would be read back empty.
+    const FShipLoadoutState State = Given;
+    int32 Fallbacks = 0;
+    TSet<FName> BaysSeen;
+    for (const FShipBayState& Entry : State.Bays)
+    {
+        if (!ShipBay::FromName(Entry.Bay))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a loadout names a bay this ship has not got, %s; ignored."), *Entry.Bay.ToString());
+            ++Fallbacks;
+        }
+        else if (BaysSeen.Contains(Entry.Bay))
+        {
+            // The first entry of a bay is the one restored, below.
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a loadout names the %s bay twice; the second, %s, is ignored."),
+                   *Entry.Bay.ToString(), *Entry.Part.PartId.ToString());
+            ++Fallbacks;
+        }
+        BaysSeen.Add(Entry.Bay);
+    }
+
+    Loadout.Spares.Reset();
+    TSet<FName> AuxRestored;
+    for (int32 Index = 0; Index < ShipBay::All().Num(); ++Index)
+    {
+        const EShipBay Bay = ShipBay::All()[Index];
+        // By name, never by position: a bay added to EShipBay later shifts
+        // nothing saved (decision 11).
+        const FShipBayState* Entry = State.Bays.FindByPredicate([Bay](const FShipBayState& Candidate) { return Candidate.Bay == ShipBay::Name(Bay); });
+        FShipPartState Part = Entry ? Entry->Part : FShipPartState();
+        bool bFellBack = !Entry && ShipBay::IsCore(Bay);
+        if (!Part.PartId.IsNone())
+        {
+            UShipModuleDataAsset* Asset = PartFor(Part.PartId);
+            const bool bFits = Asset && Register(Asset)
+                && (ShipBay::IsAux(Bay) ? ShipBay::IsAux(Asset->Bay) : Asset->Bay == Bay);
+            // One of a kind (decision 8, rule 3), as SlotFor keeps it for a
+            // fit: the aux slot restored first keeps the part, and the other
+            // is left empty.
+            const bool bTwice = bFits && ShipBay::IsAux(Bay) && AuxRestored.Contains(Part.PartId);
+            if (!bFits)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Ship: %s cannot be in the %s bay; its stock part is fitted instead."),
+                       *Part.PartId.ToString(), *ShipBay::Name(Bay).ToString());
+                bFellBack = true;
+            }
+            else if (bTwice)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Ship: %s is in both aux slots; the %s slot is left empty."),
+                       *Part.PartId.ToString(), *ShipBay::Name(Bay).ToString());
+                bFellBack = true;
+            }
+        }
+        if (bFellBack)
+        {
+            ++Fallbacks;
+            Part = FShipPartState();
+            UShipModuleDataAsset* Stock = ShipBay::IsCore(Bay) ? PartFor(ShipBay::StockPartId(Bay)) : nullptr;
+            if (Stock && Register(Stock))
+            {
+                Part.PartId = Stock->ModuleId;
+            }
+        }
+        SetBayPart(Bay, Part);
+        if (ShipBay::IsAux(Bay) && !Part.PartId.IsNone())
+        {
+            AuxRestored.Add(Part.PartId);
+        }
+        ShipParts::FindBay(Loadout, Bay)->LivesDrawn = Entry ? Entry->LivesDrawn : 0;
+    }
+
+    for (const FShipPartState& Spare : State.Spares)
+    {
+        UShipModuleDataAsset* Asset = PartFor(Spare.PartId);
+        if (Asset && Register(Asset))
+        {
+            Loadout.Spares.Add(Spare);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Ship: a spare names no part, %s; dropped."), *Spare.PartId.ToString());
+            ++Fallbacks;
+        }
+    }
+    return Fallbacks;
+}
+
+const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const
+{
+    return Loadout;
+}
+
+const TArray<FShipPartState>& UShipSubsystem::GetSpares() const
+{
+    return Loadout.Spares;
+}
+
+void UShipSubsystem::AddLoad(FName Name, float Watts)
+{
+    const FName Key(*(FString(TEXT("Load.")) + Name.ToString()));
+    PowerState.RemoveDraw(Key);
+    PowerState.AddDraw(Key, FMath::Max(0.0f, Watts));
+}
+
+bool UShipSubsystem::RemoveLoad(FName Name)
+{
+    return PowerState.RemoveDraw(FName(*(FString(TEXT("Load.")) + Name.ToString())));
 }
 
 float UShipSubsystem::GetPowerDraw() const
@@ -1241,14 +1715,37 @@ double UShipSubsystem::GetJumpConeRadians() const
     return FMath::DegreesToRadians(FMath::Max(0.0, static_cast<double>(CVarConeDeg.GetValueOnGameThread())));
 }
 
-float UShipSubsystem::GetWindingWant()
+FShipRatings UShipSubsystem::GetRatings() const
 {
-    return FMath::Max(0.0f, CVarWindingWant.GetValueOnGameThread());
+    FShipRatings Ratings = FShipRatings::Stock();
+    for (const FShipBayState& Entry : Loadout.Bays)
+    {
+        if (const TObjectPtr<UShipModuleDataAsset>* Part = KnownParts.Find(Entry.Part.PartId))
+        {
+            ShipParts::Apply(Ratings, (*Part)->Ratings);
+        }
+    }
+    return Ratings;
 }
 
-float UShipSubsystem::GetChartRangeLy()
+float UShipSubsystem::GetWindingWant() const
 {
-    return FMath::Max(0.0f, CVarRangeLy.GetValueOnGameThread());
+    return static_cast<float>(ShipParts::Effective(GetRatings().WindingWant, CVarWindingWant.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetChargeSeconds() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().ChargeSeconds, CVarChargeSeconds.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetDriveResponse() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().DriveResponse, CVarDriveResponse.GetValueOnGameThread()));
+}
+
+float UShipSubsystem::GetChartRangeLy() const
+{
+    return static_cast<float>(ShipParts::Effective(GetRatings().RangeLy, CVarRangeLy.GetValueOnGameThread()));
 }
 
 bool UShipSubsystem::HasVisited(const FSystemId& Id) const

@@ -21,10 +21,11 @@ protected:
     virtual void BeginPlay() override;
 
     /**
-     * Equipment the ship starts with. Data, not code: a Blueprint subclass can
-     * change the loadout without touching C++, and a real ship-configuration
-     * system later replaces this by writing the same list. Soft pointers so an
-     * unloaded module costs nothing until the level starts.
+     * The parts the ship starts with, one per core bay (wear and upgrades
+     * decision 2), fitted through UShipSubsystem::FitPart. Data, not code:
+     * Tools/setup_ship_parts.py writes the Blueprint's list, which overrides
+     * this one. Soft pointers so an unloaded part costs nothing until the
+     * level starts.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Ship")
     TArray<TSoftObjectPtr<UShipModuleDataAsset>> StartingModules;

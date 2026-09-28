@@ -90,7 +90,7 @@ Task 1 (A0) preconditions, both slice-(a) trees
         FLOAT FLOOR       -> stop; the report goes to the developer
   Slice (a) done when the developer sees no change on Baemsekai III, IV and V.
 
-Task 13 (B0) the feat/landing-b branch and the three trees          (slice (a) merged)
+Task 13 (B0) the feat/landing-b branch and the three trees          (slice (a) and wear slice 1 merged)
   T:  14 (B1, the PMC gate, first) -> 31 (T1) -> 33 (T3) -> 34 (T4) -> 32 (T2) -> 36 (T6)
         -> [35 (T5) only on a CUSTOM PRIMITIVE verdict] -> 37 (T7) -> 38 (T8)
         (T4 and T6 wait on F2 merged into feat/landing-b; T6 also on S1; T8 also on S4)
@@ -4837,6 +4837,51 @@ Expected: `KILLED`.
 
 ---
 
+## Amendment, 2026-09-27: wear and upgrades slice 1 lands before slice (b)
+
+The wear and upgrades spec's sign-off 29 orders its slice 1, the upgrade seam, before slice (b).
+It is built and merged, planned in `docs/superpowers/plans/2026-09-27-wear-slice-1-upgrade-seam.md`.
+Slice 1 changed text that slice (b)'s steps quote:
+- `BoostersWant`, `LightsWant` and `DefaultReactorOutput` are no longer `UShipSubsystem`
+  constants. They are the fitted parts' ratings (`FShipRatings`, `GetRatings()`), with the stock
+  numbers unchanged: 450 W, 300 W, 1400 W.
+- `ApplyAllocation` begins with `const FShipRatings Ratings = GetRatings();`. It is the boosters'
+  want's one writer, in a block that precedes the `BoosterFeed` lines.
+- `GetWindingWant()` and `GetChartRangeLy()` are instance calls, and `GetChargeSeconds()` and
+  `GetDriveResponse()` join them. The four CVars (`ds.Nav.RangeLy`, `.ChargeSeconds`,
+  `.WindingWant`, `ds.Drive.Response`) default to -1, the fitted part's; 0 or more still
+  overrides.
+- `InstallModule`/`RemoveModule` are gone. `FitPart` fits a part into its bay, and `AddLoad`/
+  `RemoveLoad` book a test's standing draw. `StockShip::Install` keeps its signature and fits
+  six parts, with the same 620 W off the top.
+
+**The rule for the boosters' want:** one writer, `ApplyAllocation`, sets it to the rated
+boosters want plus `HoldWant`. `FitPart` never writes it.
+
+Every step that names what changed, or edits a file slice 1 edited, was found by grep (by symbol, and by file) and re-planned or checked against the post-slice-1 tree:
+
+| Step | Was | Now |
+|---|---|---|
+| Task 24 (S2), *Files* | `ApplyAllocation` | the boosters block as slice 1 left it |
+| Task 24 (S2), Step 4 | replaced the three `BoosterFeed` lines; wrote the boosters' want from the old header constant plus the hold, inside the hold's change test; split the share against that constant | replaces slice 1's one-writer block and those lines; the want is written once, from `Ratings.BoostersWant + HoldWant`; the split is against `ManoeuvreWant`, the rating. The `WantNow` statement is unchanged, so Task 43 (C4) Step (c) applies as written. |
+| Task 24 (S2), Step 1, `ParkedIsWhole` | -- | unchanged: its literal 450 W plus the hold is the stock boosters' rating on `StockShip::Install` (ruling 1), as every stock-ship test states it |
+| Task 32 (T2), `ShipSkyTest.cpp` | -- | unchanged: it replaces the relief and crater knob lines and their two assertions; slice 1 rewrote only the hog block further down, which T2 does not quote |
+| Task 43 (C4), `JumpWindsTest.cpp` | -- | unchanged: its landed block goes before `Fresh->EndPlay(EEndPlayReason::Quit);` on `Default->`, both of which slice 1 kept (it changed only `Default->InstallModule` to `Default->FitPart` above). Its literal 450 W is the stock boosters' rating, as in `ParkedIsWhole` |
+| Every step that calls `StockShip::Install` | -- | unchanged: same signature, six parts, the same 620 W off the top and the same wants |
+| Task 25 (S3), *Files* | `AskShip` as on `202703c` | noted: slice 1 made the engine feed an instance call and `Rated` the boosters' rating; the step applies unchanged |
+| Task 13 (B0) | slice (a) merged | and wear slice 1 merged (new Step 0a) |
+| Task 24 (S2), Step 1, `Stock()`'s `Power.SetReactorOutput(1400.0f)` | -- | unchanged: a pure power state built by hand, with numbers, not names |
+| Task 30 (S8), `FShipFlightLimits::Cruise().LinearAcceleration` | -- | unchanged: the playtest runs on `StockShip::Install`, whose boosters rate exactly `Cruise()`'s 2 km/s^2 |
+| Task 47 (C8), Steps 5 and 7, `ds.Nav.ChargeSeconds 5` | -- | unchanged: 5 is 0 or more, so it still overrides the drive part |
+
+Line numbers in slice (b) and (c) steps that point into `ShipSubsystem.*`, `ShipHumComponent.cpp`
+or the four CVars' block have moved. As everywhere in this plan, search for the quoted code.
+The CLAUDE.md anchors slice (b) and (c) edit are ones slice 1 left alone:
+- the power paragraph's "no cutoff, no alarm" sentence (Task 24 Step 6);
+- the hum's sentence and row (Task 25);
+- the tunables table's insertion point before `ds.HUD.TargetMinPixels`;
+- *Architecture*'s `Sky/` line.
+
 # Slice (b): terrain, gravity and the vertical lever -- fly down and hover over real ground
 
 Tracks F, S and T off `feat/landing-b`. No LANDED yet: the ship comes to rest with a foot on the ground and the corner reads `1.5 M ABOVE GROUND · HOVERING`.
@@ -4874,6 +4919,17 @@ the developer (`AskUserQuestion`, per the user's CLAUDE.md), quoting that share 
   by a measured bound with a margin while `MaxSlope`, the ray march, `FloorFor` and the quadtree's
   height ranges keep a proven one, which moves Tasks 10 (R3), 16 (F2), 23 (S1), 31 (T1) and 33 (T3);
   those are re-planned against the developer's ruling before any tree opens.
+
+- [ ] **Step 0a: Wear slice 1 is on main (wear sign-off 29)**
+
+```bash
+cd /home/matt/Development/deepspace && \
+git log --oneline -1 --fixed-strings --grep='merge: wear and upgrades slice 1 -- the upgrade seam' main | grep -q . && echo "wear slice 1 merged"
+```
+
+Expected: `wear slice 1 merged`. If not, wait. Slice (b)'s track S edits `ShipSubsystem.*`,
+`ShipPowerState.*` and `ShipHum*` against the tree slice 1 leaves, and Tasks 24 and 25 are written
+against it (see *Amendment, 2026-09-27: wear and upgrades slice 1 lands before slice (b)*).
 
 - [ ] **Step 1: Create the slice branch and the three track trees**
 
@@ -9628,7 +9684,8 @@ Expected: `KILLED` twice.
 **Files:**
 - Modify: `Source/DeepSpace/Ship/ShipPowerState.h` (append a namespace), `ShipPowerState.cpp`
 - Modify: `Source/DeepSpace/Ship/ShipSubsystem.h` (public getters; private `HoldWant`,
-  `LastSplit`), `ShipSubsystem.cpp` (`ApplyAllocation`, the `CVarHoldWatts` default)
+  `LastSplit`), `ShipSubsystem.cpp` (`ApplyAllocation`'s boosters block, as wear slice 1 left
+  it; the `CVarHoldWatts` default)
 - Create: `Source/DeepSpace/Tests/ShipHoldPowerTest.cpp`
   (`DeepSpace.Ship.Power.SplitBoosters`, `DeepSpace.Ship.Power.ParkedIsWhole`)
 - Modify: `CLAUDE.md` -- *Screens, the pointer, and power*, the power paragraph (about line 210)
@@ -9897,30 +9954,44 @@ ShipPower::FBoosterSplit ShipPower::SplitBoosters(float Share, float HoldWant, f
 private: `float HoldWant = 0.0f; ShipPower::FBoosterSplit LastSplit;`.
 
 `ShipSubsystem.cpp`: set `CVarHoldWatts`' default to `ShipPower::DefaultHoldWattsPerG`. In
-`ApplyAllocation`, replace the three lines from `const float BoosterFeed = ...` to
-`const float Thrust = ...` with:
+`ApplyAllocation`, replace everything from the comment `// The boosters' want has one writer,
+here (wear sign-off 29): the fitted` down to and including
+`const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed;` with
+the block below. (Amended for wear slice 1: `BoostersWant` is no longer a constant but the
+fitted boosters part's rating, `Ratings.BoostersWant`, where `Ratings` is `ApplyAllocation`'s
+first local. The boosters' want has one writer, this block, as the rating plus the hold. So a
+fit, which never writes the want, and the hold cannot write it from two places in one frame.)
 
 ```cpp
     // The hold (landing decision 5): only under a solid world's drive floor,
-    // airborne -- landed is slice (c)'s, always airborne here. Set only when
-    // it moves by more than a watt, so the split is not re-solved every frame
-    // for nothing.
+    // airborne -- landed is slice (c)'s, always airborne here. Recomputed only
+    // when it moves by more than a watt, so the split is not re-solved every
+    // frame for nothing.
     const float WantNow = ShipPower::HoldWant(FlightState.GetLocalGravity().Size(), FlightState.GetDepthUnderDriveFloor(),
                                               FMath::Max(0.0f, CVarHoldWatts.GetValueOnGameThread()), true);
     if (FMath::Abs(WantNow - HoldWant) > 1.0f || (WantNow == 0.0f && HoldWant != 0.0f))
     {
         HoldWant = WantNow;
-        PowerState.SetWant(ShipPower::Boosters, BoostersWant + HoldWant);
+    }
+
+    // The boosters' want has one writer, here (wear sign-off 29): the fitted
+    // part's rating plus the hold. A fit changes the rating and this pass
+    // writes the sum, so a fit and the hold never write it from two places.
+    const float ManoeuvreWant = static_cast<float>(Ratings.BoostersWant);
+    const float BoostersWantNow = ManoeuvreWant + HoldWant;
+    if (PowerState.GetWant(ShipPower::Boosters) != BoostersWantNow)
+    {
+        PowerState.SetWant(ShipPower::Boosters, BoostersWantNow);
     }
 
     // Asked for fresh every frame and never stored beyond it.
-    LastSplit = ShipPower::SplitBoosters(PowerState.GetShare(ShipPower::Boosters), HoldWant, BoostersWant);
+    LastSplit = ShipPower::SplitBoosters(PowerState.GetShare(ShipPower::Boosters), HoldWant, ManoeuvreWant);
     const float EngineFeed = PowerState.GetSatisfaction(ShipPower::Engine);
     const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * LastSplit.ManoeuvreFeed;
 ```
 
-The `const float EngineFeed = ...` line stays: `ChargeJumpDrive` reads it further down
-(`ShipSubsystem.cpp:520`). Just before `FlightState.SetLimits(Limits);`:
+The block keeps `const float EngineFeed = ...`: `ChargeJumpDrive` reads it further down in
+`ApplyAllocation`. Just before `FlightState.SetLimits(Limits);`:
 
 ```cpp
     // The starved sink: a bias the flight applies only under the floor, and
@@ -10013,6 +10084,10 @@ Expected: `KILLED` twice.
   `ShipHumVoice.cpp` (after `Push`, line 38)
 - Modify: `Source/DeepSpace/Ship/ShipHumComponent.cpp` (the CVar block, lines 16-26; `AskShip`,
   lines 87-118)
+  (Amended for wear slice 1: `AskShip` already reads `Ship.GetWindingWant()`, an instance call
+  now, and its `Rated` is `Ship.GetRatings().LinearAcceleration`, the boosters part's rating.
+  This task's replacement of the `Inputs.Push = ...` statement applies unchanged. Search for the
+  code, not the line numbers.)
 - Modify: `Source/DeepSpace/Ship/ShipSubsystem.h` (public section, beside `GetHoldWatts`:
   `static float GetHoldWattsPerG();`), `Source/DeepSpace/Ship/ShipSubsystem.cpp` (its definition,
   after `GetHoldWatts`'s)

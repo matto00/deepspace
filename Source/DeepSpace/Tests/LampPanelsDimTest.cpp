@@ -219,11 +219,10 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
     // Part way: a load off the top leaves 100 W for the lights and boosters
     // to split evenly, and the lights, wanting 300, get a sixth -- half way
     // into the brown-out rather than at either end of it.
-    UShipModuleDataAsset* Load = NewObject<UShipModuleDataAsset>();
-    Load->ModuleId = TEXT("Test.Load");
-    Load->PowerDraw = Ship->GetReactorOutput() - 100.0f;
+    // A test load, not a part (wear decision 8): a standing draw is exactly
+    // what no part may have.
     Ship->SetConsumerWeight(ShipPower::Lights, 1.0f);
-    TestTrue(TEXT("the load installs"), Ship->InstallModule(Load));
+    Ship->AddLoad(TEXT("Test.Load"), Ship->GetReactorOutput() - 100.0f);
     const float Partial = Ship->GetConsumerSatisfaction(ShipPower::Lights);
     TestTrue(FString::Printf(TEXT("and the lights are part way into the brown-out (%.3f fed)"), Partial),
              Partial > 0.1f && Partial < 0.9f * UShipLightingSubsystem::BrownOutBelow);
@@ -234,7 +233,7 @@ bool FLampPanelsDimTest::RunTest(const FString& Parameters)
                                  Now.R, BunkRated.R),
                  Now.R < 0.5f * BunkRated.R && Now.R > 1.5f * UShipLightingSubsystem::StarvedGlow * BunkRated.R);
     }
-    Ship->RemoveModule(Load);
+    Ship->RemoveLoad(TEXT("Test.Load"));
     Lighting->Tick(0.016f);
     TestTrue(TEXT("the load gone, it is back at its rating"), SameColour(Glow(BunkPanel), BunkRated, 0.01f));
 
