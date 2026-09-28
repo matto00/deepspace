@@ -2,7 +2,9 @@
 
 **Date:** 2026-09-27
 **Status:** Approved by the developer, 2026-09-27: every item of
-*Decisions needing sign-off* as recommended. Not implemented.
+*Decisions needing sign-off* as recommended. Slice 1 (the upgrade seam)
+implemented per `docs/superpowers/plans/2026-09-27-wear-slice-1-upgrade-seam.md`;
+slices 2-4 not implemented.
 **Answers:** the developer's rulings on wear and upgrades, recorded below
 **Follows:** the interactable ship and power (implemented; its decision 2,
 "under-powered systems degrade, they never fail", is the law every deficit

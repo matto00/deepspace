@@ -121,3 +121,14 @@ the fold because the arrival is on the line from there to the world, and the
 ship coasts on through the fold far enough, at 1 c, to matter. It is the
 ship's past position, not a fact about anything out there, and it is cleared
 on arrival.
+
+## Amended 2026-09-27: the ship's parts (wear and upgrades, slice 1)
+
+The ship's parts live in `UShipSubsystem`, over the pure core `Ship/ShipParts.*`: which part
+is in each bay, the spares, and (from slice 4) their wear. They are held as one plain
+`FShipLoadoutState`: ids, never pointers, and bays by name, never position. It is world-level,
+and it is what the save will write (slice 3). The rated values -- the reactor's supply, the
+wants, the boosters' acceleration, the drive's response and charge, the chart's range -- are
+derived from the fitted parts on every ask and stored nowhere. A fit is a translation of the
+loadout, as an arrival is of the position, so no second copy of a rating can disagree with the
+part that rates it.
