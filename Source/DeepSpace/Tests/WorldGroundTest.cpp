@@ -80,7 +80,12 @@ bool FWorldGroundActorTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("under the drive floor the relief is whole: the morph is 1"), Ground->GetMorph(), 1.0);
 
     // A few kilometres over, frame by frame: never more than
-    // ds.Terrain.UploadsPerFrame tiles a frame.
+    // ds.Terrain.UploadsPerFrame tiles a frame. At the defaults (2 builds in
+    // flight, 4 uploads) the cap can never bind -- at most two builds finish
+    // a frame -- so this leg builds four at once against one upload a frame,
+    // where finished tiles pile up and only the cap holds them back.
+    FScopedCVar Builds(TEXT("ds.Terrain.BuildTasks"), 4.0f);
+    FScopedCVar OneUpload(TEXT("ds.Terrain.UploadsPerFrame"), 1.0f);
     const FVector Aside = (Out + FVector::CrossProduct(Out, FVector(0.3, 0.9, 0.1)).GetSafeNormal() * 5.0e-4).GetSafeNormal();
     PlaceAt(Aside, 5.0e4);
     int32 Most = 0;
