@@ -848,6 +848,38 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FGotoDuskElevationTest,
+    "DeepSpace.Sky.GotoDuskElevation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * Goto dusk at a chosen sun (the cast-shadow plan's frames): the star stands
+ * DuskElevation above the ground's horizon under the ship. The default is
+ * still DuskSunElevation, ten degrees, which DeepSpace.Sky.ShipSky holds.
+ */
+bool FGotoDuskElevationTest::RunTest(const FString& Parameters)
+{
+    const FSkySystem Fixture = SkyTestFixtures::System();
+    const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+    const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
+    const FVector Sunward = (Star.Position - Home.Position).GetSafeNormal();
+    for (const double Degrees : { 3.0, 10.0, 25.0 })
+    {
+        const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::HomeIndex, 1.5e7,
+            SkyTestFixtures::Opening(), ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(Degrees));
+        if (!TestTrue(FString::Printf(TEXT("goto dusk at %.0f degrees places over a body"), Degrees), Dusk.IsSet()))
+        {
+            continue;
+        }
+        const FVector Zenith = (Dusk->Position - Home.Position).GetSafeNormal();
+        const double Elevation = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Zenith, Sunward)));
+        TestTrue(FString::Printf(TEXT("the star stands %.0f degrees above the ground's horizon (%.6f)"), Degrees, Elevation),
+            FMath::IsNearlyEqual(Elevation, Degrees, 1e-6));
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

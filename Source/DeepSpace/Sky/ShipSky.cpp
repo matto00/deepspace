@@ -799,7 +799,7 @@ double ShipSky::ReliefScaleOf(const FSkyBody& Body)
 }
 
 TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,
-                                                const FUniversePosition& From, EGotoSide Side)
+                                                const FUniversePosition& From, EGotoSide Side, double DuskElevation)
 {
     if (!System.Bodies.IsValidIndex(Body))
     {
@@ -841,8 +841,8 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
             {
                 Aside = FVector::CrossProduct(FVector::ForwardVector, Sunward).GetSafeNormal();
             }
-            // The zenith DuskSunElevation short of square to the star.
-            Out = (Aside * FMath::Cos(DuskSunElevation) + Sunward * FMath::Sin(DuskSunElevation)).GetSafeNormal();
+            // The zenith DuskElevation short of square to the star.
+            Out = (Aside * FMath::Cos(DuskElevation) + Sunward * FMath::Sin(DuskElevation)).GetSafeNormal();
         }
     }
     if (Out.IsNearlyZero())

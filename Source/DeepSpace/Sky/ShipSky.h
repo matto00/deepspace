@@ -374,10 +374,14 @@ namespace ShipSky
      * asked for, facing it, the system's up kept up. A star has no day or
      * night side, so the ship stays on the side of it it is already on,
      * whichever is asked. Empty for an index the system does not have.
+     * DuskElevation is the star's height above the horizon under a dusk
+     * goto, rad; the frames of the cast-shadow plan take 3 degrees beside
+     * the goto's ten.
      */
     DEEPSPACE_API TOptional<FNavPlacement> GotoPlacement(const FSkySystem& System, int32 Body,
                                                          double AltitudeCm, const FUniversePosition& From,
-                                                         EGotoSide Side = EGotoSide::Day);
+                                                         EGotoSide Side = EGotoSide::Day,
+                                                         double DuskElevation = DuskSunElevation);
 
     /** ds.Sky.Goto's arguments, read: which body, how high, which side. */
     struct FGotoRequest
