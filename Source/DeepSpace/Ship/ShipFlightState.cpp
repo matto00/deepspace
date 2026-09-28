@@ -422,13 +422,66 @@ void FShipFlightState::CruiseSubStep(double FixedDelta)
     // clearance, so the ground always catches, gently.
     if (W > 0.0 && World && World->HasGround())
     {
+        const TArray<ShipLanding::FFootprintHeight, TFixedAllocator<8>> Heights =
+            ShipLanding::FootprintHeights(*World, Position, Orientation, Limits.GearClearanceCm);
+        double Clear = TNumericLimits<double>::Max();
+        for (const ShipLanding::FFootprintHeight& Point : Heights)
+        {
+            Clear = FMath::Min(Clear, Point.Above);
+        }
         const double Down = -(Target | Up);
-        const double Clear = ShipLanding::FootprintClearance(*World, Position, Orientation, Limits.GearClearanceCm).Least;
         const double May = ShipFlight::GroundApproachSpeed(FMath::Max(Clear, 0.0), Limits.LinearAcceleration,
                                                            Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);
         if (Down > May)
         {
             Target += Up * (Down - May);
+        }
+
+        // Across a slope (the along-ground cap, at the footprint): the ground
+        // under a point rises into it as the ship moves across it, faster
+        // than the ship descends. Each point's closing along its ground's
+        // normal is held to the approach law over its gap along that normal
+        // by slowing the motion across the ground -- never by lifting, and
+        // never the descent, held above. A point whose gap allows more than
+        // the ship's whole speed, at the steepest lean the ground can have,
+        // cannot bind, and its normal is not read.
+        const FVector Across = Target - Up * (Target | Up);
+        const double Asked = FMath::Max(Target.Size(), Velocity.Size());
+        const double LeastLean = 1.0 / FMath::Sqrt(1.0 + FMath::Square(World->Ground->MaxSlope()));
+        double Keep = 1.0;
+        double KeptGap = 0.0;
+        for (const ShipLanding::FFootprintHeight& Point : Heights)
+        {
+            const double Above = FMath::Max(Point.Above, 0.0);
+            if (ShipFlight::GroundApproachSpeed(Above * LeastLean, Limits.LinearAcceleration, Limits.ApproachSeconds,
+                                                Limits.TouchdownSpeed, FixedStep) >= Asked)
+            {
+                continue;
+            }
+            // Read where the point will be at the substep's end, which is
+            // where its contact is met.
+            const FVector Next = Point.FromCentre + Target * FixedDelta;
+            const FVector Normal(ShipGround::NormalAt(*World->Ground, FVector3d(Next.GetSafeNormal())));
+            const double Into = -(Across | Normal);
+            if (Into <= 0.0)
+            {
+                continue;
+            }
+            const double Gap = Above * FMath::Clamp(Normal | Up, 0.0, 1.0);
+            const double MayClose = ShipFlight::GroundApproachSpeed(Gap, Limits.LinearAcceleration, Limits.ApproachSeconds,
+                                                                    Limits.TouchdownSpeed, FixedStep);
+            const double Sinking = -((Up * (Target | Up)) | Normal);
+            const double Allowed = FMath::Clamp((MayClose - Sinking) / Into, 0.0, 1.0);
+            if (Allowed < Keep)
+            {
+                Keep = Allowed;
+                KeptGap = Gap;
+            }
+        }
+        if (Keep < 1.0)
+        {
+            Target -= Across * (1.0 - Keep);
+            RecordHold(KeptGap, Across.Size() * Keep, Speed);
         }
     }
 

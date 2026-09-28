@@ -24,30 +24,43 @@ double ShipLanding::ReachCm(double GearClearanceCm)
     return Reach;
 }
 
+TArray<ShipLanding::FFootprintHeight, TFixedAllocator<8>> ShipLanding::FootprintHeights(const FFlightSurface& Surface, const FUniversePosition& Origin,
+                                                                                       const FQuat& Orientation, double GearClearanceCm)
+{
+    TArray<FFootprintHeight, TFixedAllocator<8>> Heights;
+    if (!Surface.HasGround())
+    {
+        return Heights;
+    }
+    const FVector FromCentre = Origin - Surface.Centre;
+    for (const FVector& Point : FootprintPoints(GearClearanceCm))
+    {
+        const FVector At = FromCentre + Orientation.RotateVector(Point);
+        const double R = At.Size();
+        FFootprintHeight& Height = Heights.AddDefaulted_GetRef();
+        Height.FromCentre = At;
+        Height.Direction = FVector3d(At / R);
+        Height.Above = R - Surface.Radius - Surface.Ground->Height(Height.Direction, 0.0);
+    }
+    return Heights;
+}
+
 ShipLanding::FFootprintClearance ShipLanding::FootprintClearance(const FFlightSurface& Surface, const FUniversePosition& Origin,
                                                                  const FQuat& Orientation, double GearClearanceCm)
 {
     FFootprintClearance Out;
-    if (!Surface.HasGround())
+    const TArray<FFootprintHeight, TFixedAllocator<8>> Heights = FootprintHeights(Surface, Origin, Orientation, GearClearanceCm);
+    for (int32 Index = 0; Index < Heights.Num(); ++Index)
     {
-        return Out;
-    }
-    const FVector FromCentre = Origin - Surface.Centre;
-    const TArray<FVector, TFixedAllocator<8>> Points = FootprintPoints(GearClearanceCm);
-    FVector3d LeastD = FVector3d::UnitZ();
-    for (int32 Index = 0; Index < Points.Num(); ++Index)
-    {
-        const FVector At = FromCentre + Orientation.RotateVector(Points[Index]);
-        const double R = At.Size();
-        const FVector3d D(At / R);
-        const double Above = R - Surface.Radius - Surface.Ground->Height(D, 0.0);
-        if (Above < Out.Least)
+        if (Heights[Index].Above < Out.Least)
         {
-            Out.Least = Above;
+            Out.Least = Heights[Index].Above;
             Out.Point = Index;
-            LeastD = D;
         }
     }
-    Out.GroundNormal = FVector(ShipGround::NormalAt(*Surface.Ground, LeastD));
+    if (Out.Point != INDEX_NONE)
+    {
+        Out.GroundNormal = FVector(ShipGround::NormalAt(*Surface.Ground, Heights[Out.Point].Direction));
+    }
     return Out;
 }
