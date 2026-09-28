@@ -914,15 +914,9 @@ TOptional<double> FShipFlightState::CachedRay(int32 Slot, int32 SurfaceIndex, co
     {
         return Entry.Slot == Slot && Entry.Surface == SurfaceIndex;
     });
-    // The along-ground ray (slot 1) is level at the feet, so a ship that has
-    // sunk or slid off it since the frame's march is flying a lower line the
-    // march never saw: it marches again, which its proof makes cheap -- only
-    // ground the old balls do not cover costs a fresh sample.
-    const FVector Moved = Cache ? FVector(Position - Cache->From) : FVector::ZeroVector;
-    const bool bOnTheRay = !Cache || Slot != 1 || (Moved - Cache->Direction * (Moved | Cache->Direction)).Size() <= 1.0;
-    if (Cache && bOnTheRay && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
+    if (Cache && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
     {
-        const double Flown = FMath::Max(0.0, Moved | Cache->Direction);
+        const double Flown = FMath::Max(0.0, (Position - Cache->From) | Cache->Direction);
         if (Cache->Hit)
         {
             return FMath::Max(0.0, *Cache->Hit - Flown);
