@@ -4,6 +4,8 @@
 #include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipGravity.h"
+#include "Ship/ShipLanding.h"
+#include "Ship/ShipVerticalLever.h"
 #include "Universe/UniversePosition.h"
 
 /**
@@ -69,6 +71,38 @@ struct DEEPSPACE_API FShipFlightLimits
      */
     double DriveThrust = 1.0;
 
+    /** ds.Land.GearClearance, cm: the origin's height over flat ground at
+     *  rest, and how far below the origin the gear's feet are. */
+    double GearClearanceCm = ShipLanding::DefaultGearClearanceCm;
+
+    /** ds.Land.TouchdownSpeed, cm/s: the approach law's floor, contact speed. */
+    double TouchdownSpeed = ShipFlight::DefaultTouchdownSpeed;
+
+    /** ds.Land.ApproachSeconds: the approach law's ease; clamped where read. */
+    double ApproachSeconds = ShipFlight::DefaultApproachSeconds;
+
+    /** ds.Land.SkimSeconds and .SkimFloor (cm/s): the skim cap. */
+    double SkimSeconds = ShipFlight::DefaultSkimSeconds;
+    double SkimFloor = ShipFlight::DefaultSkimFloor;
+
+    /** ds.Land.Regime, cm: the near regime's reach over a world's cruise floor. */
+    double RegimeCm = ShipFlight::DefaultRegimeCm;
+
+    /** ds.Vertical.Top (cm/s) and .HeavyFloor: the lever's top and the climb
+     *  top's floor on heavy worlds. */
+    double VerticalTop = ShipVerticalLever::DefaultTopCmPerSecond;
+    double VerticalHeavyFloor = ShipVerticalLever::DefaultHeavyFloor;
+
+    /**
+     * The starved sink, cm/s (decision 5): ds.Boosters.StarvedSink x (1 -
+     * HoldFed), computed by the subsystem from the split. Added to the
+     * vertical lever's asked rate only under a solid world's drive floor and
+     * only while the lever asks HOVER or a sink -- a starved ship always
+     * lifts. The one sanctioned change with time in the power model, bounded,
+     * ending at rest on the ground.
+     */
+    double SinkBias = 0.0;
+
     static FShipFlightLimits Cruise();
 };
 
@@ -108,6 +142,13 @@ struct DEEPSPACE_API FShipFlightCommand
      *  a drive set to 0.1 c, left for a look round in cruise, is at 0.1 c
      *  again the moment F is pressed. */
     int32 DriveNotch = 0;
+
+    /** The vertical lever, -1..1 (landing decision 8): a climb or sink rate
+     *  on ShipVerticalLever's log scale, the boosters holding it against
+     *  gravity. At zero the ship hovers, and keeps hovering with nobody at
+     *  the helm. Persistent, like both other levers: carry it over from
+     *  GetCommand() when building a command. */
+    double Vertical = 0.0;
 };
 
 /** Which lever the ship is answering. */
@@ -142,6 +183,24 @@ enum class EFlightHold : uint8
     /** On a floor, the nose into it, and the lever above STOP: as low as the
      *  ship goes, and it holds there. */
     AtFloor,
+};
+
+/** What the ground's laws did, since the log was last reset: for the
+ *  invariant's tests (DeepSpace.Ship.Landing.GroundAlwaysCatches*) and the
+ *  playtests, never read by the flight itself. */
+struct DEEPSPACE_API FGroundLog
+{
+    /** The least footprint clearance any substep ended with, cm. */
+    double LeastClearance = TNumericLimits<double>::Max();
+
+    /** The fastest a lowest point met the ground along its normal, cm/s, at
+     *  the substep it first came within a centimetre (decision 10). */
+    double WorstContactSpeed = 0.0;
+
+    int32 Contacts = 0;
+
+    /** How often the ground's hard stop fired: the caps missed a contact. */
+    int32 HardStops = 0;
 };
 
 /**
@@ -216,6 +275,44 @@ public:
      *  (GetLinearAcceleration, kinematic, which the hum's "changing" term
      *  keeps reading) less what gravity would have done. */
     FVector GetThrustAcceleration() const;
+
+    /** The ship's origin above the ground directly below it, cm, radially,
+     *  clearance included -- the HUD's number, "1.5 M ABOVE GROUND" at rest
+     *  on flat ground -- over the nearest solid world. Unset with none. */
+    TOptional<double> GetGroundAltitude() const;
+
+    /** The least height of any footprint point above that ground, cm: 0 when
+     *  a foot touches. What the descent cap, the hard stop and contact read;
+     *  the HUD never prints it. Unset with no solid world. */
+    TOptional<double> GetFootprintClearance() const;
+
+    /** How far under a solid world's drive floor the ship is, cm; 0 when it
+     *  is not under one. The scope of effort (decision 5). */
+    double GetDepthUnderDriveFloor() const;
+
+    const FGroundLog& GetGroundLog() const;
+    void ResetGroundLog();
+
+    /** In the near regime (decision 8): within Limits.RegimeCm of the
+     *  nearest world's cruise floor -- the ground over a solid world, the
+     *  floor sphere otherwise -- entering under it and leaving over 1.1 x it. */
+    bool IsInNearRegime() const;
+
+    /** 1 at 40 km and under, 0 at 50 km and over: how far cruise flies the
+     *  plan view and the vertical lever counts. 0 outside the regime. */
+    double GetRegimeWeight() const;
+
+    /** The vertical lever moves the ship: in the regime with the weight
+     *  above 0, and cruise's lever flying (Cruise, or DriveBelowFloor). */
+    bool IsVerticalLive() const;
+
+    /** What the vertical lever asks, cm/s, + climbing, after the climb top:
+     *  the HUD's CLIMB / SINK / HOVER. The starved sink is not in it. */
+    double GetVerticalLeverRate() const;
+
+    /** The ship's radial speed, cm/s, + climbing, over the regime's world
+     *  (or the nearest world); 0 with none. */
+    double GetVerticalSpeed() const;
 
     /** Advance by DeltaSeconds. Internally fixed-step; leftover time is carried
      *  to the next call, so the result depends on elapsed time and not on how
@@ -345,6 +442,11 @@ public:
      */
     static constexpr double AtFloorCm = 100.0;
 
+    /** Penetration the ground's hard stop ignores, cm: a tenth of a
+     *  millimetre, the rounding of a substep that ends exactly on the
+     *  ground, which the approach law's D / Step bound already keeps out. */
+    static constexpr double HardStopToleranceCm = 0.01;
+
 private:
     /** What cruise's lever asks for, cm/s, signed: CruiseSpeed of Throttle. */
     double CruiseLeverSpeed() const;
@@ -384,6 +486,40 @@ private:
      *  GetHold and GetHeldFraction. */
     void RecordHold(double D, double HeldSpeed, double LeverSpeed);
 
+    /** The nearest meeting of a ray along Direction with any surface as
+     *  cruise sees it -- the ground (plus clearance, less the hull's reach)
+     *  over a solid world, the sphere otherwise -- looking far enough to
+     *  brake from Speed. */
+    TOptional<double> NearestOnCruisePath(const FVector& Direction, double Speed);
+
+    /** The solid world whose ground is nearest, into Surfaces; INDEX_NONE. */
+    int32 NearestGround() const;
+
+    /** After the translation: if any footprint point is under the ground,
+     *  take the velocity into the ground's normal away and lift the origin
+     *  along up by the deepest penetration. The ground only: sphere floors
+     *  are never lifted. */
+    void GroundHardStop();
+
+    /** Log the footprint after the substep: least clearance, and a contact's
+     *  speed the substep a lowest point first comes within a centimetre. */
+    void LogGround(const ShipLanding::FFootprintClearance& Foot);
+
+    /** Once a substep: which world is near, the regime with its hysteresis,
+     *  and the blend weight. */
+    void UpdateRegime();
+
+    /** The cruise floor's clearance over one surface, cm. */
+    double CruiseFloorClearance(const FFlightSurface& Surface) const;
+
+    /** What the plan asks radially, cm/s: the lever's rate, the climb top,
+     *  and the starved sink under the floor at HOVER or sinking. */
+    double AskedVerticalRate() const;
+
+    /** The ground ahead of the ship's origin along a horizontal Heading at
+     *  its own height, less the hull's reach, for the along-ground cap. */
+    TOptional<double> GroundAhead(int32 SurfaceIndex, const FVector& Heading, double Speed);
+
     FUniversePosition Position;
     FQuat   Orientation = FQuat::Identity;
     FVector Velocity = FVector::ZeroVector;        // cm/s, universe frame
@@ -410,6 +546,13 @@ private:
 
     TArray<FFlightSurface> Surfaces;
     TArray<FGravityWell> Wells;
+
+    FGroundLog GroundLog;
+    double LastFootprintLeast = TNumericLimits<double>::Max();
+
+    bool bInRegime = false;
+    double RegimeWeight = 0.0;
+    int32 RegimeSurface = INDEX_NONE;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;
