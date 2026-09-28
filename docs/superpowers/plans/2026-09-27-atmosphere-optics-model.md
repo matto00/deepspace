@@ -35,8 +35,10 @@
 - **Tolerances:**
   - `.LawMatchesReference`: each channel within **5% relative or 1e-3 absolute**, for both the F64 and the F32 build, everywhere (ruling 3), against the reference with its second scattering isotropic as the law's is (ruling 7).
   - `.MultipleScatteringGap`: the same against the reference's full second order, within **25% or 1e-3** (ruling 7).
-  - `.SingleScatteringMatchesReference`: the law without its table against the reference's first order, within 5% or 1e-3. `.BinsCarryTheSpectrum`: the bins' transmittance against the spectrum's, the same.
-  - `.FloatMatchesDouble`: within **1e-3 relative or 1e-5 absolute**, and every F32 output finite.
+  - `.SingleScatteringMatchesReference`: the law without its table against the reference's first order, within 5% or 1e-3. `.BinsCarryTheSpectrum`: the bins' transmittance against the spectrum's, the same. Both run under the home star (2,566 K), procgen's coolest star (2,400 K, the M band's floor in `StarSystemGenerator.cpp`'s `ClassBands`) and the Sun.
+  - **As a display shows it.** The agreement tests compare each channel after setting a negative one to zero on both sides (`Shown`): the reference's spectral light can leave sRGB's gamut, where the law's non-negative bins cannot follow. No ruling approved this, so each test counts and prints how many values it changed (planning note 17), and the count goes to the developer with ruling 7.
+  - `.MultiScatterTable`: each bin of the table within **10% relative or 1e-3 absolute** of the reference's source averaged into it, at twelve texel centres and at a sun on the horizon. The spec gives no number for the table on its own; this is the plan's, and a table that met it and failed `.LawMatchesReference` would show as the verdict table's TABLE.
+  - `.FloatMatchesDouble`: within **1e-3 relative or 1e-5 absolute**, and every F32 output finite, over decision 1's whole grid (every mix at 0.05 bar and at its ceiling), the giant, and the float extremes.
   - `.Chapman`: within **0.5%** to 89 degrees and through the horizon to 30 degrees below it, and finite in F32 throughout.
   - `.OneBlackbody`: within **2%** per channel from 2,000 to 15,000 K.
   - `.HomothetyInvariance`: ruling 5's: the eyes within **1e-12** relative, the law's outputs within **1e-9**.
@@ -68,6 +70,7 @@
 
 - **The pressure ceiling is smooth:** `P = 1 / (P_draw^-4 + P_max^-4)^(1/4)`. A giant's disc is where the air above reaches `MaxNadirTau450`.
 - **The default suite stays fast.** `./test.sh` with no argument runs every `DeepSpace.*` test, in every worktree, one at a time behind `Tools/ue_lock.sh`: landing's and wear's trees pay for every test this plan adds to it (CLAUDE.md measures the whole suite at about 15 s). A test whose full grid takes more than a few seconds keeps a small grid under `DeepSpace.` and names its full grid `Atmosphere.Full.<Name>`, which the `DeepSpace` filter does not match. The full grids are run explicitly (`./test.sh Atmosphere.Full.<Name>`) in their task and before each merge, as `Eyes.*` is run through `Tools/eyes.sh`. The seconds each new test takes are measured in its task (*Conventions*) and written into its commit message.
+  - **The total, not only each test.** Tasks 4-8 add to the default suite about 14 s over start-up, estimated from the harness at `-O2`: `.MultiScatterTable` 4.1 s, `.LawMatchesReference` 3.6 s, `.SingleScatteringMatchesReference` about 2.9 s with the 2,400 K star, `.StarColour`'s 27 noon-only builds about 2.4 s, `.FloatMatchesDouble` about 1.4 s with the thin airs, the rest under a second together. That roughly doubles CLAUDE.md's 15 s, and landing's trees pay it behind the one lock. **The budget is 15 s over start-up for this plan's additions.** Task 8, Step 5 times the whole suite in `air-optics` and on `main` and writes `Measured: the default suite grew by N s.` into Task 8's commit. Over 15 s, stop and report with the per-test times, so that the developer chooses which to move under `Atmosphere.Full.`.
 - **Project rules:**
   - All logic lives in C++ (ADR 0002). Randomness uses the distribution that describes the thing (log-normal pressure, categorical mix, shaped rather than rejected: ADR 0008).
   - Build and test only through `./build.sh`, `./test.sh` and `Tools/mutate.sh`, behind `Tools/ue_lock.sh`, with the editor closed. Use at most 3-4 workers and `nice -n 19` for any local sweep.
@@ -105,8 +108,8 @@ The plan's harness (planning note 12) compiled and ran this plan's pure C++. Thr
 | 3 | `.LawMatchesReference`: three channels within 5% or 1e-3 everywhere (decision 1) | 229 of 3,456 values per build miss. 16 are in the thin airs (up to 21%); the rest are the ceiling airs' long grazing paths, worst in the blue channel's transmittance | Task 8 (does not start) | Spectral bins, four to six, to meet 5% or 1e-3 everywhere (2026-09-27). Tasks 4-8 re-planned; the measured count is row 6's. |
 | 4 | "the noon zenith from the ground" (`.StarColour`, decision 3's table, the corpus's sky), read as a sun overhead | straight up under a sun **45 degrees** high (note 9). With the sun overhead the zenith is the sun's own aureole and wears the star's colour: under the Sun, Earth air, saturation 0.15, which fails the spec's own G-star bound (0.40-0.85). At 45 degrees it is 0.60, hue 224. This departure is what makes the G bounds pass | Task 7, Step 5 (with ruling 1) | 45 degrees, `AtmosphereLaw::NoonSun`, everywhere (2026-09-27). |
 | 5 | `.HomothetyInvariance`: the air term "bit for bit in double" from the proxy's eye and the true eye | the eyes to 1e-12 relative and the law's outputs to 1e-9 (note 4): the two eyes are one ratio formed by two roundings | Task 8 (with ruling 3) | The tolerances (2026-09-27). Task 8 writes them. |
-| 6 | Ruling 3: "four to six spectral bins" | No partition into four, five or six bins meets 5% or 1e-3 on the grid: the best six miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it (worst 0.75 in single scattering and transmittance, 0.80 with the table). Seven meet it by one partition only (note 13) | Task 4 (does not start) | eight bins, as planned; or six, with a tolerance restated for that path (Task 4, Step 1 says what then changes) |
-| 7 | `.LawMatchesReference` against the reference's full second order (decision 1) | The law's multiple scattering is Hillaire's isotropic table, as decision 1 chose. Against the reference with its second scattering isotropic too, the law meets 5% or 1e-3 everywhere. Against the full second order, 32 values per build miss, the worst about 19% off: backlit horizons too dark (the haze's forward peak), nadir views from inside ceiling airs too bright (note 16) | Task 8 (does not start) | hold the law to the isotropic reference at 5% or 1e-3 and pin the full gap at 25% or 1e-3 (as planned); or another gap bound; or a directional table, a change to decisions 1 and 11 |
+| 6 | Ruling 3: "four to six spectral bins" | No partition into four, five or six bins meets 5% or 1e-3 on the grid: the best six miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it: with the code as the plan gives it, worst 0.92 of the allowance in the bins' transmittance alone (`.BinsCarryTheSpectrum`), 0.80 in single scattering and transmittance (`.SingleScatteringMatchesReference`), and 0.80 with the table (`.LawMatchesReference`). Seven meet it by one partition only (note 13). **What eight does not meet:** across stars of 2,000-15,000 K, eight bins miss 3 values per build, all under a 2,000 K star, the worst 1.12 times its allowance. Procgen's coolest star is 2,400 K, which the tests now include but the harness did not measure. The partition was chosen on the grid the tests check, so their margins are in-sample (note 13). **What six would save:** six bins still need two RGBA16F texels per table cell, so the table and its two reads per node are unchanged; the air is 12 float4 instead of 15, and the per-bin arithmetic about a quarter less. The comparisons set negative channels to zero on both sides (note 17) | Task 4 (does not start) | eight bins, as planned; or six, with a tolerance restated for that path (Task 4, Step 1 says what then changes) |
+| 7 | `.LawMatchesReference` against the reference's full second order (decision 1) | The law's multiple scattering is Hillaire's isotropic table, as decision 1 chose. Against the reference with its second scattering isotropic too, the law meets 5% or 1e-3 everywhere. Against the full second order, 32 values per build miss, the worst about 19% off: backlit horizons too dark (the haze's forward peak), nadir views from inside ceiling airs too bright (note 16). Every agreement compares each channel as a display shows it, a negative channel set to zero on both sides; each test prints how many values that changed, and the developer rules on that too (note 17) | Task 8 (does not start) | hold the law to the isotropic reference at 5% or 1e-3 and pin the full gap at 25% or 1e-3 (as planned); or another gap bound; or a directional table, a change to decisions 1 and 11 |
 
 Two departures an earlier draft carried are gone. The corpus's noon skies cover all 10,000 systems, as slice 1's done-when says, through a writer outside the default suite (Task 13). And `DeepSpace.Universe.Air` compares every world against the same world generated with the draws off, as the spec's *Tests* say (Task 10).
 
@@ -143,7 +146,7 @@ These arose while writing the plan. Each one is argued here once, and each task 
    - Each world would pass at about **tau450 0.32-0.33**, and the lightest giant at 0.38. The test prints these.
    - The constant or the legibility definition is the developer's to change (decision 4's *Cost to change: medium*), never the test's. The ruling is a gate on Task 12, which writes the test and the constant as ruled and amends the spec's decision 4 and `.NadirLegible` item to match.
 7. **Aerosol and ozone depth scale with the column mass, `P / g`.** The spec gives both "per bar" at 1 g, and says a heavier world "holds more, since the same pressure is less column". Its giant disc pressures (0.11 bar at 15 M_E, 2.4 bar for a Jupiter) are only reproduced when the aerosol scales as `1 / g` too. Named here so the developer can overrule it.
-8. **The spec's "shared shim header" does not exist.** Landing slice (a) keeps its `WR_` shims inline in `WorldRelief.ush` (still so in `.worktrees/landing-a-relief` at `bf23d4e`) and makes no shared header. The spec's "O's first commit after landing (a) merges replaces the copies with landing's shared shim header" therefore has nothing to point at, and its *Parallel tracks* table makes track M wait on that commit. The shims stay inline in `Atmosphere.ush`, and whether to extract one shared file is orbital slice 1's first decision (see the last section). `WorldRelief.ush` belongs to landing's track T through slice (b), so extracting one is sequenced there, not here. **Task 8, Step 7 amends the spec's *Parallel tracks* rows for O and M and its merge-order paragraph**, so that M waits on the shim decision in orbital slice 1 rather than on a commit this plan will never make.
+8. **The spec's "shared shim header" does not exist.** Landing slice (a) kept its `WR_` shims inline in `WorldRelief.ush` and made no shared header (still so on `main` after landing (a) merged, `8cd12ab`). The spec's "O's first commit after landing (a) merges replaces the copies with landing's shared shim header" therefore has nothing to point at, and its *Parallel tracks* table makes track M wait on that commit. The shims stay inline in `Atmosphere.ush`, and whether to extract one shared file is orbital slice 1's first decision (see the last section). `WorldRelief.ush` belongs to landing's track T through slice (b), so extracting one is sequenced there, not here. **Task 8, Step 9 amends the spec's *Parallel tracks* rows for O and M and its merge-order paragraph**, so that M waits on the shim decision in orbital slice 1 rather than on a commit this plan will never make.
 9. **"The noon zenith" is straight up under a sun 45 degrees high** (`AtmosphereLaw::NoonSun`, Task 6), not under a sun at the zenith (*Rulings needed*, 4). With the sun overhead, the zenith is the sun's own forward-scattered aureole, and it wears the star's colour. Measured under the Sun with Earth air, its saturation is 0.15 and it fails the spec's "Earth's blue" bound. At 45 degrees it is 0.60, hue 224. `.StarColour`, `.ReferenceKnownValues`, the swatch's noon and the corpus's sky all use this one definition. Task 7 amends the spec's `.StarColour` item and decision 3's table heading to name it, in the commit that writes `.StarColour`.
 10. **`.BacklitRing` compares the ring and the lit limb at one grazing height, 3 scale heights.** There the ring is 1.36 times the lit limb (8.3e-2 against 6.1e-2, measured). At each one's own brightest point, though, the lit limb wins: it peaks near the surface at 0.157, where the ring's light, crossing the whole grazing path, is its own extinction, and the ring peaks at 0.103. The spec's sentence does not say which reading it means. The test pins the same-height one and prints both, so the developer sees the peaks. As built (`f60611b`), `.BacklitRing` also pins the haze's forward peak, not only the gas's: at 3 H in Earth's air there is no haze left, so the gas's (1 + cos^2) alone makes the ring win there, and the test adds a thin air (0.05 bar) low down, 0.25 H, where the grazing path is still optically thin and the haze dense, and requires the ring more than four times the lit limb -- more than the gas's twofold could give. The re-planned law keeps it.
 11. **A measured failure: `.StarColour`'s red-dwarf bounds** (*Rulings needed*, 1). In the game's colour space (linear sRGB, D65 white, which is `SkyColour::Blackbody`'s), a red dwarf's sky is not "pale grey-cyan". It is the star's own orange, shifted toward blue by Rayleigh's lambda^-4, and it lands peach. Measured noon zeniths, Earth air:
@@ -188,20 +191,21 @@ These arose while writing the plan. Each one is argued here once, and each task 
       | 5 | 6 | 4.5 | the same ray |
       | 6 | 6 | 4.4 | the same ray |
       | 7 | 0 | 0.86 | -- (one partition only) |
-      | 8 | 0 | 0.75 | -- (several partitions) |
+      | 8 | 0 | 0.75 in the search; 0.80 with the code as the plan gives it | -- (several partitions) |
 
       That ray is the hard one. A red dwarf's blue channel is small, and its light is the difference of large blue terms and negative green-yellow ones, so within-bin error there is amplified. Six bins cannot place a boundary that serves both the blue and the green.
     - **The choice: eight.**
-      - Across stars of 2,000-15,000 K (first order), eight bins miss 3 values per build, all at 2,000 K, the worst 1.12 times its allowance. The best six miss 31-48.
+      - Across stars of 2,000-15,000 K (first order), eight bins miss 3 values per build, all at 2,000 K, the worst 1.12 times its allowance. The best six miss 31-48. Procgen makes no star under **2,400 K** (the M band's floor in `StarSystemGenerator.cpp`'s `ClassBands`), so 2,000 K is outside the game, but 2,400 K is not, and the sweep did not report it. `.BinsCarryTheSpectrum` and `.SingleScatteringMatchesReference` therefore run 2,400 K beside the home star and the Sun (`AtmosphereTestFixtures::CoolestStarK`, Task 4). If either misses there, stop and report: that is ruling 6's question again, not a tolerance to loosen.
+      - **The margins are in-sample.** The partition was picked from 6,435 candidates against exactly the six airs and two stars those tests check, so their margins measure the fit, not how it generalises. The star sweep above, and now 2,400 K, are the only checks on anything else.
       - Eight is two whole RGBA16F texels for the table, and fifteen float4 for the air (32 coefficients, 24 folds, 4 shape numbers).
       - The weight is the star's light times the length of the wavelength's sRGB vector. Luminance weighting, the obvious choice, fails 22-fold: it all but ignores the blue.
       - A bin's extinction is its wavelengths' weighted mean depth (exact thin). The nadir-exact fit was measured too, and misses more on long paths.
-    - **The margins, for every re-planned test.** Each is the harness's, at `-O2`, with the code exactly as the plan gives it:
-      - `.BinsCarryTheSpectrum`: 0.92 of its allowance.
+    - **The margins, for every re-planned test.** Each is the harness's, at `-O2`, with the code exactly as the plan gives it, before 2,400 K and the thin airs of `.FloatMatchesDouble` were added (those are unmeasured). These are the figures the plan quotes; the search table's 0.75 was a search variant's:
+      - `.BinsCarryTheSpectrum`: 0.92 of its allowance, the tightest, so eight bins have 8% to spare.
       - `.SingleScatteringMatchesReference`: 0.80.
-      - `.LawMatchesReference`: 0.80 on the full grid and 0.66 on the default share.
+      - `.LawMatchesReference`: 0.80 on the full grid. The default share is now CO2 at its ceiling (Task 8), which the harness did not run as a share; its rays are inside the full grid's 0.80. (The earlier N2/O2 share measured 0.66.)
       - `.MultipleScatteringGap`: 0.75 of 25%.
-      - `.FloatMatchesDouble`: 0 misses of 3,960.
+      - `.FloatMatchesDouble`: 0 misses of 3,960 over the ceiling airs and the giant. With the 0.05 bar airs added (Task 8), it checks 6,930, and the thin airs are unmeasured.
       - `.MultiScatterTable`: every bin within 10%.
       - `.StarColour`: inside ruling 1's bounds, with the margins Task 7 lists.
 14. **The march, and why bins alone could not meet ruling 3.**
@@ -225,6 +229,10 @@ These arose while writing the plan. Each one is argued here once, and each task 
       - The gap is physics the spec's method leaves out, not a defect. Closing it needs a directional table: per bin, the second-order light's first and second angular moments. That is five numbers more per bin, so five more 64 x 32 RGBA16F textures per world and ten more texture reads per node. That is a change to decisions 1 and 11.
     - **The reference's azimuth.** The reference itself was found 5.3% short of its own converged value on a backlit horizon: 12 azimuth segments missed the forward peak between them. With 24 it is within 0.5% of 48, at twice the second order's time. Task 8 raises the default.
     - **The Dekker mutant.** The first plan's Task 8 expected `.FloatMatchesDouble` to kill the Dekker-product mutant. It cannot, on the grid's axis-aligned eyes, where every cross product is exact. The float extremes' limbs are now turned out of the axes, and it is killed.
+17. **`Shown`: the agreements compare what a display shows, and count what that hides.**
+    - The reference's light is spectral, folded to linear sRGB at the end, and a deep orange's blue can come out negative there: outside sRGB's gamut. The law's bins are non-negative, and so is what it folds. `Shown` sets a negative channel to zero on both sides before comparing, in `.SingleScatteringMatchesReference`, `.LawMatchesReference`, `.MultipleScatteringGap`, and (as `Max(..., 0)`) `.BinsCarryTheSpectrum`.
+    - That is a loosening no ruling approved: a disagreement wholly outside the gamut is invisible to the test. So each of those tests counts the values `Shown` changed on either side and prints the count in its info line (`N changed by the gamut clamp`). It is expected to be 0 or small, and only under the red dwarfs. It was not counted in the harness.
+    - The count goes to the developer with ruling 7. If the developer rules the clamp out, the comparisons drop `Shown`, and any value it was hiding is a miss.
 
 ## Execution order and file ownership
 
@@ -233,12 +241,12 @@ These arose while writing the plan. Each one is argued here once, and each task 
 | Track | Tree, branch | Tasks | Owns |
 |---|---|---|---|
 | orchestrator | main checkout | the merges; recording the rulings | git, and the spec's *The developer's rulings* section (one `**Atmosphere plan ruling N**` paragraph per ruling) |
-| **O: optics** | `.worktrees/air-optics`, `feat/air-optics` | 1-8 (O1-O8) | `Shaders/Private/Atmosphere.ush` (new), `Source/DeepSpace/Atmosphere/Atmosphere.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereReference.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereBins.{h,cpp}` (new), `Source/DeepSpace/Sky/SkyColour.{h,cpp}`, `Source/DeepSpace/Tests/SkyColourSpectrumTest.cpp`, `AtmosphereChapmanTest.cpp`, `AtmosphereReferenceTest.cpp`, `AtmosphereBinsTest.cpp`, `AtmosphereBuildTest.cpp`, `AtmosphereLawTest.cpp`, `AtmosphereMarchTest.cpp`, `AtmosphereTableTest.cpp`, `AtmosphereSwatchTest.cpp`, `AtmosphereAgreementTest.cpp`, `Tests/AtmosphereTestFixtures.h` (all new). In the spec: the *Tests* section's `.StarColour`, `.LawMatchesReference` and `.HomothetyInvariance` items, decision 1's bullets and paragraph on agreement, decision 3's table and its paragraph on coefficients, and ruling 2's sentence on red dwarfs' skies, which ruling 1 directs (Tasks 7 and 8), and the *Parallel tracks* rows for O and M and the merge-order paragraph under it (Task 8) |
+| **O: optics** | `.worktrees/air-optics`, `feat/air-optics` | 1-8 (O1-O8) | `Shaders/Private/Atmosphere.ush` (new), `Source/DeepSpace/Atmosphere/Atmosphere.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereReference.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereBins.{h,cpp}` (new), `Source/DeepSpace/Sky/SkyColour.{h,cpp}`, `Source/DeepSpace/Tests/SkyColourSpectrumTest.cpp`, `AtmosphereChapmanTest.cpp`, `AtmosphereReferenceTest.cpp`, `AtmosphereBinsTest.cpp`, `AtmosphereBuildTest.cpp`, `AtmosphereLawTest.cpp`, `AtmosphereMarchTest.cpp`, `AtmosphereTableTest.cpp`, `AtmosphereSwatchTest.cpp`, `AtmosphereAgreementTest.cpp`, `Tests/AtmosphereTestFixtures.h` (all new). In the spec: the *Tests* section's `.StarColour`, `.LawMatchesReference` and `.HomothetyInvariance` items, decision 1's bullets, its interface paragraph and its paragraph on agreement, decision 3's table and its paragraph on coefficients, decision 11's table sizes, and ruling 2's sentence on red dwarfs' skies, which ruling 1 directs (Tasks 7 and 8), and the *Parallel tracks* rows for O and M and the merge-order paragraph under it (Task 8) |
 | **G: procgen's air** | `.worktrees/air-procgen`, `feat/air-procgen` | 9 (G1), then 10 (G2), 11 (G3); after track O merges, 12 (G4), 13 (G5) | Task 9: `Universe/AirFacts.{h,cpp}` (new) and `Tests/AirFactsTest.cpp` (new). Task 10: `Universe/StarSystem.h`, `StarSystemGenerator.{h,cpp}`, `GenPriors.{h,cpp}`, `ProcGenPriorsConfig.h`, `Config/DefaultGame.ini`, `Universe/AirFacts.h` (the guarantees move out), `Tests/AirFixtureWorlds.h` and `Tests/AirProcGenTest.cpp` (new), and the spec's *Fixture worlds* table. Task 11: `Tools/procgen_corpus_contract.json`, `Tools/procgen_corpus.py`, `Tools/procgen_corpus_sample.tsv`, `Tools/test_procgen_corpus.py` and `Tests/ProcGenCorpusTest.cpp`. Task 12: `Atmosphere/PlanetAir.{h,cpp}` (new), `Tests/AtmosphereNadirTest.cpp` (new), `Tests/AtmosphereSwatchTest.cpp` (track O's, handed over once O has merged), `Universe/GenPriors.h` again if ruling 2 moves `MaxNadirTau450`, and the spec's decision 4 and `.NadirLegible` item. Task 13: `Tests/CorpusSkiesTest.cpp` (new), `Tools/procgen_corpus_skies_sample.tsv` (new), `Tools/procgen_corpus_contract.json`, `Tools/procgen_corpus.py` and `Tools/test_procgen_corpus.py` |
 
-Within this plan, the spec is edited by O, G and the orchestrator, always in different hunks: O's are in *Tests* (the two items), decision 3 and *Parallel tracks*; G's in *Fixture worlds*, decision 4 and *Tests* (the `.NadirLegible` item, a different item from O's); the orchestrator's in *The developer's rulings*. Each gated task merges `main` before it edits, so it edits on top of the rulings.
+Within this plan, the spec is edited by O, G and the orchestrator, always in different hunks: O's are in *Tests* (the three items), decisions 1, 3 and 11, ruling 2's one sentence, and *Parallel tracks*; G's in *Fixture worlds*, decision 4 and *Tests* (the `.NadirLegible` item, a different item from O's); the orchestrator's in *The developer's rulings*. Each gated task merges `main` before it edits, so it edits on top of the rulings.
 
-**Files this plan and the landing and wear plans both touch, and who goes first.** Landing slice (a) is two tracks. **Track P merged into `main` as `d1cfbc8`**, and its tree `.worktrees/landing-a-procgen` is gone. **Track R is still in `.worktrees/landing-a-relief`** (`feat/landing-a-relief`), at `bf23d4e`: R2 done (`Eyes.WorldReliefParity` green), R3-R5 not yet run, and an uncommitted edit to `Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp`. R's `cb0a651` removed the `DeepSpaceShaders` module: `/Project` is now the engine's own mapping, which `FEngineLoop::PreInit` makes to `<project>/Shaders` whenever that directory exists, and R's `DeepSpace.Surface.ShaderMapping` holds that. `Atmosphere.ush` relies on exactly that mapping and on no module; it adds none. Once R merges, R's `rebuild.sh` and `launch.sh` watch every `Shaders/*.ush`, which covers `Atmosphere.ush` too.
+**Files this plan and the landing and wear plans both touch, and who goes first** (as of `main` at `df37646`, 2026-09-28). **Landing slice (a) has merged:** track P as `d1cfbc8`, track R as `8cd12ab`, and both trees are gone. R's `cb0a651` removed the `DeepSpaceShaders` module: `/Project` is now the engine's own mapping, which `FEngineLoop::PreInit` makes to `<project>/Shaders` whenever that directory exists, and R's `DeepSpace.Surface.ShaderMapping` holds that. `Atmosphere.ush` relies on exactly that mapping and on no module; it adds none. R's `rebuild.sh` and `launch.sh` now watch every `Shaders/*.ush`, which covers `Atmosphere.ush` too. **Track G's Tasks 9-11 have merged** (`3c205c5`), and **wear slice 1 has merged** (`43af0dd`; `.worktrees/wear-1-s` is gone). **Landing slice (b) runs in three trees**, `.worktrees/landing-b-f`, `landing-b-s` and `landing-b-t` (`feat/landing-b-{f,s,t}`, at `d6933a9`, `3013b3a` and `bed40c8`). Between them they touch `DeepSpace.uproject`, `DeepSpace.Build.cs`, `Shaders/Private/WorldRelief.ush`, `Sky/ShipSky.*`, `Sky/SkyMaterialContract.h`, `Tools/sky_material_contract.json`, `Tools/setup_sky_materials.py`, sky material assets, `CLAUDE.md`, and ship, surface and flight files. Tasks 4-8 edit none of them, and no test name collides. What slice (b) does share with Tasks 4-8 is the one lock: every test Tasks 4-8 add to the default suite runs in all three trees (Global Constraints, *The default suite stays fast*).
 
 | File | The other plan's owner | This plan | Order |
 |---|---|---|---|
@@ -246,16 +254,16 @@ Within this plan, the spec is edited by O, G and the orchestrator, always in dif
 | `Universe/StarSystemGenerator.{h,cpp}` | landing P (`PlanetSeed` public, `DrawRelief`, `GenerateRelief`) | Task 10 (`FAirDraw`, `EAirDraws`, `DrawAir`, `GenerateAir`, `GenerateWithPlanetCount`'s draws-off parameter) | P first (done) |
 | `Universe/GenPriors.{h,cpp}` | landing P (relief priors, `MaxReliefKm`) | Task 10 (air priors, domain, the air's guarantees), Task 12 only if ruling 2 moves `MaxNadirTau450` | P first (done) |
 | `Universe/ProcGenPriorsConfig.h` | landing P | Task 10 | P first (done) |
-| `Config/DefaultGame.ini` | landing P (relief lines, merged); **wear S5** (the wear plan's Task 10, `.worktrees/wear-1-s`: a new `[/Script/DeepSpace.ShipSubsystem]` section appended at the end of the file) | Task 10 (air lines inside `[/Script/DeepSpace.ProcGenPriorsConfig]`, before `; The galaxy: ...`) | P first (done). Against wear: non-adjacent hunks (`[/Script/DeepSpace.ShipDressingConfig]` lies between), so either branch merges cleanly after the other, but **never both mid-edit at once**: Task 10's Step 1 checks that `.worktrees/wear-1-s`, if it exists, holds no uncommitted change to the file, and waits until it commits; wear's S5 Step 1 makes the same check of `air-procgen`. **Whichever of `feat/air-procgen` and `feat/wear-1-s` merges to `main` second merges `main` first** (Task 11, Step 10 and Task 13, Steps 10-11 merge `main` into the tree before merging it). |
+| `Config/DefaultGame.ini` | landing P (relief lines, merged); wear S5 (a `[/Script/DeepSpace.ShipSubsystem]` section at the end of the file, merged `43af0dd`) | Task 10 (air lines inside `[/Script/DeepSpace.ProcGenPriorsConfig]`, before `; The galaxy: ...`), merged `3c205c5` | Done: all three merged, non-adjacent hunks. Task 13 merges `main` into `air-procgen` before it merges (Steps 10-11). |
 | `Tools/procgen_corpus_contract.json`, `procgen_corpus.py`, `procgen_corpus_sample.tsv`, `test_procgen_corpus.py`, `Tests/ProcGenCorpusTest.cpp` | landing P (Task 4: `surface_gravity_g`, `relief_km`) | Task 11 (G3): four air columns; Task 13 (G5): the skies file | P first (done), then Task 11 after Task 10, and Task 13 after Task 12 |
-| `Shaders/Private/` (the directory) | landing R creates `WorldRelief.ush` there | Task 2 (O2) creates `Atmosphere.ush` beside it | No shared file: two new files. Either may merge first. |
+| `Shaders/Private/` (the directory) | landing R created `WorldRelief.ush` there (merged `8cd12ab`); slice (b)'s three trees all edit it | Task 2 (O2) created `Atmosphere.ush` beside it | No shared file. `feat/air-optics` may merge before or after slice (b). |
 | `Universe/UniverseUnits.h` | landing P (adds GM constants) | read only (Task 9 includes it) | No edit here |
-| `Sky/SkyProjection.{h,cpp}`, `Sky/SkySystem.h` | landing P owned `SkySystem.*` in (a); T owns `SkyProjection.*` in (b) | read only: Task 8's `.HomothetyInvariance` calls `SkyProjection::Project` and builds an `FSkySystem` | No edit here. A later change to `Project`'s signature by T must update `AtmosphereAgreementTest.cpp`, which T then owns for that commit. |
-| `Sky/ShipSky.h` | landing R (Task 11 (R4)) and the atmospheres spec's M | read only: Task 7 calls `ShipSky::ManualExposureBias` | No edit here |
-| `Source/DeepSpace/DeepSpace.Build.cs` | landing T (slice (b)) | **not edited**: the swatch's `FImageUtils` is in `Engine`, which already depends publicly on `ImageCore` | No overlap |
+| `Sky/SkyProjection.{h,cpp}`, `Sky/SkySystem.h` | landing P owned `SkySystem.*` in (a); T owns `SkyProjection.*` in (b) (`.worktrees/landing-b-t`) | read only: Task 8's `.HomothetyInvariance` calls `SkyProjection::Project` and builds an `FSkySystem`; Task 8, Step 8's seventh mutation edits `SkyProjection.cpp` for one run, restored by `Tools/mutate.sh` | No edit here. `SkyProjection.*` is unchanged in `landing-b-t` at `bed40c8`, and landing's T tasks plan no edit to it. **If T merges first, re-check** before Task 8: `git diff df37646 main -- Source/DeepSpace/Sky/SkyProjection.*` must leave `Project`'s signature and the mutation's anchor line intact. A later change to `Project`'s signature by T must update `AtmosphereAgreementTest.cpp`, which T then owns for that commit. |
+| `Sky/ShipSky.{h,cpp}` | landing R (merged) and T (`landing-b-t` edits both), and the atmospheres spec's M | read only: Task 7 calls `ShipSky::ManualExposureBias` | No edit here. `landing-b-t` leaves `ManualExposureBias` unchanged at `bed40c8`. |
+| `Source/DeepSpace/DeepSpace.Build.cs`, `DeepSpace.uproject` | landing slice (b), all three trees | **not edited**: the swatch's `FImageUtils` is in `Engine`, which already depends publicly on `ImageCore` | No overlap |
 | `Tools/mutate.sh` | landing R (adds `MUTATE_RUNNER`) | used, never edited | No edit here |
-| `rebuild.sh`, `launch.sh` | landing R (teaches them `Shaders/` and `.ush`) | not edited | Until R merges, a change to `Atmosphere.ush` alone does not make `./launch.sh` rebuild. `./build.sh`, `./test.sh` and `Tools/mutate.sh` are unaffected, because UBT tracks the include. |
-| `CLAUDE.md` | landing P and R; wear Z | **not edited here.** The spec's documentation ("CLAUDE.md: a new section, *The air*") is written after slice 1 merges | No overlap |
+| `rebuild.sh`, `launch.sh` | landing R (taught them `Shaders/` and `.ush`; merged) | not edited | Done: a change to `Atmosphere.ush` alone now makes `./launch.sh` and `./rebuild.sh` rebuild. |
+| `CLAUDE.md` | landing P and R, wear Z (merged); landing slice (b)'s `landing-b-s` and `landing-b-t` | **not edited here.** The spec's documentation ("CLAUDE.md: a new section, *The air*") is written after slice 1 merges | No overlap |
 
 **Order and merge points:**
 
@@ -299,7 +307,7 @@ Tasks 4-8 are sequential: each consumes the previous one's interface, except tha
 - **Build after every C++ change:** `./build.sh`. A new or changed header (`.h` or `.ush`) needs the full build. If an editor was open on the tree, run `./rebuild.sh --force` first.
 - **Test** with `./test.sh <path>`. It prints `passed: N` and exits non-zero on any failure, when no test ran, or when the log is dirty.
 - **Whole suite green.** Every "whole suite" step expects `./test.sh` green. The rulings are gates precisely so that no task commits a known-red test; a step that finds the suite red stops and reports, and does not commit.
-- **Seconds per test.** Before each commit that adds a `DeepSpace.*` test, time it: `time ./test.sh <path>` against `time ./test.sh DeepSpace.Sky.Colour` (an existing test that costs nothing: start-up alone), in the same tree, and put a line `Measured: <path> costs N s over start-up.` above the commit message's `Co-Authored-By` line, `N` being the difference in whole seconds. Task 6 shows the form. A new test more than 5 s over start-up stops the task before its commit: its grid is split as Task 8 splits `.LawMatchesReference` (a default grid under `DeepSpace.`, the full grid as `Atmosphere.Full.<Name>`), and the split is reported with the numbers. The plan's harness could not measure these in the engine, so the plan states none.
+- **Seconds per test.** Before each commit that adds a `DeepSpace.*` test, time it: `time ./test.sh <path>` against `time ./test.sh DeepSpace.Sky.Colour` (an existing test that costs nothing: start-up alone), in the same tree, and put a line `Measured: <path> costs N s over start-up.` above the commit message's `Co-Authored-By` line, `N` being the difference in whole seconds. Task 6 shows the form. **Every `Measured:` line in this plan's commit messages is a template:** replace `N` with the measured number before committing, and never commit a literal `N`. Check with `git log -1 --format=%B | grep -c ' N s'`, which must print `0` (if it does not, `git commit --amend` with the numbers). A new test more than 5 s over start-up stops the task before its commit: its grid is split as Task 8 splits `.LawMatchesReference` (a default grid under `DeepSpace.`, the full grid as `Atmosphere.Full.<Name>`), and the split is reported with the numbers. The plan's harness could not measure these in the engine, so the plan states none.
 - **Mutate** only committed files, because `Tools/mutate.sh` refuses uncommitted ones. Every mutation comes after its task's commit. Run `./build.sh` after each mutation run, because its last build held the mutant.
 - **Test names** are siblings. `DeepSpace.Atmosphere`, `DeepSpace.Universe` and `Atmosphere.Full` are groups, never tests. No test name here is a prefix of another (`./test.sh` filters by substring), and no `Atmosphere.Full.*` name contains `DeepSpace`.
 - **Units.** The optics work in radii of the body (the surface at `R = 1`) and in nadir optical depths. `FAirSpec` is in centimetres. `AirFacts` is in bar, km, K, Earth masses and radii, and Earth g.
@@ -2204,7 +2212,7 @@ Expected: `KILLED` twice. Grey scattering loses the blue zenith. Half the cross-
 Tasks 4, 5 and 6 were built for three channels (`262b3f5`, `d56a0e7`, `f60611b`, `42e49f6`), and Task 7's Steps 1-4 (`5027df5`), on `feat/air-optics`. Atmosphere plan ruling 3 chose the spec's named fallback: spectral bins in the law. So the three built tasks are replaced here, not added to. Each re-planned task starts from the built code and replaces what it names, whole files where the change is wide. Tasks 1-3 stand, except for three small, named edits to the reference (Tasks 5 and 8).
 
 What the re-plan measured (planning note 13 has the numbers), in the plan's harness, against the reference over decision 1's grid at ruling 2's ceilings:
-- **No partition into four, five or six bins meets 5% or 1e-3 everywhere.** The best six still miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it, with a fifth of the allowance to spare. Eight is past ruling 3's four to six, so **Task 4 is gated on ruling 6**.
+- **No partition into four, five or six bins meets 5% or 1e-3 everywhere.** The best six still miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it: the tightest check, the bins' transmittance alone, reads 0.92 of its allowance. Eight is past ruling 3's four to six, so **Task 4 is gated on ruling 6**.
 - **Bins were not the only cause.** The thin airs' misses were the march's: a midpoint rule over 12 samples cannot see the haze's 1 km scale height under H2/He's 55 km, nor a horizon through a ceiling air. Task 5 replaces it with a march that integrates each span exactly for an exponential, on the Chapman columns the nodes already hold, with one extra node where the sunlight climbs out of a grazing column. It keeps the 12 samples as its nodes (planning note 14).
 - **The multiple-scattering table misread the sun at the horizon.** Its columns were equal steps in the sun's cosine, and the light the air hands on changes fastest right there. Task 6 crowds its columns toward the horizon (planning note 15).
 - **What remains is the spec's own approximation.** Hillaire's multiple scattering is isotropic, and the reference's second order is not. The law meets the reference with its second scattering sent every way alike, within 5% or 1e-3 everywhere (worst 0.80 of the allowance). Against the full second order it stays within 25% or 1e-3 (worst 0.75 of that). **Task 8 is gated on ruling 7**, which holds the law to the first and pins the second (planning note 16). While measuring, the reference was found up to 5% short of its own converged value on backlit horizons (12 azimuth segments). Task 8 raises them to 24.
@@ -2255,6 +2263,7 @@ namespace AtmosphereBins
 namespace AtmosphereTestFixtures   // Tests/ only
 {
     inline constexpr double NitrogenOxygenCeilingBar = 1.1528, CarbonDioxideCeilingBar = 0.7494, HydrogenHeliumCeilingBar = 0.5740;
+    inline constexpr double CoolestStarK = 2400.0;   // procgen's coolest star: the M band's floor
 }
 ```
 
@@ -2272,6 +2281,7 @@ Expected: `1`. If `0`, stop: the ruling is not recorded, and nothing in Tasks 4-
   - Replace `    inline constexpr double NitrogenOxygenCeilingBar = 1.8013;` with `    inline constexpr double NitrogenOxygenCeilingBar = 1.1528;`.
   - Replace `    inline constexpr double CarbonDioxideCeilingBar = 1.1710;` with `    inline constexpr double CarbonDioxideCeilingBar = 0.7494;`.
   - Replace `    inline constexpr double HydrogenHeliumCeilingBar = 0.8968;` with `    inline constexpr double HydrogenHeliumCeilingBar = 0.5740;`.
+  - After `    inline constexpr double SunK = 5772.0;`, add `    inline constexpr double CoolestStarK = 2400.0;   // procgen's coolest star: ClassBands' M floor (StarSystemGenerator.cpp)`. The home star and the Sun are what the partition was chosen against; this is the coolest star the game makes (planning note 13).
   - In `Giant()`, replace `        Air.GasTau550 = 0.2192;` with `        Air.GasTau550 = 0.1403;`, and `        Air.AerosolTau550 = 0.00896;` with `        Air.AerosolTau550 = 0.005734;`.
   - In the file's opening comment, replace
 
@@ -2301,6 +2311,7 @@ Atmosphere plan ruling 2 lowers MaxNadirTau450 from 0.5 to 0.32, so each
 mix's ceiling air and the giant's disc -- the extremes decision 1's grid
 holds the law at -- scale by 0.64: N2/O2 1.1528 bar, CO2 0.7494, H2/He
 0.5740, a Jupiter's disc 1.51 bar. The guarantee itself moves in Task 12.
+CoolestStarK names procgen's coolest star, 2,400 K, for the bins' tests.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -2418,13 +2429,17 @@ bool FAtmosphereBinsCarryTheSpectrumTest::RunTest(const FString& Parameters)
     using namespace AtmosphereTestFixtures;
 
     // The bins' one approximation, alone: within a bin one optical depth
-    // stands for several. Decision 1's airs under both stars, along every
-    // path from the ground -- straight up to the horizon, each constituent
-    // through its own exact column -- the binned transmittance against the
-    // spectrum's, each channel within decision 1's 5% or 1e-3.
+    // stands for several. Decision 1's airs under the home star, procgen's
+    // coolest star and the Sun, along every path from the ground --
+    // straight up to the horizon, each constituent through its own exact
+    // column -- the binned transmittance against the spectrum's, each
+    // channel within decision 1's 5% or 1e-3, as a display shows it: a
+    // channel below zero counts as zero on both sides, and how often that
+    // changed a value is counted and printed (planning note 17).
     double Worst = 0.0;
     FString Where;
     int32 Checked = 0;
+    int32 Clamped = 0;
     for (const FNamedAir& Named : Extremes())
     {
         const AtmosphereReference::FSpectralAir Air = AtmosphereReference::Spectral(Named.Air);
@@ -2433,7 +2448,7 @@ bool FAtmosphereBinsCarryTheSpectrumTest::RunTest(const FString& Parameters)
         {
             GasTau.Value[I] = Air.GasScatter.Value[I] + Air.GasAbsorb.Value[I];
         }
-        for (const double Kelvin : {HomeStarK, SunK})
+        for (const double Kelvin : {HomeStarK, CoolestStarK, SunK})
         {
             const FSpectrum Star = AtmosphereReference::StarSpectrum(Kelvin);
             const AtmosphereBins::FBins Gas = AtmosphereBins::Average(Star, GasTau);
@@ -2460,6 +2475,7 @@ bool FAtmosphereBinsCarryTheSpectrumTest::RunTest(const FString& Parameters)
                 for (int32 C = 0; C < 3; ++C)
                 {
                     ++Checked;
+                    Clamped += (Got[C] < 0.0 || Want[C] < 0.0) ? 1 : 0;
                     const double Miss = Over(FMath::Max(Got[C], 0.0), FMath::Max(Want[C], 0.0), 0.05, 1.0e-3);
                     if (Miss > Worst)
                     {
@@ -2471,8 +2487,8 @@ bool FAtmosphereBinsCarryTheSpectrumTest::RunTest(const FString& Parameters)
             }
         }
     }
-    AddInfo(FString::Printf(TEXT("%d binned transmittances; the worst at %.2f of its allowance: %s"), Checked, Worst, *Where));
-    TestEqual(TEXT("six airs, two stars, six paths, three channels"), Checked, 6 * 2 * 6 * 3);
+    AddInfo(FString::Printf(TEXT("%d binned transmittances, %d changed by the gamut clamp; the worst at %.2f of its allowance: %s"), Checked, Clamped, Worst, *Where));
+    TestEqual(TEXT("six airs, three stars, six paths, three channels"), Checked, 6 * 3 * 6 * 3);
     TestTrue(TEXT("every channel within 5% or 1e-3 of the spectrum's"), Worst <= 1.0);
     return true;
 }
@@ -2510,8 +2526,9 @@ Expected: FAIL, `'Atmosphere/AtmosphereBins.h' file not found`.
  * grid (atmosphere optics plan, planning note 13): no partition into four,
  * five or six bins met decision 1's 5% or 1e-3 everywhere -- the best six
  * still missed a red dwarf's blue through a long horizontal CO2 path by 4.4
- * times its allowance -- and these eight meet it with a fifth to spare
- * (atmosphere plan ruling 6).
+ * times its allowance -- and these eight meet it, the tightest check
+ * (.BinsCarryTheSpectrum) at 0.92 of its allowance (atmosphere plan
+ * ruling 6).
  */
 namespace AtmosphereBins
 {
@@ -2629,7 +2646,7 @@ FVector3d AtmosphereBins::FoldThrough(const AtmosphereReference::FSpectrum& Star
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.BinFolds && ./test.sh DeepSpace.Atmosphere.BinsCarryTheSpectrum; grep -h "binned transmittances" Saved/Logs/DeepSpace.log | tail -1
 ```
 
-Expected: `passed: 1` twice. The harness measured the info line's worst at 0.92 of its allowance, for CO2 at its ceiling under the home star, 88 degrees from the zenith, in the green channel.
+Expected: `passed: 1` twice. Over the home star and the Sun, the harness measured the info line's worst at 0.92 of its allowance, for CO2 at its ceiling under the home star, 88 degrees from the zenith, in the green channel. The 2,400 K star was not in the harness, so its figure is new; the line names the worst case whichever star it is under. If `.BinsCarryTheSpectrum` fails at 2,400 K alone, stop and report the info line: that is ruling 6's question again (planning note 13), not a tolerance to loosen. Report the gamut-clamp count as well (planning note 17).
 
 - [ ] **Step 7: The whole suite, then commit.**
 
@@ -2652,7 +2669,8 @@ four, five or six bins met 5% or 1e-3 everywhere; these eight do.
 DeepSpace.Atmosphere.BinFolds holds the partition and the folds exact;
 DeepSpace.Atmosphere.BinsCarryTheSpectrum holds the one approximation --
 one depth for several -- within 5% or 1e-3 along every path from the
-ground, both stars, every mix at both extremes.
+ground, under the home star, procgen's coolest (2,400 K) and the Sun,
+every mix at both extremes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -3135,7 +3153,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereSingleScatteringTest, "DeepSpace.Atm
 namespace AtmosphereMarchTestLocal
 {
     /** As a display shows it: no channel below none (the reference's light
-     *  can leave sRGB's gamut, where no screen could show the difference). */
+     *  can leave sRGB's gamut, where no screen could show the difference).
+     *  No ruling approved this, so the test counts what it changes
+     *  (planning note 17). */
     double Shown(double Channel)
     {
         return FMath::Max(Channel, 0.0);
@@ -3157,11 +3177,14 @@ bool FAtmosphereSingleScatteringTest::RunTest(const FString& Parameters)
     FReferenceAir::FOptions FirstOrder;
     FirstOrder.bSecondOrder = false;
     int32 Checked = 0;
+    int32 Clamped = 0;
     double Worst = 0.0;
     TArray<FString> Misses;
     for (const FNamedAir& Named : Extremes())
     {
-        for (const double Kelvin : {HomeStarK, SunK})
+        // The home star and the Sun, which the bins were chosen against, and
+        // procgen's coolest star, which they were not (planning note 13).
+        for (const double Kelvin : {HomeStarK, CoolestStarK, SunK})
         {
             const FAtmosphere Law = FAtmosphere::Build(Named.Air, Kelvin, EAtmosphereTable::None);
             const FReferenceAir Reference(Named.Air, Kelvin);
@@ -3180,11 +3203,13 @@ bool FAtmosphereSingleScatteringTest::RunTest(const FString& Parameters)
                 {
                     for (int32 C = 0; C < 3; ++C)
                     {
+                        const double Raw[2][2] = {{Got->InScatter[C], Want.InScatter[C]}, {Got->Transmittance[C], Want.Transmittance[C]}};
                         const double Pairs[2][2] = {{Shown(Got->InScatter[C]), Shown(Want.InScatter[C])},
                                                     {Shown(Got->Transmittance[C]), Shown(Want.Transmittance[C])}};
                         for (int32 Q = 0; Q < 2; ++Q)
                         {
                             ++Checked;
+                            Clamped += (Raw[Q][0] < 0.0 || Raw[Q][1] < 0.0) ? 1 : 0;
                             const double Allowance = FMath::Max(0.05 * Pairs[Q][1], 1.0e-3);
                             const double Over = std::isfinite(Pairs[Q][0]) ? FMath::Abs(Pairs[Q][0] - Pairs[Q][1]) / Allowance : 1.0e30;
                             Worst = FMath::Max(Worst, Over);
@@ -3199,13 +3224,13 @@ bool FAtmosphereSingleScatteringTest::RunTest(const FString& Parameters)
             }
         }
     }
-    AddInfo(FString::Printf(TEXT("single scattering against the reference's first order: %d values, %d outside 5%% or 1e-3, the worst at %.2f of its allowance"),
-        Checked, Misses.Num(), Worst));
+    AddInfo(FString::Printf(TEXT("single scattering against the reference's first order: %d values, %d outside 5%% or 1e-3, the worst at %.2f of its allowance; %d changed by the gamut clamp"),
+        Checked, Misses.Num(), Worst, Clamped));
     for (int32 I = 0; I < FMath::Min(Misses.Num(), 40); ++I)
     {
         AddInfo(Misses[I]);
     }
-    TestEqual(TEXT("the whole grid was checked: 12 airs and stars, 48 rays, two builds, three channels, two quantities"), Checked, 12 * 48 * 2 * 3 * 2);
+    TestEqual(TEXT("the whole grid was checked: 18 airs and stars, 48 rays, two builds, three channels, two quantities"), Checked, 18 * 48 * 2 * 3 * 2);
     TestEqual(TEXT("every channel of both builds within 5% or 1e-3 of the reference's first order"), Misses.Num(), 0);
     return true;
 }
@@ -3398,16 +3423,27 @@ inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenit
 // arguments: a 64 x 32 RGBA16F texture, bins 0-3 in its left half and 4-7
 // in its right, each half read as the C++ reads the table -- 32 texels
 // across, 0 and 1 at the first and last centre.
+// Load, never SampleLevel: the GPU's bilinear weights are 8-bit fixed
+// point, and FAtmosphereTable::Sample blends in full precision, so each
+// half's four texels are loaded and blended in float, as the C++ blends
+// them. The sampler is unused; it stays in the signature because a Custom
+// node's texture input brings one.
 #define AT_TABLE_PARAM , Texture2D AT_Table, SamplerState AT_TableSampler
 #define AT_TABLE_ARG , AT_Table, AT_TableSampler
 #define AT_PRECISE precise
 static const float AT_SPLITTER = 4097.0;
 AT_Bins AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
 {
-    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;
-    float V = (saturate(Altitude01) * 31.0 + 0.5) / 32.0;
-    float4 Low = AT_Table.SampleLevel(AT_TableSampler, float2(U, V), 0.0);
-    float4 High = AT_Table.SampleLevel(AT_TableSampler, float2(U + 0.5, V), 0.0);
+    float FX = saturate((CosSunZenith + 1.0) * 0.5) * 31.0;
+    float FY = saturate(Altitude01) * 31.0;
+    int X0 = min(int(floor(FX)), 30);
+    int Y0 = min(int(floor(FY)), 30);
+    float TX = FX - float(X0);
+    float TY = FY - float(Y0);
+    float4 Low = lerp(lerp(AT_Table.Load(int3(X0, Y0, 0)), AT_Table.Load(int3(X0 + 1, Y0, 0)), TX),
+                      lerp(AT_Table.Load(int3(X0, Y0 + 1, 0)), AT_Table.Load(int3(X0 + 1, Y0 + 1, 0)), TX), TY);
+    float4 High = lerp(lerp(AT_Table.Load(int3(X0 + 32, Y0, 0)), AT_Table.Load(int3(X0 + 33, Y0, 0)), TX),
+                       lerp(AT_Table.Load(int3(X0 + 32, Y0 + 1, 0)), AT_Table.Load(int3(X0 + 33, Y0 + 1, 0)), TX), TY);
     AT_Bins Out;
     Out.V[0] = Low.r;
     Out.V[1] = Low.g;
@@ -4450,7 +4486,7 @@ cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T
 cd /home/matt/Development/deepspace/.worktrees/air-optics && for T in DeepSpace.Atmosphere.BinnedAir DeepSpace.Atmosphere.MultiScatterTable DeepSpace.Atmosphere.SingleScatteringMatchesReference DeepSpace.Sky.Colour; do echo "$T"; time ./test.sh "$T"; done
 ```
 
-Expected: `passed: 1` thirteen times. In the harness, the info line read `6912 values, 0 outside 5% or 1e-3, the worst at 0.80 of its allowance`, and the three new tests took 0.0, 4.1 and 1.9 s at `-O2`.
+Expected: `passed: 1` thirteen times. The info line now reads `10368 values`. In the harness, over the home star and the Sun only, it read `6912 values, 0 outside 5% or 1e-3, the worst at 0.80 of its allowance`, and the three new tests took 0.0, 4.1 and 1.9 s at `-O2`; the 2,400 K star adds about half again to `.SingleScatteringMatchesReference`, about 2.9 s. If it misses only at 2,400 K, stop and report the printed misses (planning note 13). Report the gamut-clamp count too (planning note 17).
 - The `static_assert` in `Atmosphere.cpp` holds the `.ush`'s `AT_BINS` to `AtmosphereBins::Count`. If it fires, the two were edited apart.
 - **If a shape test fails** (`.CrescentAtHighPhase`, `.BacklitRing`), print its info lines and report. They are the spec's claims about the look, and the re-cut law must keep them.
 
@@ -4625,7 +4661,7 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("every texel finite and not negative"), bFinite);
 
         // Texel centres: altitude J / 31 of the air's depth, the sun at
-        // CosOfColumn(I) -- overhead, 27 degrees up, a degree up, a degree
+        // CosOfColumn(I) -- overhead, 17.5 degrees up, 1.5 up, 1.5
         // down -- each bin against the reference's source averaged into it.
         for (const int32 J : {0, 3, 9})
         {
@@ -4768,22 +4804,22 @@ double FAtmosphereTable::CosOfColumn(int32 Column)
 // toward the horizon as FAtmosphereTable::ColumnOf crowds them.
 ```
 
-    and replace `    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;` with
+    and replace `    float FX = saturate((CosSunZenith + 1.0) * 0.5) * 31.0;` with
 
 ```hlsl
     float Cos = clamp(CosSunZenith, -1.0, 1.0);
     float T = Cos < 0.0 ? -sqrt(-Cos) : sqrt(Cos);
-    float U = (saturate((T + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;
+    float FX = saturate((T + 1.0) * 0.5) * 31.0;
 ```
 
 - [ ] **Step 4: Build and run; expect PASS.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.MultiScatterTable && ./test.sh DeepSpace.Atmosphere.SingleScatteringMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T in MultiScatterTable TerminatorReddens CrescentAtHighPhase BacklitRing GroundSkySwatch; do ./test.sh DeepSpace.Atmosphere.$T || break; done
 cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh DeepSpace.Atmosphere.MultiScatterTable && time ./test.sh DeepSpace.Sky.Colour
 ```
 
-Expected: `passed: 1` twice, and the two times (*Conventions*). In the harness, with the old equal-cosine columns, the horizon check read up to 0.00616 against the reference's 0.00489 (bin 3, 26% over). With these columns every bin is within 10%.
+Expected: `passed: 1` five times, and the two times (*Conventions*). `.MultiScatterTable` holds the mapping. The other four build full tables and read them off the noon columns: the shape tests at the terminator and backlit, the swatch at dusk. So they are what sees the columns move. (`.SingleScatteringMatchesReference` builds no table and cannot see them.) In the harness, with the old equal-cosine columns, the horizon check read up to 0.00616 against the reference's 0.00489 (bin 3, 26% over). With these columns every bin is within 10%.
 
 If `.MultiScatterTable` misses by more than 10% elsewhere, the first remedy is still C++-only: raise `AT_SPHERE_RINGS` and `AT_SPHERE_SEGMENTS`, and report why in the commit.
 
@@ -4815,6 +4851,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
 
+  Replace each `N` with the measured seconds before committing, and check with `git log -1 --format=%B | grep -c ' N s'`, which must print `0` (*Conventions*).
+
 - [ ] **Step 6: Prove the test can fail.**
 
 ```bash
@@ -4835,7 +4873,7 @@ Each is drawn through the shipped law in double, exposed at `ds.Sky.Radiance` 3.
 
 Two things are owed:
 - **The swatches through the binned law.** The developer ruled from the three-channel law's. The bins move the skies a little, so they go to the developer again, for information. No new ruling is asked.
-- **A proof the swatch can fail.** The first plan's mutation renamed the extension to `.nonesuch`, and UE 5.8.2 writes a PNG for an extension it does not know, so that mutant survived and proved nothing (the builder's report). The corrected mutation points the file into `/proc`, where nothing can be created.
+- **A proof the swatch can fail.** The first plan's mutation renamed the extension to `.nonesuch`, and UE 5.8.2 writes a PNG for an extension it does not know, so that mutant survived and proved nothing (the builder's report). The corrected mutation points the file under `DeepSpace.uproject`, as if it were a directory: it is a file, so the directory cannot be made and nothing is written. The attempt stays inside the repository (never a system path such as `/proc`: CLAUDE.md forbids touching those, and the plan creates nothing outside the repository), and it does not depend on how a kernel refuses a write.
 
 Then `.StarColour`: rulings 1 and 4 are recorded (2026-09-27), so its gate passes. Ruling 1 restates the red-dwarf bounds to what the physics gives, and this task writes them.
 
@@ -4861,11 +4899,11 @@ Expected: `passed: 1`, six `swatch` lines, six fresh PNGs. Report them through t
 - [ ] **Step 2: Prove the swatch can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'FPaths::Combine(FPaths::ProjectSavedDir(), ' 'FPaths::Combine(FString(TEXT("/proc/air_swatch_nowhere")), ' DeepSpace.Atmosphere.GroundSkySwatch
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'FPaths::Combine(FPaths::ProjectSavedDir(), ' 'FPaths::Combine(FPaths::ProjectDir(), TEXT("DeepSpace.uproject"), ' DeepSpace.Atmosphere.GroundSkySwatch
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && git status --short && test -f DeepSpace.uproject
 ```
 
-Expected: `KILLED`: nothing can be written under `/proc`, so `every swatch is written` fails with 0 of 6. If it survives, `FImageUtils::SaveImageByExtension` is reporting success for a file it did not write. Stop and report the log's `swatch` lines: then the test must check the files exist on disk (`IFileManager::Get().FileSize(*Path) > 0`) rather than trust the return value, and that is a change to the test, made and proved before going on.
+Expected: `KILLED`: every path is `<project>/DeepSpace.uproject/air_swatch_*.png`, whose directory would be a file, so `every swatch is written` fails with 0 of 6. Then `git status --short` prints nothing and `DeepSpace.uproject` is still a file: the attempt left nothing behind. If it survives, `FImageUtils::SaveImageByExtension` is reporting success for a file it did not write. Stop and report the log's `swatch` lines: then the test must check the files exist on disk (`IFileManager::Get().FileSize(*Path) > 0`) rather than trust the return value, and that is a change to the test, made and proved before going on.
 
 - [ ] **Step 3: The gate: rulings 1 and 4.**
 
@@ -5043,9 +5081,10 @@ cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh Deep
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "pale grey-cyan" docs/superpowers/specs/2026-09-27-atmospheres-design.md
+cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "pale grey-cyan to off-white\|are pale grey-cyan\|a faint cyan" docs/superpowers/specs/2026-09-27-atmospheres-design.md
 ```
 
-  Expected: `1`, the quotation inside ruling 1's own paragraph, which records what it replaced.
+  Expected: `2`, then `0`. The two left are records of what was replaced: the quotation in ruling 1's own paragraph, and the new `.StarColour` item's "not the pale grey-cyan first estimated". The `0` is the old decision 3 rows and ruling 2's old wording, all gone.
 
 - [ ] **Step 6: The whole suite, then commit.**
 
@@ -5069,6 +5108,8 @@ Measured: DeepSpace.Atmosphere.StarColour costs N s over start-up.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
+
+  Replace each `N` with the measured seconds before committing, and check with `git log -1 --format=%B | grep -c ' N s'`, which must print `0` (*Conventions*).
 
 - [ ] **Step 7: Prove `.StarColour` can fail.**
 
@@ -5094,11 +5135,12 @@ These are decision 1's three agreements, as rulings 3, 5, 6 and 7 leave them:
 - **`.FloatMatchesDouble`:** F32 against F64 over the grid and decision 1's float extremes, at 1e-3 or 1e-5, every output finite.
   - Its limbs from 7.8 and 1,000 radii are now turned out of the axes, as `.ImpactParameter`'s ray is. On an axis every cross product is exact, and the first plan's mutant for the Dekker product survived there (planning note 16).
   - It builds the noon table only: a full table is over a second a world, and float against double is the same arithmetic whatever the table holds.
+  - It runs decision 1's whole grid of airs, as the spec's "over the same grid" says: every mix at 0.05 bar and at its ceiling, and the giant. The first re-plan ran the ceilings and the giant only.
 - **`.HomothetyInvariance`:** ruling 5's tolerances: the eyes to 1e-12 relative, the law's outputs to 1e-9.
 
 The reference gains the isotropic option and a finer azimuth. With 12 segments it was up to 5% short of its own converged value on backlit horizons; with 24 it is within 0.5% of 48 (planning note 16). That costs the second order twice the time. So:
 - `Atmosphere.Full.LawMatchesReference` and `Atmosphere.Full.MultipleScatteringGap` stay outside the default suite. Each takes about 2.5 minutes in the harness, on one process behind the lock.
-- The default `.LawMatchesReference` keeps the grid's hardest air along its longest paths: N2/O2 at its ceiling, the horizon and the limb from the ground, under the home star. That is 6 rays.
+- The default `.LawMatchesReference` keeps the grid's hard case, the one planning note 13 and Task 4 name: CO2 at its ceiling under the home star, along its longest paths, the horizon from the ground and the horizon from inside (blue transmittance, where one depth per bin must stand for most). That is 6 rays, as many as the earlier N2/O2 share (ground horizon and limb), so it should cost about the same 3.6 s; it is re-timed against the 5 s cap in Step 4.
 
 The grid itself is the fixtures' (Task 5).
 
@@ -5110,7 +5152,7 @@ This task is gated on ruling 7 (Step 1). It writes the reference's two options a
   - in the default suite: `DeepSpace.Atmosphere.LawMatchesReference`, `DeepSpace.Atmosphere.FloatMatchesDouble` and `DeepSpace.Atmosphere.HomothetyInvariance`;
   - outside it: `Atmosphere.Full.LawMatchesReference` and `Atmosphere.Full.MultipleScatteringGap`.
 - Modify: `docs/superpowers/specs/2026-09-27-atmospheres-design.md`:
-  - Step 6: decision 1 (the bins, the march, the isotropic agreement), and the *Tests* section's `.LawMatchesReference` and `.HomothetyInvariance` items;
+  - Step 6: decision 1 (the bins, the interface paragraph with `AT_Bins` and `AT_TABLE_PARAM`, the Chapman form, the march, the isotropic agreement), decision 3's paragraph on coefficients, decision 11's table sizes (and `T_SkyAirHere`'s), and the *Tests* section's `.LawMatchesReference` and `.HomothetyInvariance` items;
   - Step 9: the *Parallel tracks* rows for O and M, and the merge-order paragraph.
 
 **Interfaces:**
@@ -5277,6 +5319,7 @@ namespace AtmosphereAgreementTestLocal
     struct FAgreement
     {
         int32 Checked = 0;
+        int32 Clamped = 0;   // values Shown changed on either side (planning note 17)
         double Worst = 0.0;
         TArray<FString> Misses;
     };
@@ -5321,11 +5364,13 @@ namespace AtmosphereAgreementTestLocal
                     {
                         for (int32 C = 0; C < 3; ++C)
                         {
+                            const double Raw[2][2] = {{Got->InScatter[C], Want.InScatter[C]}, {Got->Transmittance[C], Want.Transmittance[C]}};
                             const double Pairs[2][2] = {{Shown(Got->InScatter[C]), Shown(Want.InScatter[C])},
                                                         {Shown(Got->Transmittance[C]), Shown(Want.Transmittance[C])}};
                             for (int32 Q = 0; Q < 2; ++Q)
                             {
                                 ++Out.Checked;
+                                Out.Clamped += (Raw[Q][0] < 0.0 || Raw[Q][1] < 0.0) ? 1 : 0;
                                 const double Allowance = FMath::Max(Relative * Pairs[Q][1], Absolute);
                                 const double Over = std::isfinite(Pairs[Q][0]) ? FMath::Abs(Pairs[Q][0] - Pairs[Q][1]) / Allowance : 1.0e30;
                                 Out.Worst = FMath::Max(Out.Worst, Over);
@@ -5345,8 +5390,8 @@ namespace AtmosphereAgreementTestLocal
 
     void Report(FAutomationTestBase& Test, const FAgreement& Result, const TCHAR* Tolerance)
     {
-        Test.AddInfo(FString::Printf(TEXT("the law against the reference: %d channel values checked, %d outside %s, the worst at %.2f of its allowance"),
-            Result.Checked, Result.Misses.Num(), Tolerance, Result.Worst));
+        Test.AddInfo(FString::Printf(TEXT("the law against the reference: %d channel values checked, %d outside %s, the worst at %.2f of its allowance; %d changed by the gamut clamp"),
+            Result.Checked, Result.Misses.Num(), Tolerance, Result.Worst, Result.Clamped));
         for (int32 I = 0; I < FMath::Min(Result.Misses.Num(), 40); ++I)
         {
             Test.AddInfo(Result.Misses[I]);
@@ -5361,11 +5406,13 @@ bool FAtmosphereLawMatchesReferenceTest::RunTest(const FString& Parameters)
     using namespace AtmosphereAgreementTestLocal;
     using namespace AtmosphereTestFixtures;
 
-    // The default suite's share of the grid: its hardest air along the
-    // longest paths, the horizon and the limb from the ground under the home
-    // star. Atmosphere.Full.LawMatchesReference is the whole grid.
-    const TArray<FNamedAir> Hardest = {{TEXT("N2/O2 at its ceiling"), NitrogenOxygen(NitrogenOxygenCeilingBar)}};
-    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground eye, horizon"), TEXT("ground eye, limb")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));
+    // The default suite's share of the grid: its hard case, CO2 at its
+    // ceiling under the home star, where a red dwarf's small blue must come
+    // through a long horizontal path (planning note 13), along the horizon
+    // from the ground and from inside the air.
+    // Atmosphere.Full.LawMatchesReference is the whole grid.
+    const TArray<FNamedAir> Hardest = {{TEXT("CO2 at its ceiling"), CarbonDioxide(CarbonDioxideCeilingBar)}};
+    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground eye, horizon"), TEXT("inside eye, horizon")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));
     return true;
 }
 
@@ -5401,8 +5448,14 @@ bool FAtmosphereFloatMatchesDoubleTest::RunTest(const FString& Parameters)
 
     // The noon table only: a full one costs over a second a world, and float
     // against double is the same arithmetic whatever the table holds.
-    const FAirSpec Airs[] = {NitrogenOxygen(NitrogenOxygenCeilingBar), CarbonDioxide(CarbonDioxideCeilingBar),
-                             HydrogenHelium(HydrogenHeliumCeilingBar), Giant()};
+    // Decision 1's grid of airs -- every mix at 0.05 bar and at its ceiling
+    // -- and the giant.
+    TArray<FAirSpec> Airs;
+    for (const FNamedAir& Named : Extremes())
+    {
+        Airs.Add(Named.Air);
+    }
+    Airs.Add(Giant());
     int32 Checked = 0;
     bool bFinite = true;
     TArray<FString> Misses;
@@ -5475,7 +5528,9 @@ bool FAtmosphereHomothetyInvarianceTest::RunTest(const FString& Parameters)
     Body.Position = FUniversePosition() + FVector(1.495978707e13, 0.0, 0.0);
     Body.Radius = EarthRadiusCm;
 
-    const FAtmosphere Air = FAtmosphere::Build(EarthAir(), SunK);
+    // No table: what is compared is the eye, and the law's arithmetic on it.
+    // A full table costs about 1.4 s and adds the same reads to both sides.
+    const FAtmosphere Air = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
     const FVector3d Up = FVector3d(-1.0, 0.3, 0.2).GetSafeNormal();
     const FVector3d ToStar = (Star.Position - Body.Position).GetSafeNormal();
     const FVector3d Views[] = {-Up, (FVector3d(0.0, 0.0, 1.0) - Up).GetSafeNormal(), FVector3d::CrossProduct(Up, FVector3d(0.0, 0.0, 1.0)).GetSafeNormal()};
@@ -5526,19 +5581,21 @@ cd /home/matt/Development/deepspace/.worktrees/air-optics && for T in DeepSpace.
 Expected: all five pass. The harness measured:
 - the full grid, 0 of 6,912 outside 5% or 1e-3, the worst at 0.80;
 - the gap, 0 outside 25% or 1e-3, the worst at 0.75;
-- the default share, 72 values, the worst at 0.66;
-- float against double, 0 of 3,960;
-- times of 3.6 s for the default share and 0.8 s for float against double, at `-O2`.
+- the earlier default share (N2/O2 at its ceiling, the ground horizon and limb), 72 values, the worst at 0.66, in 3.6 s at `-O2`. The share is now CO2 at its ceiling along the ground and inside horizons, also 72 values; the harness did not run it as a share, but its rays are inside the full grid's 0.80, and it should cost about the same;
+- float against double, 0 of 3,960 over the ceilings and the giant, in 0.8 s. With the 0.05 bar airs it checks 6,930, about 1.4 s; the thin airs are unmeasured.
+
+Each info line also prints how many values the gamut clamp changed (planning note 17): report those counts with the times.
 
 The harness could not build `.HomothetyInvariance` (it needs `SkyProjection`). The first plan's harness passed it, and its law calls are the entry points, whose signatures did not change. The printed misses (up to 40) are the report if anything fails; the verdict table says what follows. A default test more than 5 s over start-up stops the task: report it, with the time.
 
-- [ ] **Step 5: The whole suite.**
+- [ ] **Step 5: The whole suite, and what it now costs.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
+cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh
+cd /home/matt/Development/deepspace && ./build.sh && time ./test.sh
 ```
 
-Expected: green.
+Expected: green twice (the editor closed on both trees). The first is this tree, the second `main`, which has none of Tasks 4-8's tests; the difference is what Tasks 4-8 added to the default suite. Put it in Step 7's commit as `Measured: the default suite grew by N s.` Over 15 s, stop and report the per-test times (Global Constraints, *The default suite stays fast*).
 
 - [ ] **Step 6: Amend the spec to the rulings.** In `docs/superpowers/specs/2026-09-27-atmospheres-design.md`:
   - In decision 1's list, replace the bullet `- **Three colour channels**, with per-world effective coefficients that` / `  already fold in the star's spectrum (decision 3).` with:
@@ -5546,13 +5603,42 @@ Expected: green.
 ```markdown
 - **Eight spectral bins**, not three colour channels (atmosphere plan
   rulings 3 and 6): each bin a run of the reference's wavelengths, narrow
-  in the blue, its coefficients the star-weighted mean of its wavelengths',
-  folded into linear sRGB only at the end by the star's own light in each
-  bin -- so the star is still in the coefficients (decision 3). Three
-  channels, and any four to six bins, missed the reference on long paths
-  by up to several times the tolerance.
+  in the blue, its coefficients the star-weighted mean of its wavelengths'
+  and themselves colourless, folded into linear sRGB only at the end by the
+  star's own light in each bin -- so the star enters through the bins'
+  weights and the folds, which C++ computes, and the shader still never
+  sees a temperature (decision 3). Three channels, and any four to six
+  bins, missed the reference on long paths by up to several times the
+  tolerance.
 ```
 
+  - Replace the paragraph beginning `` `AT_Air` is a plain struct of scalars (the per-channel coefficients and the`` and ending `(a) merges.` (eight lines) with:
+
+```markdown
+`AT_Air` is a plain struct of scalars: per spectral bin, the gas's and the
+aerosol's scattering and extinction, colourless, and the star's light in
+the bin as `FoldR`, `FoldG` and `FoldB`; then the shape, `GasH`,
+`AerosolH`, `AerosolG` and `Top` -- 60 scalars, fifteen float4 (amended
+by atmosphere plan rulings 3 and 6). The multiple-scattering table (below)
+is read through a hook each side defines *before* including the file,
+`AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith
+AT_TABLE_PARAM)`, returning an `AT_Bins`, a value per bin: in HLSL four
+`Load`s of each half of the texture the Custom node is handed, blended in
+float, in C++ a bilinear read of `FAtmosphere`'s own table. The table
+travels as the trailing macro argument `AT_TABLE_PARAM` (`AT_TABLE_ARG` at
+a call), which every law function that reaches the hook takes, because a
+Custom node's texture is a parameter of the function it generates, not a
+global (atmosphere optics plan, planning note 1). The entry points'
+arguments are otherwise as above, and they still return linear sRGB,
+folded from the bins at the end.
+```
+
+  - In the code block of entry points, replace `AT_REAL    AT_LogChapman   (AT_REAL X, AT_REAL CosZenith);       // ln(airmass), Schueler's form` with `AT_REAL    AT_LogChapman   (AT_REAL X, AT_REAL CosZenith);       // ln(airmass), asymptotic form`.
+  - In decision 1's bullet on the optical depth to the sun, replace `exponential atmosphere, in Schueler's (2012) closed-form approximation,` with `exponential atmosphere, in the asymptotic form sqrt(pi X / 2) erfcx(sqrt(X / 2) cos z) with its first correction in 1 / X (Schueler's (2012) closed form missed it by 2.5% at 60 degrees: atmosphere optics plan, planning note 5),`, re-wrapped at the bullet's width.
+  - In decision 11 (*Performance*), the table grows with the bins, a cell holding eight values, not three:
+    - replace `- **One 32 x 32 multiple-scattering table per airy world**, RGBA16F (8 KB),` with `- **One 32 x 32 multiple-scattering table per airy world**, a value per bin in each cell, as one 64 x 32 RGBA16F texture (16 KB; bins 0-3 in the left half, 4-7 in the right: atmosphere plan ruling 6),`, re-wrapped;
+    - replace `A system of twelve airy worlds is under 100 KB.` with `A system of twelve airy worlds is under 200 KB.`;
+    - replace `` `T_SkyAirHere` (32 x 32, RGBA16F, uncompressed, no mips, never`` with `` `T_SkyAirHere` (64 x 32, RGBA16F, a world's table's layout, uncompressed, no mips, never``, re-wrapped.
   - Replace the bullet beginning `- **Along the view**, **12 samples**, spaced by the density's own` (three lines, ending `Rayleigh phase and a Henyey-Greenstein phase for the aerosol.`) with:
 
 ```markdown
@@ -5566,16 +5652,17 @@ Expected: green.
 ```
 
   - In the paragraph beginning `**How they are held equal.**`, replace `and requires each channel` / `within 5% relative or 1e-3 absolute of the reference -- **for both the F64` / `and the F32 builds**.` with `and requires each channel within 5% relative or 1e-3 absolute of the reference with its second scattering sent every way alike, as the law's multiple scattering is -- **for both the F64 and the F32 builds** -- and within 25% or 1e-3 of the reference's full second order, the approximation's own cost (atmosphere plan ruling 7).`, re-wrapped at the paragraph's width.
-  - In decision 3's paragraph beginning `**Per-world effective coefficients.**`, replace `Rendering carries three channels, but` with `Rendering carries eight spectral bins (atmosphere plan ruling 6), because`, and replace `fits **per-channel effective scattering and extinction` / `coefficients** exact in the optically thin limit and at the world's own` / `nadir column.` with `averages **per-bin scattering and extinction** exact in the optically thin limit, then folds each bin into colour by the star's light in it.`, re-wrapped; and replace `is what proves three` / `channels good enough across the angles that matter;` with `is what proves the bins good enough across the angles that matter;`.
+  - In decision 3's paragraph beginning `**Per-world effective coefficients.**`, replace `Rendering carries three channels, but` with `Rendering carries eight spectral bins (atmosphere plan ruling 6), because`, and replace `fits **per-channel effective scattering and extinction` / `coefficients** exact in the optically thin limit and at the world's own` / `nadir column.` with `averages **per-bin scattering and extinction** exact in the optically thin limit, then folds each bin into colour by the star's light in it.`, re-wrapped; and replace `is what proves three` / `channels good enough across the angles that matter;` with `is what proves the bins good enough across the angles that matter;`; and replace `the star colour is` / `already in the coefficients, so the shader never sees a temperature.` with `the star enters through the bins' weights and folds, which C++ computes, so the shader never sees a temperature.`, re-wrapped.
   - In the *Tests* section:
     - In the `.LawMatchesReference` item, replace `(decision 1's grid and tolerance),` with `(decision 1's grid and tolerance, the reference's second scattering isotropic as the law's is: atmosphere plan ruling 7),`. After `for F64 and F32.`, add ` The default suite runs its hardest air along its longest paths; the whole grid is Atmosphere.Full.LawMatchesReference, and the full second order's gap, within 25% or 1e-3, Atmosphere.Full.MultipleScatteringGap, both run by name before a merge.`
     - In the `.HomothetyInvariance` item, replace the words `the same term, bit for bit in double, at k = 1 and k = 1e-3,` (they wrap after `in`) with `the same term in double, at k = 1 and k = 1e-3, the eyes within 1e-12 relative and the law's outputs within 1e-9 (atmosphere plan ruling 5: the proxy's eye and the true eye are one ratio formed by two roundings),`, wrapped at the item's width.
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "Three colour channels\|bit for bit in\|proves three" docs/superpowers/specs/2026-09-27-atmospheres-design.md
+cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "per-channel coefficients and the\|returning an .AT_Rgb.: in HLSL\|Schueler's form\|Schueler's (2012) closed-form\|already in the coefficients\|(8 KB)\|under 100 KB\|T_SkyAirHere. (32 x 32" docs/superpowers/specs/2026-09-27-atmospheres-design.md
 ```
 
-  Expected: `0`.
+  Expected: `0` twice: the three channels, the old interface paragraph, Schueler's form, the star "in the coefficients" and decision 11's three-channel sizes are all gone.
 
 - [ ] **Step 7: Commit.**
 
@@ -5605,10 +5692,13 @@ Measured: DeepSpace.Atmosphere.FloatMatchesDouble costs N s over start-up.
 Measured: DeepSpace.Atmosphere.LawMatchesReference costs N s over start-up.
 Measured: Atmosphere.Full.LawMatchesReference takes N s.
 Measured: Atmosphere.Full.MultipleScatteringGap takes N s.
+Measured: the default suite grew by N s.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
+
+  Replace each `N` with the measured seconds before committing, and check with `git log -1 --format=%B | grep -c ' N s'`, which must print `0` (*Conventions*).
 
 - [ ] **Step 8: Prove the tests can fail.**
 
@@ -5632,7 +5722,7 @@ Expected: `KILLED` seven times:
 6. Float loses a near sample's height in `R - 1`.
 7. The proxy stops being a homothety.
 
-Mutants 1-6 were run in the plan's harness and killed. The seventh is the first plan's, unchanged. Mutant 4 takes as long as the gap's full grid.
+Mutants 1-6 were run in the plan's harness and killed, mutant 2 on the earlier N2/O2 share. On the CO2 share it is unmeasured. If it survives, the share gains N2/O2 at its ceiling along the ground horizon (three rays, about 1.8 s more), and the test is re-timed; a surviving mutant strengthens the test, never weakens the mutation. The seventh is the first plan's, unchanged. Mutant 4 takes as long as the gap's full grid.
 
 The seventh mutation touches `SkyProjection.cpp`, which is not this plan's file: `Tools/mutate.sh` restores it and rebuilds, and nothing of it is committed.
 
@@ -8141,15 +8231,15 @@ Expected: a clean merge and a green suite. Landing's track P merged first, track
 This plan stops where `M_SkyBody` needs landing slice (a)'s Custom-node route. The follow-on is spec slice 1's track M, and whatever of O and G this plan leaves. It starts after landing (a) merges, and needs these, in about this order:
 
 1. **The rulings above**, all seven recorded and encoded by this plan's gates. Ruling 3 chose spectral bins and ruling 6 eight of them, so `AT_Air` is 60 scalars (note 2), and no material is written against the old three-channel struct.
-2. **The shim decision** (planning note 8), which the spec's *Parallel tracks* now makes track M wait on (Task 8, Step 7). Keep `AT_` shims inline, or extract one shared subset header with `WorldRelief.ush`. The latter touches `WorldRelief.ush`, which landing's track T owns through slice (b), so it is sequenced after slice (b) or done by T.
+2. **The shim decision** (planning note 8), which the spec's *Parallel tracks* now makes track M wait on (Task 8, Step 9). Keep `AT_` shims inline, or extract one shared subset header with `WorldRelief.ush`. The latter touches `WorldRelief.ush`, which landing's track T owns through slice (b), so it is sequenced after slice (b) or done by T.
 3. **The HLSL half, proven.** `Atmosphere.ush`'s HLSL half has never been compiled. The first material that includes it (`M_SkyAirProbe`, then `M_SkyBody`) is the first compiler, and `DeepSpace.Sky.MaterialContract`'s translator run is where a syntax error first shows. What to check:
    - `precise` on `AT_ProductError`'s and `AT_DiffOfProducts`' locals (DXC and SPIR-V `NoContraction`);
    - the macro `AT_TABLE_PARAM`'s `Texture2D` and `SamplerState` parameters (planning note 1). The Custom node's body calls, for example, `AT_InScatter(..., AirMultiScatter, AirMultiScatterSampler)`;
    - the `static const int` loop bounds, and `int(...)` casts.
 4. **The texture routes** (spec *Risks*):
    - The per-world table is 32 x 32 texels of eight bins, `Texels[(Row * 32 + Column) * 8 + Bin]`, with row = altitude and column = `FAtmosphereTable::ColumnOf` of the sun's cosine (crowded toward the horizon), already rounded through half floats. It is uploaded as one transient 64 x 32 RGBA16F `UTexture2D`, bins 0-3 in the left half and 4-7 in the right, with no mips, no sRGB and clamped addressing, and set as `AirMultiScatter` per body.
-   - The GPU's bilinear filter weights are 8-bit fixed point, and the C++ blends exactly. For `Eyes.AtmosphereProbe`'s 1e-3 to hold, the HLSL hook should `Load` the four texels of each half and blend in float, as the C++ does, not `SampleLevel`. That is one edit to the hook in the `.ush`'s HLSL half.
-   - The eye's-air table `T_SkyAirHere` is slice 2's.
+   - The GPU's bilinear filter weights are 8-bit fixed point, and the C++ blends exactly. So the HLSL hook, as Tasks 5 and 6 write it, already `Load`s the four texels of each half and blends in float, as the C++ does, never `SampleLevel`. `Eyes.AtmosphereProbe`'s 1e-3 is the first proof of that. The sampler parameter stays unused in the hook's signature.
+   - The eye's-air table `T_SkyAirHere` is slice 2's. It grows with the bins: 64 x 32 RGBA16F, a world's table's layout, not the spec's first 32 x 32 (Task 8, Step 6 amends decision 11 to say so).
 5. **The material contract, re-cut to the law's struct** (planning note 2). Per body, eight bins each of gas scatter, gas extinction, aerosol scatter and aerosol extinction (two float4 apiece), the fold's R, G and B (two float4 apiece), and `AirShape` = (`GasH`, `AerosolH`, `AerosolG`, `Top`) in radii: fifteen float4, plus the `AirMultiScatter` texture. It goes on all three sides: `SkyMaterialContract.h`, `sky_material_contract.json` and the assets. The spec's `AirRayleigh`, `AirMie`, `AirAbsorb` and `AirShape` names are amended with the reason. The `MPC_Sky` `Here*` block (slice 2) takes the same shape.
 6. **`FSkyBody` carries the air.** `FSkySystem::FromSystem` (`SkySystem.*`, free after landing (a)) builds `FAtmosphere::Build(PlanetAir::SpecOf(Planet), Star.TemperatureK)` per airy world, or holds the `FAirSpec` and builds at `AShipSky`'s system change.
    - At about 1.4 s per world for the full eight-bin table (measured in the harness at `-O2`), a system of several airy worlds costs seconds. So the build belongs off the game thread (`UE::Tasks`), with the air term drawn table-less (`EAtmosphereTable::None`) until it lands, or at the jump's fold.
@@ -8165,7 +8255,7 @@ This plan stops where `M_SkyBody` needs landing slice (a)'s Custom-node route. T
 10. **The rest of slice 1's done-when:**
     - `ds.Air.Describe`, `ds.Air.Show` and `ds.Sky.Goto ... backlit`;
     - the level rebuild and `check_blueprints.py`;
-    - the 4K frame at 16.6 ms (12 nodes, at most 14 with the refinement, eight bins, two texture reads a node, and the disc filling the view from 500 km);
+    - the 4K frame at 16.6 ms (12 nodes, at most 14 with the refinement, eight bins, two texture reads a node, and the disc filling the view from 500 km). **Before measuring it, take `AT_SunAt`'s logarithms out of the node.** As written, each node computes `AT_log(AT_max(A.GasExtinct[K], AT_TINY))` and the aerosol's for every bin: 16 logarithms of numbers that never change for a given air, about 190 a pixel on top of the logarithmic means. Compute them once per march (an `AT_Bins` pair made in `AT_MarchAir` and `AT_SunThrough` and passed down to `AT_NodeAt` and `AT_SunAt`), or carry them in `AT_Air` (eight float4 more in the contract). The values are the same numbers, so every agreement test should read identically; the change is proved by `.FloatMatchesDouble`, `.SingleScatteringMatchesReference` and `Atmosphere.Full.LawMatchesReference` before the frame is timed. It is left out of Tasks 5-8 because the plan's harness verified the law as written, and it changes cost, not a value;
     - before and after frames of R, G and J to the developer;
     - `.GroundSkySwatch`'s drawn R, G and C (Task 12) and the corpus's spread (Tasks 11 and 13) are this plan's; the follow-on only confirms they reached the developer.
 11. **The documentation "after the merges":**
