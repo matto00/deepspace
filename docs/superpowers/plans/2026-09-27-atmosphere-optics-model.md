@@ -5,7 +5,7 @@
 **Goal:** Build the part of the atmospheres spec that may start before landing slice (a) merges: the pure C++ optics (a brute-force spectral reference and the shipped law in `Shaders/Private/Atmosphere.ush`, compiled into C++ twice), `SkyColour::ThroughFilter`, the ground-sky swatches the developer rules on, and procgen's air (the two draws, their guarantees, the fixture worlds and the corpus). Each piece is held by headless tests. It stops at the boundary where `M_SkyBody` needs landing (a)'s Custom-node route.
 
 **Architecture:**
-- **Track O, optics (starts now).** `SkyColour` gains the spectral integral that its one blackbody has so far approximated. `AtmosphereReference` is the slow truth: 16 wavelengths, exact columns by numerical integration, and second-order scattering by brute force. `Atmosphere.ush` is the law the GPU will run. It is written in landing's scalar subset (the `AT_` prefix for landing's `WR_`), in the log domain so that float cannot overflow, and it is compiled into `Atmosphere.cpp` as `AtmosphereF64` and as `AtmosphereF32`, the GPU's mirror. `FAtmosphere::Build` fits the three-channel coefficients from the star's spectrum and builds the 32 x 32 multiple-scattering table. `.GroundSkySwatch` writes noon and dusk fisheyes of the ground sky through the shipped law, which is what the red-dwarf ruling is made from. Pure tests hold the law to the reference and float to double.
+- **Track O, optics (starts now).** `SkyColour` gains the spectral integral that its one blackbody has so far approximated. `AtmosphereReference` is the slow truth: 16 wavelengths, exact columns by numerical integration, and second-order scattering by brute force. `Atmosphere.ush` is the law the GPU will run. It is written in landing's scalar subset (the `AT_` prefix for landing's `WR_`), in the log domain so that float cannot overflow, and it is compiled into `Atmosphere.cpp` as `AtmosphereF64` and as `AtmosphereF32`, the GPU's mirror. `FAtmosphere::Build` averages the air into eight spectral bins, with the star's light in each bin as its fold back to colour (atmosphere plan rulings 3 and 6), and builds the 32 x 32 multiple-scattering table, a value per bin. `.GroundSkySwatch` writes noon and dusk fisheyes of the ground sky through the shipped law, which is what the red-dwarf ruling is made from. Pure tests hold the law to the reference and float to double.
 - **Track G, procgen's air.** `AirFacts` (pure, new files, starts now) holds the derived facts and the Jeans and nadir-haze guarantees. The two draws land on `FPlanet` (landing's track P, which owned every generator file, has merged), with the spec's fixture worlds found by its rules and the corpus's four air facts. After track O has also merged, `PlanetAir` adapts a planet's facts to the optics, `.NadirLegible` holds the guarantee, and a writer outside the default suite gives every temperate world of the corpus its noon sky.
 - Nothing in this plan touches `M_SkyBody`, `setup_sky_materials.py`, the material contract, `SkySystem.*`, `SkyProjection.*`, `ShipSky.*`, `DeepSpace.Build.cs` or any `.uasset`.
 
@@ -19,7 +19,7 @@
 - **Ruling 2:** sky colour is derived and honest, from the star's blackbody x the composition's scattering and absorption x the column. **No palette, no floor.**
 - **Ruling 3:** our own analytic model everywhere. No engine atmosphere component. **No `verify_level.py` change** in this plan.
 - **Ruling 4:** two new draws on new labelled streams, `Label("air.mix")` and `Label("air.pressure")`, from the planet's seed. Kinds unchanged. Barren and Ice stay airless. `DeepSpace.Universe.Seed` and `.Stream` stay untouched. Priors go in the ini with a domain check.
-- **Ruling 8:** haze is capped at nadir by a guarantee in code, `GenGuarantees::MaxNadirTau450 = 0.5`, never an ini prior.
+- **Ruling 8:** haze is capped at nadir by a guarantee in code, `GenGuarantees::MaxNadirTau450`, never an ini prior. Decision 4 set it at 0.5, and **atmosphere plan ruling 2 lowers it to 0.32** (Task 12 moves the constant; Task 4 moves the optics fixtures' ceilings to it).
 - **This plan's rulings are gates** (*Rulings needed before execution*). A gated task does not start until its ruling is recorded in the spec, so no step commits a known-red test and every "whole suite" step expects green.
 - **The reference:** double precision, spectral at 16 wavelengths from 400 to 700 nm, a fine ray march, exact optical depth to the sun by numerical integration, and second order by brute force. It never runs in a frame.
 - **The law:** `Shaders/Private/Atmosphere.ush`, in landing's subset:
@@ -29,19 +29,22 @@
   - shims `AT_floor`, `AT_saturate`, `AT_min`, `AT_max` and `AT_sqrt`, mirroring landing's `WR_floor`, `WR_saturate`, `WR_min`, `WR_max` and `WR_sqrt` in `WorldRelief.ush`, with `AT_exp`, `AT_log`, `AT_cos` and `AT_sin` added (landing has no `exp`, `log`, `cos` or `sin` shim; it has `WR_frac` and `WR_step`, which the law does not use);
   - compiled in C++ as `AtmosphereF64` (double) and `AtmosphereF32` (float).
 - **Float-safe by construction:** the Chapman function works in the log domain. The impact parameter comes from `|E x D|`, never from `sqrt(|E|^2 - (E.D)^2)`.
-- **Samples:** **12** view samples, with the sun's optical depth analytic (Chapman). Multiple scattering is Hillaire's (2020) isotropic approximation, from a **32 x 32** table per airy world (sun zenith by altitude), built in C++ and stored as RGBA16F values.
+- **The law's spectrum:** **eight spectral bins** (atmosphere plan rulings 3 and 6), `AtmosphereBins::First = {0, 2, 3, 5, 6, 8, 10, 11, 16}` over the 16 wavelengths. Each bin's coefficients are the star-weighted mean of its wavelengths', and each bin is folded into linear sRGB by the star's light in it. The entry points still return linear sRGB.
+- **Samples:** **12** view nodes, with a span's light integrated exactly for an exponential (logarithmic mean over the Chapman columns), and one more node halfway where single scattering changes by more than e^4 (planning note 14). The sun's optical depth is analytic (Chapman). Multiple scattering is Hillaire's (2020) isotropic approximation, from a **32 x 32** table per airy world: sun zenith, crowded toward the horizon (planning note 15), by altitude, a value per bin. It is built in C++ and stored through half floats: on the GPU a 64 x 32 RGBA16F texture, bins 0-3 left and 4-7 right.
 - **The air's top:** `AirTop` is **10** scale heights of the gas.
 - **Tolerances:**
-  - `.LawMatchesReference`: each channel within **5% relative or 1e-3 absolute**, for both the F64 and the F32 build, unless ruling 3 restates it.
+  - `.LawMatchesReference`: each channel within **5% relative or 1e-3 absolute**, for both the F64 and the F32 build, everywhere (ruling 3), against the reference with its second scattering isotropic as the law's is (ruling 7).
+  - `.MultipleScatteringGap`: the same against the reference's full second order, within **25% or 1e-3** (ruling 7).
+  - `.SingleScatteringMatchesReference`: the law without its table against the reference's first order, within 5% or 1e-3. `.BinsCarryTheSpectrum`: the bins' transmittance against the spectrum's, the same.
   - `.FloatMatchesDouble`: within **1e-3 relative or 1e-5 absolute**, and every F32 output finite.
   - `.Chapman`: within **0.5%** to 89 degrees and through the horizon to 30 degrees below it, and finite in F32 throughout.
   - `.OneBlackbody`: within **2%** per channel from 2,000 to 15,000 K.
-  - `.HomothetyInvariance`: the spec's "bit for bit", or ruling 5's tolerances.
-- **`.StarColour` bounds** (the noon zenith from the ground, Earth air, 1 bar, 1 g), in linear sRGB with HSV `S = 1 - min/max`, as the spec states them and as rulings 1 and 4 restate them:
-  - S rises monotonically from 2,000 to 15,000 K;
-  - **S <= 0.25 at 2,566 K** and **S <= 0.12 at 2,000 K**;
-  - under 5,772 K, **hue within 200-235 degrees and S within 0.40-0.85**.
-  - If the law lands outside a bound, the spec is amended with the reason, never the test alone.
+  - `.HomothetyInvariance`: ruling 5's: the eyes within **1e-12** relative, the law's outputs within **1e-9**.
+- **`.StarColour` bounds** (the noon zenith from the ground, straight up under a sun 45 degrees high by ruling 4, Earth air, 1 bar, 1 g), in linear sRGB with HSV `S = 1 - min/max`, as **ruling 1** restates them:
+  - S falls from 2,000 K to the greyest sky, which lies between 3,000 and 4,500 K, and rises from it to 15,000 K;
+  - under 2,566 K a peach sky, **S within 0.62-0.82 and hue within 15-40 degrees**; under 2,000 K, **S >= 0.85**;
+  - from 4,000 K up, hue within 200-240 degrees; under 5,772 K, **hue within 200-235 degrees and S within 0.40-0.85**;
+  - no palette, no floor, no white balance per star.
 - **Mixes:** mean molecular weight 28.97 (N2/O2), 44.0 (CO2) and 2.3 (H2/He). Rayleigh cross-section relative to air 1.0, 2.4 and 0.2. Earth air's Rayleigh depth is 0.097 per bar at 550 nm.
 - **Aerosol and absorber** (decision 5), as optical depth at 550 nm per bar, scale height, Angstrom alpha, asymmetry g, and single-scatter albedo:
 
@@ -86,26 +89,28 @@ The spec implies these five input classes, and no test the spec lists exercises 
    - an eye a million radii out.
 
    Each must be finite and mean what it says. Pinned by `DeepSpace.Atmosphere.DegenerateRays` in **Task 5 (O5)**.
-4. **Star temperatures outside the blackbody's range** (0 K, 500 K, 40,000 K), and a 1,000 K star whose blue channel is almost nothing. The channel fit divides by the star's own channel, so these must stay finite and non-negative, clamped exactly as `Blackbody` clamps. Pinned by `DeepSpace.Atmosphere.StarTemperatureExtremes` in **Task 4 (O4)**.
+4. **Star temperatures outside the blackbody's range** (0 K, 500 K, 40,000 K), and a 1,000 K star whose blue is almost nothing. The bins weigh by the star's light and the fold divides by its own channel, so these must stay finite and non-negative, clamped exactly as `Blackbody` clamps. Pinned by `DeepSpace.Atmosphere.StarTemperatureExtremes` in **Task 5 (O5)**, over the bins' coefficients and folds.
 5. **Priors whose mix weights leave a world nothing it can hold.** For example, `AirMixWeightNitrogenOxygen=0` and `AirMixWeightCarbonDioxide=0` pass the domain, since the sum is above 0. Every temperate world that cannot keep hydrogen then has zero total weight, and `FGenStream::Categorical` `check()`s on a zero total, which is a crash. The expectation: that world is airless (`None`, 0 bar), and no draw happens. Pinned inside `DeepSpace.Universe.Air` in **Task 10 (G2)**.
 
 ## Rulings needed before execution (gates)
 
-The plan's harness (planning note 12) compiled and ran this plan's pure C++. Three of the spec's stated numbers do not hold for the law the spec specifies, and the plan departs from the spec's words in two more places. **Each row is a gate:** the task it names does not start (or, for Task 7, does not pass its gate step) until the ruling is recorded.
+The plan's harness (planning note 12) compiled and ran this plan's pure C++. Three of the spec's stated numbers do not hold for the law the spec specifies, and the plan departs from the spec's words in two more places. **Each row is a gate:** the task it names does not start (or, for Task 7, does not pass its gate step) until the ruling is recorded. Rulings 1-5 were recorded on 2026-09-27. Re-planning Tasks 4-8 for ruling 3 measured two more questions, rows 6 and 7, which gate Tasks 4 and 8.
 
 **How a ruling is recorded.** On the developer's word, the orchestrator adds one paragraph to the spec's *The developer's rulings, 2026-09-27* section, on `main`, beginning exactly `**Atmosphere plan ruling N (<date>):**` followed by the developer's choice, and commits it on `main` (a docs commit; no track owns that section). The gated task's gate step merges `main` into its tree and greps for that line. The task that encodes the ruling then amends the spec's affected sentence to say the same, with the reason, in its own commit: the spec is amended, never the test alone.
 
-| # | The spec says | Measured, or the plan's departure | Gates | The developer's choice |
+| # | The spec says | Measured, or the plan's departure | Gates | The developer's choice (recorded) |
 |---|---|---|---|---|
-| 1 | `.StarColour`: under 2,566 K a "pale grey-cyan" sky, saturation <= 0.25; <= 0.12 at 2,000 K; saturation rising with temperature (ruling 2) | peach: 0.72 at 2,566 K, 0.96 at 2,000 K; the least saturated sky is near 3,500-4,000 K. The G-star bounds hold (note 11) | Task 7, Step 5. Made **from Task 7's swatches** (Steps 1-4), which show the ground sky under a red dwarf, a G star and a CO2 world through the shipped law, as the spec's `.GroundSkySwatch` intends | restate the red-dwarf bounds and ruling 2's words to what the physics gives in the game's D65 colour space, or ask for a sky relative to the star's light, which the game does not render |
-| 2 | `.NadirLegible`: half the airless contrast at `MaxNadirTau450 = 0.5` (decision 4) | 0.34, and it would pass at tau450 about 0.32 (note 6) | Task 12 (does not start) | lower the guarantee to about 0.32, or state legibility differently (Weber contrast, or the green channel's) |
-| 3 | `.LawMatchesReference`: three channels within 5% or 1e-3 everywhere (decision 1) | 229 of 3,456 values per build miss. 16 are in the thin airs (up to 21%); the rest are the ceiling airs' long grazing paths, worst in the blue channel's transmittance | Task 8 (does not start) | the spec's named fallback, four or six spectral bins in the law (*Risks*), which changes `AT_Air` and so Tasks 4-8 are re-planned first; or a tolerance restated for grazing paths through thick air |
-| 4 | "the noon zenith from the ground" (`.StarColour`, decision 3's table, the corpus's sky), read as a sun overhead | straight up under a sun **45 degrees** high (note 9). With the sun overhead the zenith is the sun's own aureole and wears the star's colour: under the Sun, Earth air, saturation 0.15, which fails the spec's own G-star bound (0.40-0.85). At 45 degrees it is 0.60, hue 224. This departure is what makes the G bounds pass | Task 7, Step 5 (with ruling 1) | accept 45 degrees; or name another elevation, in which case `.StarColour`'s G bounds are re-measured under it before the test is written |
-| 5 | `.HomothetyInvariance`: the air term "bit for bit in double" from the proxy's eye and the true eye | the eyes to 1e-12 relative and the law's outputs to 1e-9 (note 4): the two eyes are one ratio formed by two roundings | Task 8 (with ruling 3) | accept the tolerances; or hold bit for bit, which needs both sides to form the eye by one rounding, a change to `SkyProjection` (landing track T's file through slice (b)) |
+| 1 | `.StarColour`: under 2,566 K a "pale grey-cyan" sky, saturation <= 0.25; <= 0.12 at 2,000 K; saturation rising with temperature (ruling 2) | peach: 0.72 at 2,566 K, 0.96 at 2,000 K; the least saturated sky is near 3,500-4,000 K. The G-star bounds hold (note 11) | Task 7, Step 5. Made **from Task 7's swatches** (Steps 1-4), which show the ground sky under a red dwarf, a G star and a CO2 world through the shipped law, as the spec's `.GroundSkySwatch` intends | Keep the physics: peach, no white balance per star (2026-09-27). Task 7 writes the bounds. |
+| 2 | `.NadirLegible`: half the airless contrast at `MaxNadirTau450 = 0.5` (decision 4) | 0.34, and it would pass at tau450 about 0.32 (note 6) | Task 12 (does not start) | `MaxNadirTau450` 0.32 (2026-09-27). Task 12 applies it; Task 4 moves the optics fixtures' ceilings. |
+| 3 | `.LawMatchesReference`: three channels within 5% or 1e-3 everywhere (decision 1) | 229 of 3,456 values per build miss. 16 are in the thin airs (up to 21%); the rest are the ceiling airs' long grazing paths, worst in the blue channel's transmittance | Task 8 (does not start) | Spectral bins, four to six, to meet 5% or 1e-3 everywhere (2026-09-27). Tasks 4-8 re-planned; the measured count is row 6's. |
+| 4 | "the noon zenith from the ground" (`.StarColour`, decision 3's table, the corpus's sky), read as a sun overhead | straight up under a sun **45 degrees** high (note 9). With the sun overhead the zenith is the sun's own aureole and wears the star's colour: under the Sun, Earth air, saturation 0.15, which fails the spec's own G-star bound (0.40-0.85). At 45 degrees it is 0.60, hue 224. This departure is what makes the G bounds pass | Task 7, Step 5 (with ruling 1) | 45 degrees, `AtmosphereLaw::NoonSun`, everywhere (2026-09-27). |
+| 5 | `.HomothetyInvariance`: the air term "bit for bit in double" from the proxy's eye and the true eye | the eyes to 1e-12 relative and the law's outputs to 1e-9 (note 4): the two eyes are one ratio formed by two roundings | Task 8 (with ruling 3) | The tolerances (2026-09-27). Task 8 writes them. |
+| 6 | Ruling 3: "four to six spectral bins" | No partition into four, five or six bins meets 5% or 1e-3 on the grid: the best six miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it (worst 0.75 in single scattering and transmittance, 0.80 with the table). Seven meet it by one partition only (note 13) | Task 4 (does not start) | eight bins, as planned; or six, with a tolerance restated for that path (Task 4, Step 1 says what then changes) |
+| 7 | `.LawMatchesReference` against the reference's full second order (decision 1) | The law's multiple scattering is Hillaire's isotropic table, as decision 1 chose. Against the reference with its second scattering isotropic too, the law meets 5% or 1e-3 everywhere. Against the full second order, 32 values per build miss, the worst about 19% off: backlit horizons too dark (the haze's forward peak), nadir views from inside ceiling airs too bright (note 16) | Task 8 (does not start) | hold the law to the isotropic reference at 5% or 1e-3 and pin the full gap at 25% or 1e-3 (as planned); or another gap bound; or a directional table, a change to decisions 1 and 11 |
 
 Two departures an earlier draft carried are gone. The corpus's noon skies cover all 10,000 systems, as slice 1's done-when says, through a writer outside the default suite (Task 13). And `DeepSpace.Universe.Air` compares every world against the same world generated with the draws off, as the spec's *Tests* say (Task 10).
 
-Everything else in Tasks 1-6, 8, 9 and 12 passed in the harness as written; planning note 12 lists what the harness did not cover.
+Everything else in Tasks 1-6, 8, 9 and 12 passed in the harness as written; planning note 12 lists what the harness did not cover. The re-planned Tasks 4-8 were run again, file by file as the plan gives them, in a harness rebuilt from the built code (notes 13-16). Every test passes there, and every mutation named in them was killed there except the two that need the engine (the swatch's file writing, and `SkyProjection`).
 
 ## Planning notes (read before executing)
 
@@ -116,10 +121,10 @@ These arose while writing the plan. Each one is argued here once, and each task 
    - So every law function that reaches the hook takes a trailing `AT_TABLE_PARAM`, which is an empty-looking macro. In HLSL it is `, Texture2D AT_Table, SamplerState AT_TableSampler`. In C++ it is `, const FAtmosphereTable& AT_Table`.
    - Calls pass `AT_TABLE_ARG`. The spec's argument lists are otherwise unchanged. The subset is kept, because the only non-subset text lives in the two platform halves.
    - Orbital slice 1's probe is the first thing that proves the HLSL half. This departure goes to the developer with this plan.
-2. **The per-channel coefficients are four vectors and a shape, not the spec's contract names.**
-   - `AT_Air` carries four vectors of three channels each: gas scatter, gas extinction, aerosol scatter and aerosol extinction. It also carries `GasH`, `AerosolH`, the aerosol's `g` and `Top`, all in radii.
-   - Scatter carries the star's colour at unit luminance. Extinction is relative to the star's own light, so a white surface seen through no air stays white.
-   - The spec's contract (`AirRayleigh`, `AirMie` with `w` as `g`, `AirAbsorb`, and `AirShape` with `w` as one albedo) cannot carry CO2's blue/red single-scatter albedo. It also cannot separate a colour-folded scatter from a colourless extinction.
+2. **The per-bin coefficients and folds, and a shape, not the spec's contract names.**
+   - `AT_Air` carries, per bin (eight, ruling 6), the gas's scatter and extinction and the aerosol's scatter and extinction, colourless; the star's light in each bin as `FoldR`, `FoldG` and `FoldB`; and `GasH`, `AerosolH`, the aerosol's `g` and `Top`, all in radii. That is 60 scalars, fifteen float4.
+   - Extinction is per unit light in the bin, and a transmittance is folded as 1 less what is lost, so a white surface seen through no air stays exactly white.
+   - The spec's contract (`AirRayleigh`, `AirMie` with `w` as `g`, `AirAbsorb`, and `AirShape` with `w` as one albedo) cannot carry CO2's blue/red single-scatter albedo, nor bins.
    - The contract is orbital slice 1's to write, from this struct. See *What orbital slice 1 needs*.
 3. **The planet's shadow is hard, in the law and in the reference.**
    - A sample whose ray to the star passes nearer the centre than the surface gets no sunlight. That is the law's "planet's occultation" (decision 1), made exact rather than smeared by the Chapman function's exponential continuation into the planet.
@@ -140,7 +145,7 @@ These arose while writing the plan. Each one is argued here once, and each task 
 7. **Aerosol and ozone depth scale with the column mass, `P / g`.** The spec gives both "per bar" at 1 g, and says a heavier world "holds more, since the same pressure is less column". Its giant disc pressures (0.11 bar at 15 M_E, 2.4 bar for a Jupiter) are only reproduced when the aerosol scales as `1 / g` too. Named here so the developer can overrule it.
 8. **The spec's "shared shim header" does not exist.** Landing slice (a) keeps its `WR_` shims inline in `WorldRelief.ush` (still so in `.worktrees/landing-a-relief` at `bf23d4e`) and makes no shared header. The spec's "O's first commit after landing (a) merges replaces the copies with landing's shared shim header" therefore has nothing to point at, and its *Parallel tracks* table makes track M wait on that commit. The shims stay inline in `Atmosphere.ush`, and whether to extract one shared file is orbital slice 1's first decision (see the last section). `WorldRelief.ush` belongs to landing's track T through slice (b), so extracting one is sequenced there, not here. **Task 8, Step 7 amends the spec's *Parallel tracks* rows for O and M and its merge-order paragraph**, so that M waits on the shim decision in orbital slice 1 rather than on a commit this plan will never make.
 9. **"The noon zenith" is straight up under a sun 45 degrees high** (`AtmosphereLaw::NoonSun`, Task 6), not under a sun at the zenith (*Rulings needed*, 4). With the sun overhead, the zenith is the sun's own forward-scattered aureole, and it wears the star's colour. Measured under the Sun with Earth air, its saturation is 0.15 and it fails the spec's "Earth's blue" bound. At 45 degrees it is 0.60, hue 224. `.StarColour`, `.ReferenceKnownValues`, the swatch's noon and the corpus's sky all use this one definition. Task 7 amends the spec's `.StarColour` item and decision 3's table heading to name it, in the commit that writes `.StarColour`.
-10. **`.BacklitRing` compares the ring and the lit limb at one grazing height, 3 scale heights.** There the ring is 1.36 times the lit limb (8.3e-2 against 6.1e-2, measured). At each one's own brightest point, though, the lit limb wins: it peaks near the surface at 0.157, where the ring's light, crossing the whole grazing path, is its own extinction, and the ring peaks at 0.103. The spec's sentence does not say which reading it means. The test pins the same-height one and prints both, so the developer sees the peaks.
+10. **`.BacklitRing` compares the ring and the lit limb at one grazing height, 3 scale heights.** There the ring is 1.36 times the lit limb (8.3e-2 against 6.1e-2, measured). At each one's own brightest point, though, the lit limb wins: it peaks near the surface at 0.157, where the ring's light, crossing the whole grazing path, is its own extinction, and the ring peaks at 0.103. The spec's sentence does not say which reading it means. The test pins the same-height one and prints both, so the developer sees the peaks. As built (`f60611b`), `.BacklitRing` also pins the haze's forward peak, not only the gas's: at 3 H in Earth's air there is no haze left, so the gas's (1 + cos^2) alone makes the ring win there, and the test adds a thin air (0.05 bar) low down, 0.25 H, where the grazing path is still optically thin and the haze dense, and requires the ring more than four times the lit limb -- more than the gas's twofold could give. The re-planned law keeps it.
 11. **A measured failure: `.StarColour`'s red-dwarf bounds** (*Rulings needed*, 1). In the game's colour space (linear sRGB, D65 white, which is `SkyColour::Blackbody`'s), a red dwarf's sky is not "pale grey-cyan". It is the star's own orange, shifted toward blue by Rayleigh's lambda^-4, and it lands peach. Measured noon zeniths, Earth air:
 
     | Star | Saturation | Hue |
@@ -169,6 +174,57 @@ These arose while writing the plan. Each one is argued here once, and each task 
       - two `-Wshadow` errors.
     - **Fixed in review, after the harness ran:** `.ChannelFit` bound a reference to a member of a temporary `FAtmosphere` (`Build(...).GetAir()`), which the harness passed by luck; Task 4 now keeps the `FAtmosphere` alive.
     - **Not covered by the harness:** the HLSL half (orbital slice 1's probe), the engine's real headers, UBT's flags (`.ImpactParameter` is the canary for a fused multiply-add), Task 7's swatch writer, Task 8's split into a default and a full grid, Task 10's generator code, `.FixtureWorlds` and the guarantees' move, and Tasks 11 and 13's C++. The Python of the corpus's air columns was run and passes; Task 13's skies reader was not.
+13. **The bin count, by measurement (ruling 3's re-plan; ruling 6).**
+    - **How.** The plan's harness (note 12's, rebuilt from the built code of Tasks 1-6) ran the law with bins against the reference over decision 1's grid, at ruling 2's ceilings. It searched:
+      - every contiguous partition of the 16 wavelengths into four, five, six, seven and eight bins: 455, 1,365, 3,003, 5,005 and 6,435 of them;
+      - five ways of weighting a wavelength within its bin, and two of fitting a bin's extinction.
+      Single scattering and transmittance were checked against the reference's first order across the whole search. The table was added for the best candidates.
+    - **Why three channels failed.** Transmittance is exp of the depth, and one depth per channel cannot stand for a channel whose wavelengths' depths differ by a factor of three over a horizon path. The worst miss was about 54 times its allowance: a blue transmittance of 0.074 against 0.0199, from inside a ceiling air looking at the horizon.
+    - **Four to eight bins, the best of each** (single scattering and transmittance against the first order, both builds):
+
+      | Bins | Misses (of 6,912) | Worst, times the allowance | Where |
+      |---|---|---|---|
+      | 4 | 28 | 4.1 | CO2 at its ceiling, the home star, a horizon from inside, blue transmittance |
+      | 5 | 6 | 4.5 | the same ray |
+      | 6 | 6 | 4.4 | the same ray |
+      | 7 | 0 | 0.86 | -- (one partition only) |
+      | 8 | 0 | 0.75 | -- (several partitions) |
+
+      That ray is the hard one. A red dwarf's blue channel is small, and its light is the difference of large blue terms and negative green-yellow ones, so within-bin error there is amplified. Six bins cannot place a boundary that serves both the blue and the green.
+    - **The choice: eight.**
+      - Across stars of 2,000-15,000 K (first order), eight bins miss 3 values per build, all at 2,000 K, the worst 1.12 times its allowance. The best six miss 31-48.
+      - Eight is two whole RGBA16F texels for the table, and fifteen float4 for the air (32 coefficients, 24 folds, 4 shape numbers).
+      - The weight is the star's light times the length of the wavelength's sRGB vector. Luminance weighting, the obvious choice, fails 22-fold: it all but ignores the blue.
+      - A bin's extinction is its wavelengths' weighted mean depth (exact thin). The nadir-exact fit was measured too, and misses more on long paths.
+    - **The margins, for every re-planned test.** Each is the harness's, at `-O2`, with the code exactly as the plan gives it:
+      - `.BinsCarryTheSpectrum`: 0.92 of its allowance.
+      - `.SingleScatteringMatchesReference`: 0.80.
+      - `.LawMatchesReference`: 0.80 on the full grid and 0.66 on the default share.
+      - `.MultipleScatteringGap`: 0.75 of 25%.
+      - `.FloatMatchesDouble`: 0 misses of 3,960.
+      - `.MultiScatterTable`: every bin within 10%.
+      - `.StarColour`: inside ruling 1's bounds, with the margins Task 7 lists.
+14. **The march, and why bins alone could not meet ruling 3.**
+    - **The midpoint rule's floor.** With sixteen bins, one per wavelength and so spectrally exact, the built law's 12-sample midpoint march still missed 33 values per build in single scattering alone (thin airs up to 21%), and 81 per build in all, at the first ceilings.
+    - **Where it missed:**
+      - the haze's 1 km scale height under H2/He's 55 km, whose first sample sat a whole haze scale height up;
+      - horizons from the ground through ceiling airs, where the view's transmittance falls by e over a few kilometres;
+      - limbs, where the density is Gaussian along the ray.
+    - **The replacement:**
+      - The 12 samples become 12 nodes, `u^2`-spaced from the closest point as before, with both ends of each piece as nodes.
+      - Between two nodes, each constituent contributes its exact column times the logarithmic mean `(B - A) / ln(B / A)` of what it gathers per unit column. The column is the difference of the Chapman columns the nodes already hold, for free. The mean is exact for anything exponential in the column: the density, and the view's transmittance through one constituent.
+      - A span whose single scattering changes by more than `e^4` takes one more node halfway. Sunlight climbing out of a grazing column, or out of the ground's shadow, rises faster than exponentially, and the mean misses its approach.
+    - **The result.** An explicit shadow-edge split was tried as well and dropped: the halfway node alone meets the grid, and a mutation removing the split survived. Across the grid no ray takes more than 14 node evaluations, and a whole dusk sky from the ground takes 12 everywhere. `AT_VIEW_SAMPLES` stays 12, the spec's constant. Its meaning changes from samples to nodes, and the refinement is new; the developer confirms both with the plan (*What the developer is asked*).
+15. **The table's columns** (Task 6). Equal steps in the sun's cosine put the two columns either side of the horizon 3.7 degrees from it, where the light the air hands on changes fastest. A ground horizon under a setting sun read about half as bright again as the reference. Columns at equal steps in `T`, cosine `T |T|`, put them 0.06 degrees from it, and that error is gone. The HLSL hook takes a square root per read.
+16. **What remains: the isotropy of multiple scattering (ruling 7), and the reference's own azimuth.**
+    - **The law's approximation.** The law's table is Hillaire's isotropic approximation (decision 1). The reference computes the second order exactly, with the Rayleigh and Henyey-Greenstein phases, and only the tail beyond it isotropically.
+    - **Measured, with sixteen bins, the new march and the new columns:**
+      - Against the reference with its second scattering made isotropic (`FOptions::bIsotropicSecondOrder`), the law matches everywhere, with and without the table. So the table and the march are what they claim.
+      - Against the full reference, 32 values per build miss 5%, the worst about 19% off.
+      - The misses: backlit horizons and limbs from the ground are too dark. The haze's forward peak is aimed at the sky's light, and an isotropic table cannot aim it. Nadir views from inside a ceiling air are too bright, since the haze near the ground scatters forward the dim light from below, not the sky.
+      - The gap is physics the spec's method leaves out, not a defect. Closing it needs a directional table: per bin, the second-order light's first and second angular moments. That is five numbers more per bin, so five more 64 x 32 RGBA16F textures per world and ten more texture reads per node. That is a change to decisions 1 and 11.
+    - **The reference's azimuth.** The reference itself was found 5.3% short of its own converged value on a backlit horizon: 12 azimuth segments missed the forward peak between them. With 24 it is within 0.5% of 48, at twice the second order's time. Task 8 raises the default.
+    - **The Dekker mutant.** The first plan's Task 8 expected `.FloatMatchesDouble` to kill the Dekker-product mutant. It cannot, on the grid's axis-aligned eyes, where every cross product is exact. The float extremes' limbs are now turned out of the axes, and it is killed.
 
 ## Execution order and file ownership
 
@@ -177,7 +233,7 @@ These arose while writing the plan. Each one is argued here once, and each task 
 | Track | Tree, branch | Tasks | Owns |
 |---|---|---|---|
 | orchestrator | main checkout | the merges; recording the rulings | git, and the spec's *The developer's rulings* section (one `**Atmosphere plan ruling N**` paragraph per ruling) |
-| **O: optics** | `.worktrees/air-optics`, `feat/air-optics` | 1-8 (O1-O8) | `Shaders/Private/Atmosphere.ush` (new), `Source/DeepSpace/Atmosphere/Atmosphere.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereReference.{h,cpp}` (new), `Source/DeepSpace/Sky/SkyColour.{h,cpp}`, `Source/DeepSpace/Tests/SkyColourSpectrumTest.cpp`, `AtmosphereChapmanTest.cpp`, `AtmosphereReferenceTest.cpp`, `AtmosphereBuildTest.cpp`, `AtmosphereLawTest.cpp`, `AtmosphereTableTest.cpp`, `AtmosphereSwatchTest.cpp`, `AtmosphereAgreementTest.cpp`, `Tests/AtmosphereTestFixtures.h` (all new). In the spec: the *Tests* section's `.StarColour` and `.HomothetyInvariance` items and decision 3's table heading (Tasks 7 and 8), and the *Parallel tracks* rows for O and M and the merge-order paragraph under it (Task 8) |
+| **O: optics** | `.worktrees/air-optics`, `feat/air-optics` | 1-8 (O1-O8) | `Shaders/Private/Atmosphere.ush` (new), `Source/DeepSpace/Atmosphere/Atmosphere.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereReference.{h,cpp}` (new), `Source/DeepSpace/Atmosphere/AtmosphereBins.{h,cpp}` (new), `Source/DeepSpace/Sky/SkyColour.{h,cpp}`, `Source/DeepSpace/Tests/SkyColourSpectrumTest.cpp`, `AtmosphereChapmanTest.cpp`, `AtmosphereReferenceTest.cpp`, `AtmosphereBinsTest.cpp`, `AtmosphereBuildTest.cpp`, `AtmosphereLawTest.cpp`, `AtmosphereMarchTest.cpp`, `AtmosphereTableTest.cpp`, `AtmosphereSwatchTest.cpp`, `AtmosphereAgreementTest.cpp`, `Tests/AtmosphereTestFixtures.h` (all new). In the spec: the *Tests* section's `.StarColour`, `.LawMatchesReference` and `.HomothetyInvariance` items, decision 1's bullets and paragraph on agreement, decision 3's table and its paragraph on coefficients, and ruling 2's sentence on red dwarfs' skies, which ruling 1 directs (Tasks 7 and 8), and the *Parallel tracks* rows for O and M and the merge-order paragraph under it (Task 8) |
 | **G: procgen's air** | `.worktrees/air-procgen`, `feat/air-procgen` | 9 (G1), then 10 (G2), 11 (G3); after track O merges, 12 (G4), 13 (G5) | Task 9: `Universe/AirFacts.{h,cpp}` (new) and `Tests/AirFactsTest.cpp` (new). Task 10: `Universe/StarSystem.h`, `StarSystemGenerator.{h,cpp}`, `GenPriors.{h,cpp}`, `ProcGenPriorsConfig.h`, `Config/DefaultGame.ini`, `Universe/AirFacts.h` (the guarantees move out), `Tests/AirFixtureWorlds.h` and `Tests/AirProcGenTest.cpp` (new), and the spec's *Fixture worlds* table. Task 11: `Tools/procgen_corpus_contract.json`, `Tools/procgen_corpus.py`, `Tools/procgen_corpus_sample.tsv`, `Tools/test_procgen_corpus.py` and `Tests/ProcGenCorpusTest.cpp`. Task 12: `Atmosphere/PlanetAir.{h,cpp}` (new), `Tests/AtmosphereNadirTest.cpp` (new), `Tests/AtmosphereSwatchTest.cpp` (track O's, handed over once O has merged), `Universe/GenPriors.h` again if ruling 2 moves `MaxNadirTau450`, and the spec's decision 4 and `.NadirLegible` item. Task 13: `Tests/CorpusSkiesTest.cpp` (new), `Tools/procgen_corpus_skies_sample.tsv` (new), `Tools/procgen_corpus_contract.json`, `Tools/procgen_corpus.py` and `Tools/test_procgen_corpus.py` |
 
 Within this plan, the spec is edited by O, G and the orchestrator, always in different hunks: O's are in *Tests* (the two items), decision 3 and *Parallel tracks*; G's in *Fixture worlds*, decision 4 and *Tests* (the `.NadirLegible` item, a different item from O's); the orchestrator's in *The developer's rulings*. Each gated task merges `main` before it edits, so it edits on top of the rulings.
@@ -208,15 +264,17 @@ Track O (now, no landing dependency):
   1 (O1) SkyColour's spectrum, ThroughFilter, OneBlackbody
   2 (O2) Atmosphere.ush: shims and the Chapman function, compiled twice
   3 (O3) the reference
-  4 (O4) FAtmosphere::Build: the channel fit
-  5 (O5) the law: the ray, the march, the sun
-  6 (O6) the multiple-scattering table
-  7 (O7) the ground-sky swatch, to the developer
-         [GATE: rulings 1 and 4 recorded on main]  then .StarColour, and the spec's words for it
-  8 (O8) [GATE: rulings 3 and 5 recorded on main]  the law against the reference (a default grid and
-         Atmosphere.Full.LawMatchesReference), float against double, the homothety; the spec's shim rows
+  (1-3 built; 4-6 and 7's swatch built for three channels, re-planned below for ruling 3)
+  4 (O4) [GATE: ruling 6 recorded on main]  the fixtures at ruling 2's ceilings; the eight bins
+  5 (O5) the law over the bins: the air, the march, the fold, the table per bin
+  6 (O6) the table's columns crowd the horizon
+  7 (O7) the swatches again through the bins, to the developer; the swatch's mutation corrected;
+         [rulings 1 and 4 recorded]  .StarColour as ruling 1 states it, and the spec's words for it
+  8 (O8) [GATE: ruling 7 recorded on main]  the law against the reference (a default share,
+         Atmosphere.Full.LawMatchesReference, Atmosphere.Full.MultipleScatteringGap), float against
+         double, the homothety; the spec's shim rows
   -> MERGE feat/air-optics into main (touches no landing file): when Tasks 1-8 are committed,
-     ./test.sh is green and ./test.sh Atmosphere.Full.LawMatchesReference is green
+     ./test.sh is green and both Atmosphere.Full.* grids are green
 
 Track G:
   9 (G1) AirFacts, pure (now: new files only)
@@ -233,7 +291,7 @@ Track G:
   -> MERGE feat/air-procgen into main
 ```
 
-Tasks 1-8 are sequential: each consumes the previous one's interface, except that Task 8 consumes only Tasks 3-6, so it may run while Task 7 waits at its gate (both in `air-optics`, one commit at a time). Task 9 runs in parallel with all of them. Tasks 10-13 are sequential.
+Tasks 4-8 are sequential: each consumes the previous one's interface, except that Task 8 consumes only Tasks 3-6, so it may run before Task 7 (both in `air-optics`, one commit at a time). Task 9 runs in parallel with all of them. Tasks 10-13 are sequential.
 
 ## Conventions for every task
 
@@ -2141,38 +2199,622 @@ cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 Expected: `KILLED` twice. Grey scattering loses the blue zenith. Half the cross-section misses Earth's tau.
 
 ---
-## Task 4 (O4): `FAtmosphere::Build` -- the star's spectrum folded into three channels
+## Tasks 4-8, re-planned for ruling 3 (read first)
 
-Decision 3: when a system loads, each airy world's effective per-channel coefficients are fitted from the star's spectrum through the world's own spectral laws. This task builds that fit, and the struct the law reads (`FAtmosphereAir`, the C++ face of the `.ush`'s `AT_Air`; planning note 2). It also declares the table that Task 6 fills.
+Tasks 4, 5 and 6 were built for three channels (`262b3f5`, `d56a0e7`, `f60611b`, `42e49f6`), and Task 7's Steps 1-4 (`5027df5`), on `feat/air-optics`. Atmosphere plan ruling 3 chose the spec's named fallback: spectral bins in the law. So the three built tasks are replaced here, not added to. Each re-planned task starts from the built code and replaces what it names, whole files where the change is wide. Tasks 1-3 stand, except for three small, named edits to the reference (Tasks 5 and 8).
 
-The fit, per channel `c`:
-- **Scatter** is exact in the optically thin limit, and carries the star's colour at unit luminance: `Colour(Star, tau_scatter) / H`. The shader never sees a temperature.
-- **Extinction** is exact at the world's own nadir column. The total comes from `-ln ChannelAverage(Star, e^-tau(lambda))`. The aerosol's share is its thin-limit average, and the gas carries the rest (its scattering and the ozone).
-- **The white air** is the same air with the star's colour taken out of its scatter. Task 6's table is built from it, so the colour enters once, where the table is read.
+What the re-plan measured (planning note 13 has the numbers), in the plan's harness, against the reference over decision 1's grid at ruling 2's ceilings:
+- **No partition into four, five or six bins meets 5% or 1e-3 everywhere.** The best six still miss a red dwarf's blue through a long horizontal CO2 path by 4.4 times the allowance. Eight bins, narrow in the blue, meet it, with a fifth of the allowance to spare. Eight is past ruling 3's four to six, so **Task 4 is gated on ruling 6**.
+- **Bins were not the only cause.** The thin airs' misses were the march's: a midpoint rule over 12 samples cannot see the haze's 1 km scale height under H2/He's 55 km, nor a horizon through a ceiling air. Task 5 replaces it with a march that integrates each span exactly for an exponential, on the Chapman columns the nodes already hold, with one extra node where the sunlight climbs out of a grazing column. It keeps the 12 samples as its nodes (planning note 14).
+- **The multiple-scattering table misread the sun at the horizon.** Its columns were equal steps in the sun's cosine, and the light the air hands on changes fastest right there. Task 6 crowds its columns toward the horizon (planning note 15).
+- **What remains is the spec's own approximation.** Hillaire's multiple scattering is isotropic, and the reference's second order is not. The law meets the reference with its second scattering sent every way alike, within 5% or 1e-3 everywhere (worst 0.80 of the allowance). Against the full second order it stays within 25% or 1e-3 (worst 0.75 of that). **Task 8 is gated on ruling 7**, which holds the law to the first and pins the second (planning note 16). While measuring, the reference was found up to 5% short of its own converged value on backlit horizons (12 azimuth segments). Task 8 raises them to 24.
+
+The other rulings fold in as follows:
+- **Ruling 1** gives `.StarColour` its bounds (Task 7, Steps 5-9).
+- **Ruling 2** lowers the fixtures' ceilings (Task 4, Step 2) and fixes Task 12's guarantee at 0.32.
+- **Ruling 4** is `AtmosphereLaw::NoonSun`, already built.
+- **Ruling 5** gives `.HomothetyInvariance` its tolerances (Task 8).
+
+The two corrections the builder reported are in:
+- `.BacklitRing`'s strengthening (`f60611b`) stands, and planning note 10 says what it pins.
+- The swatch's mutation (Task 7, Step 3). UE 5.8.2 writes a PNG for an unknown extension, so `.nonesuch` proved nothing.
+
+---
+## Task 4 (O4, re-planned): The bins -- the law's spectrum, and the fixtures at ruling 2's ceilings
+
+The law will carry eight spectral bins rather than three channels (rulings 3 and 6). This task builds the bins themselves, pure and on their own, before anything uses them:
+- **The partition:** `AtmosphereBins::First`, eight runs of the reference's 16 wavelengths: 400-420, 440, 460-480, 500, 520-540, 560-580, 600 and 620-700 nm.
+- **The average (`Average`):** each bin's value is its wavelengths' mean, weighted by `Weight`. `Weight` is the star's light times the length of the wavelength's linear sRGB vector. Luminance weighting would all but ignore the blue: measured, it misses by 22 times.
+- **The fold:**
+  - `Fold`: the star's light in a bin, in linear sRGB.
+  - `FoldLight` and `FoldThrough`: bins back to colour. `FoldThrough` folds a transmittance as 1 less what is lost, as the `.ush` will, so that nothing lost is exactly 1.
+
+The bins' one approximation is that one optical depth stands for several within a bin. `.BinsCarryTheSpectrum` holds it alone, along every path from the ground. It first lowers the fixtures' ceilings to ruling 2's 0.32, which every later agreement is measured at.
 
 **Files:**
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.h` (whole file below)
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.cpp` (append)
-- Test: create `Source/DeepSpace/Tests/AtmosphereBuildTest.cpp` (`DeepSpace.Atmosphere.ChannelFit`, `DeepSpace.Atmosphere.StarTemperatureExtremes`)
+- Modify: `Source/DeepSpace/Tests/AtmosphereTestFixtures.h` (Step 2: the three ceilings, the giant, two comments)
+- Create: `Source/DeepSpace/Atmosphere/AtmosphereBins.h`, `Source/DeepSpace/Atmosphere/AtmosphereBins.cpp`
+- Test: create `Source/DeepSpace/Tests/AtmosphereBinsTest.cpp` (`DeepSpace.Atmosphere.BinFolds`, `DeepSpace.Atmosphere.BinsCarryTheSpectrum`)
 
 **Interfaces:**
-- Consumes: `FAirSpec`, `AtmosphereReference::{Spectral, StarSpectrum, ToLinearSrgb, Colour, ChannelAverage, FSpectrum, FSpectralAir}` (Task 3); the fixtures (Task 3).
+- Consumes: `AtmosphereReference::{FSpectrum, FSpectralAir, Spectral, StarSpectrum, ToLinearSrgb, Colour, ChannelAverage, ColumnExact}` (Task 3); `SkyColour::Spectral::{Count, ChannelWeights}` (Task 1).
 - Produces:
 
 ```cpp
-struct FAtmosphereAir { FVector3d GasScatter, GasExtinct, AerosolScatter, AerosolExtinct; double GasH, AerosolH, AerosolG, Top; bool IsAirless() const; };
-struct FAtmosphereTable { static constexpr int32 Size = 32; TArray<FVector3f> Texels; bool IsEmpty() const;
-                          void Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const; };
-class FAtmosphere
+namespace AtmosphereBins
 {
-public:
-    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK);   // Task 6 adds a third parameter, defaulted
-    bool HasAir() const; const FAtmosphereAir& GetAir() const; const FAtmosphereAir& GetWhiteAir() const;
-    const FAtmosphereTable& GetTable() const; const FVector3d& GetStarColour() const;
-};
+    inline constexpr int32 Count = 8;
+    inline constexpr int32 First[Count + 1] = {0, 2, 3, 5, 6, 8, 10, 11, 16};
+    struct FBins { double Value[Count] = {}; };
+    double Weight(const AtmosphereReference::FSpectrum& Star, int32 Index);
+    FBins Average(const AtmosphereReference::FSpectrum& Star, const AtmosphereReference::FSpectrum& Value);
+    FVector3d Fold(const AtmosphereReference::FSpectrum& Star, int32 Bin);
+    FVector3d FoldLight(const AtmosphereReference::FSpectrum& Star, const FBins& Light);
+    FVector3d FoldThrough(const AtmosphereReference::FSpectrum& Star, const FBins& Through);
+}
+namespace AtmosphereTestFixtures   // Tests/ only
+{
+    inline constexpr double NitrogenOxygenCeilingBar = 1.1528, CarbonDioxideCeilingBar = 0.7494, HydrogenHeliumCeilingBar = 0.5740;
+}
 ```
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/AtmosphereBuildTest.cpp`:
+- [ ] **Step 1: The gate: ruling 6.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && grep -c '^\*\*Atmosphere plan ruling 6 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md
+```
+
+Expected: `1`. If `0`, stop: the ruling is not recorded, and nothing in Tasks 4-8 runs until it is. Read it.
+- **Ruling 6 accepts eight bins:** go on.
+- **Ruling 6 holds to six:** stop and report. Task 4's partition becomes `{0, 3, 5, 6, 9, 11, 16}`, measured the best six, and `Count` becomes 6. Task 5's HLSL hook then reads a 64 x 32 texture with its right half's `b` and `a` unused, and `.BinsCarryTheSpectrum` and every agreement need a tolerance the ruling states. That re-plan comes first.
+
+- [ ] **Step 2: The fixtures at ruling 2's ceilings.** Every ceiling and the giant's disc scale with the guarantee, since the gas's and the aerosol's depths both go with `P`, so each is its 0.5 value times 0.64. In `Source/DeepSpace/Tests/AtmosphereTestFixtures.h`:
+  - Replace `    inline constexpr double NitrogenOxygenCeilingBar = 1.8013;` with `    inline constexpr double NitrogenOxygenCeilingBar = 1.1528;`.
+  - Replace `    inline constexpr double CarbonDioxideCeilingBar = 1.1710;` with `    inline constexpr double CarbonDioxideCeilingBar = 0.7494;`.
+  - Replace `    inline constexpr double HydrogenHeliumCeilingBar = 0.8968;` with `    inline constexpr double HydrogenHeliumCeilingBar = 0.5740;`.
+  - In `Giant()`, replace `        Air.GasTau550 = 0.2192;` with `        Air.GasTau550 = 0.1403;`, and `        Air.AerosolTau550 = 0.00896;` with `        Air.AerosolTau550 = 0.005734;`.
+  - In the file's opening comment, replace
+
+```cpp
+ * mix's ceiling under MaxNadirTau450, where tau at 450 nm is 0.5 straight
+ * down. Nothing outside Tests/ may include this.
+```
+
+    with
+
+```cpp
+ * mix's ceiling under MaxNadirTau450, where tau at 450 nm is 0.32 straight
+ * down (atmosphere plan ruling 2; at 0.5 they were 1.8013, 1.1710 and
+ * 0.8968 bar, and every ceiling scales with the guarantee). Nothing
+ * outside Tests/ may include this.
+```
+
+  - In `Giant()`'s comment, replace `2.36 bar of hydrogen and helium above the level` and the line after it, `     *  where tau at 450 nm reaches 0.5. */`, with `1.51 bar of hydrogen and helium above the level` and `     *  where tau at 450 nm reaches 0.32 (ruling 2; 2.36 bar at 0.5). */`.
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh
+git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Tests/AtmosphereTestFixtures.h
+git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
+test(atmosphere): the fixtures' ceilings at ruling 2's guarantee
+
+Atmosphere plan ruling 2 lowers MaxNadirTau450 from 0.5 to 0.32, so each
+mix's ceiling air and the giant's disc -- the extremes decision 1's grid
+holds the law at -- scale by 0.64: N2/O2 1.1528 bar, CO2 0.7494, H2/He
+0.5740, a Jupiter's disc 1.51 bar. The guarantee itself moves in Task 12.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+MSG
+```
+
+Expected: the whole suite green, as before (the harness ran every built optics test on the new ceilings), then the commit.
+
+- [ ] **Step 3: Write the failing tests.** Create `Source/DeepSpace/Tests/AtmosphereBinsTest.cpp`:
+
+```cpp
+#include "Misc/AutomationTest.h"
+#include "Atmosphere/AtmosphereBins.h"
+#include "Tests/AtmosphereTestFixtures.h"
+
+#include <cmath>
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereBinFoldsTest, "DeepSpace.Atmosphere.BinFolds",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereBinsCarryTheSpectrumTest, "DeepSpace.Atmosphere.BinsCarryTheSpectrum",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace AtmosphereBinsTestLocal
+{
+    using AtmosphereReference::FSpectrum;
+    using SkyColour::Spectral::Count;
+
+    /** How far Got is from Want, over max(Relative |Want|, Absolute). */
+    double Over(double Got, double Want, double Relative, double Absolute)
+    {
+        return std::isfinite(Got) ? FMath::Abs(Got - Want) / FMath::Max(Relative * FMath::Abs(Want), Absolute) : 1.0e30;
+    }
+}
+
+bool FAtmosphereBinFoldsTest::RunTest(const FString& Parameters)
+{
+    using namespace AtmosphereBinsTestLocal;
+    using AtmosphereBins::First;
+
+    // The partition: every wavelength in exactly one bin, in order.
+    bool bContiguous = First[0] == 0 && First[AtmosphereBins::Count] == Count;
+    for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+    {
+        bContiguous &= First[Bin + 1] > First[Bin];
+    }
+    TestTrue(TEXT("the bins cover the 16 wavelengths, each once, none empty"), bContiguous);
+
+    for (const double Kelvin : {0.0, 1000.0, 2000.0, 2566.0, 5772.0, 15000.0, 40000.0})
+    {
+        const FSpectrum Star = AtmosphereReference::StarSpectrum(Kelvin);
+        const FVector3d Own = AtmosphereReference::ToLinearSrgb(Star);
+
+        // The folds are the star's light, split: they sum to its colour.
+        FVector3d Sum = FVector3d::ZeroVector;
+        bool bWeights = true;
+        for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+        {
+            Sum += AtmosphereBins::Fold(Star, Bin);
+        }
+        for (int32 I = 0; I < Count; ++I)
+        {
+            const double W = AtmosphereBins::Weight(Star, I);
+            bWeights &= std::isfinite(W) && W > 0.0;
+        }
+        TestTrue(FString::Printf(TEXT("%.0f K: the folds sum to the star's colour"), Kelvin), (Sum - Own).GetAbsMax() <= 1.0e-12 * Own.GetAbsMax());
+        TestTrue(FString::Printf(TEXT("%.0f K: every wavelength weighs something, and something finite"), Kelvin), bWeights);
+
+        // Nothing lost is all of it kept, exactly.
+        AtmosphereBins::FBins Ones;
+        for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+        {
+            Ones.Value[Bin] = 1.0;
+        }
+        const FVector3d Kept = AtmosphereBins::FoldThrough(Star, Ones);
+        TestTrue(FString::Printf(TEXT("%.0f K: a clear path keeps all of the star's light"), Kelvin), (Kept - FVector3d::OneVector).GetAbsMax() < 1.0e-12);
+
+        // A spectrum constant within each bin is carried exactly: averaged
+        // to itself, and folded to what the reference integrates.
+        FSpectrum Stepped;
+        for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+        {
+            for (int32 I = First[Bin]; I < First[Bin + 1]; ++I)
+            {
+                Stepped.Value[I] = 0.1 * (Bin + 1);
+            }
+        }
+        const AtmosphereBins::FBins Averaged = AtmosphereBins::Average(Star, Stepped);
+        bool bAveraged = true;
+        for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+        {
+            bAveraged &= FMath::Abs(Averaged.Value[Bin] - 0.1 * (Bin + 1)) < 1.0e-12;
+        }
+        TestTrue(FString::Printf(TEXT("%.0f K: a stepped spectrum averages to its steps"), Kelvin), bAveraged);
+        const FVector3d Light = AtmosphereBins::FoldLight(Star, Averaged);
+        const FVector3d Want = AtmosphereReference::Colour(Star, Stepped);
+        TestTrue(FString::Printf(TEXT("%.0f K: and folds to the reference's colour of it"), Kelvin), (Light - Want).GetAbsMax() <= 1.0e-12 * Want.GetAbsMax());
+        // The reference's own fold (ChannelAverage), wherever the star has a
+        // channel's light to keep: under 2,000 K its blue is below the
+        // floor, where the fold keeps all of nothing and the reference a
+        // fraction of it.
+        if (Kelvin >= 2000.0)
+        {
+            const FVector3d Through = AtmosphereBins::FoldThrough(Star, Averaged);
+            const FVector3d ThroughWant = AtmosphereReference::ChannelAverage(Star, Stepped);
+            TestTrue(FString::Printf(TEXT("%.0f K: and to its transmittance"), Kelvin), (Through - ThroughWant).GetAbsMax() < 1.0e-12);
+        }
+    }
+    return true;
+}
+
+bool FAtmosphereBinsCarryTheSpectrumTest::RunTest(const FString& Parameters)
+{
+    using namespace AtmosphereBinsTestLocal;
+    using namespace AtmosphereTestFixtures;
+
+    // The bins' one approximation, alone: within a bin one optical depth
+    // stands for several. Decision 1's airs under both stars, along every
+    // path from the ground -- straight up to the horizon, each constituent
+    // through its own exact column -- the binned transmittance against the
+    // spectrum's, each channel within decision 1's 5% or 1e-3.
+    double Worst = 0.0;
+    FString Where;
+    int32 Checked = 0;
+    for (const FNamedAir& Named : Extremes())
+    {
+        const AtmosphereReference::FSpectralAir Air = AtmosphereReference::Spectral(Named.Air);
+        FSpectrum GasTau;
+        for (int32 I = 0; I < Count; ++I)
+        {
+            GasTau.Value[I] = Air.GasScatter.Value[I] + Air.GasAbsorb.Value[I];
+        }
+        for (const double Kelvin : {HomeStarK, SunK})
+        {
+            const FSpectrum Star = AtmosphereReference::StarSpectrum(Kelvin);
+            const AtmosphereBins::FBins Gas = AtmosphereBins::Average(Star, GasTau);
+            const AtmosphereBins::FBins Aerosol = AtmosphereBins::Average(Star, Air.AerosolExtinct);
+            for (const double FromZenith : {0.0, 60.0, 80.0, 85.0, 88.0, 90.0})
+            {
+                // Airmasses: each constituent's column along the path over
+                // its column straight up.
+                const double Cos = FMath::Cos(FMath::DegreesToRadians(FromZenith));
+                const double GasAirmass = AtmosphereReference::ColumnExact(1.0, Cos, Air.GasH) / Air.GasH;
+                const double AerosolAirmass = AtmosphereReference::ColumnExact(1.0, Cos, Air.AerosolH) / Air.AerosolH;
+                FSpectrum Through;
+                for (int32 I = 0; I < Count; ++I)
+                {
+                    Through.Value[I] = std::exp(-(GasAirmass * GasTau.Value[I] + AerosolAirmass * Air.AerosolExtinct.Value[I]));
+                }
+                AtmosphereBins::FBins BinThrough;
+                for (int32 Bin = 0; Bin < AtmosphereBins::Count; ++Bin)
+                {
+                    BinThrough.Value[Bin] = std::exp(-(GasAirmass * Gas.Value[Bin] + AerosolAirmass * Aerosol.Value[Bin]));
+                }
+                const FVector3d Want = AtmosphereReference::ChannelAverage(Star, Through);
+                const FVector3d Got = AtmosphereBins::FoldThrough(Star, BinThrough);
+                for (int32 C = 0; C < 3; ++C)
+                {
+                    ++Checked;
+                    const double Miss = Over(FMath::Max(Got[C], 0.0), FMath::Max(Want[C], 0.0), 0.05, 1.0e-3);
+                    if (Miss > Worst)
+                    {
+                        Worst = Miss;
+                        Where = FString::Printf(TEXT("%s, %.0f K, %.0f degrees from the zenith, channel %d: %.5f against %.5f"),
+                            Named.Name, Kelvin, FromZenith, C, Got[C], Want[C]);
+                    }
+                }
+            }
+        }
+    }
+    AddInfo(FString::Printf(TEXT("%d binned transmittances; the worst at %.2f of its allowance: %s"), Checked, Worst, *Where));
+    TestEqual(TEXT("six airs, two stars, six paths, three channels"), Checked, 6 * 2 * 6 * 3);
+    TestTrue(TEXT("every channel within 5% or 1e-3 of the spectrum's"), Worst <= 1.0);
+    return true;
+}
+
+#endif
+```
+
+- [ ] **Step 4: Run it; expect a compile failure.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
+```
+
+Expected: FAIL, `'Atmosphere/AtmosphereBins.h' file not found`.
+
+- [ ] **Step 5: The bins.** Create `Source/DeepSpace/Atmosphere/AtmosphereBins.h`:
+
+```cpp
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Atmosphere/AtmosphereReference.h"
+
+/**
+ * The law's spectrum (atmosphere plan ruling 3): the reference's 16
+ * wavelengths gathered into Count contiguous bins, the air one number per
+ * bin, and each bin's light folded into linear sRGB only at the end, by the
+ * star's own light in that bin. Pure: spectra in, bins out.
+ * FAtmosphere::Build fills the law's air from these, and the .ush's AT_BINS
+ * is Count.
+ *
+ * Why these bins: the air's optical depth runs as lambda^-4, so the bins
+ * are narrow in the blue, where it changes fastest, and wide in the red.
+ * They were chosen by measurement against the reference over decision 1's
+ * grid (atmosphere optics plan, planning note 13): no partition into four,
+ * five or six bins met decision 1's 5% or 1e-3 everywhere -- the best six
+ * still missed a red dwarf's blue through a long horizontal CO2 path by 4.4
+ * times its allowance -- and these eight meet it with a fifth to spare
+ * (atmosphere plan ruling 6).
+ */
+namespace AtmosphereBins
+{
+    inline constexpr int32 Count = 8;
+
+    /** The index (SkyColour::Spectral::Nm) of each bin's first wavelength,
+     *  and after the last the count of wavelengths: 400-420, 440, 460-480,
+     *  500, 520-540, 560-580, 600 and 620-700 nm. */
+    inline constexpr int32 First[Count + 1] = {0, 2, 3, 5, 6, 8, 10, 11, 16};
+
+    /** A value per bin. */
+    struct FBins
+    {
+        double Value[Count] = {};
+    };
+
+    /** What a wavelength counts for inside its bin: the star's light there
+     *  times the length of the wavelength's linear sRGB vector
+     *  (SkyColour::Spectral::ChannelWeights) -- how far it can move any
+     *  channel, not only luminance, which would all but ignore the blue.
+     *  Positive for every star in SkyColour's range. */
+    DEEPSPACE_API double Weight(const AtmosphereReference::FSpectrum& Star, int32 Index);
+
+    /** Value averaged over each bin by Weight: exact in the optically thin
+     *  limit for anything linear in the spectrum -- scattering, an optical
+     *  depth. */
+    DEEPSPACE_API FBins Average(const AtmosphereReference::FSpectrum& Star, const AtmosphereReference::FSpectrum& Value);
+
+    /** The star's light in bin Bin, in linear sRGB at the spectrum's own
+     *  scale: the sum over the bin's wavelengths of the star times
+     *  ChannelWeights. The Count folds sum to ToLinearSrgb(Star). A channel
+     *  can be negative: the matching functions reach outside sRGB's gamut. */
+    DEEPSPACE_API FVector3d Fold(const AtmosphereReference::FSpectrum& Star, int32 Bin);
+
+    /** Light per bin, for unit light in each, folded into linear sRGB: the
+     *  sum of Fold(Star, b) times Light[b]. */
+    DEEPSPACE_API FVector3d FoldLight(const AtmosphereReference::FSpectrum& Star, const FBins& Light);
+
+    /** A transmittance per bin, folded as the reference folds one
+     *  (AtmosphereReference::ChannelAverage): the star's light it keeps over
+     *  the star's light, channel by channel, the star's channel floored at
+     *  1e-4 of its brightest. */
+    DEEPSPACE_API FVector3d FoldThrough(const AtmosphereReference::FSpectrum& Star, const FBins& Through);
+}
+```
+
+  Create `Source/DeepSpace/Atmosphere/AtmosphereBins.cpp`:
+
+```cpp
+#include "Atmosphere/AtmosphereBins.h"
+
+#include <cmath>
+
+double AtmosphereBins::Weight(const AtmosphereReference::FSpectrum& Star, int32 Index)
+{
+    return Star.Value[Index] * SkyColour::Spectral::ChannelWeights(Index).Size();
+}
+
+AtmosphereBins::FBins AtmosphereBins::Average(const AtmosphereReference::FSpectrum& Star, const AtmosphereReference::FSpectrum& Value)
+{
+    FBins Out;
+    for (int32 Bin = 0; Bin < Count; ++Bin)
+    {
+        double Sum = 0.0;
+        double Total = 0.0;
+        for (int32 I = First[Bin]; I < First[Bin + 1]; ++I)
+        {
+            Sum += Weight(Star, I) * Value.Value[I];
+            Total += Weight(Star, I);
+        }
+        Out.Value[Bin] = Total > 0.0 ? Sum / Total : 0.0;
+    }
+    return Out;
+}
+
+FVector3d AtmosphereBins::Fold(const AtmosphereReference::FSpectrum& Star, int32 Bin)
+{
+    FVector3d Out = FVector3d::ZeroVector;
+    for (int32 I = First[Bin]; I < First[Bin + 1]; ++I)
+    {
+        Out += SkyColour::Spectral::ChannelWeights(I) * Star.Value[I];
+    }
+    return Out;
+}
+
+FVector3d AtmosphereBins::FoldLight(const AtmosphereReference::FSpectrum& Star, const FBins& Light)
+{
+    FVector3d Out = FVector3d::ZeroVector;
+    for (int32 Bin = 0; Bin < Count; ++Bin)
+    {
+        Out += Fold(Star, Bin) * Light.Value[Bin];
+    }
+    return Out;
+}
+
+FVector3d AtmosphereBins::FoldThrough(const AtmosphereReference::FSpectrum& Star, const FBins& Through)
+{
+    // As the .ush's AT_FoldThrough: 1 less what is lost, so nothing lost is
+    // exactly 1, even in a channel the star all but lacks.
+    const FVector3d Own = AtmosphereReference::ToLinearSrgb(Star);
+    const double Floor = FMath::Max(1.0e-4 * FMath::Max3(Own.X, Own.Y, Own.Z), 1.0e-30);
+    FBins Lost;
+    for (int32 Bin = 0; Bin < Count; ++Bin)
+    {
+        Lost.Value[Bin] = 1.0 - Through.Value[Bin];
+    }
+    const FVector3d Gone = FoldLight(Star, Lost);
+    return FVector3d(1.0 - Gone.X / FMath::Max(Own.X, Floor), 1.0 - Gone.Y / FMath::Max(Own.Y, Floor), 1.0 - Gone.Z / FMath::Max(Own.Z, Floor));
+}
+```
+
+- [ ] **Step 6: Build and run; expect PASS.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.BinFolds && ./test.sh DeepSpace.Atmosphere.BinsCarryTheSpectrum; grep -h "binned transmittances" Saved/Logs/DeepSpace.log | tail -1
+```
+
+Expected: `passed: 1` twice. The harness measured the info line's worst at 0.92 of its allowance, for CO2 at its ceiling under the home star, 88 degrees from the zenith, in the green channel.
+
+- [ ] **Step 7: The whole suite, then commit.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
+git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Atmosphere/AtmosphereBins.h Source/DeepSpace/Atmosphere/AtmosphereBins.cpp Source/DeepSpace/Tests/AtmosphereBinsTest.cpp
+git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
+feat(atmosphere): the law's spectrum -- eight bins, averaged and folded back to colour
+
+AtmosphereBins (atmosphere plan rulings 3 and 6): the reference's 16
+wavelengths as eight contiguous bins, narrow in the blue where lambda^-4
+changes fastest -- 400-420, 440, 460-480, 500, 520-540, 560-580, 600,
+620-700 nm. A bin's value is its wavelengths' mean weighted by the star's
+light times the length of each wavelength's sRGB vector (luminance
+weighting all but ignores the blue); a bin's light goes back to linear
+sRGB through the star's own light in it, and a transmittance as 1 less
+what is lost. Measured against the reference over decision 1's grid, no
+four, five or six bins met 5% or 1e-3 everywhere; these eight do.
+
+DeepSpace.Atmosphere.BinFolds holds the partition and the folds exact;
+DeepSpace.Atmosphere.BinsCarryTheSpectrum holds the one approximation --
+one depth for several -- within 5% or 1e-3 along every path from the
+ground, both stars, every mix at both extremes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+MSG
+```
+
+- [ ] **Step 8: Prove the tests can fail.**
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/AtmosphereBins.cpp '    return Star.Value[Index] * SkyColour::Spectral::ChannelWeights(Index).Size();' '    return Star.Value[Index] * SkyColour::Spectral::Luminance(Index);' DeepSpace.Atmosphere.BinsCarryTheSpectrum
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/AtmosphereBins.cpp '        Out += SkyColour::Spectral::ChannelWeights(I) * Star.Value[I];' '        Out += SkyColour::Spectral::ChannelWeights(I);' DeepSpace.Atmosphere.BinFolds
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
+```
+
+Expected: `KILLED` twice.
+- The first weighs the bins by luminance. The harness measured H2/He's blue at 80 degrees 22 times over its allowance.
+- The second folds the eye's response without the star, so the folds no longer sum to the star's colour.
+
+---
+## Task 5 (O5, re-planned): The law over the bins -- the air, the march, the fold
+
+The built law carries three channels in `AT_Air`. This task re-cuts every function over `AT_Air` at once, since the struct's layout is what they share. It has no intermediate green state, so it is one task.
+
+**The air.** `AT_Air` holds, per bin and colourless:
+- the gas's and the aerosol's scattering and extinction per radius;
+- `FoldR`, `FoldG` and `FoldB`: the star's light in each bin, in linear sRGB.
+
+The sums of the folds are the star's colour. The shader still never sees a temperature (decision 3), and there is no white air: the table is built from the air itself, and the star's colour enters once, in the fold.
+
+**The fold.** `AT_FoldLight` and `AT_FoldThrough` turn bins into colour at the end, so the entry points still return linear sRGB, and their signatures (decision 1) are unchanged.
+
+**The march** (planning note 14). The 12 samples become 12 nodes. The piece either side of the closest point keeps its `u^2` spacing, now with both ends as nodes. Between two nodes, each constituent's light is its exact column there, times the logarithmic mean of what it gathers per unit column:
+- The column is the difference of the Chapman columns the nodes already hold, so it costs nothing.
+- The logarithmic mean is `(B - A) / ln(B / A)`, exact for anything that falls exponentially with the column: the density itself, and the view's transmittance through one constituent. A midpoint rule is not, where a scale height or an optical depth is short against the spacing. That is what missed in the thin airs and on the grazing paths.
+- A span whose single scattering changes by more than `e^4` takes one more node halfway: sunlight climbing out of a grazing column, or out of the ground's shadow, rises faster than exponentially. Over the whole grid no ray takes more than 14 nodes, and a dusk sky takes 12 everywhere.
+
+**The table** holds a value per bin: 32 x 32 texels of eight values. On the GPU that is a 64 x 32 RGBA16F texture, bins 0-3 in its left half and 4-7 in its right. Task 6 changes only how its columns are spaced.
+
+Three tests change:
+- `.ChannelFit` becomes `.BinnedAir`.
+- `.StarTemperatureExtremes` holds the bins' coefficients and folds.
+- `.MultiScatterTable` holds each bin against the reference's source, per wavelength, averaged into it. So the reference gains `MultiScatterSpectrum`.
+
+`.SingleScatteringMatchesReference` is new. It holds the march and the bins together, with the table out: the law with no table against the reference's first order, over decision 1's whole grid, both builds, at decision 1's 5% or 1e-3. That grid moves into the fixtures, where Task 8's agreement will read it too.
+
+`AtmosphereLawTest.cpp`'s nine tests are untouched and must pass as they stand, `.BacklitRing` strengthened as built.
+
+**Files:**
+- Modify: `Shaders/Private/Atmosphere.ush` (from `// -- The air ---` to the end: replaced)
+- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.h`, `Source/DeepSpace/Atmosphere/Atmosphere.cpp` (whole files below)
+- Modify: `Source/DeepSpace/Atmosphere/AtmosphereReference.h`, `Source/DeepSpace/Atmosphere/AtmosphereReference.cpp` (`MultiScatterSpectrum`)
+- Modify: `Source/DeepSpace/Tests/AtmosphereTestFixtures.h` (append `FRayCase` and `Grid`)
+- Test: replace `Source/DeepSpace/Tests/AtmosphereBuildTest.cpp` (`DeepSpace.Atmosphere.BinnedAir`, `DeepSpace.Atmosphere.StarTemperatureExtremes`) and `Source/DeepSpace/Tests/AtmosphereTableTest.cpp` (`DeepSpace.Atmosphere.MultiScatterTable`); create `Source/DeepSpace/Tests/AtmosphereMarchTest.cpp` (`DeepSpace.Atmosphere.SingleScatteringMatchesReference`)
+
+**Interfaces:**
+- Consumes: `AtmosphereBins::{Count, First, FBins, Weight, Average, Fold}` (Task 4); `AT_LogChapman` (Task 2); `FReferenceAir` (Task 3).
+- Produces, in the `.ush` (every other `AT_` function keeps its signature, over the new `AT_Air`):
+
+```hlsl
+static const int AT_BINS = 8;
+struct AT_Air { AT_REAL GasScatter[AT_BINS]; AT_REAL GasExtinct[AT_BINS]; AT_REAL AerosolScatter[AT_BINS]; AT_REAL AerosolExtinct[AT_BINS];
+                AT_REAL FoldR[AT_BINS]; AT_REAL FoldG[AT_BINS]; AT_REAL FoldB[AT_BINS]; AT_REAL GasH, AerosolH, AerosolG, Top; };
+struct AT_Bins { AT_REAL V[AT_BINS]; };
+struct AT_March { AT_REAL L[AT_BINS]; AT_REAL T[AT_BINS]; AT_REAL F[AT_BINS]; };
+AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM);   // the hook, per platform
+AT_Rgb  AT_FoldLight(AT_Air A, AT_Bins L);
+AT_Rgb  AT_FoldThrough(AT_Air A, AT_Bins T);
+AT_REAL AT_LogMean(AT_REAL A, AT_REAL B);
+AT_Bins AT_MultiScatterCell(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM);
+```
+
+- And in C++:
+
+```cpp
+struct FAtmosphereAir { AtmosphereBins::FBins GasScatter, GasExtinct, AerosolScatter, AerosolExtinct; FVector3d Fold[AtmosphereBins::Count];
+                        double GasH, AerosolH, AerosolG, Top; bool IsAirless() const; };
+struct FAtmosphereTable { static constexpr int32 Size = 32; TArray<float> Texels; bool IsEmpty() const;
+                          float Texel(int32 Row, int32 Column, int32 Bin) const;
+                          void Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const; };
+// FAtmosphere: GetWhiteAir() is gone; Build, HasAir, GetAir, GetTable, GetStarColour as built.
+AtmosphereReference::FSpectrum FReferenceAir::MultiScatterSpectrum(double Altitude01, double CosSunZenith,
+                                                                   int32 Rings = 48, int32 Segments = 24, int32 Steps = 96) const;
+namespace AtmosphereTestFixtures { struct FRayCase { FString Name; FVector3d Eye, Direction; double Length; FVector3d Sun; };
+                                   TArray<FRayCase> Grid(double GasH, double Top); }   // Tests/ only
+```
+
+- [ ] **Step 1: The grid, into the fixtures.** In `Source/DeepSpace/Tests/AtmosphereTestFixtures.h`, replace the file's last lines
+
+```cpp
+            {TEXT("H2/He at its ceiling"), HydrogenHelium(HydrogenHeliumCeilingBar)}};
+    }
+}
+```
+
+  with
+
+```cpp
+            {TEXT("H2/He at its ceiling"), HydrogenHelium(HydrogenHeliumCeilingBar)}};
+    }
+
+    /** One ray of decision 1's grid, in one air's radii. */
+    struct FRayCase
+    {
+        FString Name;
+        FVector3d Eye = FVector3d::ZeroVector;
+        FVector3d Direction = FVector3d::ZeroVector;
+        double Length = 1.0e30;
+        FVector3d Sun = FVector3d::ZeroVector;
+    };
+
+    /**
+     * Decision 1's grid for an air of gas scale height GasH and top Top, the
+     * eye on +Z: four eyes (the ground, inside at 2 H, just above the top,
+     * and 7.8 radii out), four views (nadir, zenith, horizon, limb --
+     * outside, the ray grazing 2 H up; inside, 5 degrees above the horizon)
+     * and three suns (noon, the terminator, and backlit -- behind the world
+     * from outside, low ahead from inside). 48 rays, each named
+     * "<eye> eye, <view>, <sun> sun".
+     */
+    inline TArray<FRayCase> Grid(double GasH, double Top)
+    {
+        TArray<FRayCase> Cases;
+        const double Heights[] = {1.0e-3 * GasH, 2.0 * GasH, Top + 2.0 * GasH, 6.8};
+        const TCHAR* const EyeNames[] = {TEXT("ground"), TEXT("inside"), TEXT("above"), TEXT("far")};
+        for (int32 E = 0; E < 4; ++E)
+        {
+            const double R = 1.0 + Heights[E];
+            const bool bInside = Heights[E] < Top;
+            FVector3d Limb;
+            if (bInside)
+            {
+                const double Five = FMath::DegreesToRadians(5.0);
+                Limb = FVector3d(FMath::Cos(Five), 0.0, FMath::Sin(Five));
+            }
+            else
+            {
+                const double SinAngle = (1.0 + 2.0 * GasH) / R;
+                Limb = FVector3d(SinAngle, 0.0, -FMath::Sqrt(1.0 - SinAngle * SinAngle));
+            }
+            const FVector3d Views[] = {FVector3d(0.0, 0.0, -1.0), FVector3d(0.0, 0.0, 1.0), FVector3d(1.0, 0.0, 0.0), Limb};
+            const TCHAR* const ViewNames[] = {TEXT("nadir"), TEXT("zenith"), TEXT("horizon"), TEXT("limb")};
+            const FVector3d Suns[] = {FVector3d(0.0, 0.0, 1.0), FVector3d(0.0, 1.0, 0.0),
+                bInside ? FVector3d(1.0, 0.0, 0.1).GetSafeNormal() : FVector3d(0.0, 0.0, -1.0)};
+            const TCHAR* const SunNames[] = {TEXT("noon"), TEXT("terminator"), TEXT("backlit")};
+            for (int32 V = 0; V < 4; ++V)
+            {
+                for (int32 S = 0; S < 3; ++S)
+                {
+                    FRayCase Case;
+                    Case.Name = FString::Printf(TEXT("%s eye, %s, %s sun"), EyeNames[E], ViewNames[V], SunNames[S]);
+                    Case.Eye = FVector3d(0.0, 0.0, R);
+                    Case.Direction = Views[V];
+                    Case.Sun = Suns[S];
+                    Cases.Add(Case);
+                }
+            }
+        }
+        return Cases;
+    }
+}
+```
+
+- [ ] **Step 2: Write the failing tests.** Replace `Source/DeepSpace/Tests/AtmosphereBuildTest.cpp` with:
 
 ```cpp
 #include "Misc/AutomationTest.h"
@@ -2184,8 +2826,8 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-    FAtmosphereChannelFitTest,
-    "DeepSpace.Atmosphere.ChannelFit",
+    FAtmosphereBinnedAirTest,
+    "DeepSpace.Atmosphere.BinnedAir",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -2200,82 +2842,115 @@ namespace AtmosphereBuildTestLocal
         return 0.2126 * Colour.X + 0.7152 * Colour.Y + 0.0722 * Colour.Z;
     }
 
-    bool FiniteAndNonNegative(const FVector3d& V)
+    bool FiniteAndNonNegative(const AtmosphereBins::FBins& B)
     {
-        return std::isfinite(V.X) && std::isfinite(V.Y) && std::isfinite(V.Z) && V.X >= 0.0 && V.Y >= 0.0 && V.Z >= 0.0;
+        bool bGood = true;
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            bGood &= std::isfinite(B.Value[K]) && B.Value[K] >= 0.0;
+        }
+        return bGood;
+    }
+
+    bool Same(const AtmosphereBins::FBins& A, const AtmosphereBins::FBins& B)
+    {
+        bool bSame = true;
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            bSame &= A.Value[K] == B.Value[K];
+        }
+        return bSame;
     }
 
     bool Same(const FAtmosphereAir& A, const FAtmosphereAir& B)
     {
-        return A.GasScatter == B.GasScatter && A.GasExtinct == B.GasExtinct && A.AerosolScatter == B.AerosolScatter
-            && A.AerosolExtinct == B.AerosolExtinct && A.GasH == B.GasH && A.AerosolH == B.AerosolH && A.AerosolG == B.AerosolG && A.Top == B.Top;
+        bool bSame = Same(A.GasScatter, B.GasScatter) && Same(A.GasExtinct, B.GasExtinct) && Same(A.AerosolScatter, B.AerosolScatter)
+            && Same(A.AerosolExtinct, B.AerosolExtinct) && A.GasH == B.GasH && A.AerosolH == B.AerosolH && A.AerosolG == B.AerosolG && A.Top == B.Top;
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            bSame &= A.Fold[K] == B.Fold[K];
+        }
+        return bSame;
     }
 }
 
-bool FAtmosphereChannelFitTest::RunTest(const FString& Parameters)
+bool FAtmosphereBinnedAirTest::RunTest(const FString& Parameters)
 {
     using namespace AtmosphereBuildTestLocal;
     using namespace AtmosphereTestFixtures;
 
-    const FAtmosphere Earth = FAtmosphere::Build(EarthAir(), SunK);
+    // No tables: the coefficients are the question here, and a table is a
+    // second a world.
+    const FAtmosphere Earth = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
     const FAtmosphereAir& A = Earth.GetAir();
     TestTrue(TEXT("Earth's air has air"), Earth.HasAir());
     TestTrue(TEXT("its top is ten of its gas's scale heights"), FMath::IsNearlyEqual(A.Top, 10.0 * A.GasH, 1.0e-15));
 
-    // The gas scatters blue most, under a G star.
-    TestTrue(FString::Printf(TEXT("under the Sun the gas scatters blue over green over red (%.4f, %.4f, %.4f per radius)"),
-        A.GasScatter.X, A.GasScatter.Y, A.GasScatter.Z), A.GasScatter.Z > A.GasScatter.Y && A.GasScatter.Y > A.GasScatter.X);
+    // The bins are colourless and the gas's scattering falls from the blue
+    // bin to the red, as lambda^-4 does.
+    bool bFalls = true;
+    for (int32 K = 1; K < AtmosphereBins::Count; ++K)
+    {
+        bFalls &= A.GasScatter.Value[K] < A.GasScatter.Value[K - 1];
+    }
+    TestTrue(TEXT("the gas scatters less in every redder bin"), bFalls);
 
-    // Exact at the nadir column: the fitted extinction lets through, straight
-    // down, exactly what the spectrum does.
+    // Each bin is its wavelengths' own air, averaged as AtmosphereBins
+    // averages: exact in the thin limit, per radius.
     const AtmosphereReference::FSpectralAir Spectral = AtmosphereReference::Spectral(EarthAir());
     const AtmosphereReference::FSpectrum Star = AtmosphereReference::StarSpectrum(SunK);
-    AtmosphereReference::FSpectrum Through;
+    AtmosphereReference::FSpectrum GasTau;
     for (int32 I = 0; I < SkyColour::Spectral::Count; ++I)
     {
-        Through.Value[I] = std::exp(-(Spectral.GasScatter.Value[I] + Spectral.GasAbsorb.Value[I] + Spectral.AerosolExtinct.Value[I]));
+        GasTau.Value[I] = Spectral.GasScatter.Value[I] + Spectral.GasAbsorb.Value[I];
     }
-    const FVector3d Nadir = AtmosphereReference::ChannelAverage(Star, Through);
-    for (int32 C = 0; C < 3; ++C)
+    const AtmosphereBins::FBins Scatter = AtmosphereBins::Average(Star, Spectral.GasScatter);
+    const AtmosphereBins::FBins Extinct = AtmosphereBins::Average(Star, GasTau);
+    const AtmosphereBins::FBins Aerosol = AtmosphereBins::Average(Star, Spectral.AerosolExtinct);
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
     {
-        const double Fitted = std::exp(-(A.GasExtinct[C] * A.GasH + A.AerosolExtinct[C] * A.AerosolH));
-        TestTrue(FString::Printf(TEXT("channel %d: the fit lets through %.9f straight down, the spectrum %.9f"), C, Fitted, Nadir[C]),
-            FMath::Abs(Fitted - Nadir[C]) < 1.0e-9);
+        TestTrue(FString::Printf(TEXT("bin %d: the gas's scattering and extinction, and the aerosol's, are the bin's average over its scale height"), K),
+            FMath::Abs(A.GasScatter.Value[K] * A.GasH - Scatter.Value[K]) <= 1.0e-12 * Scatter.Value[K]
+            && FMath::Abs(A.GasExtinct.Value[K] * A.GasH - Extinct.Value[K]) <= 1.0e-12 * Extinct.Value[K]
+            && FMath::Abs(A.AerosolExtinct.Value[K] * A.AerosolH - Aerosol.Value[K]) <= 1.0e-12 * Aerosol.Value[K]);
+        TestTrue(FString::Printf(TEXT("bin %d: its fold is the star's light there"), K), A.Fold[K] == AtmosphereBins::Fold(Star, K));
     }
 
-    // Exact in the thin limit: the scatter is the star's light times the
-    // spectrum's, integrated.
-    const FVector3d Thin = AtmosphereReference::Colour(Star, Spectral.GasScatter);
-    TestTrue(TEXT("the gas's scatter is the thin limit's, star's colour and all"),
-        (A.GasScatter * A.GasH - Thin).GetAbsMax() < 1.0e-12);
+    // The ozone absorbs: the gas takes out more than it scatters where the
+    // Chappuis band is, and exactly what it scatters where it is not.
+    TestTrue(TEXT("in the 600 nm bin the gas's extinction exceeds its scattering"),
+        A.GasExtinct.Value[6] > 1.01 * A.GasScatter.Value[6]);
 
     // Linear in the column.
-    const FAtmosphere Double = FAtmosphere::Build(NitrogenOxygen(2.0), SunK);
-    TestTrue(TEXT("twice the pressure, twice the scatter"),
-        (Double.GetAir().GasScatter - 2.0 * A.GasScatter).GetAbsMax() < 1.0e-9 * A.GasScatter.GetAbsMax());
+    const FAtmosphere Double = FAtmosphere::Build(NitrogenOxygen(2.0), SunK, EAtmosphereTable::None);
+    bool bLinear = true;
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+    {
+        bLinear &= FMath::Abs(Double.GetAir().GasScatter.Value[K] - 2.0 * A.GasScatter.Value[K]) <= 1.0e-9 * A.GasScatter.Value[K];
+    }
+    TestTrue(TEXT("twice the pressure, twice the scatter"), bLinear);
 
-    // The star's colour, and the white air that is the scatter without it.
+    // The star is in the fold and nowhere else: its colour is the folds'
+    // sum, at unit luminance.
+    FVector3d Folds = FVector3d::ZeroVector;
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+    {
+        Folds += A.Fold[K];
+    }
     TestTrue(FString::Printf(TEXT("the star's colour has luminance 1 (%.6f)"), Luminance(Earth.GetStarColour())),
         FMath::Abs(Luminance(Earth.GetStarColour()) - 1.0) < 1.0e-3);
-    for (int32 C = 0; C < 3; ++C)
-    {
-        TestTrue(FString::Printf(TEXT("channel %d: white scatter times the star's colour is the scatter"), C),
-            FMath::Abs(Earth.GetWhiteAir().GasScatter[C] * Earth.GetStarColour()[C] - A.GasScatter[C]) <= 1.0e-9 * A.GasScatter[C]);
-    }
-    TestTrue(TEXT("the white air's extinction is the air's"), Earth.GetWhiteAir().GasExtinct == A.GasExtinct);
+    TestTrue(TEXT("and is the sum of the folds"), (Folds - Earth.GetStarColour()).GetAbsMax() <= 1.0e-12);
 
-    // The star is in the scatter: a red dwarf's sky scatters redder light.
-    // Held by value: GetAir() returns a reference into the FAtmosphere, and a
-    // reference into a temporary dies with the statement.
-    const FAtmosphere HomeAir = FAtmosphere::Build(EarthAir(), HomeStarK);
+    // A red dwarf's air folds redder light, though its bins scatter alike.
+    const FAtmosphere HomeAir = FAtmosphere::Build(EarthAir(), HomeStarK, EAtmosphereTable::None);
     const FAtmosphereAir& Home = HomeAir.GetAir();
-    TestTrue(TEXT("under the home star the gas's scatter is redder than under the Sun"),
-        Home.GasScatter.X / Home.GasScatter.Z > A.GasScatter.X / A.GasScatter.Z);
+    TestTrue(TEXT("under the home star the red bin's fold outweighs the blue bin's more than under the Sun"),
+        Home.Fold[AtmosphereBins::Count - 1].X / Home.Fold[0].Z > A.Fold[AtmosphereBins::Count - 1].X / A.Fold[0].Z);
 
     // No air.
     const FAtmosphere None = FAtmosphere::Build(Airless(), SunK);
     TestFalse(TEXT("an airless world has no air"), None.HasAir());
-    TestTrue(TEXT("and no coefficients"), None.GetAir().GasScatter.IsZero() && None.GetAir().AerosolExtinct.IsZero() && None.GetAir().Top == 0.0);
+    TestTrue(TEXT("and no coefficients"), None.GetAir().GasScatter.Value[0] == 0.0 && None.GetAir().AerosolExtinct.Value[0] == 0.0 && None.GetAir().Top == 0.0);
     TestTrue(TEXT("and no table"), None.GetTable().IsEmpty());
     return true;
 }
@@ -2286,642 +2961,352 @@ bool FAtmosphereStarTemperatureExtremesTest::RunTest(const FString& Parameters)
     using namespace AtmosphereTestFixtures;
 
     // Review focus 4: temperatures past the blackbody's range, and a 1,000 K
-    // star with almost no blue for the fit to divide by.
+    // star with almost no blue in its bins' weights.
     const double Kelvins[] = {0.0, 500.0, 1000.0, 2000.0, 2566.0, 15000.0, 40000.0};
     for (const double Kelvin : Kelvins)
     {
         for (const FAirSpec& Spec : {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar), Giant()})
         {
-            const FAtmosphere Air = FAtmosphere::Build(Spec, Kelvin);
+            const FAtmosphere Air = FAtmosphere::Build(Spec, Kelvin, EAtmosphereTable::None);
             const FAtmosphereAir& A = Air.GetAir();
-            const FAtmosphereAir& W = Air.GetWhiteAir();
-            TestTrue(FString::Printf(TEXT("%.0f K: every coefficient finite and not negative"), Kelvin),
+            bool bFolds = true;
+            for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+            {
+                bFolds &= std::isfinite(A.Fold[K].X) && std::isfinite(A.Fold[K].Y) && std::isfinite(A.Fold[K].Z);
+            }
+            TestTrue(FString::Printf(TEXT("%.0f K: every coefficient finite and not negative, every fold finite"), Kelvin),
                 FiniteAndNonNegative(A.GasScatter) && FiniteAndNonNegative(A.GasExtinct) && FiniteAndNonNegative(A.AerosolScatter)
-                && FiniteAndNonNegative(A.AerosolExtinct) && FiniteAndNonNegative(W.GasScatter) && FiniteAndNonNegative(W.AerosolScatter));
+                && FiniteAndNonNegative(A.AerosolExtinct) && bFolds);
             TestTrue(FString::Printf(TEXT("%.0f K: the star's colour has luminance 1"), Kelvin),
                 FMath::Abs(Luminance(Air.GetStarColour()) - 1.0) < 1.0e-3);
         }
     }
     TestTrue(TEXT("clamped as Blackbody clamps: 0 K and 500 K build as 1,000 K"),
-        Same(FAtmosphere::Build(EarthAir(), 0.0).GetAir(), FAtmosphere::Build(EarthAir(), 1000.0).GetAir())
-        && Same(FAtmosphere::Build(EarthAir(), 500.0).GetAir(), FAtmosphere::Build(EarthAir(), 1000.0).GetAir()));
+        Same(FAtmosphere::Build(EarthAir(), 0.0, EAtmosphereTable::None).GetAir(), FAtmosphere::Build(EarthAir(), 1000.0, EAtmosphereTable::None).GetAir())
+        && Same(FAtmosphere::Build(EarthAir(), 500.0, EAtmosphereTable::None).GetAir(), FAtmosphere::Build(EarthAir(), 1000.0, EAtmosphereTable::None).GetAir()));
     TestTrue(TEXT("and 40,000 K as 15,000 K"),
-        Same(FAtmosphere::Build(EarthAir(), 40000.0).GetAir(), FAtmosphere::Build(EarthAir(), 15000.0).GetAir()));
+        Same(FAtmosphere::Build(EarthAir(), 40000.0, EAtmosphereTable::None).GetAir(), FAtmosphere::Build(EarthAir(), 15000.0, EAtmosphereTable::None).GetAir()));
     return true;
 }
 
 #endif
 ```
 
-- [ ] **Step 2: Run it; expect a compile failure.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
-```
-
-Expected: FAIL, `unknown type name 'FAtmosphere'` (or `no member named 'Build'`).
-
-- [ ] **Step 3: The header.** Replace `Source/DeepSpace/Atmosphere/Atmosphere.h` with:
-
-```cpp
-#pragma once
-
-#include "CoreMinimal.h"
-#include "Atmosphere/AtmosphereReference.h"
-
-/**
- * The air's optics as the game draws them (atmospheres decision 1):
- * Shaders/Private/Atmosphere.ush, the one law, compiled here twice -- in
- * double, what the game computes, and in float, the GPU's mirror, which the
- * rendered probe (orbital slice 1) holds the GPU to and the pure tests hold
- * to the double. AtmosphereReference is what "right" means; this is what
- * draws.
- */
-namespace AtmosphereLaw
-{
-    /** ln of the Chapman function, the .ush's AT_LogChapman: X = R / H,
-     *  CosZenith the ray against the local vertical. */
-    DEEPSPACE_API double LogChapmanF64(double X, double CosZenith);
-    DEEPSPACE_API float LogChapmanF32(float X, float CosZenith);
-}
-
-/**
- * One world's air as the law takes it: the .ush's AT_Air, in double. Per
- * radius of the body, at the surface, three channels. Scatter is in the
- * star's own colour at unit luminance -- the star is in the coefficients,
- * so the shader never sees a temperature (decision 3); extinction is
- * relative to the star's own light, so a white surface seen through no air
- * stays white. The gas falls by e every GasH radii and the aerosol every
- * AerosolH; the air is drawn to Top radii above the surface. Airless when
- * Top is 0.
- */
-struct FAtmosphereAir
-{
-    FVector3d GasScatter = FVector3d::ZeroVector;
-    FVector3d GasExtinct = FVector3d::ZeroVector;
-    FVector3d AerosolScatter = FVector3d::ZeroVector;
-    FVector3d AerosolExtinct = FVector3d::ZeroVector;
-    double GasH = 0.0;
-    double AerosolH = 0.0;
-    double AerosolG = 0.0;
-    double Top = 0.0;
-
-    bool IsAirless() const { return !(Top > 0.0); }
-};
-
-/**
- * One airy world's multiple-scattering table (decision 11): Size x Size
- * texels, row = altitude over the air's depth (0 at the surface), column =
- * the sun's zenith cosine from -1 to 1, each an RGB the GPU will sample as
- * RGBA16F -- which is why the values stored here have already been
- * through a half float. Texels[Row * Size + Column]. Empty until
- * FAtmosphere::Build fills it; an empty table reads as no multiple
- * scattering.
- */
-struct DEEPSPACE_API FAtmosphereTable
-{
-    static constexpr int32 Size = 32;
-
-    TArray<FVector3f> Texels;
-
-    bool IsEmpty() const { return Texels.Num() != Size * Size; }
-
-    /** Bilinear between texel centres, clamped at the edges: what the .ush's
-     *  hook reads. Zeros when empty. */
-    void Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const;
-};
-
-/** One world's air under one star, fitted for the law (decision 3). */
-class DEEPSPACE_API FAtmosphere
-{
-public:
-    /**
-     * The per-channel coefficients from the star's spectrum through the
-     * world's own spectral laws: scatter exact in the optically thin limit,
-     * extinction exact at the nadir column (the aerosol's thin-limit share
-     * on its own profile, the rest on the gas's). The star's temperature is
-     * clamped as SkyColour::Blackbody clamps it.
-     */
-    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK);
-
-    bool HasAir() const { return !Air.IsAirless(); }
-    const FAtmosphereAir& GetAir() const { return Air; }
-
-    /** The same air with the star's colour taken out of its scatter: what
-     *  the multiple-scattering table is built from, so the colour enters
-     *  once, where the table is read. */
-    const FAtmosphereAir& GetWhiteAir() const { return White; }
-
-    const FAtmosphereTable& GetTable() const { return Table; }
-
-    /** The star's light in linear sRGB at unit luminance. */
-    const FVector3d& GetStarColour() const { return StarColour; }
-
-private:
-    FAtmosphereAir Air;
-    FAtmosphereAir White;
-    FAtmosphereTable Table;
-    FVector3d StarColour = FVector3d::ZeroVector;
-};
-```
-
-- [ ] **Step 4: The fit.** Append to `Source/DeepSpace/Atmosphere/Atmosphere.cpp`:
-
-```cpp
-
-void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double& OutR, double& OutG, double& OutB) const
-{
-    if (IsEmpty())
-    {
-        OutR = 0.0;
-        OutG = 0.0;
-        OutB = 0.0;
-        return;
-    }
-    const double FX = FMath::Clamp((CosSunZenith + 1.0) * 0.5, 0.0, 1.0) * (Size - 1);
-    const double FY = FMath::Clamp(Altitude01, 0.0, 1.0) * (Size - 1);
-    const int32 X0 = FMath::Min(FMath::FloorToInt32(FX), Size - 2);
-    const int32 Y0 = FMath::Min(FMath::FloorToInt32(FY), Size - 2);
-    const double TX = FX - X0;
-    const double TY = FY - Y0;
-    const FVector3f& C00 = Texels[Y0 * Size + X0];
-    const FVector3f& C01 = Texels[Y0 * Size + X0 + 1];
-    const FVector3f& C10 = Texels[(Y0 + 1) * Size + X0];
-    const FVector3f& C11 = Texels[(Y0 + 1) * Size + X0 + 1];
-    const auto Blend = [TX, TY](double A, double B, double C, double D) { return FMath::Lerp(FMath::Lerp(A, B, TX), FMath::Lerp(C, D, TX), TY); };
-    OutR = Blend(C00.X, C01.X, C10.X, C11.X);
-    OutG = Blend(C00.Y, C01.Y, C10.Y, C11.Y);
-    OutB = Blend(C00.Z, C01.Z, C10.Z, C11.Z);
-}
-
-FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK)
-{
-    using namespace AtmosphereReference;
-    FAtmosphere Out;
-    const FSpectrum Star = StarSpectrum(StarTemperatureK);
-    Out.StarColour = ToLinearSrgb(Star);
-    const FSpectralAir Spectra = Spectral(Spec);
-    if (!Spectra.bAir)
-    {
-        return Out;
-    }
-
-    FSpectrum Through;
-    for (int32 I = 0; I < SkyColour::Spectral::Count; ++I)
-    {
-        Through.Value[I] = FMath::Exp(-(Spectra.GasScatter.Value[I] + Spectra.GasAbsorb.Value[I] + Spectra.AerosolExtinct.Value[I]));
-    }
-    const FVector3d Nadir = ChannelAverage(Star, Through);
-    const FVector3d AerosolTau = ChannelAverage(Star, Spectra.AerosolExtinct);
-    const FVector3d GasScatterColour = Colour(Star, Spectra.GasScatter);
-    const FVector3d AerosolScatterColour = Colour(Star, Spectra.AerosolScatter);
-    const FVector3d GasScatterWhite = ChannelAverage(Star, Spectra.GasScatter);
-    const FVector3d AerosolScatterWhite = ChannelAverage(Star, Spectra.AerosolScatter);
-
-    FAtmosphereAir& A = Out.Air;
-    A.GasH = Spectra.GasH;
-    A.AerosolH = Spectra.AerosolH;
-    A.AerosolG = Spectra.AerosolG;
-    A.Top = Spectra.Top;
-    for (int32 C = 0; C < 3; ++C)
-    {
-        const double TotalTau = -FMath::Loge(FMath::Clamp(Nadir[C], 1.0e-6, 1.0));
-        const double Aerosol = FMath::Max(AerosolTau[C], 0.0);
-        A.GasExtinct[C] = FMath::Max(TotalTau - Aerosol, 0.0) / Spectra.GasH;
-        A.AerosolExtinct[C] = Aerosol / Spectra.AerosolH;
-        A.GasScatter[C] = FMath::Max(GasScatterColour[C], 0.0) / Spectra.GasH;
-        A.AerosolScatter[C] = FMath::Max(AerosolScatterColour[C], 0.0) / Spectra.AerosolH;
-    }
-    Out.White = A;
-    for (int32 C = 0; C < 3; ++C)
-    {
-        Out.White.GasScatter[C] = FMath::Max(GasScatterWhite[C], 0.0) / Spectra.GasH;
-        Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
-    }
-    return Out;
-}
-```
-
-- [ ] **Step 5: Build and run; expect PASS.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.ChannelFit && ./test.sh DeepSpace.Atmosphere.StarTemperatureExtremes
-```
-
-Expected: `passed: 1` twice.
-
-- [ ] **Step 6: The whole suite, then commit.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
-git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Atmosphere/Atmosphere.h Source/DeepSpace/Atmosphere/Atmosphere.cpp Source/DeepSpace/Tests/AtmosphereBuildTest.cpp
-git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
-feat(atmosphere): FAtmosphere::Build -- the star's spectrum folded into three channels
-
-Per airy world and star (atmospheres decision 3): scatter exact in the
-optically thin limit, carrying the star's colour at unit luminance, so
-the shader never sees a temperature; extinction exact at the world's own
-nadir column, relative to the star's own light. The white air -- scatter
-without the star's colour -- is what the multiple-scattering table will be
-built from. FAtmosphereAir is the .ush's AT_Air in double; FAtmosphereTable
-is declared for Task 6 to fill.
-
-DeepSpace.Atmosphere.ChannelFit holds the fit's two exactnesses, linearity
-and the star in the scatter; DeepSpace.Atmosphere.StarTemperatureExtremes
-(review focus 4) holds 0-40,000 K finite, non-negative and clamped as
-Blackbody clamps.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-MSG
-```
-
-- [ ] **Step 7: Prove the tests can fail.**
-
-```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/Atmosphere.cpp 'A.GasExtinct[C] = FMath::Max(TotalTau - Aerosol, 0.0) / Spectra.GasH;' 'A.GasExtinct[C] = FMath::Max(TotalTau, 0.0) / Spectra.GasH;' DeepSpace.Atmosphere.ChannelFit
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Sky/SkyColour.cpp 'const double T = FMath::Clamp(TemperatureK, MinTemperatureK, MaxTemperatureK);' 'const double T = TemperatureK;' DeepSpace.Atmosphere.StarTemperatureExtremes
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
-```
-
-Expected: `KILLED` twice.
-- The first mutant counts the aerosol twice at nadir.
-- The second mutant unclamps the temperature. A 0 K star then has no light at all: its spectrum divided by zero luminance is not a number, and 40,000 K no longer builds as 15,000 K.
-
----
-## Task 5 (O5): The law -- the ray, the march, the sun
-
-This is the rest of the shipped law (decision 1's entry points). What it covers:
-- the air's structs;
-- the ray through the air, measured from its closest approach, with the impact parameter taken from `|E x D|` by a difference of products that keeps its own precision;
-- the columns along the view by Chapman differences;
-- the sun's transmittance, with the ground's hard shadow (planning note 3);
-- the 12-sample march, spaced by the density's own distribution: split at the lowest point and crowded toward it as `u^2`;
-- `AT_InScatter`, `AT_Transmittance` and `AT_SunThrough`.
-
-The multiple-scattering hook reads the table, which stays empty until Task 6. The platform halves carry the hook and the table macros (planning note 1). Review focus 1-3 are pinned here.
-
-**Files:**
-- Modify: `Shaders/Private/Atmosphere.ush` (append, after `AT_LogChapman`)
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.h` (append)
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.cpp` (insert after `#undef AT_CPP`; append)
-- Test: create `Source/DeepSpace/Tests/AtmosphereLawTest.cpp`, which holds these tests:
-  - `DeepSpace.Atmosphere.AirlessIsZero`, `.LimbBeyondSilhouette`, `.TerminatorReddens`, `.CrescentAtHighPhase`, `.BacklitRing` and `.ImpactParameter`;
-  - `.EyeBelowTheDatum`, `.NoStar` and `.DegenerateRays` (review focus 1-3).
-
-**Interfaces:**
-- Consumes: `FAtmosphereAir`, `FAtmosphereTable::Sample`, `FAtmosphere::Build` and its getters (Task 4); `AT_LogChapman` (Task 2); the fixtures (Task 3).
-- Produces, in the `.ush`:
-
-```hlsl
-struct AT_Air { AT_REAL GasScatterR, GasScatterG, GasScatterB, GasExtinctR, GasExtinctG, GasExtinctB,
-                AerosolScatterR, AerosolScatterG, AerosolScatterB, AerosolExtinctR, AerosolExtinctG, AerosolExtinctB,
-                GasH, AerosolH, AerosolG, Top; };   // each a separate AT_REAL field
-struct AT_Rgb { AT_REAL R; AT_REAL G; AT_REAL B; };
-struct AT_Scatter { AT_REAL R; AT_REAL G; AT_REAL B; AT_REAL TR; AT_REAL TG; AT_REAL TB; };
-struct AT_March { AT_REAL R, G, B, TR, TG, TB, FR, FG, FB; };   // FR..FB: the scattered fraction, for Task 6
-AT_Rgb     AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM);   // the hook, per platform
-AT_REAL    AT_DiffOfProducts(AT_REAL A, AT_REAL B, AT_REAL C, AT_REAL D);
-AT_March   AT_MarchAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
-                       AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM);
-AT_Scatter AT_InScatter(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
-                        AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM);
-AT_Rgb     AT_Transmittance(AT_Air A, AT_REAL FX, AT_REAL FY, AT_REAL FZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ, AT_REAL Length);
-AT_Rgb     AT_SunThrough(AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ, AT_REAL SX, AT_REAL SY, AT_REAL SZ);
-static const int AT_VIEW_SAMPLES = 12;   static const AT_REAL AT_NO_END = AT_REAL(1.0e30);
-```
-
-- And in C++:
-
-```cpp
-struct FAtmosphereScatter { FVector3d InScatter; FVector3d Transmittance; };
-namespace AtmosphereLaw
-{
-    inline constexpr int32 ViewSamples = 12;
-    inline constexpr double NoEnd = 1.0e30;
-    FAtmosphereScatter InScatterF64(const FAtmosphereAir&, const FAtmosphereTable&, const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun);
-    FAtmosphereScatter InScatterF32(const FAtmosphereAir&, const FAtmosphereTable&, const FVector3f& Eye, const FVector3f& Direction, float Length, const FVector3f& Sun);
-    FVector3d TransmittanceF64(const FAtmosphereAir&, const FVector3d& From, const FVector3d& Direction, double Length);
-    FVector3d TransmittanceF32(const FAtmosphereAir&, const FVector3f& From, const FVector3f& Direction, float Length);
-    FVector3d SunThroughF64(const FAtmosphereAir&, const FVector3d& Point, const FVector3d& Sun);
-    FVector3d SunThroughF32(const FAtmosphereAir&, const FVector3f& Point, const FVector3f& Sun);
-    double ImpactParameterF64(const FVector3d& Eye, const FVector3d& Direction);
-    float ImpactParameterF32(const FVector3f& Eye, const FVector3f& Direction);
-}
-namespace AtmosphereLocal { template <typename TAir, typename TReal> TAir ToAir(const FAtmosphereAir&); }   // Atmosphere.cpp only
-```
-
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/AtmosphereLawTest.cpp`:
+  Replace `Source/DeepSpace/Tests/AtmosphereTableTest.cpp` with:
 
 ```cpp
 #include "Misc/AutomationTest.h"
 #include "Atmosphere/Atmosphere.h"
+#include "Atmosphere/AtmosphereReference.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereAirlessIsZeroTest, "DeepSpace.Atmosphere.AirlessIsZero",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereLimbBeyondSilhouetteTest, "DeepSpace.Atmosphere.LimbBeyondSilhouette",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereTerminatorReddensTest, "DeepSpace.Atmosphere.TerminatorReddens",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereCrescentAtHighPhaseTest, "DeepSpace.Atmosphere.CrescentAtHighPhase",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereBacklitRingTest, "DeepSpace.Atmosphere.BacklitRing",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereImpactParameterTest, "DeepSpace.Atmosphere.ImpactParameter",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereEyeBelowTheDatumTest, "DeepSpace.Atmosphere.EyeBelowTheDatum",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereNoStarTest, "DeepSpace.Atmosphere.NoStar",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereDegenerateRaysTest, "DeepSpace.Atmosphere.DegenerateRays",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereMultiScatterTableTest, "DeepSpace.Atmosphere.MultiScatterTable",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-namespace AtmosphereLawTestLocal
+namespace AtmosphereTableTestLocal
 {
-    using AtmosphereLaw::NoEnd;
-
     double Luminance(const FVector3d& Colour)
     {
         return 0.2126 * Colour.X + 0.7152 * Colour.Y + 0.0722 * Colour.Z;
     }
 
-    bool IsFinite(const FVector3d& V)
+    /** Straight up from the ground under the noon sun, 45 degrees high. */
+    FVector3d NoonZenith(const FAtmosphere& Air)
     {
-        return std::isfinite(V.X) && std::isfinite(V.Y) && std::isfinite(V.Z);
-    }
-
-    const FAtmosphere& Earth()
-    {
-        static const FAtmosphere Air = FAtmosphere::Build(AtmosphereTestFixtures::EarthAir(), AtmosphereTestFixtures::SunK);
-        return Air;
-    }
-
-    FAtmosphereScatter Look(const FAtmosphere& Air, const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun)
-    {
-        return AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), Eye, Direction, Length, Sun);
-    }
-
-    FAtmosphereScatter Look32(const FAtmosphere& Air, const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun)
-    {
-        return AtmosphereLaw::InScatterF32(Air.GetAir(), Air.GetTable(), FVector3f(Eye), FVector3f(Direction), static_cast<float>(Length), FVector3f(Sun));
-    }
-
-    /** A ray from 7.8 radii travelling +Y that grazes the air Height radii
-     *  above the surface, on the +X side (Side 1) or the -X side (Side -1). */
-    FAtmosphereScatter Limb(const FAtmosphere& Air, double Height, const FVector3d& Sun, double Side = 1.0)
-    {
-        return Look(Air, FVector3d(Side * (1.0 + Height), -7.8, 0.0), FVector3d(0.0, 1.0, 0.0), NoEnd, Sun);
-    }
-
-    /** At the surface point (1, 0, 0), a sun Degrees above the horizon. */
-    FVector3d SunAtElevation(double Degrees)
-    {
-        const double Radians = FMath::DegreesToRadians(Degrees);
-        return FVector3d(std::sin(Radians), std::cos(Radians), 0.0);
+        const FVector3d Up(0.0, 0.0, 1.0);
+        return AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), Up, Up, AtmosphereLaw::NoEnd, AtmosphereLaw::NoonSun()).InScatter;
     }
 }
 
-bool FAtmosphereAirlessIsZeroTest::RunTest(const FString& Parameters)
+bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
 {
-    using namespace AtmosphereLawTestLocal;
-    const FAtmosphere None = FAtmosphere::Build(AtmosphereTestFixtures::Airless(), AtmosphereTestFixtures::SunK);
-    const FVector3d Up(0.0, 0.0, 1.0);
-    for (const FAtmosphereScatter& S : {Look(None, FVector3d(0.0, 0.0, 1.001), Up, NoEnd, Up), Look32(None, FVector3d(0.0, 0.0, 1.001), Up, NoEnd, Up),
-                                        Look(None, FVector3d(1.001, -7.8, 0.0), FVector3d(0.0, 1.0, 0.0), NoEnd, FVector3d(1.0, 0.0, 0.0))})
+    using namespace AtmosphereTableTestLocal;
+    using namespace AtmosphereTestFixtures;
+    constexpr int32 Size = FAtmosphereTable::Size;
+    constexpr int32 Bins = AtmosphereBins::Count;
+
+    const FAtmosphere Full = FAtmosphere::Build(EarthAir(), SunK);
+    const FAtmosphere CarbonDioxideAir = FAtmosphere::Build(CarbonDioxide(CarbonDioxideCeilingBar), SunK);
+    const FAirSpec Specs[] = {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar)};
+    const FAtmosphere* const Laws[] = {&Full, &CarbonDioxideAir};
+    for (int32 Index = 0; Index < 2; ++Index)
     {
-        TestTrue(TEXT("an airless world adds exactly nothing"), S.InScatter == FVector3d::ZeroVector);
-        TestTrue(TEXT("and dims exactly nothing"), S.Transmittance == FVector3d::OneVector);
-    }
-    TestTrue(TEXT("its sunlight passes whole, the night side too: the disc's Lambert darkens it, not an air"),
-        AtmosphereLaw::SunThroughF64(None.GetAir(), FVector3d(0.0, 0.0, 1.0), FVector3d(0.0, 0.0, -1.0)) == FVector3d::OneVector);
-    TestTrue(TEXT("and with no star"), AtmosphereLaw::SunThroughF64(None.GetAir(), FVector3d(0.0, 0.0, 1.0), FVector3d::ZeroVector) == FVector3d::OneVector);
-    TestTrue(TEXT("its transmittance is one"), AtmosphereLaw::TransmittanceF32(None.GetAir(), FVector3f(0.0f, 0.0f, 3.0f), FVector3f(0.0f, 0.0f, -1.0f), 2.0f) == FVector3d::OneVector);
-    return true;
-}
+        const FAirSpec& Spec = Specs[Index];
+        const FAtmosphere& Law = *Laws[Index];
+        const FReferenceAir Reference(Spec, SunK);
+        const AtmosphereReference::FSpectrum Star = AtmosphereReference::StarSpectrum(SunK);
+        const FAtmosphereTable& Table = Law.GetTable();
+        if (!TestFalse(TEXT("an airy world has a table"), Table.IsEmpty()))
+        {
+            return false;
+        }
+        bool bFinite = true;
+        for (const float Texel : Table.Texels)
+        {
+            bFinite &= std::isfinite(Texel) && Texel >= 0.0f;
+        }
+        TestTrue(TEXT("every texel finite and not negative"), bFinite);
 
-bool FAtmosphereLimbBeyondSilhouetteTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    const FAtmosphereAir& A = Earth().GetAir();
-    const FVector3d Noon(1.0, 0.0, 0.0);
-    const FAtmosphereScatter Low = Limb(Earth(), 2.0 * A.GasH, Noon);
-    const FAtmosphereScatter High = Limb(Earth(), 8.0 * A.GasH, Noon);
-    const FAtmosphereScatter Above = Limb(Earth(), A.Top + 1.0e-4, Noon);
-    AddInfo(FString::Printf(TEXT("the lit limb at 2 H: (%.5f, %.5f, %.5f); at 8 H luminance %.3e"),
-        Low.InScatter.X, Low.InScatter.Y, Low.InScatter.Z, Luminance(High.InScatter)));
-    TestTrue(TEXT("the air shows past the silhouette: a ray grazing 2 H up is lit"), Luminance(Low.InScatter) > 1.0e-4);
-    TestTrue(TEXT("and fades with height"), Luminance(Low.InScatter) > Luminance(High.InScatter) && Luminance(High.InScatter) > 0.0);
-    TestTrue(TEXT("a ray above the air's top meets none of it"),
-        Above.InScatter == FVector3d::ZeroVector && Above.Transmittance == FVector3d::OneVector);
-    TestTrue(TEXT("the grazing path reddens what passes through it"), Low.Transmittance.X > Low.Transmittance.Z);
-    return true;
-}
+        // Texel centres: altitude J / 31 of the air's depth, sun cosine
+        // -1 + 2 I / 31 -- overhead, 29 degrees up, 5.6 up, 5.6 down -- each
+        // bin against the reference's source averaged into it.
+        for (const int32 J : {0, 3, 9})
+        {
+            for (const int32 I : {31, 23, 17, 14})
+            {
+                const double Altitude01 = static_cast<double>(J) / (Size - 1);
+                const double Cos = -1.0 + 2.0 * I / (Size - 1);
+                const AtmosphereBins::FBins Want = AtmosphereBins::Average(Star, Reference.MultiScatterSpectrum(Altitude01, Cos));
+                for (int32 K = 0; K < Bins; ++K)
+                {
+                    const double Got = Table.Texel(J, I, K);
+                    TestTrue(FString::Printf(TEXT("altitude %.3f, sun cosine %.4f, bin %d: the table's %.5f against the reference's %.5f"),
+                        Altitude01, Cos, K, Got, Want.Value[K]),
+                        FMath::Abs(Got - Want.Value[K]) <= FMath::Max(0.10 * FMath::Abs(Want.Value[K]), 1.0e-3));
+                }
+            }
+        }
 
-bool FAtmosphereTerminatorReddensTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    const FAtmosphereAir& A = Earth().GetAir();
-    const FVector3d Surface(1.0, 0.0, 0.0);
-    const FVector3d Low = AtmosphereLaw::SunThroughF64(A, Surface, SunAtElevation(2.0));
-    const FVector3d High = AtmosphereLaw::SunThroughF64(A, Surface, SunAtElevation(60.0));
-    AddInfo(FString::Printf(TEXT("the ground's sunlight at 2 degrees (%.4f, %.4f, %.4f), at 60 (%.4f, %.4f, %.4f)"),
-        Low.X, Low.Y, Low.Z, High.X, High.Y, High.Z));
-    TestTrue(TEXT("near the terminator the ground is lit red over blue"), Low.X > Low.Z);
-    TestTrue(TEXT("and far redder than under a high sun"), Low.X / Low.Z > 2.0 * High.X / High.Z);
-    TestTrue(TEXT("a high sun reaches the ground mostly unreddened"), High.Z > 0.5);
-    TestTrue(TEXT("past the terminator the ground is in its own shadow"),
-        AtmosphereLaw::SunThroughF64(A, Surface, SunAtElevation(-0.5)) == FVector3d::ZeroVector);
-
-    // Twilight: seen from 7.8 radii, the air over a point one degree into
-    // the night is still lit from above the shadow.
-    const FVector3d Eye(7.8, 0.0, 0.0);
-    const double OneDegree = FMath::DegreesToRadians(1.0);
-    const FVector3d Night(std::cos(OneDegree), -std::sin(OneDegree), 0.0);
-    const FVector3d ToNight = Night - Eye;
-    const FAtmosphereScatter Twilight = Look(Earth(), Eye, ToNight.GetSafeNormal(), ToNight.Size(), FVector3d(0.0, 1.0, 0.0));
-    TestTrue(FString::Printf(TEXT("the night side's first degree glows (luminance %.3e)"), Luminance(Twilight.InScatter)),
-        Luminance(Twilight.InScatter) > 0.0);
-    return true;
-}
-
-bool FAtmosphereCrescentAtHighPhaseTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    const double H = Earth().GetAir().GasH;
-    // Phase 150 degrees: the star mostly behind the world, off to +X.
-    const FVector3d Behind(0.5, 0.8660254037844386, 0.0);
-    const double SunSide = Luminance(Limb(Earth(), 2.0 * H, Behind, 1.0).InScatter);
-    const double FarSide = Luminance(Limb(Earth(), 2.0 * H, Behind, -1.0).InScatter);
-    const double Quarter = Luminance(Limb(Earth(), 2.0 * H, FVector3d(1.0, 0.0, 0.0), 1.0).InScatter);
-    AddInfo(FString::Printf(TEXT("phase 150: the sun's side %.4e, the far side %.4e; phase 90: %.4e"), SunSide, FarSide, Quarter));
-    TestTrue(TEXT("at high phase the limb is a crescent: the sun's side outshines the far side five times"), SunSide > 5.0 * FarSide);
-    TestTrue(TEXT("forward scattering: the crescent outshines the lit limb at quarter phase"), SunSide > Quarter);
-    return true;
-}
-
-bool FAtmosphereBacklitRingTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    const double H = Earth().GetAir().GasH;
-    // The star exactly behind the world: the eye, the world and the star on
-    // one line. Compared at one grazing height, 3 H, where forward
-    // scattering wins: lower, the ring's light crosses the whole grazing
-    // path twice over and is its own extinction (planning note 10).
-    const FVector3d Behind(0.0, 1.0, 0.0);
-    const FVector3d Quarter(1.0, 0.0, 0.0);
-    const double Ring = Luminance(Limb(Earth(), 3.0 * H, Behind).InScatter);
-    const double Lit = Luminance(Limb(Earth(), 3.0 * H, Quarter).InScatter);
-    AddInfo(FString::Printf(TEXT("3 H up: the backlit ring %.4e, the lit limb at phase 90 %.4e"), Ring, Lit));
-    TestTrue(TEXT("with the star behind the world the ring outshines the lit limb at 90 degrees of phase, at the same height"), Ring > Lit);
-
-    // The brightest of each, for the developer: the lit limb's peak sits
-    // lower, in air the ring cannot shine through.
-    double RingPeak = 0.0;
-    double LitPeak = 0.0;
-    for (double Height = 0.25; Height <= 8.0; Height += 0.25)
-    {
-        RingPeak = FMath::Max(RingPeak, Luminance(Limb(Earth(), Height * H, Behind).InScatter));
-        LitPeak = FMath::Max(LitPeak, Luminance(Limb(Earth(), Height * H, Quarter).InScatter));
-    }
-    AddInfo(FString::Printf(TEXT("brightest over 0.25-8 H: the ring %.4e, the lit limb %.4e"), RingPeak, LitPeak));
-    return true;
-}
-
-bool FAtmosphereImpactParameterTest::RunTest(const FString& Parameters)
-{
-    // A limb ray from a thousand radii, in no special axes: the float impact
-    // parameter must be the double one's, which the naive |E|^2 - (E.D)^2 or
-    // an unguarded cross product loses at this range.
-    const FQuat Turn(FVector(0.3, 0.5, 0.8).GetSafeNormal(), 0.7);
-    const double B = 1.0 + 2.0 * 7.463e5 / AtmosphereTestFixtures::EarthRadiusCm;
-    const FVector3f Eye(Turn.RotateVector(FVector(B, -1000.0, 0.0)));
-    const FVector3f Direction(Turn.RotateVector(FVector(0.0, 1.0, 0.0)));
-    const double Double = AtmosphereLaw::ImpactParameterF64(FVector3d(Eye), FVector3d(Direction));
-    const float Float = AtmosphereLaw::ImpactParameterF32(Eye, Direction);
-    AddInfo(FString::Printf(TEXT("impact parameter from 1,000 radii: double %.9f, float %.9f"), Double, static_cast<double>(Float)));
-    TestTrue(TEXT("the double sees the tangent 2 H up, to the inputs' own rounding"), FMath::Abs(Double - B) < 2.0e-4);
-    TestTrue(TEXT("and the float sees what the double sees, to 1e-6"), FMath::Abs(static_cast<double>(Float) / Double - 1.0) < 1.0e-6);
-    return true;
-}
-
-bool FAtmosphereEyeBelowTheDatumTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    // Review focus 1: landing's valleys sit under the sphere the law calls
-    // the ground. The sky from a valley floor is the sky from the datum.
-    const FVector3d Up(0.0, 0.0, 1.0);
-    const FAtmosphereScatter Datum = Look(Earth(), FVector3d(0.0, 0.0, 1.0), Up, NoEnd, Up);
-    const FAtmosphereScatter Valley = Look(Earth(), FVector3d(0.0, 0.0, 0.999), Up, NoEnd, Up);
-    TestTrue(TEXT("the sky from the datum is a sky"), Luminance(Datum.InScatter) > 0.0);
-    TestTrue(TEXT("from a valley under the datum it is finite"), IsFinite(Valley.InScatter) && IsFinite(Valley.Transmittance));
-    TestTrue(TEXT("and it is the datum's"), (Valley.InScatter - Datum.InScatter).GetAbsMax() <= 1.0e-12 * Datum.InScatter.GetAbsMax());
-
-    const FAtmosphereScatter Down = Look(Earth(), FVector3d(0.0, 0.0, 1.0), -Up, NoEnd, Up);
-    TestTrue(TEXT("looking into the ground from it adds nothing and dims nothing"),
-        Down.InScatter == FVector3d::ZeroVector && Down.Transmittance == FVector3d::OneVector);
-
-    const FAtmosphereScatter Centre = Look(Earth(), FVector3d::ZeroVector, Up, NoEnd, Up);
-    const FAtmosphereScatter Centre32 = Look32(Earth(), FVector3d::ZeroVector, Up, NoEnd, Up);
-    TestTrue(TEXT("an eye at the very centre is finite, in double and float"),
-        IsFinite(Centre.InScatter) && IsFinite(Centre32.InScatter) && IsFinite(Centre32.Transmittance));
-    TestTrue(TEXT("and the float valley is the float datum"),
-        IsFinite(Look32(Earth(), FVector3d(0.0, 0.0, 0.999), Up, NoEnd, Up).InScatter));
-    return true;
-}
-
-bool FAtmosphereNoStarTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    // Review focus 2: FSkyFrame::SunDirection is zero with no star.
-    const double H = Earth().GetAir().GasH;
-    const FAtmosphereScatter Lit = Limb(Earth(), 2.0 * H, FVector3d(1.0, 0.0, 0.0));
-    const FAtmosphereScatter Dark = Limb(Earth(), 2.0 * H, FVector3d::ZeroVector);
-    TestTrue(TEXT("no star, no light in the air"), Dark.InScatter == FVector3d::ZeroVector);
-    TestTrue(TEXT("but the air still dims what is behind it, as much as by day"), Dark.Transmittance == Lit.Transmittance);
-    TestTrue(TEXT("no star, no sunlight through the air"),
-        AtmosphereLaw::SunThroughF64(Earth().GetAir(), FVector3d(0.0, 0.0, 1.0), FVector3d::ZeroVector) == FVector3d::ZeroVector);
-    const FAtmosphereScatter Dark32 = Look32(Earth(), FVector3d(1.0 + 2.0 * H, -7.8, 0.0), FVector3d(0.0, 1.0, 0.0), NoEnd, FVector3d::ZeroVector);
-    TestTrue(TEXT("and the same in float"), Dark32.InScatter == FVector3d::ZeroVector && IsFinite(Dark32.Transmittance));
-    return true;
-}
-
-bool FAtmosphereDegenerateRaysTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereLawTestLocal;
-    // Review focus 3.
-    const FVector3d Up(0.0, 0.0, 1.0);
-    const FVector3d Far(0.0, 0.0, 7.8);
-
-    const FAtmosphereScatter Through = Look(Earth(), Far, -Up, NoEnd, Up);
-    const FAtmosphereScatter ToGround = Look(Earth(), Far, -Up, 6.8, Up);
-    TestTrue(TEXT("a view straight at the centre is finite and lit"), IsFinite(Through.InScatter) && Luminance(Through.InScatter) > 0.0);
-    TestTrue(TEXT("and ends at the ground, however far it was told to go"),
-        Through.InScatter == ToGround.InScatter && Through.Transmittance == ToGround.Transmittance);
-
-    for (const double Length : {0.0, -5.0})
-    {
-        const FAtmosphereScatter None = Look(Earth(), FVector3d(0.0, 0.0, 1.0), Up, Length, Up);
-        TestTrue(FString::Printf(TEXT("a ray of length %.0f adds nothing and dims nothing"), Length),
-            None.InScatter == FVector3d::ZeroVector && None.Transmittance == FVector3d::OneVector);
+        // Read between texel centres, bilinearly.
+        double Read[Bins];
+        Table.Sample(0.0, -1.0 + 2.0 * 30.5 / (Size - 1), Read);
+        TestTrue(TEXT("halfway between two texels the table reads their mean"),
+            FMath::Abs(Read[0] - 0.5 * (Table.Texel(0, 30, 0) + Table.Texel(0, 31, 0))) < 1.0e-6);
     }
 
-    const FAtmosphereScatter Endless = Look(Earth(), FVector3d(0.0, 0.0, 1.0), Up, NoEnd, Up);
-    const FAtmosphereScatter Million = Look(Earth(), FVector3d(0.0, 0.0, 1.0), Up, 1.0e6, Up);
-    TestTrue(TEXT("to infinity is to the air's top"), Endless.InScatter == Million.InScatter && Endless.Transmittance == Million.Transmittance);
+    // Coverage. The noon sun's cosine, sin 45 degrees = 0.7071, lies between
+    // columns 26 (0.677) and 27 (0.742).
+    const FAtmosphere Noon = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::NoonOnly);
+    const FAtmosphere NoTable = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
+    bool bNoonColumns = true;
+    bool bRestZero = true;
+    for (int32 J = 0; J < Size; ++J)
+    {
+        for (int32 I = 0; I < Size; ++I)
+        {
+            for (int32 K = 0; K < Bins; ++K)
+            {
+                const float Only = Noon.GetTable().Texel(J, I, K);
+                if (I == 26 || I == 27)
+                {
+                    bNoonColumns &= Only == Full.GetTable().Texel(J, I, K);
+                }
+                else
+                {
+                    bRestZero &= Only == 0.0f;
+                }
+            }
+        }
+    }
+    TestTrue(TEXT("the noon table's two columns are the full table's, exactly"), bNoonColumns);
+    TestTrue(TEXT("and it has nothing else"), bRestZero);
+    TestTrue(TEXT("no table when none is asked for"), NoTable.GetTable().IsEmpty());
+    TestTrue(TEXT("the noon zenith reads the same from either table"), NoonZenith(Full) == NoonZenith(Noon));
 
-    const FVector3d Distant(0.0, 1.0e6, 0.0);
-    const FVector3d Back = (FVector3d(1.0 + 2.0 * Earth().GetAir().GasH, 0.0, 0.0) - Distant).GetSafeNormal();
-    TestTrue(TEXT("a limb from a million radii is finite, in double and float"),
-        IsFinite(Look(Earth(), Distant, Back, NoEnd, FVector3d(1.0, 0.0, 0.0)).InScatter)
-        && IsFinite(Look32(Earth(), Distant, Back, NoEnd, FVector3d(1.0, 0.0, 0.0)).InScatter));
+    // Multiple scattering adds light.
+    TestTrue(FString::Printf(TEXT("the table brightens the noon zenith (%.4f with, %.4f without)"),
+        Luminance(NoonZenith(Full)), Luminance(NoonZenith(NoTable))),
+        Luminance(NoonZenith(Full)) > 1.01 * Luminance(NoonZenith(NoTable)));
     return true;
 }
 
 #endif
 ```
 
-- [ ] **Step 2: Run it; expect a compile failure.**
+  Create `Source/DeepSpace/Tests/AtmosphereMarchTest.cpp`:
+
+```cpp
+#include "Misc/AutomationTest.h"
+#include "Atmosphere/Atmosphere.h"
+#include "Atmosphere/AtmosphereReference.h"
+#include "Tests/AtmosphereTestFixtures.h"
+
+#include <cmath>
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereSingleScatteringTest, "DeepSpace.Atmosphere.SingleScatteringMatchesReference",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace AtmosphereMarchTestLocal
+{
+    /** As a display shows it: no channel below none (the reference's light
+     *  can leave sRGB's gamut, where no screen could show the difference). */
+    double Shown(double Channel)
+    {
+        return FMath::Max(Channel, 0.0);
+    }
+}
+
+bool FAtmosphereSingleScatteringTest::RunTest(const FString& Parameters)
+{
+    using namespace AtmosphereMarchTestLocal;
+    using namespace AtmosphereTestFixtures;
+
+    // The law's march and its bins, with multiple scattering out of both:
+    // the law with no table against the reference's first order, over
+    // decision 1's whole grid, both builds, at decision 1's 5% or 1e-3.
+    // The cases that fail a midpoint rule are here -- the haze's 1 km under
+    // H2/He's 55 km, the horizon through a ceiling air, a limb whose light
+    // climbs out of the ground's shadow -- and so are the long paths where
+    // one depth per bin must stand for several.
+    FReferenceAir::FOptions FirstOrder;
+    FirstOrder.bSecondOrder = false;
+    int32 Checked = 0;
+    double Worst = 0.0;
+    TArray<FString> Misses;
+    for (const FNamedAir& Named : Extremes())
+    {
+        for (const double Kelvin : {HomeStarK, SunK})
+        {
+            const FAtmosphere Law = FAtmosphere::Build(Named.Air, Kelvin, EAtmosphereTable::None);
+            const FReferenceAir Reference(Named.Air, Kelvin);
+            for (const FRayCase& Case : Grid(Law.GetAir().GasH, Law.GetAir().Top))
+            {
+                FReferenceAir::FRay Ray;
+                Ray.Eye = Case.Eye;
+                Ray.Direction = Case.Direction;
+                Ray.Length = Case.Length;
+                Ray.Sun = Case.Sun;
+                const FReferenceAir::FResult Want = Reference.Trace(Ray, FirstOrder);
+                const FAtmosphereScatter F64 = AtmosphereLaw::InScatterF64(Law.GetAir(), Law.GetTable(), Case.Eye, Case.Direction, Case.Length, Case.Sun);
+                const FAtmosphereScatter F32 = AtmosphereLaw::InScatterF32(Law.GetAir(), Law.GetTable(),
+                    FVector3f(Case.Eye), FVector3f(Case.Direction), static_cast<float>(Case.Length), FVector3f(Case.Sun));
+                for (const FAtmosphereScatter* Got : {&F64, &F32})
+                {
+                    for (int32 C = 0; C < 3; ++C)
+                    {
+                        const double Pairs[2][2] = {{Shown(Got->InScatter[C]), Shown(Want.InScatter[C])},
+                                                    {Shown(Got->Transmittance[C]), Shown(Want.Transmittance[C])}};
+                        for (int32 Q = 0; Q < 2; ++Q)
+                        {
+                            ++Checked;
+                            const double Allowance = FMath::Max(0.05 * Pairs[Q][1], 1.0e-3);
+                            const double Over = std::isfinite(Pairs[Q][0]) ? FMath::Abs(Pairs[Q][0] - Pairs[Q][1]) / Allowance : 1.0e30;
+                            Worst = FMath::Max(Worst, Over);
+                            if (!(Over <= 1.0))
+                            {
+                                Misses.Add(FString::Printf(TEXT("%s, %.0f K, %s, %s %s channel %d: %.5f against %.5f"), Named.Name, Kelvin, *Case.Name,
+                                    Got == &F64 ? TEXT("F64") : TEXT("F32"), Q == 0 ? TEXT("in-scatter") : TEXT("transmittance"), C, Pairs[Q][0], Pairs[Q][1]));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    AddInfo(FString::Printf(TEXT("single scattering against the reference's first order: %d values, %d outside 5%% or 1e-3, the worst at %.2f of its allowance"),
+        Checked, Misses.Num(), Worst));
+    for (int32 I = 0; I < FMath::Min(Misses.Num(), 40); ++I)
+    {
+        AddInfo(Misses[I]);
+    }
+    TestEqual(TEXT("the whole grid was checked: 12 airs and stars, 48 rays, two builds, three channels, two quantities"), Checked, 12 * 48 * 2 * 3 * 2);
+    TestEqual(TEXT("every channel of both builds within 5% or 1e-3 of the reference's first order"), Misses.Num(), 0);
+    return true;
+}
+
+#endif
+```
+
+- [ ] **Step 3: Run it; expect a compile failure.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: FAIL, `no member named 'InScatterF64' in namespace 'AtmosphereLaw'`.
+Expected: FAIL, `no member named 'Fold' in 'FAtmosphereAir'` (or `no member named 'MultiScatterSpectrum'`).
 
-- [ ] **Step 3: The law.** Append to `Shaders/Private/Atmosphere.ush`:
+- [ ] **Step 4: The reference's source per wavelength.** In `Source/DeepSpace/Atmosphere/AtmosphereReference.h`, after the line
+
+```cpp
+    FVector3d MultiScatterWhite(double Altitude01, double CosSunZenith, int32 Rings = 48, int32 Segments = 24, int32 Steps = 96) const;
+```
+
+  add
+
+```cpp
+
+    /** The same source per wavelength, before any weighting into channels:
+     *  what the law's table is held to, bin by bin. */
+    AtmosphereReference::FSpectrum MultiScatterSpectrum(double Altitude01, double CosSunZenith, int32 Rings = 48, int32 Segments = 24, int32 Steps = 96) const;
+```
+
+  In `Source/DeepSpace/Atmosphere/AtmosphereReference.cpp`, replace the whole of `FReferenceAir::MultiScatterWhite` (from `FVector3d FReferenceAir::MultiScatterWhite(` to its closing brace, the end of the file) with:
+
+```cpp
+AtmosphereReference::FSpectrum FReferenceAir::MultiScatterSpectrum(double Altitude01, double CosSunZenith, int32 Rings, int32 Segments, int32 StepsPerRay) const
+{
+    using namespace AtmosphereReferenceLocal;
+    FSpectrum Psi;
+    if (!Air.bAir)
+    {
+        return Psi;
+    }
+    const FVector3d Point(0.0, 0.0, 1.0 + FMath::Clamp(Altitude01, 0.0, 1.0) * Air.Top);
+    const FVector3d Sun(std::sqrt(FMath::Max(1.0 - CosSunZenith * CosSunZenith, 0.0)), 0.0, CosSunZenith);
+    // The View only weights IntoView*, which this does not read.
+    const FSecond Second = SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay);
+    for (int32 I = 0; I < Count; ++I)
+    {
+        const double F = FMath::Min(Second.Transfer.Value[I], 0.999);
+        Psi.Value[I] = UE_DOUBLE_PI * Second.Mean.Value[I] / (1.0 - F);
+    }
+    return Psi;
+}
+
+FVector3d FReferenceAir::MultiScatterWhite(double Altitude01, double CosSunZenith, int32 Rings, int32 Segments, int32 StepsPerRay) const
+{
+    if (!Air.bAir)
+    {
+        return FVector3d::ZeroVector;
+    }
+    return AtmosphereReference::ChannelAverage(Star, MultiScatterSpectrum(Altitude01, CosSunZenith, Rings, Segments, StepsPerRay));
+}
+```
+
+- [ ] **Step 5: The law.** In `Shaders/Private/Atmosphere.ush`, replace everything from the line `// -- The air -----------------------------------------------------------------` to the end of the file with:
 
 ```hlsl
-
 // -- The air -----------------------------------------------------------------
-// One world's air as the law takes it: per radius at the surface, three
-// channels that already fold in the star's spectrum (FAtmosphere::Build).
-// Scatter is in the star's own colour at unit luminance; extinction is
-// relative to the star's own light. The gas falls by e every GasH radii,
-// the aerosol every AerosolH; AerosolG is the aerosol's Henyey-Greenstein
-// asymmetry; the air is drawn to Top radii above the surface, and Top 0 is
-// no air.
+// The law carries light in AT_BINS spectral bins, not three colour channels
+// (atmosphere plan ruling 3): each bin is a run of the reference's 16
+// wavelengths (AtmosphereBins::First in C++), and within a bin the air is
+// one number. Only at the end is each bin's light folded into linear sRGB,
+// by the star's own light in that bin (Fold), so the shader never sees a
+// temperature and three channels never have to stand for a spectrum.
+static const int AT_BINS = 8;
+
+// One world's air as the law takes it. Per bin, per radius at the surface,
+// for unit light in the bin: the gas's and the aerosol's scattering and
+// extinction, colourless. Fold: the star's light in each bin in linear
+// sRGB at unit luminance, so the three sums are the star's colour. The gas
+// falls by e every GasH radii, the aerosol every AerosolH; AerosolG is the
+// aerosol's Henyey-Greenstein asymmetry; the air is drawn to Top radii above
+// the surface, and Top 0 is no air.
 struct AT_Air
 {
-    AT_REAL GasScatterR;
-    AT_REAL GasScatterG;
-    AT_REAL GasScatterB;
-    AT_REAL GasExtinctR;
-    AT_REAL GasExtinctG;
-    AT_REAL GasExtinctB;
-    AT_REAL AerosolScatterR;
-    AT_REAL AerosolScatterG;
-    AT_REAL AerosolScatterB;
-    AT_REAL AerosolExtinctR;
-    AT_REAL AerosolExtinctG;
-    AT_REAL AerosolExtinctB;
+    AT_REAL GasScatter[AT_BINS];
+    AT_REAL GasExtinct[AT_BINS];
+    AT_REAL AerosolScatter[AT_BINS];
+    AT_REAL AerosolExtinct[AT_BINS];
+    AT_REAL FoldR[AT_BINS];
+    AT_REAL FoldG[AT_BINS];
+    AT_REAL FoldB[AT_BINS];
     AT_REAL GasH;
     AT_REAL AerosolH;
     AT_REAL AerosolG;
     AT_REAL Top;
+};
+
+// A value per bin: light, or the fraction of it that survives.
+struct AT_Bins
+{
+    AT_REAL V[AT_BINS];
 };
 
 struct AT_Rgb
@@ -2931,7 +3316,8 @@ struct AT_Rgb
     AT_REAL B;
 };
 
-// What a view gathers (in-scatter) and what it lets through (T), per channel.
+// What a view gathers (in-scatter) and what it lets through (T), folded
+// into linear sRGB.
 struct AT_Scatter
 {
     AT_REAL R;
@@ -2964,20 +3350,25 @@ struct AT_Ray
     AT_REAL S1;
 };
 
-// A march's sums: in-scatter, transmittance, and the fraction of light the
-// air scatters along the way (F), which the multiple-scattering table needs.
+// A march's sums, per bin: in-scatter for unit light in the bin (L), the
+// transmittance (T), and the fraction of light the air scatters along the
+// way (F), which the multiple-scattering table needs.
 struct AT_March
 {
-    AT_REAL R;
-    AT_REAL G;
-    AT_REAL B;
-    AT_REAL TR;
-    AT_REAL TG;
-    AT_REAL TB;
-    AT_REAL FR;
-    AT_REAL FG;
-    AT_REAL FB;
+    AT_REAL L[AT_BINS];
+    AT_REAL T[AT_BINS];
+    AT_REAL F[AT_BINS];
 };
+
+AT_Bins AT_FilledBins(AT_REAL Value)
+{
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = Value;
+    }
+    return Out;
+}
 
 #if defined(AT_CPP)
 // -- C++: the table, and exact products ---------------------------------------
@@ -2989,37 +3380,43 @@ struct AT_March
 #define AT_TABLE_ARG , AT_Table
 #define AT_PRECISE
 static const AT_REAL AT_SPLITTER = sizeof(AT_REAL) == 8 ? AT_REAL(134217729.0) : AT_REAL(4097.0);
-inline AT_Rgb AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
 {
     (void)A;
-    double R = 0.0;
-    double G = 0.0;
-    double B = 0.0;
-    AT_Table.Sample(double(Altitude01), double(CosSunZenith), R, G, B);
-    AT_Rgb Out;
-    Out.R = AT_REAL(R);
-    Out.G = AT_REAL(G);
-    Out.B = AT_REAL(B);
+    double Values[AT_BINS];
+    AT_Table.Sample(double(Altitude01), double(CosSunZenith), Values);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_REAL(Values[K]);
+    }
     return Out;
 }
 #else
 // -- HLSL: the table, and exact products ----------------------------------------
 // The Custom node hands its texture and sampler down as the trailing
-// arguments. Texel centres as the C++ reads them: 32 texels, 0 and 1 at the
-// first and last centre.
+// arguments: a 64 x 32 RGBA16F texture, bins 0-3 in its left half and 4-7
+// in its right, each half read as the C++ reads the table -- 32 texels
+// across, 0 and 1 at the first and last centre.
 #define AT_TABLE_PARAM , Texture2D AT_Table, SamplerState AT_TableSampler
 #define AT_TABLE_ARG , AT_Table, AT_TableSampler
 #define AT_PRECISE precise
 static const float AT_SPLITTER = 4097.0;
-AT_Rgb AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
+AT_Bins AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
 {
-    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 32.0;
+    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;
     float V = (saturate(Altitude01) * 31.0 + 0.5) / 32.0;
-    float4 Texel = AT_Table.SampleLevel(AT_TableSampler, float2(U, V), 0.0);
-    AT_Rgb Out;
-    Out.R = Texel.r;
-    Out.G = Texel.g;
-    Out.B = Texel.b;
+    float4 Low = AT_Table.SampleLevel(AT_TableSampler, float2(U, V), 0.0);
+    float4 High = AT_Table.SampleLevel(AT_TableSampler, float2(U + 0.5, V), 0.0);
+    AT_Bins Out;
+    Out.V[0] = Low.r;
+    Out.V[1] = Low.g;
+    Out.V[2] = Low.b;
+    Out.V[3] = Low.a;
+    Out.V[4] = High.r;
+    Out.V[5] = High.g;
+    Out.V[6] = High.b;
+    Out.V[7] = High.a;
     return Out;
 }
 #endif
@@ -3205,18 +3602,26 @@ AT_Columns AT_ColumnsBetween(AT_Air A, AT_REAL B, AT_REAL SA, AT_REAL SB)
     return Out;
 }
 
+// What a pair of columns lets through, per bin.
+AT_Bins AT_Through(AT_Air A, AT_Columns C)
+{
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_exp(-(A.GasExtinct[K] * C.Gas + A.AerosolExtinct[K] * C.Aerosol));
+    }
+    return Out;
+}
+
 // -- The sun -----------------------------------------------------------------
 // The star's light reaching a point R radii out (Altitude above the surface)
-// whose sun is at CosZenith, per channel: 0 in the ground's own shadow (a ray
-// to the star that passes nearer the centre than the surface), else exp of
-// one combined exponent, each depth capped at e^80 so a sun just past the
+// whose sun is at CosZenith, per bin: 0 in the ground's own shadow (a ray to
+// the star that passes nearer the centre than the surface), else exp of one
+// combined exponent, each depth capped at e^80 so a sun just past the
 // tangent never makes an infinity.
-AT_Rgb AT_SunAt(AT_Air A, AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith)
+AT_Bins AT_SunAt(AT_Air A, AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith)
 {
-    AT_Rgb Out;
-    Out.R = AT_REAL(0.0);
-    Out.G = AT_REAL(0.0);
-    Out.B = AT_REAL(0.0);
+    AT_Bins Out = AT_FilledBins(AT_REAL(0.0));
     AT_REAL Sin2 = AT_max(AT_REAL(1.0) - CosZenith * CosZenith, AT_REAL(0.0));
     if (CosZenith < AT_REAL(0.0) && R * R * Sin2 < AT_REAL(1.0))
     {
@@ -3224,12 +3629,59 @@ AT_Rgb AT_SunAt(AT_Air A, AT_REAL R, AT_REAL Altitude, AT_REAL CosZenith)
     }
     AT_REAL LogGas = AT_LogColumn(R, Altitude, CosZenith, A.GasH);
     AT_REAL LogAerosol = AT_LogColumn(R, Altitude, CosZenith, A.AerosolH);
-    Out.R = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctR, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
-                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctR, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
-    Out.G = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctG, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
-                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctG, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
-    Out.B = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinctB, AT_TINY)) + LogGas, AT_MAX_EXPONENT))
-                   + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinctB, AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = AT_exp(-(AT_exp(AT_min(AT_log(AT_max(A.GasExtinct[K], AT_TINY)) + LogGas, AT_MAX_EXPONENT))
+                          + AT_exp(AT_min(AT_log(AT_max(A.AerosolExtinct[K], AT_TINY)) + LogAerosol, AT_MAX_EXPONENT))));
+    }
+    return Out;
+}
+
+// -- Folding the bins into colour ---------------------------------------------
+// Light: each bin's light times the star's light in that bin, summed.
+AT_Rgb AT_FoldLight(AT_Air A, AT_Bins L)
+{
+    AT_Rgb Out;
+    Out.R = AT_REAL(0.0);
+    Out.G = AT_REAL(0.0);
+    Out.B = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.R = Out.R + A.FoldR[K] * L.V[K];
+        Out.G = Out.G + A.FoldG[K] * L.V[K];
+        Out.B = Out.B + A.FoldB[K] * L.V[K];
+    }
+    return Out;
+}
+
+// A transmittance: what each channel of the star's own light keeps, as 1
+// less what it loses, so that nothing lost is exactly 1. A channel of the
+// star's light floored at 1e-4 of its brightest (a 1,000 K star's
+// near-absent blue), as the reference's ChannelAverage floors it.
+AT_Rgb AT_FoldThrough(AT_Air A, AT_Bins T)
+{
+    AT_REAL OwnR = AT_REAL(0.0);
+    AT_REAL OwnG = AT_REAL(0.0);
+    AT_REAL OwnB = AT_REAL(0.0);
+    AT_REAL LostR = AT_REAL(0.0);
+    AT_REAL LostG = AT_REAL(0.0);
+    AT_REAL LostB = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        AT_REAL Lost = AT_REAL(1.0) - T.V[K];
+        OwnR = OwnR + A.FoldR[K];
+        OwnG = OwnG + A.FoldG[K];
+        OwnB = OwnB + A.FoldB[K];
+        LostR = LostR + A.FoldR[K] * Lost;
+        LostG = LostG + A.FoldG[K] * Lost;
+        LostB = LostB + A.FoldB[K] * Lost;
+    }
+    // AT_TINY, not 0, for an airless world's empty fold: it loses nothing.
+    AT_REAL Floor = AT_max(AT_REAL(1.0e-4) * AT_max(OwnR, AT_max(OwnG, OwnB)), AT_TINY);
+    AT_Rgb Out;
+    Out.R = AT_REAL(1.0) - LostR / AT_max(OwnR, Floor);
+    Out.G = AT_REAL(1.0) - LostG / AT_max(OwnG, Floor);
+    Out.B = AT_REAL(1.0) - LostB / AT_max(OwnB, Floor);
     return Out;
 }
 
@@ -3249,59 +3701,167 @@ AT_REAL AT_HenyeyGreenstein(AT_REAL Cos, AT_REAL G)
 AT_March AT_EmptyMarch()
 {
     AT_March M;
-    M.R = AT_REAL(0.0);
-    M.G = AT_REAL(0.0);
-    M.B = AT_REAL(0.0);
-    M.TR = AT_REAL(1.0);
-    M.TG = AT_REAL(1.0);
-    M.TB = AT_REAL(1.0);
-    M.FR = AT_REAL(0.0);
-    M.FG = AT_REAL(0.0);
-    M.FB = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        M.L[K] = AT_REAL(0.0);
+        M.T[K] = AT_REAL(1.0);
+        M.F[K] = AT_REAL(0.0);
+    }
     return M;
 }
 
-// N samples from Low (the end nearest the closest point, where the air is
-// densest) toward Far, spaced as u^2 so they crowd where the density is.
-// Each gathers single scattering (pi times the phase times the sun's light
-// through the air) and the multiple-scattering table's term, both through
-// the view's transmittance back to the ray's start, S0.
+// (B - A) / ln(B / A), the logarithmic mean: what a function whose
+// logarithm is linear between A and B averages to, and so, times the
+// length, its exact integral -- for an exponential, however long the
+// length. The mean of A and B where either is 0 (the ground's shadow);
+// near A = B the series, where the quotient would cancel.
+AT_REAL AT_LogMean(AT_REAL A, AT_REAL B)
+{
+    if (!(A > AT_REAL(0.0)) || !(B > AT_REAL(0.0)))
+    {
+        return AT_REAL(0.5) * (A + B);
+    }
+    AT_REAL X = B / A - AT_REAL(1.0);
+    if (AT_max(X, -X) < AT_REAL(0.01))
+    {
+        return A * (AT_REAL(1.0) + X * (AT_REAL(0.5) - X / AT_REAL(12.0)));
+    }
+    return (B - A) / AT_log(B / A);
+}
+
+// What the view gathers at one point, per bin, for unit light in the bin,
+// per unit column of each constituent: its scattering coefficient times
+// the sun's light through the air (Single) and times the table's (Multi),
+// each times the view's transmittance back to the ray's start, S0 (Seen);
+// and the columns from S0 to the point.
+struct AT_Node
+{
+    AT_REAL GasSingle[AT_BINS];
+    AT_REAL AerosolSingle[AT_BINS];
+    AT_REAL GasMulti[AT_BINS];
+    AT_REAL AerosolMulti[AT_BINS];
+    AT_REAL Seen[AT_BINS];
+    AT_REAL GasColumn;
+    AT_REAL AerosolColumn;
+};
+
+AT_Node AT_NodeAt(AT_Air A, AT_Ray Ray, AT_REAL S, AT_REAL SX, AT_REAL SY, AT_REAL SZ,
+                  AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL PX = Ray.CX + S * Ray.DX;
+    AT_REAL PY = Ray.CY + S * Ray.DY;
+    AT_REAL PZ = Ray.CZ + S * Ray.DZ;
+    AT_REAL R = AT_sqrt(Ray.B * Ray.B + S * S);
+    AT_REAL Altitude = AT_Altitude(Ray.B, S);
+    AT_REAL CosSun = (PX * SX + PY * SY + PZ * SZ) / AT_max(R, AT_TINY);
+    AT_Columns Behind = AT_ColumnsBetween(A, Ray.B, Ray.S0, S);
+    AT_Bins Seen = AT_Through(A, Behind);
+    AT_Bins Sun = AT_SunAt(A, R, Altitude, CosSun);
+    AT_Bins Multi = AT_MultiScatter(A, AT_saturate(Altitude / A.Top), CosSun AT_TABLE_ARG);
+    AT_Node Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        AT_REAL Gas = A.GasScatter[K] * Seen.V[K];
+        AT_REAL Aerosol = A.AerosolScatter[K] * Seen.V[K];
+        Out.GasSingle[K] = Gas * GasPhase * Sun.V[K];
+        Out.AerosolSingle[K] = Aerosol * AerosolPhase * Sun.V[K];
+        Out.GasMulti[K] = Gas * SunOn * Multi.V[K];
+        Out.AerosolMulti[K] = Aerosol * SunOn * Multi.V[K];
+        Out.Seen[K] = Seen.V[K];
+    }
+    Out.GasColumn = Behind.Gas;
+    Out.AerosolColumn = Behind.Aerosol;
+    return Out;
+}
+
+// The single scattering between two nodes, per bin: each constituent's
+// column there -- exact, from the Chapman columns the nodes hold -- times
+// the logarithmic mean of what it gathers per unit column.
+AT_Bins AT_SingleBetween(AT_Node P, AT_Node Q)
+{
+    AT_REAL Gas = AT_max(Q.GasColumn - P.GasColumn, P.GasColumn - Q.GasColumn);
+    AT_REAL Aerosol = AT_max(Q.AerosolColumn - P.AerosolColumn, P.AerosolColumn - Q.AerosolColumn);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = Gas * AT_LogMean(P.GasSingle[K], Q.GasSingle[K]) + Aerosol * AT_LogMean(P.AerosolSingle[K], Q.AerosolSingle[K]);
+    }
+    return Out;
+}
+
+// The single scattering over a span, P at SP to Q at SQ. The logarithmic
+// mean is exact for light that falls exponentially, but sunlight climbing
+// out of a grazing column rises faster than that -- its optical depth
+// itself falls exponentially -- and the ground's shadow ends it in a step.
+// Where the ends differ by more than e^4, either way, the mean all but loses
+// the brighter end's approach, and the span takes a node of its own halfway.
+AT_Bins AT_SingleSpan(AT_Air A, AT_Ray Ray, AT_Node P, AT_Node Q, AT_REAL SP, AT_REAL SQ,
+                      AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL LightP = AT_REAL(0.0);
+    AT_REAL LightQ = AT_REAL(0.0);
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        LightP = LightP + P.GasSingle[K] + P.AerosolSingle[K];
+        LightQ = LightQ + Q.GasSingle[K] + Q.AerosolSingle[K];
+    }
+    AT_REAL Steep = AT_REAL(54.6);   // e^4
+    if (!(LightP > Steep * LightQ) && !(LightQ > Steep * LightP))
+    {
+        return AT_SingleBetween(P, Q);
+    }
+    AT_Node M = AT_NodeAt(A, Ray, AT_REAL(0.5) * (SP + SQ), SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    AT_Bins First = AT_SingleBetween(P, M);
+    AT_Bins Second = AT_SingleBetween(M, Q);
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = First.V[K] + Second.V[K];
+    }
+    return Out;
+}
+
+// The light between two nodes: the multiple scattering and the fraction
+// scattered by the logarithmic mean over the span, the single scattering by
+// AT_SingleSpan.
+AT_March AT_Span(AT_Air A, AT_Ray Ray, AT_Node P, AT_Node Q, AT_REAL SP, AT_REAL SQ, AT_March Sum,
+                 AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL GasPhase, AT_REAL AerosolPhase, AT_REAL SunOn AT_TABLE_PARAM)
+{
+    AT_REAL Gas = AT_max(Q.GasColumn - P.GasColumn, P.GasColumn - Q.GasColumn);
+    AT_REAL Aerosol = AT_max(Q.AerosolColumn - P.AerosolColumn, P.AerosolColumn - Q.AerosolColumn);
+    AT_Bins Single = AT_SingleSpan(A, Ray, P, Q, SP, SQ, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    AT_March Out = Sum;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.L[K] = Out.L[K] + Single.V[K] + Gas * AT_LogMean(P.GasMulti[K], Q.GasMulti[K]) + Aerosol * AT_LogMean(P.AerosolMulti[K], Q.AerosolMulti[K]);
+        Out.F[K] = Out.F[K] + (Gas * A.GasScatter[K] + Aerosol * A.AerosolScatter[K]) * AT_LogMean(P.Seen[K], Q.Seen[K]);
+    }
+    return Out;
+}
+
+// N >= 2 nodes from Low (the end nearest the closest point, where the air
+// is densest) to Far, spaced as u^2 so they crowd where the density is, and
+// the light of each span between them. A midpoint rule is not exact where a
+// constituent's scale height or its optical depth is short against the
+// spacing (the haze's 1 km under a gas of 55 km; a horizon through thick
+// air), or where the density is curved along the ray (a limb); this is.
 AT_March AT_MarchPiece(AT_Air A, AT_Ray Ray, AT_REAL Low, AT_REAL Far, int N,
                        AT_REAL SX, AT_REAL SY, AT_REAL SZ, AT_REAL PhaseGas, AT_REAL PhaseAerosol, AT_REAL SunOn AT_TABLE_PARAM)
 {
     AT_March Out = AT_EmptyMarch();
     AT_REAL Span = Far - Low;
-    AT_REAL AbsSpan = AT_max(Span, -Span);
-    AT_REAL GasSingle = AT_PI * PhaseGas * SunOn;
-    AT_REAL AerosolSingle = AT_PI * PhaseAerosol * SunOn;
-    for (int I = 0; I < N; ++I)
+    AT_REAL GasPhase = AT_PI * PhaseGas * SunOn;
+    AT_REAL AerosolPhase = AT_PI * PhaseAerosol * SunOn;
+    AT_REAL Last = Low;
+    AT_Node Previous = AT_NodeAt(A, Ray, Low, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+    for (int I = 1; I < N; ++I)
     {
-        AT_REAL U = (AT_REAL(I) + AT_REAL(0.5)) / AT_REAL(N);
+        AT_REAL U = AT_REAL(I) / AT_REAL(N - 1);
         AT_REAL S = Low + Span * U * U;
-        AT_REAL DS = AbsSpan * AT_REAL(2.0) * U / AT_REAL(N);
-        AT_REAL PX = Ray.CX + S * Ray.DX;
-        AT_REAL PY = Ray.CY + S * Ray.DY;
-        AT_REAL PZ = Ray.CZ + S * Ray.DZ;
-        AT_REAL R = AT_sqrt(Ray.B * Ray.B + S * S);
-        AT_REAL Altitude = AT_Altitude(Ray.B, S);
-        AT_REAL CosSun = (PX * SX + PY * SY + PZ * SZ) / AT_max(R, AT_TINY);
-        AT_REAL GasDensity = AT_exp(-Altitude / A.GasH);
-        AT_REAL AerosolDensity = AT_exp(-Altitude / A.AerosolH);
-        AT_Columns Behind = AT_ColumnsBetween(A, Ray.B, Ray.S0, S);
-        AT_REAL TR = AT_exp(-(A.GasExtinctR * Behind.Gas + A.AerosolExtinctR * Behind.Aerosol));
-        AT_REAL TG = AT_exp(-(A.GasExtinctG * Behind.Gas + A.AerosolExtinctG * Behind.Aerosol));
-        AT_REAL TB = AT_exp(-(A.GasExtinctB * Behind.Gas + A.AerosolExtinctB * Behind.Aerosol));
-        AT_Rgb Sun = AT_SunAt(A, R, Altitude, CosSun);
-        AT_Rgb Multi = AT_MultiScatter(A, AT_saturate(Altitude / A.Top), CosSun AT_TABLE_ARG);
-        Out.R = Out.R + (A.GasScatterR * GasDensity * (GasSingle * Sun.R + SunOn * Multi.R)
-                         + A.AerosolScatterR * AerosolDensity * (AerosolSingle * Sun.R + SunOn * Multi.R)) * TR * DS;
-        Out.G = Out.G + (A.GasScatterG * GasDensity * (GasSingle * Sun.G + SunOn * Multi.G)
-                         + A.AerosolScatterG * AerosolDensity * (AerosolSingle * Sun.G + SunOn * Multi.G)) * TG * DS;
-        Out.B = Out.B + (A.GasScatterB * GasDensity * (GasSingle * Sun.B + SunOn * Multi.B)
-                         + A.AerosolScatterB * AerosolDensity * (AerosolSingle * Sun.B + SunOn * Multi.B)) * TB * DS;
-        Out.FR = Out.FR + (A.GasScatterR * GasDensity + A.AerosolScatterR * AerosolDensity) * TR * DS;
-        Out.FG = Out.FG + (A.GasScatterG * GasDensity + A.AerosolScatterG * AerosolDensity) * TG * DS;
-        Out.FB = Out.FB + (A.GasScatterB * GasDensity + A.AerosolScatterB * AerosolDensity) * TB * DS;
+        AT_Node Next = AT_NodeAt(A, Ray, S, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+        Out = AT_Span(A, Ray, Previous, Next, Last, S, Out, SX, SY, SZ, GasPhase, AerosolPhase, SunOn AT_TABLE_ARG);
+        Previous = Next;
+        Last = S;
     }
     return Out;
 }
@@ -3340,37 +3900,43 @@ AT_March AT_MarchAir(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, A
     else
     {
         AT_REAL Share = AT_floor(AT_REAL(AT_VIEW_SAMPLES) * (-Ray.S0) / (Ray.S1 - Ray.S0) + AT_REAL(0.5));
-        int Before = int(AT_min(AT_max(Share, AT_REAL(1.0)), AT_REAL(AT_VIEW_SAMPLES - 1)));
+        int Before = int(AT_min(AT_max(Share, AT_REAL(2.0)), AT_REAL(AT_VIEW_SAMPLES - 2)));
         First = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S0, Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
         Second = AT_MarchPiece(A, Ray, AT_REAL(0.0), Ray.S1, AT_VIEW_SAMPLES - Before, SX, SY, SZ, PhaseGas, PhaseAerosol, SunOn AT_TABLE_ARG);
     }
-    AT_Columns Whole = AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1);
-    Out.R = First.R + Second.R;
-    Out.G = First.G + Second.G;
-    Out.B = First.B + Second.B;
-    Out.FR = First.FR + Second.FR;
-    Out.FG = First.FG + Second.FG;
-    Out.FB = First.FB + Second.FB;
-    Out.TR = AT_exp(-(A.GasExtinctR * Whole.Gas + A.AerosolExtinctR * Whole.Aerosol));
-    Out.TG = AT_exp(-(A.GasExtinctG * Whole.Gas + A.AerosolExtinctG * Whole.Aerosol));
-    Out.TB = AT_exp(-(A.GasExtinctB * Whole.Gas + A.AerosolExtinctB * Whole.Aerosol));
+    AT_Bins Whole = AT_Through(A, AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1));
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.L[K] = First.L[K] + Second.L[K];
+        Out.F[K] = First.F[K] + Second.F[K];
+        Out.T[K] = Whole.V[K];
+    }
     return Out;
 }
 
 // -- The entry points (decision 1) ------------------------------------------
 // The light the air adds between an eye E and Length along D, under a star
-// toward S, and what it lets through.
+// toward S, and what it lets through, in linear sRGB.
 AT_Scatter AT_InScatter(AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ, AT_REAL DX, AT_REAL DY, AT_REAL DZ,
                         AT_REAL Length, AT_REAL SX, AT_REAL SY, AT_REAL SZ AT_TABLE_PARAM)
 {
     AT_March M = AT_MarchAir(A, EX, EY, EZ, DX, DY, DZ, Length, SX, SY, SZ AT_TABLE_ARG);
+    AT_Bins L;
+    AT_Bins T;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        L.V[K] = M.L[K];
+        T.V[K] = M.T[K];
+    }
+    AT_Rgb Light = AT_FoldLight(A, L);
+    AT_Rgb Through = AT_FoldThrough(A, T);
     AT_Scatter Out;
-    Out.R = M.R;
-    Out.G = M.G;
-    Out.B = M.B;
-    Out.TR = M.TR;
-    Out.TG = M.TG;
-    Out.TB = M.TB;
+    Out.R = Light.R;
+    Out.G = Light.G;
+    Out.B = Light.B;
+    Out.TR = Through.R;
+    Out.TG = Through.G;
+    Out.TB = Through.B;
     return Out;
 }
 
@@ -3390,11 +3956,7 @@ AT_Rgb AT_Transmittance(AT_Air A, AT_REAL FX, AT_REAL FY, AT_REAL FZ, AT_REAL DX
     {
         return Out;
     }
-    AT_Columns Whole = AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1);
-    Out.R = AT_exp(-(A.GasExtinctR * Whole.Gas + A.AerosolExtinctR * Whole.Aerosol));
-    Out.G = AT_exp(-(A.GasExtinctG * Whole.Gas + A.AerosolExtinctG * Whole.Aerosol));
-    Out.B = AT_exp(-(A.GasExtinctB * Whole.Gas + A.AerosolExtinctB * Whole.Aerosol));
-    return Out;
+    return AT_FoldThrough(A, AT_Through(A, AT_ColumnsBetween(A, Ray.B, Ray.S0, Ray.S1)));
 }
 
 // The star's light reaching P, per channel, relative to its own. An airless
@@ -3419,13 +3981,194 @@ AT_Rgb AT_SunThrough(AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ, AT_REAL SX, A
     }
     AT_REAL Length = AT_sqrt(PX * PX + PY * PY + PZ * PZ);
     AT_REAL Cos = (PX * SX + PY * SY + PZ * SZ) / AT_max(Length, AT_TINY);
-    return AT_SunAt(A, AT_max(Length, AT_REAL(1.0)), AT_max(Length - AT_REAL(1.0), AT_REAL(0.0)), Cos);
+    return AT_FoldThrough(A, AT_SunAt(A, AT_max(Length, AT_REAL(1.0)), AT_max(Length - AT_REAL(1.0), AT_REAL(0.0)), Cos));
+}
+
+// -- The multiple-scattering table (decision 11) -------------------------------
+// The sphere of directions as rings of equal step in T, cos(zenith) = T |T|,
+// crowded toward the horizon -- where a ray's path through the air is longest
+// and most of the light at low altitude comes from -- by segments of equal
+// azimuth over half the circle: the texel's sun lies in the X-Z plane, so the
+// light field is mirror-symmetric in azimuth and the other half is the same.
+// A Fibonacci sphere of 64, 128 or 256 points gives this integral 10% apart
+// from itself (the thin band of long horizontal paths falls between its
+// points differently each time); 32 rings are within 6% of a 192-ring
+// integral at the ground, where it converges slowest.
+static const int AT_SPHERE_RINGS = 32;
+static const int AT_SPHERE_SEGMENTS = 8;
+
+// One texel (Hillaire 2020): at Altitude01 of the air's depth under a sun at
+// CosSunZenith, per bin, the light the air sends every way after one
+// scattering, averaged over the sphere, and grown by the geometric series of
+// the fraction F each scattering hands on: Psi = L1 / (1 - F). The bins are
+// colourless, so the star's colour enters once, where the bins are folded.
+// Built in C++ when a system loads, never in a frame, and read from an empty
+// table while it is built.
+AT_Bins AT_MultiScatterCell(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
+{
+    AT_REAL R = AT_REAL(1.0) + AT_saturate(Altitude01) * A.Top;
+    AT_REAL SX = AT_sqrt(AT_max(AT_REAL(1.0) - CosSunZenith * CosSunZenith, AT_REAL(0.0)));
+    AT_Bins L = AT_FilledBins(AT_REAL(0.0));
+    AT_Bins F = AT_FilledBins(AT_REAL(0.0));
+    for (int I = 0; I < AT_SPHERE_RINGS; ++I)
+    {
+        AT_REAL T = AT_REAL(-1.0) + (AT_REAL(2.0) * AT_REAL(I) + AT_REAL(1.0)) / AT_REAL(AT_SPHERE_RINGS);
+        AT_REAL AbsT = AT_max(T, -T);
+        AT_REAL Mu = T * AbsT;
+        // The share of the sphere one direction stands for, its mirror image
+        // included: 2 x (2 |T| dT)(dPhi) / 4 pi, dT = 2 / RINGS, dPhi =
+        // pi / SEGMENTS.
+        AT_REAL Weight = AT_REAL(2.0) * AbsT / AT_REAL(AT_SPHERE_RINGS * AT_SPHERE_SEGMENTS);
+        AT_REAL Ring = AT_sqrt(AT_max(AT_REAL(1.0) - Mu * Mu, AT_REAL(0.0)));
+        for (int J = 0; J < AT_SPHERE_SEGMENTS; ++J)
+        {
+            AT_REAL Phi = AT_PI * (AT_REAL(J) + AT_REAL(0.5)) / AT_REAL(AT_SPHERE_SEGMENTS);
+            AT_March M = AT_MarchAir(A, AT_REAL(0.0), AT_REAL(0.0), R, Ring * AT_cos(Phi), Ring * AT_sin(Phi), Mu,
+                                     AT_NO_END, SX, AT_REAL(0.0), CosSunZenith AT_TABLE_ARG);
+            for (int K = 0; K < AT_BINS; ++K)
+            {
+                L.V[K] = L.V[K] + Weight * M.L[K];
+                F.V[K] = F.V[K] + Weight * M.F[K];
+            }
+        }
+    }
+    AT_Bins Out;
+    for (int K = 0; K < AT_BINS; ++K)
+    {
+        Out.V[K] = L.V[K] / AT_max(AT_REAL(1.0) - F.V[K], AT_REAL(0.001));
+    }
+    return Out;
 }
 ```
 
-- [ ] **Step 4: The C++ entry points.** Append to `Source/DeepSpace/Atmosphere/Atmosphere.h`:
+- [ ] **Step 6: The C++ side.** Replace `Source/DeepSpace/Atmosphere/Atmosphere.h` with:
 
 ```cpp
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Atmosphere/AtmosphereBins.h"
+#include "Atmosphere/AtmosphereReference.h"
+
+/**
+ * The air's optics as the game draws them (atmospheres decision 1):
+ * Shaders/Private/Atmosphere.ush, the one law, compiled here twice -- in
+ * double, what the game computes, and in float, the GPU's mirror, which the
+ * rendered probe (orbital slice 1) holds the GPU to and the pure tests hold
+ * to the double. AtmosphereReference is what "right" means; this is what
+ * draws.
+ */
+namespace AtmosphereLaw
+{
+    /** ln of the Chapman function, the .ush's AT_LogChapman: X = R / H,
+     *  CosZenith the ray against the local vertical. */
+    DEEPSPACE_API double LogChapmanF64(double X, double CosZenith);
+    DEEPSPACE_API float LogChapmanF32(float X, float CosZenith);
+}
+
+/**
+ * One world's air as the law takes it: the .ush's AT_Air, in double, over
+ * AtmosphereBins' Count spectral bins (atmosphere plan ruling 3). Per bin,
+ * per radius of the body at the surface, for unit light in the bin: the
+ * gas's and the aerosol's scattering and extinction, colourless. Fold[b] is
+ * the star's light in bin b in linear sRGB at unit luminance -- the star is
+ * in the fold, so the shader never sees a temperature (decision 3) -- and
+ * the Count folds sum to the star's colour. The gas falls by e every GasH
+ * radii and the aerosol every AerosolH; the air is drawn to Top radii above
+ * the surface. Airless when Top is 0.
+ */
+struct FAtmosphereAir
+{
+    AtmosphereBins::FBins GasScatter;
+    AtmosphereBins::FBins GasExtinct;
+    AtmosphereBins::FBins AerosolScatter;
+    AtmosphereBins::FBins AerosolExtinct;
+    FVector3d Fold[AtmosphereBins::Count] = {};
+    double GasH = 0.0;
+    double AerosolH = 0.0;
+    double AerosolG = 0.0;
+    double Top = 0.0;
+
+    bool IsAirless() const { return !(Top > 0.0); }
+};
+
+/**
+ * One airy world's multiple-scattering table (decision 11): Size x Size
+ * texels, row = altitude over the air's depth (0 at the surface), column =
+ * the sun's zenith cosine from -1 to 1, each a value per bin
+ * -- two RGBA16F texels on the GPU, a 64 x 32 texture with bins 0-3 in its
+ * left half and 4-7 in its right, which is why the values stored here have
+ * already been through a half float. Texels[(Row * Size + Column) * Count +
+ * Bin]. Empty until FAtmosphere::Build fills it; an empty table reads as no
+ * multiple scattering.
+ */
+struct DEEPSPACE_API FAtmosphereTable
+{
+    static constexpr int32 Size = 32;
+
+    TArray<float> Texels;
+
+    bool IsEmpty() const { return Texels.Num() != Size * Size * AtmosphereBins::Count; }
+
+    float Texel(int32 Row, int32 Column, int32 Bin) const { return Texels[(Row * Size + Column) * AtmosphereBins::Count + Bin]; }
+
+    /** Bilinear between texel centres, clamped at the edges: what the .ush's
+     *  hook reads. Zeros when empty. */
+    void Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const;
+};
+
+/** How much of the multiple-scattering table Build fills. NoonOnly fills
+ *  the two columns either side of the noon sun's cosine -- every sample of
+ *  a zenith view under that sun reads only those, so it is all the noon
+ *  zenith needs and exactly what the full table holds there -- for the
+ *  corpus's sky of every world; None fills nothing (single scattering). */
+enum class EAtmosphereTable : uint8 { None, NoonOnly, Full };
+
+namespace AtmosphereLaw
+{
+    /** The sky's reference view, what the corpus's sky_zenith_rgb and
+     *  DeepSpace.Atmosphere.StarColour mean by "the noon zenith": straight
+     *  up from the ground under a sun 45 degrees high. Not a sun at the
+     *  zenith: the zenith would then be the star's own forward-scattered
+     *  aureole, and wear the star's colour rather than the sky's. */
+    inline constexpr double NoonSunElevationDeg = 45.0;
+
+    /** That sun, the zenith being +Z: (cos 45, 0, sin 45). */
+    inline FVector3d NoonSun()
+    {
+        const double Radians = FMath::DegreesToRadians(NoonSunElevationDeg);
+        return FVector3d(FMath::Cos(Radians), 0.0, FMath::Sin(Radians));
+    }
+}
+
+/** One world's air under one star, fitted for the law (decision 3). */
+class DEEPSPACE_API FAtmosphere
+{
+public:
+    /**
+     * The per-bin coefficients from the star's spectrum through the world's
+     * own spectral laws, each its wavelengths' average by AtmosphereBins::
+     * Weight -- exact in the optically thin limit, the gas's extinction
+     * carrying the ozone -- and the star's light in each bin as the fold. The star's temperature is
+     * clamped as SkyColour::Blackbody clamps it. The multiple-scattering
+     * table is built through the .ush's own AT_MultiScatterCell, and stored
+     * through half floats.
+     */
+    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage = EAtmosphereTable::Full);
+
+    bool HasAir() const { return !Air.IsAirless(); }
+    const FAtmosphereAir& GetAir() const { return Air; }
+    const FAtmosphereTable& GetTable() const { return Table; }
+
+    /** The star's light in linear sRGB at unit luminance: the sum of the
+     *  air's folds. */
+    const FVector3d& GetStarColour() const { return StarColour; }
+
+private:
+    FAtmosphereAir Air;
+    FAtmosphereTable Table;
+    FVector3d StarColour = FVector3d::ZeroVector;
+};
 
 /** What one view gathers and lets through, per channel: linear sRGB in the
  *  pi convention for a star of unit luminance, and the fraction of the
@@ -3465,9 +4208,36 @@ namespace AtmosphereLaw
 }
 ```
 
-  In `Source/DeepSpace/Atmosphere/Atmosphere.cpp`, immediately after the line `#undef AT_CPP`, insert:
+  Replace `Source/DeepSpace/Atmosphere/Atmosphere.cpp` with:
 
 ```cpp
+#include "Atmosphere/Atmosphere.h"
+
+#include <cmath>
+#include "Math/Float16.h"
+
+// The shared file, twice. AT_CPP selects its C++ halves and AT_REAL its
+// precision; each copy lives in its own namespace, so the two sets of AT_
+// symbols never meet. The relative path is the file the GPU will include as
+// /Project/Private/Atmosphere.ush: a change to it that C++ cannot compile
+// fails ./build.sh.
+#define AT_CPP 1
+namespace AtmosphereF64
+{
+#define AT_REAL double
+#include "../../../Shaders/Private/Atmosphere.ush"
+#undef AT_REAL
+}
+namespace AtmosphereF32
+{
+#define AT_REAL float
+#include "../../../Shaders/Private/Atmosphere.ush"
+#undef AT_REAL
+}
+#undef AT_CPP
+
+static_assert(AtmosphereF64::AT_BINS == AtmosphereBins::Count && AtmosphereF32::AT_BINS == AtmosphereBins::Count,
+    "Atmosphere.ush's AT_BINS is AtmosphereBins::Count");
 
 namespace AtmosphereLocal
 {
@@ -3476,18 +4246,16 @@ namespace AtmosphereLocal
     TAir ToAir(const FAtmosphereAir& In)
     {
         TAir A;
-        A.GasScatterR = TReal(In.GasScatter.X);
-        A.GasScatterG = TReal(In.GasScatter.Y);
-        A.GasScatterB = TReal(In.GasScatter.Z);
-        A.GasExtinctR = TReal(In.GasExtinct.X);
-        A.GasExtinctG = TReal(In.GasExtinct.Y);
-        A.GasExtinctB = TReal(In.GasExtinct.Z);
-        A.AerosolScatterR = TReal(In.AerosolScatter.X);
-        A.AerosolScatterG = TReal(In.AerosolScatter.Y);
-        A.AerosolScatterB = TReal(In.AerosolScatter.Z);
-        A.AerosolExtinctR = TReal(In.AerosolExtinct.X);
-        A.AerosolExtinctG = TReal(In.AerosolExtinct.Y);
-        A.AerosolExtinctB = TReal(In.AerosolExtinct.Z);
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            A.GasScatter[K] = TReal(In.GasScatter.Value[K]);
+            A.GasExtinct[K] = TReal(In.GasExtinct.Value[K]);
+            A.AerosolScatter[K] = TReal(In.AerosolScatter.Value[K]);
+            A.AerosolExtinct[K] = TReal(In.AerosolExtinct.Value[K]);
+            A.FoldR[K] = TReal(In.Fold[K].X);
+            A.FoldG[K] = TReal(In.Fold[K].Y);
+            A.FoldB[K] = TReal(In.Fold[K].Z);
+        }
         A.GasH = TReal(In.GasH);
         A.AerosolH = TReal(In.AerosolH);
         A.AerosolG = TReal(In.AerosolG);
@@ -3510,11 +4278,111 @@ namespace AtmosphereLocal
         return FVector3d(C.R, C.G, C.B);
     }
 }
-```
 
-  Append to `Source/DeepSpace/Atmosphere/Atmosphere.cpp`:
+double AtmosphereLaw::LogChapmanF64(double X, double CosZenith)
+{
+    return AtmosphereF64::AT_LogChapman(X, CosZenith);
+}
 
-```cpp
+float AtmosphereLaw::LogChapmanF32(float X, float CosZenith)
+{
+    return AtmosphereF32::AT_LogChapman(X, CosZenith);
+}
+
+
+void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const
+{
+    if (IsEmpty())
+    {
+        for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+        {
+            Out[K] = 0.0;
+        }
+        return;
+    }
+    const double FX = FMath::Clamp((CosSunZenith + 1.0) * 0.5, 0.0, 1.0) * (Size - 1);
+    const double FY = FMath::Clamp(Altitude01, 0.0, 1.0) * (Size - 1);
+    const int32 X0 = FMath::Min(FMath::FloorToInt32(FX), Size - 2);
+    const int32 Y0 = FMath::Min(FMath::FloorToInt32(FY), Size - 2);
+    const double TX = FX - X0;
+    const double TY = FY - Y0;
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+    {
+        Out[K] = FMath::Lerp(FMath::Lerp(Texel(Y0, X0, K), Texel(Y0, X0 + 1, K), TX),
+                             FMath::Lerp(Texel(Y0 + 1, X0, K), Texel(Y0 + 1, X0 + 1, K), TX), TY);
+    }
+}
+
+FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage)
+{
+    using namespace AtmosphereReference;
+    FAtmosphere Out;
+    const FSpectrum Star = StarSpectrum(StarTemperatureK);
+    Out.StarColour = ToLinearSrgb(Star);
+    const FSpectralAir Spectra = Spectral(Spec);
+    if (!Spectra.bAir)
+    {
+        return Out;
+    }
+
+    // Each bin's air is its wavelengths' own, averaged by AtmosphereBins::
+    // Weight: exact in the thin limit. Deep, one number stands for a spread
+    // of depths; the bins are narrow enough that it does (planning note 13).
+    FSpectrum GasExtinct;
+    for (int32 I = 0; I < SkyColour::Spectral::Count; ++I)
+    {
+        GasExtinct.Value[I] = Spectra.GasScatter.Value[I] + Spectra.GasAbsorb.Value[I];
+    }
+    const AtmosphereBins::FBins GasScatter = AtmosphereBins::Average(Star, Spectra.GasScatter);
+    const AtmosphereBins::FBins GasTau = AtmosphereBins::Average(Star, GasExtinct);
+    const AtmosphereBins::FBins AerosolScatter = AtmosphereBins::Average(Star, Spectra.AerosolScatter);
+    const AtmosphereBins::FBins AerosolTau = AtmosphereBins::Average(Star, Spectra.AerosolExtinct);
+
+    FAtmosphereAir& A = Out.Air;
+    A.GasH = Spectra.GasH;
+    A.AerosolH = Spectra.AerosolH;
+    A.AerosolG = Spectra.AerosolG;
+    A.Top = Spectra.Top;
+    for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+    {
+        A.GasScatter.Value[K] = GasScatter.Value[K] / Spectra.GasH;
+        A.GasExtinct.Value[K] = GasTau.Value[K] / Spectra.GasH;
+        A.AerosolScatter.Value[K] = AerosolScatter.Value[K] / Spectra.AerosolH;
+        A.AerosolExtinct.Value[K] = AerosolTau.Value[K] / Spectra.AerosolH;
+        A.Fold[K] = AtmosphereBins::Fold(Star, K);
+    }
+
+    if (Coverage != EAtmosphereTable::None)
+    {
+        // Each texel from the .ush's own AT_MultiScatterCell in double, so
+        // the table is the law's (decision 11), read while it is built from
+        // an empty table -- single scattering only -- and stored through
+        // half floats, as the GPU's RGBA16F texture will hold it.
+        constexpr int32 Size = FAtmosphereTable::Size;
+        const AtmosphereF64::AT_Air Air64 = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Out.Air);
+        const FAtmosphereTable Empty;
+        Out.Table.Texels.SetNumZeroed(Size * Size * AtmosphereBins::Count);
+        // NoonOnly: the two columns either side of the noon sun's, which
+        // every sample of a zenith view under that sun reads.
+        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((AtmosphereLaw::NoonSun().Z + 1.0) * 0.5 * (Size - 1)), Size - 2);
+        const int32 FirstColumn = Coverage == EAtmosphereTable::Full ? 0 : NoonColumn;
+        const int32 LastColumn = Coverage == EAtmosphereTable::Full ? Size - 1 : NoonColumn + 1;
+        for (int32 Row = 0; Row < Size; ++Row)
+        {
+            for (int32 Column = FirstColumn; Column <= LastColumn; ++Column)
+            {
+                const double Altitude01 = static_cast<double>(Row) / (Size - 1);
+                const double Cos = -1.0 + 2.0 * Column / (Size - 1);
+                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, Cos, Empty);
+                for (int32 K = 0; K < AtmosphereBins::Count; ++K)
+                {
+                    Out.Table.Texels[(Row * Size + Column) * AtmosphereBins::Count + K] = FFloat16(static_cast<float>(Cell.V[K])).GetFloat();
+                }
+            }
+        }
+    }
+    return Out;
+}
 
 FAtmosphereScatter AtmosphereLaw::InScatterF64(const FAtmosphereAir& Air, const FAtmosphereTable& Table,
     const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun)
@@ -3575,102 +4443,116 @@ float AtmosphereLaw::ImpactParameterF32(const FVector3f& Eye, const FVector3f& D
 }
 ```
 
-- [ ] **Step 5: Build and run; expect PASS.**
+- [ ] **Step 7: Build and run; expect PASS.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T in AirlessIsZero LimbBeyondSilhouette TerminatorReddens CrescentAtHighPhase BacklitRing ImpactParameter EyeBelowTheDatum NoStar DegenerateRays; do ./test.sh DeepSpace.Atmosphere.$T || break; done
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && for T in BinnedAir StarTemperatureExtremes MultiScatterTable SingleScatteringMatchesReference AirlessIsZero LimbBeyondSilhouette TerminatorReddens CrescentAtHighPhase BacklitRing ImpactParameter EyeBelowTheDatum NoStar DegenerateRays; do ./test.sh DeepSpace.Atmosphere.$T || break; done; grep -h "single scattering against" Saved/Logs/DeepSpace.log | tail -1
+cd /home/matt/Development/deepspace/.worktrees/air-optics && for T in DeepSpace.Atmosphere.BinnedAir DeepSpace.Atmosphere.MultiScatterTable DeepSpace.Atmosphere.SingleScatteringMatchesReference DeepSpace.Sky.Colour; do echo "$T"; time ./test.sh "$T"; done
 ```
 
-Expected: `passed: 1` nine times.
-- **If `.ImpactParameter` fails with the float far from the double**, the compiler has fused a step of the split.
-  1. Check the build flags for `-ffp-contract=fast` or `-ffast-math` (`grep -o "ffp-contract[^ ]*\|ffast-math" Saved/mutant-build.log Intermediate/Build/Linux/x64/UnrealEditor/Development/DeepSpace/*.rsp 2>/dev/null | sort -u`).
-  2. Report it. Do not loosen the test: the GPU's `precise` path is what it stands for.
-- **If a shape test fails** (`.CrescentAtHighPhase`, `.BacklitRing`), print the info lines and report the numbers. These are the spec's claims about the look, and changing them is the spec's call.
+Expected: `passed: 1` thirteen times. In the harness, the info line read `6912 values, 0 outside 5% or 1e-3, the worst at 0.80 of its allowance`, and the three new tests took 0.0, 4.1 and 1.9 s at `-O2`.
+- The `static_assert` in `Atmosphere.cpp` holds the `.ush`'s `AT_BINS` to `AtmosphereBins::Count`. If it fires, the two were edited apart.
+- **If a shape test fails** (`.CrescentAtHighPhase`, `.BacklitRing`), print its info lines and report. They are the spec's claims about the look, and the re-cut law must keep them.
 
-- [ ] **Step 6: The whole suite, then commit.**
+- [ ] **Step 8: The whole suite, then commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
-git -C /home/matt/Development/deepspace/.worktrees/air-optics add Shaders/Private/Atmosphere.ush Source/DeepSpace/Atmosphere/Atmosphere.h Source/DeepSpace/Atmosphere/Atmosphere.cpp Source/DeepSpace/Tests/AtmosphereLawTest.cpp
+git -C /home/matt/Development/deepspace/.worktrees/air-optics add Shaders/Private/Atmosphere.ush Source/DeepSpace/Atmosphere/Atmosphere.h Source/DeepSpace/Atmosphere/Atmosphere.cpp Source/DeepSpace/Atmosphere/AtmosphereReference.h Source/DeepSpace/Atmosphere/AtmosphereReference.cpp Source/DeepSpace/Tests/AtmosphereTestFixtures.h Source/DeepSpace/Tests/AtmosphereBuildTest.cpp Source/DeepSpace/Tests/AtmosphereTableTest.cpp Source/DeepSpace/Tests/AtmosphereMarchTest.cpp
 git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
-feat(atmosphere): the shipped law -- the ray through the air, 12 samples, the sun through it
+feat(atmosphere): the law over eight bins -- the air, a march exact for exponentials, the fold
 
-Atmosphere.ush gains AT_InScatter, AT_Transmittance and AT_SunThrough
-(atmospheres decision 1): the ray measured from its closest approach, its
-impact parameter from |E x D| as differences of Dekker-exact products;
-columns along the view by Chapman differences, always the upward branch;
-the sun's light by one combined log-domain exponent, with the ground's hard
-shadow; 12 samples split at the closest point and crowded toward it; the
-multiple-scattering hook reading a table passed as a trailing macro
-argument (Texture2D and sampler in HLSL, FAtmosphereTable in C++).
+Atmosphere.ush re-cut for atmosphere plan rulings 3 and 6: AT_Air holds
+per bin the gas's and the aerosol's scattering and extinction, colourless,
+and the star's light in each bin as the fold; the entry points fold the
+bins into linear sRGB at the end, so their signatures are decision 1's
+still. The march's 12 samples are 12 nodes: between two, each
+constituent's exact column (the Chapman columns the nodes hold) times the
+logarithmic mean of what it gathers per unit column -- exact for the
+density and for the view's transmittance, where a midpoint rule missed
+the haze's 1 km under H2/He's 55 km and horizons through ceiling airs --
+with one more node halfway where single scattering climbs past e^4, as
+sunlight out of a grazing column does. The table holds a value per bin
+(on the GPU, two RGBA16F texels); there is no white air.
 
-Tests: the airless world exactly untouched; the limb past the silhouette;
-the terminator reddened and twilight past it; the crescent and the backlit
-ring; the impact parameter from 1,000 radii in float; and review focus 1-3:
-an eye below the datum, no star, and degenerate rays.
+DeepSpace.Atmosphere.SingleScatteringMatchesReference holds the march and
+the bins to the reference's first order over decision 1's whole grid,
+both builds, within 5% or 1e-3. .BinnedAir and .StarTemperatureExtremes
+hold the coefficients and folds; .MultiScatterTable each bin against
+FReferenceAir::MultiScatterSpectrum averaged into it. The grid moves into
+the fixtures.
+
+Measured: DeepSpace.Atmosphere.BinnedAir costs N s over start-up.
+Measured: DeepSpace.Atmosphere.MultiScatterTable costs N s over start-up.
+Measured: DeepSpace.Atmosphere.SingleScatteringMatchesReference costs N s over start-up.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
 
-- [ ] **Step 7: Prove the tests can fail.**
+  Each `N` is its time less `DeepSpace.Sky.Colour`'s, in whole seconds (*Conventions*).
+
+- [ ] **Step 9: Prove the tests can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush 'if (CosZenith < AT_REAL(0.0) && R * R * Sin2 < AT_REAL(1.0))' 'if (CosZenith < AT_REAL(-2.0) && R * R * Sin2 < AT_REAL(1.0))' DeepSpace.Atmosphere.TerminatorReddens
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    if (CosZenith < AT_REAL(0.0) && R * R * Sin2 < AT_REAL(1.0))' '    if (CosZenith < AT_REAL(-2.0) && R * R * Sin2 < AT_REAL(1.0))' DeepSpace.Atmosphere.TerminatorReddens
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    return PQ + E;' '    return PQ;' DeepSpace.Atmosphere.ImpactParameter
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    if (E2 < AT_REAL(1.0))' '    if (E2 < AT_REAL(0.0))' DeepSpace.Atmosphere.EyeBelowTheDatum
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '> AT_REAL(0.25) ? AT_REAL(1.0) : AT_REAL(0.0);' '> AT_REAL(-1.0) ? AT_REAL(1.0) : AT_REAL(0.0);' DeepSpace.Atmosphere.NoStar
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush 'AT_REAL PhaseAerosol = AT_HenyeyGreenstein(CosView, A.AerosolG);' 'AT_REAL PhaseAerosol = AT_HenyeyGreenstein(-CosView, A.AerosolG);' DeepSpace.Atmosphere.BacklitRing
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '        S1 = AT_min(S1, -Ground);' '        S1 = AT_min(S1, Ground);' DeepSpace.Atmosphere.DegenerateRays
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(CosView, A.AerosolG);' '    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(-CosView, A.AerosolG);' DeepSpace.Atmosphere.BacklitRing
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '            S1 = AT_min(S1, -Ground);' '            S1 = AT_min(S1, Ground);' DeepSpace.Atmosphere.DegenerateRays
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    AT_REAL Floor = AT_max(AT_REAL(1.0e-4) * AT_max(OwnR, AT_max(OwnG, OwnB)), AT_TINY);' '    AT_REAL Floor = AT_REAL(1.0e-4) * AT_max(OwnR, AT_max(OwnG, OwnB));' DeepSpace.Atmosphere.AirlessIsZero
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    return (B - A) / AT_log(B / A);' '    return AT_REAL(0.5) * (A + B);' DeepSpace.Atmosphere.SingleScatteringMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    AT_REAL Steep = AT_REAL(54.6);   // e^4' '    AT_REAL Steep = AT_REAL(1.0e30);   // e^4' DeepSpace.Atmosphere.SingleScatteringMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '        Out.B = Out.B + A.FoldB[K] * L.V[K];' '        Out.B = Out.B + A.FoldG[K] * L.V[K];' DeepSpace.Atmosphere.SingleScatteringMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/Atmosphere.cpp '        A.GasExtinct.Value[K] = GasTau.Value[K] / Spectra.GasH;' '        A.GasExtinct.Value[K] = GasScatter.Value[K] / Spectra.GasH;' DeepSpace.Atmosphere.BinnedAir
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Sky/SkyColour.cpp '    const double T = FMath::Clamp(TemperatureK, MinTemperatureK, MaxTemperatureK);' '    const double T = TemperatureK;' DeepSpace.Atmosphere.StarTemperatureExtremes
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '        Out.V[K] = L.V[K] / AT_max(AT_REAL(1.0) - F.V[K], AT_REAL(0.001));' '        Out.V[K] = AT_REAL(4.0) * L.V[K] / AT_max(AT_REAL(1.0) - F.V[K], AT_REAL(0.001));' DeepSpace.Atmosphere.MultiScatterTable
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/AtmosphereReference.cpp '        Psi.Value[I] = UE_DOUBLE_PI * Second.Mean.Value[I] / (1.0 - F);' '        Psi.Value[I] = UE_DOUBLE_PI * Second.Mean.Value[I];' DeepSpace.Atmosphere.MultiScatterTable
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: `KILLED` six times:
+Expected: `KILLED` fourteen times:
 1. The shadow is gone past the terminator.
 2. The naive difference loses the float impact parameter.
 3. The valley eye is no longer lifted, and sees nothing.
 4. A zero sun becomes a sun on the horizon.
 5. Forward scattering turns backward, and the ring dims.
-6. The view straight down runs through the planet: `Through` no longer equals `ToGround` once `NoEnd` passes the far side.
+6. The view straight down runs through the planet.
+7. An airless world's empty fold divides nothing by nothing.
+8. The logarithmic mean becomes the midpoint's arithmetic one, and the thin airs and grazing paths miss again.
+9. No span is ever split, and the far eye's backlit limb loses the light climbing out of the grazing column.
+10. The blue channel folds the green's light.
+11. The ozone drops out of the gas's extinction.
+12. The star's temperature goes unclamped: a 0 K star's spectrum is not a number.
+13. The table's texels are four times their light.
+14. The reference's source is read without its geometric tail.
 
-Each `.ush` mutation rebuilds the whole module.
+Every mutant was run in the plan's harness and killed. Each `.ush` mutation rebuilds the whole module.
 
 ---
-## Task 6 (O6): The multiple-scattering table
+## Task 6 (O6, re-planned): The table's columns crowd the horizon
 
-Decision 1's multiple scattering is Hillaire's (2020) isotropic approximation, read from a 32 x 32 table per airy world, built in C++ from the same `.ush` when the system loads. Each texel averages the light the air sends every way after one scattering over 32 rings crowded toward the horizon, by 8 segments of azimuth over the half circle (the other half is its mirror image), and grows it by the geometric series of the fraction `F` that each scattering hands on: `Psi = L1 / (1 - F)`. It is built from the white air (Task 4), so the star's colour enters once, where the table is read. The values go through a half float, because the GPU's RGBA16F texture will hold exactly those.
+The multiple-scattering table was built in `42e49f6` (Hillaire's isotropic approximation: 32 rings crowded toward the horizon, 8 half-circle segments, `Psi = L1 / (1 - F)`, 32 x 32 texels through half floats, `NoonOnly` and `None` coverage, and `AtmosphereLaw::NoonSun`). Task 5 carried all of it over to the bins. This task changes one thing, measured by the re-plan (planning note 15).
 
-`FAtmosphere::Build` gains a coverage parameter:
-- `NoonOnly` fills only the two columns either side of the noon sun's cosine. That is all a noon zenith reads, and exactly what the full table holds there. It exists for the corpus's skies across 10,000 systems (Task 13).
-- `None` builds no table.
+**The problem.** The columns were equal steps in the sun's cosine: 0.065 apart, so the two either side of the horizon hold suns 3.7 degrees below and above it. The light the air hands on changes fastest exactly there, as the sun goes from lighting the air to leaving it in the ground's shadow. A bilinear read between those columns carried the lit side's light into the terminator: a ground horizon under a sun on the horizon, through a ceiling air, came out about half as bright again as the reference.
 
-"The noon zenith" is defined here once, as `AtmosphereLaw::NoonSun()`: straight up from the ground under a sun **45 degrees** high. It is not a sun at the zenith, because the zenith would then be the star's own forward-scattered aureole, which wears the star's colour rather than the sky's. The plan's harness measured this: under the Sun, an overhead sun gives the zenith a saturation of 0.15, and a 45-degree sun gives 0.61 (planning note 9). This reading is ruling 4's to confirm (*Rulings needed*). If the ruling names another elevation, Task 7 stops and this task's `NoonSunElevationDeg` and the two coverage columns `.MultiScatterTable` checks change first, in a commit of their own.
-
-`.StarColour`, the first test of the sky's colour from the ground, is Task 7's: it waits on rulings 1 and 4, and this task waits on nothing.
+**The fix.** The columns become equal steps in `T` with the sun's cosine `T |T|`, as the table's own sphere crowds its rings, so the two columns either side of the horizon hold suns 0.06 degrees from it. `FAtmosphereTable::ColumnOf` and `CosOfColumn` are the one mapping, and the build, `Sample` and the HLSL hook all use it. The noon sun's columns move from 26-27 to 28-29.
 
 **Files:**
-- Modify: `Shaders/Private/Atmosphere.ush` (append)
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.h` (`FAtmosphere::Build`'s declaration; an enum before the class)
-- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.cpp` (`#include "Math/Float16.h"`; `FAtmosphere::Build`)
-- Test: create `Source/DeepSpace/Tests/AtmosphereTableTest.cpp` (`DeepSpace.Atmosphere.MultiScatterTable`)
+- Modify: `Source/DeepSpace/Atmosphere/Atmosphere.h` (`FAtmosphereTable`), `Source/DeepSpace/Atmosphere/Atmosphere.cpp` (`ColumnOf`, `CosOfColumn`, `Sample`, `Build`), `Shaders/Private/Atmosphere.ush` (the HLSL hook)
+- Test: replace `Source/DeepSpace/Tests/AtmosphereTableTest.cpp` (`DeepSpace.Atmosphere.MultiScatterTable`)
 
 **Interfaces:**
-- Consumes: `AT_MarchAir`, `AT_March` and `AT_EmptyMarch` (Task 5); `FAtmosphere`, `FAtmosphereTable` and `GetWhiteAir` (Task 4); `AtmosphereLocal::ToAir` (Task 5); `FReferenceAir::MultiScatterWhite` (Task 3).
+- Consumes: `FAtmosphereTable`, `FAtmosphere::Build`, `EAtmosphereTable` (Task 5); `FReferenceAir::MultiScatterSpectrum` (Task 5); `AtmosphereBins::Average` (Task 4).
 - Produces:
 
-```hlsl
-static const int AT_SPHERE_RINGS = 32;
-static const int AT_SPHERE_SEGMENTS = 8;
-AT_Rgb AT_MultiScatterCell(AT_Air White, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM);
-```
-
 ```cpp
-enum class EAtmosphereTable : uint8 { None, NoonOnly, Full };
-static FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage = EAtmosphereTable::Full);
-namespace AtmosphereLaw { inline constexpr double NoonSunElevationDeg = 45.0; inline FVector3d NoonSun(); }
+static double FAtmosphereTable::ColumnOf(double CosSunZenith);   // fractional column: (T + 1) / 2 * (Size - 1), CosSunZenith = T |T|
+static double FAtmosphereTable::CosOfColumn(int32 Column);       // its inverse at a column's centre
 ```
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/AtmosphereTableTest.cpp`:
+- [ ] **Step 1: Write the failing test.** Replace `Source/DeepSpace/Tests/AtmosphereTableTest.cpp` with:
 
 ```cpp
 #include "Misc/AutomationTest.h"
@@ -3705,74 +4587,110 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
     using namespace AtmosphereTableTestLocal;
     using namespace AtmosphereTestFixtures;
     constexpr int32 Size = FAtmosphereTable::Size;
+    constexpr int32 Bins = AtmosphereBins::Count;
 
-    for (const FAirSpec& Spec : {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar)})
+    // The columns: equal steps in T, the sun's cosine T |T|, crowded at the
+    // horizon; ColumnOf undoes CosOfColumn.
+    bool bColumns = true;
+    for (int32 I = 0; I < Size; ++I)
     {
-        const FAtmosphere Law = FAtmosphere::Build(Spec, SunK);
+        bColumns &= FMath::Abs(FAtmosphereTable::ColumnOf(FAtmosphereTable::CosOfColumn(I)) - I) < 1.0e-9;
+    }
+    TestTrue(TEXT("ColumnOf finds each column's own sun"), bColumns);
+    TestTrue(TEXT("the ends are the sun overhead and underfoot"),
+        FAtmosphereTable::CosOfColumn(0) == -1.0 && FAtmosphereTable::CosOfColumn(Size - 1) == 1.0);
+    TestTrue(TEXT("and the two columns either side of the horizon hold suns within a tenth of a degree of it"),
+        FMath::Abs(FAtmosphereTable::CosOfColumn(Size / 2)) < std::sin(FMath::DegreesToRadians(0.1)));
+
+    const FAtmosphere Full = FAtmosphere::Build(EarthAir(), SunK);
+    const FAtmosphere CarbonDioxideAir = FAtmosphere::Build(CarbonDioxide(CarbonDioxideCeilingBar), SunK);
+    const FAirSpec Specs[] = {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar)};
+    const FAtmosphere* const Laws[] = {&Full, &CarbonDioxideAir};
+    for (int32 Index = 0; Index < 2; ++Index)
+    {
+        const FAirSpec& Spec = Specs[Index];
+        const FAtmosphere& Law = *Laws[Index];
         const FReferenceAir Reference(Spec, SunK);
+        const AtmosphereReference::FSpectrum Star = AtmosphereReference::StarSpectrum(SunK);
         const FAtmosphereTable& Table = Law.GetTable();
         if (!TestFalse(TEXT("an airy world has a table"), Table.IsEmpty()))
         {
             return false;
         }
         bool bFinite = true;
-        for (const FVector3f& Texel : Table.Texels)
+        for (const float Texel : Table.Texels)
         {
-            bFinite &= std::isfinite(Texel.X) && std::isfinite(Texel.Y) && std::isfinite(Texel.Z) && Texel.GetMin() >= 0.0f;
+            bFinite &= std::isfinite(Texel) && Texel >= 0.0f;
         }
         TestTrue(TEXT("every texel finite and not negative"), bFinite);
 
-        // Texel centres: altitude J / 31 of the air's depth, sun cosine -1 + 2 I / 31.
+        // Texel centres: altitude J / 31 of the air's depth, the sun at
+        // CosOfColumn(I) -- overhead, 27 degrees up, a degree up, a degree
+        // down -- each bin against the reference's source averaged into it.
         for (const int32 J : {0, 3, 9})
         {
-            for (const int32 I : {31, 23, 17, 14})
+            for (const int32 I : {31, 24, 18, 13})
             {
                 const double Altitude01 = static_cast<double>(J) / (Size - 1);
-                const double Cos = -1.0 + 2.0 * I / (Size - 1);
-                const FVector3f& Texel = Table.Texels[J * Size + I];
-                const FVector3d Want = Reference.MultiScatterWhite(Altitude01, Cos);
-                for (int32 C = 0; C < 3; ++C)
+                const double Cos = FAtmosphereTable::CosOfColumn(I);
+                const AtmosphereBins::FBins Want = AtmosphereBins::Average(Star, Reference.MultiScatterSpectrum(Altitude01, Cos));
+                for (int32 K = 0; K < Bins; ++K)
                 {
-                    const double Got = Texel[C];
-                    TestTrue(FString::Printf(TEXT("altitude %.3f, sun cosine %.3f, channel %d: the table's %.5f against the reference's %.5f"),
-                        Altitude01, Cos, C, Got, Want[C]),
-                        FMath::Abs(Got - Want[C]) <= FMath::Max(0.10 * FMath::Abs(Want[C]), 1.0e-3));
+                    const double Got = Table.Texel(J, I, K);
+                    TestTrue(FString::Printf(TEXT("altitude %.3f, sun cosine %.4f, bin %d: the table's %.5f against the reference's %.5f"),
+                        Altitude01, Cos, K, Got, Want.Value[K]),
+                        FMath::Abs(Got - Want.Value[K]) <= FMath::Max(0.10 * FMath::Abs(Want.Value[K]), 1.0e-3));
                 }
             }
         }
 
+        // A sun on the horizon, read between the columns either side of it:
+        // there the light the air hands on changes fastest with the sun, and
+        // a blend across a coarse step reads the lit side's light into the
+        // shadow's.
+        const AtmosphereBins::FBins Horizon = AtmosphereBins::Average(Star, Reference.MultiScatterSpectrum(0.0, 0.0));
+        double AtHorizon[Bins];
+        Table.Sample(0.0, 0.0, AtHorizon);
+        for (int32 K = 0; K < Bins; ++K)
+        {
+            TestTrue(FString::Printf(TEXT("the sun on the horizon, bin %d: the table reads %.5f against the reference's %.5f"), K, AtHorizon[K], Horizon.Value[K]),
+                FMath::Abs(AtHorizon[K] - Horizon.Value[K]) <= FMath::Max(0.10 * Horizon.Value[K], 1.0e-3));
+        }
+
         // Read between texel centres, bilinearly.
-        double R = 0.0;
-        double G = 0.0;
-        double B = 0.0;
-        Table.Sample(0.0, -1.0 + 2.0 * 30.5 / (Size - 1), R, G, B);
-        TestTrue(TEXT("halfway between two texels the table reads their mean"),
-            FMath::Abs(R - 0.5 * (Table.Texels[30].X + Table.Texels[31].X)) < 1.0e-6);
+        const double Between = 0.5 * (FAtmosphereTable::CosOfColumn(30) + FAtmosphereTable::CosOfColumn(31));
+        double Read[Bins];
+        Table.Sample(0.0, Between, Read);
+        const double Column = FAtmosphereTable::ColumnOf(Between) - 30.0;
+        TestTrue(TEXT("between two texels the table reads their blend at the sun's own column"),
+            FMath::Abs(Read[0] - FMath::Lerp(static_cast<double>(Table.Texel(0, 30, 0)), static_cast<double>(Table.Texel(0, 31, 0)), Column)) < 1.0e-6);
     }
 
-    // Coverage. The noon sun's cosine, sin 45 degrees = 0.7071, lies between
-    // columns 26 (0.677) and 27 (0.742).
-    const FAtmosphere Full = FAtmosphere::Build(EarthAir(), SunK);
+    // Coverage. The noon sun's cosine, sin 45 degrees, lies between columns
+    // 28 and 29 (T = 0.8409, column 28.53).
     const FAtmosphere Noon = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::NoonOnly);
     const FAtmosphere NoTable = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
-    bool bColumns = true;
+    bool bNoonColumns = true;
     bool bRestZero = true;
     for (int32 J = 0; J < Size; ++J)
     {
         for (int32 I = 0; I < Size; ++I)
         {
-            const FVector3f& Only = Noon.GetTable().Texels[J * Size + I];
-            if (I == 26 || I == 27)
+            for (int32 K = 0; K < Bins; ++K)
             {
-                bColumns &= Only == Full.GetTable().Texels[J * Size + I];
-            }
-            else
-            {
-                bRestZero &= Only.IsZero();
+                const float Only = Noon.GetTable().Texel(J, I, K);
+                if (I == 28 || I == 29)
+                {
+                    bNoonColumns &= Only == Full.GetTable().Texel(J, I, K);
+                }
+                else
+                {
+                    bRestZero &= Only == 0.0f;
+                }
             }
         }
     }
-    TestTrue(TEXT("the noon table's two columns are the full table's, exactly"), bColumns);
+    TestTrue(TEXT("the noon table's two columns are the full table's, exactly"), bNoonColumns);
     TestTrue(TEXT("and it has nothing else"), bRestZero);
     TestTrue(TEXT("no table when none is asked for"), NoTable.GetTable().IsEmpty());
     TestTrue(TEXT("the noon zenith reads the same from either table"), NoonZenith(Full) == NoonZenith(Noon));
@@ -3793,209 +4711,103 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: FAIL, `use of undeclared identifier 'EAtmosphereTable'`.
+Expected: FAIL, `no member named 'ColumnOf' in 'FAtmosphereTable'`.
 
-- [ ] **Step 3: The texel.** Append to `Shaders/Private/Atmosphere.ush`:
+- [ ] **Step 3: The mapping.** In `Source/DeepSpace/Atmosphere/Atmosphere.h`, in `FAtmosphereTable`'s comment replace ` * the sun's zenith cosine from -1 to 1, each a value per bin` with ` * the sun's zenith cosine from -1 to 1 (ColumnOf), each a value per bin`. After the line `    bool IsEmpty() const { return Texels.Num() != Size * Size * AtmosphereBins::Count; }`, add:
+
+```cpp
+
+    /** The column, fractional, that holds a sun at CosSunZenith: the
+     *  columns are equal steps in T with CosSunZenith = T |T|, crowded
+     *  toward the horizon, where the light that has scattered changes
+     *  fastest with the sun. */
+    static double ColumnOf(double CosSunZenith);
+
+    /** The sun's zenith cosine at a column's centre. */
+    static double CosOfColumn(int32 Column);
+```
+
+  In `Source/DeepSpace/Atmosphere/Atmosphere.cpp`:
+  - Immediately before `void FAtmosphereTable::Sample(`, add:
+
+```cpp
+double FAtmosphereTable::ColumnOf(double CosSunZenith)
+{
+    const double Cos = FMath::Clamp(CosSunZenith, -1.0, 1.0);
+    const double T = Cos < 0.0 ? -std::sqrt(-Cos) : std::sqrt(Cos);
+    return (T + 1.0) * 0.5 * (Size - 1);
+}
+
+double FAtmosphereTable::CosOfColumn(int32 Column)
+{
+    const double T = -1.0 + 2.0 * Column / (Size - 1);
+    return T * std::fabs(T);
+}
+
+```
+
+  - In `Sample`, replace `    const double FX = FMath::Clamp((CosSunZenith + 1.0) * 0.5, 0.0, 1.0) * (Size - 1);` with `    const double FX = ColumnOf(CosSunZenith);`.
+  - In `Build`, replace `        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((AtmosphereLaw::NoonSun().Z + 1.0) * 0.5 * (Size - 1)), Size - 2);` with `        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32(FAtmosphereTable::ColumnOf(AtmosphereLaw::NoonSun().Z)), Size - 2);`.
+  - Also in `Build`, replace the two lines
+
+```cpp
+                const double Cos = -1.0 + 2.0 * Column / (Size - 1);
+                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, Cos, Empty);
+```
+
+    with
+
+```cpp
+                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, FAtmosphereTable::CosOfColumn(Column), Empty);
+```
+
+  In `Shaders/Private/Atmosphere.ush`'s HLSL half, replace `// across, 0 and 1 at the first and last centre.` with the two lines
 
 ```hlsl
-
-// -- The multiple-scattering table (decision 11) -------------------------------
-// The sphere of directions as rings of equal step in T, cos(zenith) = T |T|,
-// crowded toward the horizon -- where a ray's path through the air is longest
-// and most of the light at low altitude comes from -- by segments of equal
-// azimuth over half the circle: the texel's sun lies in the X-Z plane, so the
-// light field is mirror-symmetric in azimuth and the other half is the same.
-// A Fibonacci sphere of 64, 128 or 256 points gives this integral 10% apart
-// from itself (the thin band of long horizontal paths falls between its
-// points differently each time); 32 rings are within 6% of a 192-ring
-// integral at the ground, where it converges slowest.
-static const int AT_SPHERE_RINGS = 32;
-static const int AT_SPHERE_SEGMENTS = 8;
-
-// One texel (Hillaire 2020): at Altitude01 of the air's depth under a sun at
-// CosSunZenith, the light the air sends every way after one scattering,
-// averaged over the sphere, and grown by the geometric series of the fraction
-// F each scattering hands on: Psi = L1 / (1 - F). Built from the white air --
-// the star's colour left out of its scatter, so the colour enters once, where
-// Psi is used -- in C++ when a system loads, never in a frame, and read from
-// an empty table while it is built.
-AT_Rgb AT_MultiScatterCell(AT_Air White, AT_REAL Altitude01, AT_REAL CosSunZenith AT_TABLE_PARAM)
-{
-    AT_REAL R = AT_REAL(1.0) + AT_saturate(Altitude01) * White.Top;
-    AT_REAL SX = AT_sqrt(AT_max(AT_REAL(1.0) - CosSunZenith * CosSunZenith, AT_REAL(0.0)));
-    AT_REAL LR = AT_REAL(0.0);
-    AT_REAL LG = AT_REAL(0.0);
-    AT_REAL LB = AT_REAL(0.0);
-    AT_REAL FR = AT_REAL(0.0);
-    AT_REAL FG = AT_REAL(0.0);
-    AT_REAL FB = AT_REAL(0.0);
-    for (int I = 0; I < AT_SPHERE_RINGS; ++I)
-    {
-        AT_REAL T = AT_REAL(-1.0) + (AT_REAL(2.0) * AT_REAL(I) + AT_REAL(1.0)) / AT_REAL(AT_SPHERE_RINGS);
-        AT_REAL AbsT = AT_max(T, -T);
-        AT_REAL Mu = T * AbsT;
-        // The share of the sphere one direction stands for, its mirror image
-        // included: 2 x (2 |T| dT)(dPhi) / 4 pi, dT = 2 / RINGS, dPhi =
-        // pi / SEGMENTS.
-        AT_REAL Weight = AT_REAL(2.0) * AbsT / AT_REAL(AT_SPHERE_RINGS * AT_SPHERE_SEGMENTS);
-        AT_REAL Ring = AT_sqrt(AT_max(AT_REAL(1.0) - Mu * Mu, AT_REAL(0.0)));
-        for (int J = 0; J < AT_SPHERE_SEGMENTS; ++J)
-        {
-            AT_REAL Phi = AT_PI * (AT_REAL(J) + AT_REAL(0.5)) / AT_REAL(AT_SPHERE_SEGMENTS);
-            AT_March M = AT_MarchAir(White, AT_REAL(0.0), AT_REAL(0.0), R, Ring * AT_cos(Phi), Ring * AT_sin(Phi), Mu,
-                                     AT_NO_END, SX, AT_REAL(0.0), CosSunZenith AT_TABLE_ARG);
-            LR = LR + Weight * M.R;
-            LG = LG + Weight * M.G;
-            LB = LB + Weight * M.B;
-            FR = FR + Weight * M.FR;
-            FG = FG + Weight * M.FG;
-            FB = FB + Weight * M.FB;
-        }
-    }
-    AT_Rgb Out;
-    Out.R = LR / AT_max(AT_REAL(1.0) - FR, AT_REAL(0.001));
-    Out.G = LG / AT_max(AT_REAL(1.0) - FG, AT_REAL(0.001));
-    Out.B = LB / AT_max(AT_REAL(1.0) - FB, AT_REAL(0.001));
-    return Out;
-}
+// across, 0 and 1 at the first and last centre, the sun's columns crowded
+// toward the horizon as FAtmosphereTable::ColumnOf crowds them.
 ```
 
-- [ ] **Step 4: Build the table.** In `Source/DeepSpace/Atmosphere/Atmosphere.h`, immediately before the line `/** One world's air under one star, fitted for the law (decision 3). */`, add:
+    and replace `    float U = (saturate((CosSunZenith + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;` with
 
-```cpp
-/** How much of the multiple-scattering table Build fills. NoonOnly fills
- *  the two columns either side of the noon sun's cosine -- every sample of
- *  a zenith view under that sun reads only those, so it is all the noon
- *  zenith needs and exactly what the full table holds there -- for the
- *  corpus's sky of every world; None fills nothing (single scattering). */
-enum class EAtmosphereTable : uint8 { None, NoonOnly, Full };
-
-namespace AtmosphereLaw
-{
-    /** The sky's reference view, what the corpus's sky_zenith_rgb and
-     *  DeepSpace.Atmosphere.StarColour mean by "the noon zenith": straight
-     *  up from the ground under a sun 45 degrees high. Not a sun at the
-     *  zenith: the zenith would then be the star's own forward-scattered
-     *  aureole, and wear the star's colour rather than the sky's. */
-    inline constexpr double NoonSunElevationDeg = 45.0;
-
-    /** That sun, the zenith being +Z: (cos 45, 0, sin 45). */
-    inline FVector3d NoonSun()
-    {
-        const double Radians = FMath::DegreesToRadians(NoonSunElevationDeg);
-        return FVector3d(FMath::Cos(Radians), 0.0, FMath::Sin(Radians));
-    }
-}
-
+```hlsl
+    float Cos = clamp(CosSunZenith, -1.0, 1.0);
+    float T = Cos < 0.0 ? -sqrt(-Cos) : sqrt(Cos);
+    float U = (saturate((T + 1.0) * 0.5) * 31.0 + 0.5) / 64.0;
 ```
 
-  In the same file, replace
-
-```cpp
-    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK);
-```
-
-  with
-
-```cpp
-    static FAtmosphere Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage = EAtmosphereTable::Full);
-```
-
-  and add to the comment above it: `The multiple-scattering table is built from the white air through the .ush's own AT_MultiScatterCell, and stored through half floats.`
-
-  In `Source/DeepSpace/Atmosphere/Atmosphere.cpp`, after `#include <cmath>`, add `#include "Math/Float16.h"`. Replace
-
-```cpp
-FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK)
-```
-
-  with
-
-```cpp
-FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EAtmosphereTable Coverage)
-```
-
-  and, in its body, replace the final
-
-```cpp
-        Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
-    }
-    return Out;
-}
-```
-
-  with
-
-```cpp
-        Out.White.AerosolScatter[C] = FMath::Max(AerosolScatterWhite[C], 0.0) / Spectra.AerosolH;
-    }
-
-    if (Coverage != EAtmosphereTable::None)
-    {
-        // Each texel from the .ush's own AT_MultiScatterCell in double, so
-        // the table is the law's (decision 11), read while it is built from
-        // an empty table -- single scattering only -- and stored through
-        // half floats, as the GPU's RGBA16F texture will hold it.
-        constexpr int32 Size = FAtmosphereTable::Size;
-        const AtmosphereF64::AT_Air WhiteAir = AtmosphereLocal::ToAir<AtmosphereF64::AT_Air, double>(Out.White);
-        const FAtmosphereTable Empty;
-        Out.Table.Texels.SetNumZeroed(Size * Size);
-        // NoonOnly: the two columns either side of the noon sun's cosine,
-        // which every sample of a zenith view under that sun reads.
-        const double NoonCos = AtmosphereLaw::NoonSun().Z;
-        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((NoonCos + 1.0) * 0.5 * (Size - 1)), Size - 2);
-        const int32 FirstColumn = Coverage == EAtmosphereTable::Full ? 0 : NoonColumn;
-        const int32 LastColumn = Coverage == EAtmosphereTable::Full ? Size - 1 : NoonColumn + 1;
-        for (int32 Row = 0; Row < Size; ++Row)
-        {
-            for (int32 Column = FirstColumn; Column <= LastColumn; ++Column)
-            {
-                const double Altitude01 = static_cast<double>(Row) / (Size - 1);
-                const double Cos = -1.0 + 2.0 * Column / (Size - 1);
-                const AtmosphereF64::AT_Rgb Cell = AtmosphereF64::AT_MultiScatterCell(WhiteAir, Altitude01, Cos, Empty);
-                Out.Table.Texels[Row * Size + Column] = FVector3f(
-                    FFloat16(static_cast<float>(Cell.R)).GetFloat(),
-                    FFloat16(static_cast<float>(Cell.G)).GetFloat(),
-                    FFloat16(static_cast<float>(Cell.B)).GetFloat());
-            }
-        }
-    }
-    return Out;
-}
-```
-
-- [ ] **Step 5: Build and run; expect PASS.**
+- [ ] **Step 4: Build and run; expect PASS.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.MultiScatterTable
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.MultiScatterTable && ./test.sh DeepSpace.Atmosphere.SingleScatteringMatchesReference
 cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh DeepSpace.Atmosphere.MultiScatterTable && time ./test.sh DeepSpace.Sky.Colour
 ```
 
-Expected: `passed: 1`, and the two times for the commit message (*Conventions*, seconds per test). If `.MultiScatterTable` misses by more than 10%:
-- The first remedy is C++-only: raise `AT_SPHERE_RINGS` and `AT_SPHERE_SEGMENTS` (the table is never built on the GPU), then re-run. They are constants with a test on them, so the commit says why.
-- If 256 directions still miss, report the printed cells. The spec's fallback is single scattering plus a per-world constant (*Risks*).
+Expected: `passed: 1` twice, and the two times (*Conventions*). In the harness, with the old equal-cosine columns, the horizon check read up to 0.00616 against the reference's 0.00489 (bin 3, 26% over). With these columns every bin is within 10%.
 
-- [ ] **Step 6: The whole suite, then commit.**
+If `.MultiScatterTable` misses by more than 10% elsewhere, the first remedy is still C++-only: raise `AT_SPHERE_RINGS` and `AT_SPHERE_SEGMENTS`, and report why in the commit.
+
+- [ ] **Step 5: The whole suite, then commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
 git -C /home/matt/Development/deepspace/.worktrees/air-optics add Shaders/Private/Atmosphere.ush Source/DeepSpace/Atmosphere/Atmosphere.h Source/DeepSpace/Atmosphere/Atmosphere.cpp Source/DeepSpace/Tests/AtmosphereTableTest.cpp
 git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
-feat(atmosphere): the multiple-scattering table
+feat(atmosphere): the table's columns crowd the horizon
 
-AT_MultiScatterCell (Hillaire 2020): the first-order light the air sends
-every way, over 32 rings crowded toward the horizon by 8 half-circle
-segments (a Fibonacci sphere of 64-256 points differs from itself by 10%
-there),
-grown by 1 / (1 - F). FAtmosphere::Build
-fills the 32 x 32 table from the white air through the .ush in double, and
-stores it through half floats as the GPU's RGBA16F will hold it; coverage
-NoonOnly fills only the two columns the noon zenith reads (a sun 45 degrees
-up, not overhead, whose zenith would be its own aureole), for the corpus.
+The multiple-scattering table's sun axis was equal steps in the sun's
+cosine, so the columns either side of the horizon held suns 3.7 degrees
+below and above it -- where the light the air hands on changes fastest --
+and a read between them carried the lit side's light into the terminator:
+a ground horizon under a setting sun came out half as bright again as
+the reference. Now
+the columns are equal steps in T, the cosine T |T|, as the table's own
+sphere crowds its rings: 0.06 degrees either side of the horizon.
+FAtmosphereTable::ColumnOf and CosOfColumn are the one mapping, used by the
+build, Sample and the HLSL hook; noon's columns are 28 and 29.
 
-DeepSpace.Atmosphere.MultiScatterTable holds the texels to the reference's
-second order and geometric tail within 10%, and the noon-only coverage to
-the full table's two columns exactly.
+DeepSpace.Atmosphere.MultiScatterTable holds the mapping, each bin against
+the reference, and the table's read at a sun on the horizon.
 
 Measured: DeepSpace.Atmosphere.MultiScatterTable costs N s over start-up.
 
@@ -4003,237 +4815,67 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
 
-  `N` is Step 5's first time less its second, in whole seconds (*Conventions*).
-
-- [ ] **Step 7: Prove the test can fail.**
+- [ ] **Step 6: Prove the test can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush 'Out.R = LR / AT_max(AT_REAL(1.0) - FR, AT_REAL(0.001));' 'Out.R = AT_REAL(4.0) * LR / AT_max(AT_REAL(1.0) - FR, AT_REAL(0.001));' DeepSpace.Atmosphere.MultiScatterTable
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/Atmosphere.cpp '    return (T + 1.0) * 0.5 * (Size - 1);' '    return (Cos + 1.0) * 0.5 * (Size - 1);' DeepSpace.Atmosphere.MultiScatterTable
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: `KILLED`. The mutant quadruples the red channel's table.
+Expected: `KILLED`. The mutant reads the old equal-cosine columns from a table built on the new ones: `ColumnOf` no longer undoes `CosOfColumn`, and the horizon read misses.
 
 ---
+## Task 7 (O7, re-planned): The ground sky again through the bins, and the sky's colour as ruled
 
-## Task 7 (O7): The ground sky the developer rules on, and the sky's colour
+`.GroundSkySwatch` was built in `5027df5`: Steps 1-4 of the first plan, with the file as built, saving to `FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), ...))`. It writes six 256-pixel fisheyes of the ground sky, noon and dusk:
+- Earth air under the home star and under the Sun;
+- carbon dioxide at 1 bar under the home star.
 
-The spec's `.GroundSkySwatch` exists so that an honest red-dwarf sky seen *from the ground* is judged "while ruling 2's risk is cheap to act on". Ruling 1 (*Rulings needed*) is exactly that judgement, so the swatches come first and go to the developer, and `.StarColour` is written only once rulings 1 and 4 are recorded.
+Each is drawn through the shipped law in double, exposed at `ds.Sky.Radiance` 3.0 and the galley's EV100 0.7, to `Saved/air_swatch_*.png`. Rulings 1 and 4 were made from those swatches. Its code does not change: it calls only the entry points, whose signatures the bins kept.
 
-- **`.GroundSkySwatch`** writes six fisheyes, noon and dusk for three skies: Earth air under the home star (2,566 K) and under the Sun (5,772 K), and carbon dioxide at 1 bar under the home star. They are the fixtures' stand-ins from `AtmosphereTestFixtures`, because the drawn fixture worlds R, G and C need track G's draws and `PlanetAir`. Task 12 re-points the swatch at the drawn worlds.
-- A swatch is an equidistant fisheye of the whole sky, from an eye on the ground: the zenith at the centre, the horizon on the rim, 256 pixels across. Each pixel is the shipped law in double (`AtmosphereLaw::InScatterF64`). It is exposed as the deck will see it: the law's unit of radiance, a white surface lit head-on by the star, is `ds.Sky.Radiance`'s scene luminance (default 3.0: a white surface under a Sun at 1 AU, which a temperate world's star gives it), times `2^ShipSky::ManualExposureBias(0.7)`, the galley's EV100 (`ds.Sky.Exposure`'s default). The result is sRGB-encoded and clipped at white. The star's disc is not drawn: the swatch is the air.
-- Noon is `AtmosphereLaw::NoonSun()` (Task 6, ruling 4). Dusk is the same azimuth 3 degrees up.
-- Like the corpus test, it fails only if a swatch cannot be written.
+Two things are owed:
+- **The swatches through the binned law.** The developer ruled from the three-channel law's. The bins move the skies a little, so they go to the developer again, for information. No new ruling is asked.
+- **A proof the swatch can fail.** The first plan's mutation renamed the extension to `.nonesuch`, and UE 5.8.2 writes a PNG for an extension it does not know, so that mutant survived and proved nothing (the builder's report). The corrected mutation points the file into `/proc`, where nothing can be created.
+
+Then `.StarColour`: rulings 1 and 4 are recorded (2026-09-27), so its gate passes. Ruling 1 restates the red-dwarf bounds to what the physics gives, and this task writes them.
 
 **Files:**
-- Test: create `Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp` (`DeepSpace.Atmosphere.GroundSkySwatch`; from Step 6, `DeepSpace.Atmosphere.StarColour`)
-- Modify: `docs/superpowers/specs/2026-09-27-atmospheres-design.md` (Step 7: the *Tests* section's `.StarColour` item; decision 3's table)
+- Test: modify `Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp` (`DeepSpace.Atmosphere.StarColour`, beside the built `.GroundSkySwatch`)
+- Modify: `docs/superpowers/specs/2026-09-27-atmospheres-design.md` (Step 5):
+  - the *Tests* section's `.StarColour` item;
+  - decision 3's table;
+  - ruling 2's sentence on red dwarfs' skies, which ruling 1 restates.
 
 **Interfaces:**
-- Consumes: `FAtmosphere::Build`, `EAtmosphereTable`, `AtmosphereLaw::{InScatterF64, NoEnd, NoonSun, NoonSunElevationDeg}` (Tasks 4-6); the fixtures (Task 3); `ShipSky::ManualExposureBias(double)` (`Sky/ShipSky.h`, read only); `FImageUtils::SaveImageByExtension(const TCHAR*, const FImageView&, int32)` (`ImageUtils.h`, module `Engine`) and `FImageView(const FColor*, int32, int32, EGammaSpace)` (`ImageCore.h`).
-- Produces: the files `Saved/air_swatch_<sky>_<noon|dusk>.png`, six of them, and in the test's local namespace:
+- Consumes: `FAtmosphere::Build`, `EAtmosphereTable::NoonOnly`, `AtmosphereLaw::{InScatterF64, NoEnd, NoonSun}` (Tasks 5-6); the fixtures (Task 3); the built swatch's `AtmosphereSwatchTestLocal` namespace.
+- Produces: `DeepSpace.Atmosphere.StarColour`, and in `AtmosphereSwatchTestLocal`: `FVector3d NoonZenith(const FAtmosphere&)`, `double Saturation(const FVector3d&)`, `double Hue(const FVector3d&)`. Task 12 re-points the swatch's `Skies()` and gives `PlanetAir` its own `NoonZenith` and `Saturation` for the corpus.
 
-```cpp
-namespace AtmosphereSwatchTestLocal
-{
-    constexpr int32 Side = 256;
-    constexpr double DuskSunElevationDeg = 3.0, GalleyEV100 = 0.7, SkyRadiance = 3.0;
-    struct FSky { FString Name; FAirSpec Spec; double StarTemperatureK; };
-    TArray<FSky> Skies();                                  // the three skies; Task 12 re-points it
-    FVector3d SunAt(double ElevationDeg);
-    bool Write(const FString& Name, const FAtmosphere& Air, const FVector3d& Sun, FString& OutPath, double& OutPeak);
-}
-```
-
-- [ ] **Step 1: Write the swatch.** Create `Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp`:
-
-```cpp
-#include "Misc/AutomationTest.h"
-#include "Atmosphere/Atmosphere.h"
-#include "ImageCore.h"
-#include "ImageUtils.h"
-#include "Misc/Paths.h"
-#include "Sky/ShipSky.h"
-#include "Tests/AtmosphereTestFixtures.h"
-
-#include <cmath>
-
-#if WITH_DEV_AUTOMATION_TESTS
-
-/**
- * Not a test of correctness but a picture to be judged (atmospheres spec,
- * .GroundSkySwatch; this plan's ruling 1): the ground sky at noon and at
- * dusk, through the shipped law, as the deck's fixed exposure will show it,
- * written to Saved/air_swatch_<sky>_<noon|dusk>.png. It fails only if a
- * swatch cannot be written.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereGroundSkySwatchTest, "DeepSpace.Atmosphere.GroundSkySwatch",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-namespace AtmosphereSwatchTestLocal
-{
-    /** Pixels across: an equidistant fisheye of the whole sky, the zenith at
-     *  the centre and the horizon on the rim. */
-    constexpr int32 Side = 256;
-
-    /** The dusk sun: the noon sun's azimuth (+X), 3 degrees up. */
-    constexpr double DuskSunElevationDeg = 3.0;
-
-    /** The galley's EV100, ds.Sky.Exposure's default (ShipSky.cpp): the
-     *  exposure the day sky will be seen at from the deck (decision 9). */
-    constexpr double GalleyEV100 = 0.7;
-
-    /** ds.Sky.Radiance's default (ShipSky.cpp): the scene luminance of a
-     *  white surface under a Sun at 1 AU. The law's radiance is relative to
-     *  a white surface lit head-on by the star, which a temperate world's
-     *  star gives it at about that irradiance. */
-    constexpr double SkyRadiance = 3.0;
-
-    struct FSky
-    {
-        FString Name;
-        FAirSpec Spec;
-        double StarTemperatureK = 0.0;
-    };
-
-    /** The skies the developer judges: the spec's fixtures R, G and C by
-     *  their stand-ins, until the drawn worlds exist (Task 12). */
-    TArray<FSky> Skies()
-    {
-        using namespace AtmosphereTestFixtures;
-        return {
-            {TEXT("R_n2o2_2566K"), EarthAir(), HomeStarK},
-            {TEXT("G_n2o2_5772K"), EarthAir(), SunK},
-            {TEXT("C_co2_2566K"), CarbonDioxide(1.0), HomeStarK}};
-    }
-
-    /** A sun ElevationDeg above the horizon toward +X. */
-    FVector3d SunAt(double ElevationDeg)
-    {
-        const double Radians = FMath::DegreesToRadians(ElevationDeg);
-        return FVector3d(std::cos(Radians), 0.0, std::sin(Radians));
-    }
-
-    /** One fisheye of Air's sky from the ground under Sun, exposed at the
-     *  galley's EV, to Saved/air_swatch_<Name>.png. OutPeak is the brightest
-     *  channel before exposure. False if the file could not be written. */
-    bool Write(const FString& Name, const FAtmosphere& Air, const FVector3d& Sun, FString& OutPath, double& OutPeak)
-    {
-        const double Scale = SkyRadiance * std::exp2(ShipSky::ManualExposureBias(GalleyEV100));
-        const FVector3d Eye(0.0, 0.0, 1.0);
-        TArray<FColor> Pixels;
-        Pixels.SetNumZeroed(Side * Side);
-        OutPeak = 0.0;
-        for (int32 Y = 0; Y < Side; ++Y)
-        {
-            for (int32 X = 0; X < Side; ++X)
-            {
-                const double U = 2.0 * (X + 0.5) / Side - 1.0;
-                const double V = 1.0 - 2.0 * (Y + 0.5) / Side;
-                const double Rim = std::sqrt(U * U + V * V);
-                if (Rim > 1.0)
-                {
-                    Pixels[Y * Side + X] = FColor::Black;
-                    continue;
-                }
-                const double FromZenith = Rim * 0.5 * UE_DOUBLE_PI;
-                const double Azimuth = std::atan2(V, U);
-                const FVector3d Direction(std::sin(FromZenith) * std::cos(Azimuth), std::sin(FromZenith) * std::sin(Azimuth), std::cos(FromZenith));
-                const FVector3d Sky = AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), Eye, Direction, AtmosphereLaw::NoEnd, Sun).InScatter;
-                OutPeak = FMath::Max(OutPeak, Sky.GetMax());
-                const FLinearColor Scene(static_cast<float>(FMath::Max(Sky.X, 0.0) * Scale),
-                                         static_cast<float>(FMath::Max(Sky.Y, 0.0) * Scale),
-                                         static_cast<float>(FMath::Max(Sky.Z, 0.0) * Scale));
-                // sRGB-encoded and clipped at white, as the display shows it.
-                Pixels[Y * Side + X] = Scene.ToFColor(true);
-            }
-        }
-        OutPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir(), FString::Printf(TEXT("air_swatch_%s.png"), *Name));
-        return FImageUtils::SaveImageByExtension(*OutPath, FImageView(Pixels.GetData(), Side, Side, EGammaSpace::sRGB));
-    }
-}
-
-bool FAtmosphereGroundSkySwatchTest::RunTest(const FString& Parameters)
-{
-    using namespace AtmosphereSwatchTestLocal;
-    const TArray<FSky> All = Skies();
-    int32 Written = 0;
-    for (const FSky& Sky : All)
-    {
-        const FAtmosphere Air = FAtmosphere::Build(Sky.Spec, Sky.StarTemperatureK);
-        const TPair<const TCHAR*, FVector3d> Times[] = {
-            TPair<const TCHAR*, FVector3d>(TEXT("noon"), AtmosphereLaw::NoonSun()),
-            TPair<const TCHAR*, FVector3d>(TEXT("dusk"), SunAt(DuskSunElevationDeg))};
-        for (const TPair<const TCHAR*, FVector3d>& Time : Times)
-        {
-            FString Path;
-            double Peak = 0.0;
-            const bool bWritten = Write(FString::Printf(TEXT("%s_%s"), *Sky.Name, Time.Key), Air, Time.Value, Path, Peak);
-            Written += bWritten ? 1 : 0;
-            AddInfo(FString::Printf(TEXT("swatch %s at %s (%.0f K, the sun %.0f degrees up): %s; brightest channel %.4f before exposure"),
-                *Sky.Name, Time.Key, Sky.StarTemperatureK, FMath::RadiansToDegrees(std::asin(Time.Value.Z)),
-                bWritten ? *Path : TEXT("NOT WRITTEN"), Peak));
-        }
-    }
-    TestEqual(TEXT("every swatch is written"), Written, 2 * All.Num());
-    return true;
-}
-
-#endif
-```
-
-- [ ] **Step 2: Build and run; expect PASS and six files.**
+- [ ] **Step 1: The swatches through the bins, to the developer.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.GroundSkySwatch; grep -h "swatch " Saved/Logs/DeepSpace.log | tail -6; ls -l Saved/air_swatch_*.png
-cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh DeepSpace.Atmosphere.GroundSkySwatch && time ./test.sh DeepSpace.Sky.Colour
 ```
 
-Expected: `passed: 1`, six `swatch` lines, six PNGs of 256 x 256, and the two times (*Conventions*). The dusk swatches are darker at the zenith and bright toward +X; the brightest channel before exposure is below 1. A swatch that is uniformly white is clipping: report its peak, and do not change the exposure, which is the deck's.
+Expected: `passed: 1`, six `swatch` lines, six fresh PNGs. Report them through the orchestrator to the developer: the six paths in `.worktrees/air-optics/Saved/` and the six `swatch` lines, marked "the same skies through the eight-bin law; for information, no ruling asked". Nothing is committed: the test's code did not change.
 
-- [ ] **Step 3: The whole suite, then commit.**
+- [ ] **Step 2: Prove the swatch can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
-git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp
-git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
-test(atmosphere): the ground sky as the developer will judge it -- noon and dusk fisheyes
-
-DeepSpace.Atmosphere.GroundSkySwatch (atmospheres spec, slice 1's ground
-skies; this plan's ruling 1): six 256-pixel fisheyes of the sky from the
-ground, noon (the sun 45 degrees up) and dusk (3 degrees), for Earth air
-under the home star and the Sun and carbon dioxide under the home star,
-through the shipped law in double, exposed at ds.Sky.Radiance's 3.0 and the
-galley's EV100 0.7 through ShipSky::ManualExposureBias, sRGB, clipped at
-white, to Saved/air_swatch_*.png. The fixtures' stand-ins until the drawn
-worlds R, G and C exist. Fails only if a swatch cannot be written.
-
-Measured: DeepSpace.Atmosphere.GroundSkySwatch costs N s over start-up.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-MSG
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'FPaths::Combine(FPaths::ProjectSavedDir(), ' 'FPaths::Combine(FString(TEXT("/proc/air_swatch_nowhere")), ' DeepSpace.Atmosphere.GroundSkySwatch
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-- [ ] **Step 4: Prove the test can fail, and send the swatches.**
+Expected: `KILLED`: nothing can be written under `/proc`, so `every swatch is written` fails with 0 of 6. If it survives, `FImageUtils::SaveImageByExtension` is reporting success for a file it did not write. Stop and report the log's `swatch` lines: then the test must check the files exist on disk (`IFileManager::Get().FileSize(*Path) > 0`) rather than trust the return value, and that is a change to the test, made and proved before going on.
 
-```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'TEXT("air_swatch_%s.png")' 'TEXT("air_swatch_%s.nonesuch")' DeepSpace.Atmosphere.GroundSkySwatch
-cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.GroundSkySwatch
-```
-
-Expected: `KILLED` (no image format has that extension, so nothing is written), then `passed: 1` again, rewriting the six files. Then report, through the orchestrator to the developer: the six PNG paths in `.worktrees/air-optics/Saved/`, the six `swatch` lines, planning note 11's table, and *Rulings needed* rows 1 and 4. This is what ruling 1 is made from.
-
-- [ ] **Step 5: The gate: rulings 1 and 4.**
+- [ ] **Step 3: The gate: rulings 1 and 4.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && grep -c '^\*\*Atmosphere plan ruling 1 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md && grep -c '^\*\*Atmosphere plan ruling 4 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md
 ```
 
-Expected: `1` and `1`. If either is `0`, stop: the ruling is not recorded, and nothing after this step runs until it is (Task 8 may run meanwhile; see *Execution order*). Read both paragraphs.
-- If ruling 4 names an elevation other than 45 degrees, stop and report: Task 6's `NoonSunElevationDeg` and `.MultiScatterTable`'s two coverage columns change first, in their own commit, and `.StarColour`'s G-star bounds are re-measured under the new sun before Step 6.
-- Otherwise go on. The bounds Step 6 writes are ruling 1's.
+Expected: `1` and `1` (both recorded 2026-09-27). Ruling 4 keeps 45 degrees, so Task 6's columns and `.StarColour`'s G-star bounds stand. Ruling 1 keeps the physics: peach under red dwarfs, about 0.72 at 2,566 K and 0.96 at 2,000 K, the greyest near 3,500-4,000 K, blue from about 4,000 K, and no white balance per star.
 
-- [ ] **Step 6: Write `.StarColour`.** In `AtmosphereSwatchTest.cpp`, after the `IMPLEMENT_SIMPLE_AUTOMATION_TEST` of `FAtmosphereGroundSkySwatchTest`, add:
+- [ ] **Step 4: Write `.StarColour`.** In `AtmosphereSwatchTest.cpp`, after the `IMPLEMENT_SIMPLE_AUTOMATION_TEST` of `FAtmosphereGroundSkySwatchTest`, add:
 
 ```cpp
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereStarColourTest, "DeepSpace.Atmosphere.StarColour",
@@ -4296,48 +4938,116 @@ bool FAtmosphereStarColourTest::RunTest(const FString& Parameters)
     using namespace AtmosphereTestFixtures;
     const auto Zenith = [](double Kelvin) { return NoonZenith(FAtmosphere::Build(EarthAir(), Kelvin, EAtmosphereTable::NoonOnly)); };
 
-    // Decision 3's table, pinned: no palette, no floor.
-    double Previous = -1.0;
-    bool bRises = true;
+    // Decision 3's table, pinned as atmosphere plan ruling 1 restates it: no
+    // palette, no floor, no white balance per star. In linear sRGB with a
+    // D65 white a red dwarf's sky is peach, the star's own orange pulled
+    // toward blue by lambda^-4; the sky is greyest near 3,500 K and blue
+    // from 4,000 K up.
+    TArray<double> Saturations;
+    TArray<int32> Kelvins;
+    bool bBlue = true;
     for (int32 Kelvin = 2000; Kelvin <= 15000; Kelvin += 500)
     {
         const FVector3d Sky = Zenith(Kelvin);
         const double S = Saturation(Sky);
         AddInfo(FString::Printf(TEXT("%5d K: noon zenith (%.4f, %.4f, %.4f), saturation %.3f, hue %.0f"),
             Kelvin, Sky.X, Sky.Y, Sky.Z, S, Hue(Sky)));
-        bRises &= S >= Previous - 1.0e-9;
-        Previous = S;
+        Saturations.Add(S);
+        Kelvins.Add(Kelvin);
+        if (Kelvin >= 4000)
+        {
+            bBlue &= Hue(Sky) >= 200.0 && Hue(Sky) <= 240.0;
+        }
     }
-    TestTrue(TEXT("the sky's saturation rises with the star's temperature, 2,000-15,000 K"), bRises);
+    int32 Least = 0;
+    for (int32 I = 1; I < Saturations.Num(); ++I)
+    {
+        Least = Saturations[I] < Saturations[Least] ? I : Least;
+    }
+    bool bFalls = true;
+    bool bRises = true;
+    for (int32 I = 1; I < Saturations.Num(); ++I)
+    {
+        if (I <= Least)
+        {
+            bFalls &= Saturations[I] < Saturations[I - 1];
+        }
+        else
+        {
+            bRises &= Saturations[I] > Saturations[I - 1];
+        }
+    }
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("the greyest sky is between 3,000 and 4,500 K (%d K)"), Kelvins[Least]), Kelvins[Least] >= 3000 && Kelvins[Least] <= 4500);
+    TestTrue(TEXT("saturation falls from 2,000 K to the greyest and rises from it to 15,000 K"), bFalls && bRises);
+    TestTrue(TEXT("from 4,000 K up the sky is blue: hue within 200-240"), bBlue);
 
-    const double Home = Saturation(Zenith(HomeStarK));
+    const FVector3d Home = Zenith(HomeStarK);
     const double Coolest = Saturation(Zenith(2000.0));
     const FVector3d Sun = Zenith(SunK);
-    TestTrue(FString::Printf(TEXT("under the home star, 2,566 K, a pale sky: saturation %.3f <= 0.25"), Home), Home <= 0.25);
-    TestTrue(FString::Printf(TEXT("under 2,000 K near grey: %.3f <= 0.12"), Coolest), Coolest <= 0.12);
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("under the home star, 2,566 K, a peach sky: saturation %.3f in [0.62, 0.82]"), Saturation(Home)),
+        Saturation(Home) >= 0.62 && Saturation(Home) <= 0.82);
+    TestTrue(FString::Printf(TEXT("and its hue %.1f orange, in [15, 40]"), Hue(Home)), Hue(Home) >= 15.0 && Hue(Home) <= 40.0);
+    // Atmosphere plan ruling 1 (2026-09-27).
+    TestTrue(FString::Printf(TEXT("under 2,000 K deep orange: saturation %.3f >= 0.85"), Coolest), Coolest >= 0.85);
     TestTrue(FString::Printf(TEXT("under the Sun, Earth's blue: hue %.1f in [200, 235]"), Hue(Sun)), Hue(Sun) >= 200.0 && Hue(Sun) <= 235.0);
     TestTrue(FString::Printf(TEXT("and saturation %.3f in [0.40, 0.85]"), Saturation(Sun)), Saturation(Sun) >= 0.40 && Saturation(Sun) <= 0.85);
     return true;
 }
 ```
 
-  These are the spec's bounds as written. Ruling 1 decides what stands: for each of the first three assertions (the rise, the home star, 2,000 K) that ruling 1 restates, replace that assertion's condition and message with the ruling's bound, and put `// Atmosphere plan ruling 1 (<its date>).` on the line above it; an assertion ruling 1 removes is deleted, its `AddInfo` table kept. The two G-star assertions stay (ruling 4 keeps them true, note 9). Never loosen a bound past what the ruling says.
+  The bounds are ruling 1's, with the binned law's measured values inside them. The harness measured:
+  - 2,000 K: saturation 0.920, hue 20;
+  - 2,566 K: 0.715, hue 26;
+  - 3,500 K, the greyest: 0.163;
+  - 4,000 K: 0.171, hue 226;
+  - 5,772 K: 0.620, hue 224;
+  - 15,000 K: 0.855, hue 230.
 
-- [ ] **Step 7: Run; expect PASS. Amend the spec to match.**
+  The three-channel law gave 0.96 at 2,000 K. The bins give 0.92, still "about" ruling 1's figure, so the 2,000 K bound is `>= 0.85` and not a band.
+
+- [ ] **Step 5: Run; expect PASS. Amend the spec to match.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.StarColour; grep -h "K: noon zenith" Saved/Logs/DeepSpace.log | tail -27
 cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh DeepSpace.Atmosphere.StarColour && time ./test.sh DeepSpace.Sky.Colour
 ```
 
-  Expected: `passed: 1` and the 27-line table. A failure here means the test does not say what ruling 1 says: fix the test to the ruling, never the ruling to the test.
+  Expected: `passed: 1` and the 27-line table. A failure means the test does not say what ruling 1 says: fix the test to the ruling, never the ruling to the test.
 
   Then, in `docs/superpowers/specs/2026-09-27-atmospheres-design.md`:
-  - In the *Tests* section's `.StarColour` item, replace `of the noon zenith from the ground under` with `of the noon zenith from the ground (straight up, the sun 45 degrees high: atmosphere plan ruling 4) under`.
-  - In the same item, replace every bound ruling 1 restated with the ruling's, and at the item's end, after its last words `never the test alone.` (they wrap after `test`), add ` (Amended by atmosphere plan ruling 1, which gives the reason.)`
-  - In decision 3, replace the table heading `| Star | Sky at noon under Earth air |` with `| Star | Sky at noon under Earth air (straight up, the sun 45 degrees high) |`, and, if ruling 1 restates the 2,566 K or 3,000 K row, that row with the ruling's words.
+  - In the *Tests* section, replace the `.StarColour` item, from `  - **[1, O]** \`.StarColour\`, in linear sRGB, HSV saturation \`S = 1 -` through `    alone.`, with:
 
-- [ ] **Step 8: The whole suite, then commit.**
+```markdown
+  - **[1, O]** `.StarColour`, in linear sRGB, HSV saturation `S = 1 -
+    min/max` and hue in degrees, of the noon zenith from the ground
+    (straight up, the sun 45 degrees high: atmosphere plan ruling 4) under
+    Earth air at 1 bar and 1 g, from 2,000 to 15,000 K: S falls to the
+    greyest sky, between 3,000 and 4,500 K, and rises from it; from 4,000 K
+    up the hue is blue (200-240 degrees); **under 2,566 K a peach sky, S
+    between 0.62 and 0.82 and hue between 15 and 40 degrees**; **under
+    2,000 K, S at least 0.85**; **under 5,772 K, hue between 200 and 235
+    degrees and S between 0.40 and 0.85** (Earth's clear zenith). No
+    palette, no floor, no white balance per star. (Amended by atmosphere
+    plan ruling 1: in the game's linear sRGB with a D65 white, a red
+    dwarf's sky is the star's own orange pulled toward blue by lambda^-4,
+    not the pale grey-cyan first estimated, which read the sky relative to
+    the star's light.)
+```
+
+  - In decision 3, replace the table heading `| Star | Sky at noon under Earth air |` with `| Star | Sky at noon under Earth air (straight up, the sun 45 degrees high) |`.
+  - In the same table, replace the row `| 2,566 K (home) | pale grey-cyan to off-white, low saturation; a sun far oranger than the sky |` with `| 2,566 K (home) | peach: saturation about 0.72, hue about 26 degrees; a sun oranger still (atmosphere plan ruling 1) |`.
+  - Replace the row `| 3,000 K | about (1, 1.26, 1.31) relative, a faint cyan |` with `| 3,000 K | a paler peach, saturation about 0.49; the greyest sky is near 3,500 K, and blue begins near 4,000 K |`.
+  - In ruling 2 of *The developer's rulings*, replace the words `skies -- red dwarfs' -- are pale grey-cyan; blue only under G, F and A` (they wrap after `A`) and `   stars.` with `skies -- red dwarfs' -- are peach; blue only from about 4,000 K, under` and `   K, G, F and A stars (as atmosphere plan ruling 1 restates it).`. Ruling 1 itself directs this restatement. It is the only edit to that section outside the orchestrator's, one sentence, far from the plan-ruling paragraphs.
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "pale grey-cyan" docs/superpowers/specs/2026-09-27-atmospheres-design.md
+```
+
+  Expected: `1`, the quotation inside ruling 1's own paragraph, which records what it replaced.
+
+- [ ] **Step 6: The whole suite, then commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
@@ -4347,10 +5057,12 @@ test(atmosphere): the sky's colour from the star, as ruled
 
 DeepSpace.Atmosphere.StarColour pins decision 3's table as atmosphere plan
 rulings 1 and 4 state it: the noon zenith straight up under a sun 45
-degrees high (an overhead sun's zenith is its own aureole), Earth air at
-1 bar and 1 g, from 2,000 to 15,000 K; Earth's blue under the Sun (hue
-200-235, saturation 0.40-0.85); the red-dwarf bounds as ruling 1 gives
-them. The spec's .StarColour item and decision 3's table say the same.
+degrees high, Earth air at 1 bar and 1 g, from 2,000 to 15,000 K through
+the eight-bin law. Peach under the home star (saturation 0.72, hue 26),
+deep orange at 2,000 K, the greyest sky between 3,000 and 4,500 K, blue
+from 4,000 K up, Earth's blue under the Sun (hue 224, saturation 0.62). No
+palette, no floor, no white balance per star. The spec's .StarColour
+item, decision 3's table and ruling 2's sentence say the same.
 
 Measured: DeepSpace.Atmosphere.StarColour costs N s over start-up.
 
@@ -4358,61 +5070,128 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
 
-- [ ] **Step 9: Prove `.StarColour` can fail.**
+- [ ] **Step 7: Prove `.StarColour` can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/Atmosphere.cpp 'A.GasScatter[C] = FMath::Max(GasScatterColour[C], 0.0) / Spectra.GasH;' 'A.GasScatter[C] = FMath::Max(GasScatterWhite[C], 0.0) / Spectra.GasH;' DeepSpace.Atmosphere.StarColour
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Atmosphere/Atmosphere.cpp '        A.Fold[K] = AtmosphereBins::Fold(Star, K);' '        A.Fold[K] = AtmosphereBins::Fold(AtmosphereReference::StarSpectrum(6504.0), K);' DeepSpace.Atmosphere.StarColour
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereSwatchTest.cpp 'AtmosphereLaw::NoEnd, AtmosphereLaw::NoonSun()).InScatter;' 'AtmosphereLaw::NoEnd, FVector3d(0.0, 0.0, 1.0)).InScatter;' DeepSpace.Atmosphere.StarColour
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: `KILLED` twice.
-- The first takes the star's colour out of the gas's scatter, so every sky scatters as though under a white star. The G-star saturation leaves its band, and a red dwarf's sky turns blue past whatever ruling 1 bounds it by.
-- The second puts the noon sun overhead: the zenith becomes the Sun's aureole, saturation 0.15, below the G-star band (note 9). The mutation's text is `NoonZenith`'s own line; the swatch's `Write` passes `Sun`, not `NoonSun()`, so it is untouched.
+Expected: `KILLED` twice. Both were run in the plan's harness.
+- The first folds every star's light as a 6,504 K star's, a white balance per star, which ruling 1 refused. The home star's sky turns blue.
+- The second puts the noon sun overhead, so the zenith becomes the Sun's aureole. The mutation's text is `NoonZenith`'s own line. The swatch's `Write` passes `Sun`, not `NoonSun()`, so it is untouched.
 
 ---
+## Task 8 (O8, re-planned): The law against the reference, float against double, and the homothety
 
-## Task 8 (O8): The law against the reference, float against double, and the homothety
+These are decision 1's three agreements, as rulings 3, 5, 6 and 7 leave them:
+- **`.LawMatchesReference`:** the shipped law, in both builds, against the reference, over decision 1's grid: every mix at both pressure extremes, under the home star and the Sun.
+  - The reference's second scattering is sent every way alike (`FOptions::bIsotropicSecondOrder`), as the law's table sends every order past the first (ruling 7).
+  - The tolerance is decision 1's 5% or 1e-3, everywhere, thin airs and grazing paths included (ruling 3).
+  - The harness measured 0 misses of 6,912 values, the worst at 0.80 of its allowance.
+- **`.MultipleScatteringGap`:** the same grid against the reference's full second order, held to ruling 7's bound: 25% or 1e-3, measured worst 0.75 of it. That bound is what the isotropic approximation costs. Its worst cases are backlit horizons from the ground, where the haze's forward peak is aimed at skylight the table cannot aim, and nadir views from inside the ceiling airs.
+- **`.FloatMatchesDouble`:** F32 against F64 over the grid and decision 1's float extremes, at 1e-3 or 1e-5, every output finite.
+  - Its limbs from 7.8 and 1,000 radii are now turned out of the axes, as `.ImpactParameter`'s ray is. On an axis every cross product is exact, and the first plan's mutant for the Dekker product survived there (planning note 16).
+  - It builds the noon table only: a full table is over a second a world, and float against double is the same arithmetic whatever the table holds.
+- **`.HomothetyInvariance`:** ruling 5's tolerances: the eyes to 1e-12 relative, the law's outputs to 1e-9.
 
-These are decision 1's three agreements:
-- `.LawMatchesReference`: the shipped law, in both builds, against the reference, over the grid of eyes, views and suns, for every mix at both pressure extremes, under the home star and the Sun.
-- `.FloatMatchesDouble`: F32 against F64 over the same grid, plus the float extremes.
-- `.HomothetyInvariance`: the eye formed from a real `SkyProjection` proxy against the true eye (planning note 4).
+The reference gains the isotropic option and a finer azimuth. With 12 segments it was up to 5% short of its own converged value on backlit horizons; with 24 it is within 0.5% of 48 (planning note 16). That costs the second order twice the time. So:
+- `Atmosphere.Full.LawMatchesReference` and `Atmosphere.Full.MultipleScatteringGap` stay outside the default suite. Each takes about 2.5 minutes in the harness, on one process behind the lock.
+- The default `.LawMatchesReference` keeps the grid's hardest air along its longest paths: N2/O2 at its ceiling, the horizon and the limb from the ground, under the home star. That is 6 rays.
 
-The reference traces each of `.LawMatchesReference`'s 576 rays at second order, which takes minutes on one process behind the lock. That is too long for the default suite, which every worktree runs (*Global Constraints*). So it is two tests over one function:
-- `DeepSpace.Atmosphere.LawMatchesReference`, in the default suite: the hardest air of the grid (N2/O2 at its ceiling, under the home star, where the harness found the grazing misses) from the ground eye and the far eye, 24 rays. It is a subset of the full grid, so whatever the full grid passes, it passes.
-- `Atmosphere.Full.LawMatchesReference`, outside it: the whole grid. It runs in Step 3 and before the merge (Step 8).
+The grid itself is the fixtures' (Task 5).
 
-This task is gated on rulings 3 and 5 (Step 1). It writes only tests. If one fails, the verdict table below says what follows. It never says to loosen a tolerance past a ruling.
+This task is gated on ruling 7 (Step 1). It writes the reference's two options and the tests. If one fails, the verdict table says what follows. It never says to loosen a tolerance past a ruling.
 
 **Files:**
-- Test: create `Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp` (`DeepSpace.Atmosphere.LawMatchesReference`, `Atmosphere.Full.LawMatchesReference`, `DeepSpace.Atmosphere.FloatMatchesDouble`, `DeepSpace.Atmosphere.HomothetyInvariance`)
-- Modify: `docs/superpowers/specs/2026-09-27-atmospheres-design.md` (Step 4: the *Tests* section's `.HomothetyInvariance` and `.LawMatchesReference` items, and decision 1's tolerance if ruling 3 restates it; Step 7: the *Parallel tracks* rows for O and M, and the merge-order paragraph)
+- Modify: `Source/DeepSpace/Atmosphere/AtmosphereReference.h`, `Source/DeepSpace/Atmosphere/AtmosphereReference.cpp` (Step 2: `SphereSegments`, `bIsotropicSecondOrder`)
+- Test: create `Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp`:
+  - in the default suite: `DeepSpace.Atmosphere.LawMatchesReference`, `DeepSpace.Atmosphere.FloatMatchesDouble` and `DeepSpace.Atmosphere.HomothetyInvariance`;
+  - outside it: `Atmosphere.Full.LawMatchesReference` and `Atmosphere.Full.MultipleScatteringGap`.
+- Modify: `docs/superpowers/specs/2026-09-27-atmospheres-design.md`:
+  - Step 6: decision 1 (the bins, the march, the isotropic agreement), and the *Tests* section's `.LawMatchesReference` and `.HomothetyInvariance` items;
+  - Step 9: the *Parallel tracks* rows for O and M, and the merge-order paragraph.
 
 **Interfaces:**
-- Consumes: everything in Tasks 3-6. Also `SkyProjection::Project`, `FSkyViewParams`, `FSkyFrame` and `FSkyBodyView` (`Sky/SkyProjection.h`), `FSkySystem`, `FSkyBody` and `ESkyBodyKind` (`Sky/SkySystem.h`), and `FUniversePosition` (read only).
-- Produces: nothing new. It is the gate before the merge.
+- Consumes: everything in Tasks 3-6, and `AtmosphereTestFixtures::{FRayCase, Grid}` (Task 5). Also, read only:
+  - `SkyProjection::Project`, `FSkyViewParams`, `FSkyFrame` and `FSkyBodyView` (`Sky/SkyProjection.h`);
+  - `FSkySystem`, `FSkyBody` and `ESkyBodyKind` (`Sky/SkySystem.h`);
+  - `FUniversePosition`.
+- Produces:
+
+```cpp
+struct FReferenceAir::FOptions { ...; int32 SphereSegments = 24; bool bIsotropicSecondOrder = false; };
+```
 
 | Verdict | When | What follows |
 |---|---|---|
-| **PASS** | all green, the full grid too | Step 4 onward, then the merge (Step 8) |
-| **THREE CHANNELS** | `.LawMatchesReference` misses beyond ruling 3's tolerance only on long limb or terminator paths, worst under the home star, and both builds miss alike | Stop. The spec's named fallback is four or six spectral bins in the shader (*Risks*: "Three channels may not carry the extremes"). That changes the `.ush`'s interface, which orbital slice 1 has not written against yet, so it goes to the developer with the printed worst cases. |
-| **LAW** | `.LawMatchesReference` misses at noon or in the thin airs too | A defect in the law or the reference. Debug with superpowers:systematic-debugging: compare `.Trace` with `FReferenceAir::FOptions::bSecondOrder = false` against the law built with `EAtmosphereTable::None`, which isolates the single scattering. |
-| **FLOAT FLOOR** | `.FloatMatchesDouble` misses, and the printed worst cases are all limb rays from 1,000 radii whose impact parameters (printed) differ by more than 1e-6 | Stop and escalate, as landing does. The Dekker product is the defence, and `.ImpactParameter` should already have caught its loss. |
+| **PASS** | all green, both full grids too | Step 6 onward, then the merge (Step 10) |
+| **BINS** | `.LawMatchesReference` misses only in transmittance, or in-scatter on long paths, alike in both builds | The bins are not carrying the spectrum. Run `.BinsCarryTheSpectrum` and `.SingleScatteringMatchesReference`; the one that fails names the part. Report; do not re-partition unasked, since ruling 6 fixed the bins. |
+| **TABLE** | misses only where multiple scattering dominates (terminator suns, nadir from inside), `.SingleScatteringMatchesReference` green | The table against the isotropic reference: check `.MultiScatterTable`'s cells and the column mapping (Task 6). |
+| **GAP** | `.MultipleScatteringGap` alone misses | The isotropic approximation costs more than ruling 7 allows. That is the developer's, with the printed worst cases. |
+| **FLOAT FLOOR** | `.FloatMatchesDouble` misses, the printed worst cases all limb rays whose impact parameters (printed) differ by more than 1e-6 | Stop and escalate, as landing does. |
 
-- [ ] **Step 1: The gate: rulings 3 and 5.**
+- [ ] **Step 1: The gate: rulings 5 and 7.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && grep -c '^\*\*Atmosphere plan ruling 3 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md && grep -c '^\*\*Atmosphere plan ruling 5 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md
+cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && grep -c '^\*\*Atmosphere plan ruling 5 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md && grep -c '^\*\*Atmosphere plan ruling 7 ' docs/superpowers/specs/2026-09-27-atmospheres-design.md
 ```
 
-Expected: `1` and `1`. If either is `0`, stop: this task waits for the ruling. Read both paragraphs.
-- **Ruling 3 chose spectral bins:** stop. Tasks 4-8 are re-planned first (`AT_Air` changes), and nothing below runs.
-- **Ruling 3 restated the tolerance:** Step 2's `Within(..., 0.05, 1.0e-3)` calls in `LawAgainstReference` take the ruling's numbers, and the ruling's condition (for example, a looser bound on grazing paths through thick air, which the `FCase::Name` of each ray identifies), with `// Atmosphere plan ruling 3 (<its date>).` above them.
-- **Ruling 5 accepted the tolerances:** Step 2's `.HomothetyInvariance` stands as written (1e-12 on the eye, 1e-9 on the outputs).
-- **Ruling 5 asked for bit for bit:** stop. Both sides must form the eye by one rounding, which is a change to `SkyProjection`, landing track T's file through slice (b); it is sequenced with T, and `.HomothetyInvariance` is written after it.
+Expected: `1` and `1`. Ruling 5 is recorded (the tolerances). If ruling 7 is `0`, stop: this task waits for it. Read it.
+- **Ruling 7 accepts the isotropic agreement and the 25% gap:** Step 3's code stands as written.
+- **Ruling 7 names another gap bound:** `FAtmosphereFullMultipleScatteringGapTest`'s `0.25` and its `TEXT("25% or 1e-3")` take the ruled number, with `// Atmosphere plan ruling 7 (<its date>).` above them.
+- **Ruling 7 asks the law to meet the full second order at 5%:** stop. That is a directional multiple-scattering table (planning note 16), a change to decisions 1 and 11 that is re-planned before anything here runs.
 
-- [ ] **Step 2: Write the tests.** Create `Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp`:
+- [ ] **Step 2: The reference's two options.** In `Source/DeepSpace/Atmosphere/AtmosphereReference.h`:
+  - In `FOptions`, replace `        int32 SphereSegments = 12;` with `        int32 SphereSegments = 24;`.
+  - Also in `FOptions`, after `        int32 SecondarySteps = 32;`, add:
+
+```cpp
+        /** The second scattering sent every way alike, as the law's table
+         *  sends every order past the first: what the law is held to
+         *  (atmosphere plan ruling 7). */
+        bool bIsotropicSecondOrder = false;
+```
+
+  - Replace `    FSecond SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 Steps) const;` with `    FSecond SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 Steps, bool bIsotropic) const;`.
+
+  In `Source/DeepSpace/Atmosphere/AtmosphereReference.cpp`:
+  - Replace `FReferenceAir::FSecond FReferenceAir::SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 StepsPerRay) const` with `FReferenceAir::FSecond FReferenceAir::SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 StepsPerRay, bool bIsotropic) const`.
+  - In it, replace the two lines
+
+```cpp
+        const double IntoGas = RayleighPhase(CosView) * Solid;
+        const double IntoAerosol = HenyeyGreenstein(CosView, Air.AerosolG) * Solid;
+```
+
+    with
+
+```cpp
+        // Isotropic, the second scattering sends light every way alike: the
+        // law's own assumption for every order past the first.
+        const double IntoGas = bIsotropic ? Direction.Share : RayleighPhase(CosView) * Solid;
+        const double IntoAerosol = bIsotropic ? Direction.Share : HenyeyGreenstein(CosView, Air.AerosolG) * Solid;
+```
+
+  - In `Trace`, replace `SecondOrderAt(P, D, S, Options.SphereRings, Options.SphereSegments, Options.SecondarySteps);` with `SecondOrderAt(P, D, S, Options.SphereRings, Options.SphereSegments, Options.SecondarySteps, Options.bIsotropicSecondOrder);`.
+  - In `MultiScatterSpectrum`, replace `SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay);` with `SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay, false);`.
+
+  In the comment above `FOptions`, replace `     *  paths and most of the light are -- by SphereSegments of azimuth. */` with:
+
+```cpp
+     *  paths and most of the light are -- by SphereSegments of azimuth.
+     *  Twelve segments left a backlit horizon 5% short of its converged
+     *  value; 24 are within 0.5% of 48. */
+```
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.ReferenceKnownValues && ./test.sh DeepSpace.Atmosphere.MultiScatterTable
+```
+
+  Expected: `passed: 1` twice: the known values hold at the finer azimuth, and the table's source is unchanged (its own 48 x 24 sphere).
+
+- [ ] **Step 3: Write the tests.** Create `Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp`:
 
 ```cpp
 #include "Misc/AutomationTest.h"
@@ -4432,6 +5211,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereLawMatchesReferenceTest, "DeepSpace.
 // Constraints): minutes of second-order reference traces. Run by name.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereFullLawMatchesReferenceTest, "Atmosphere.Full.LawMatchesReference",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+// Outside DeepSpace. too: the law against the reference's full second
+// order, whose phase the law's isotropic table leaves out (ruling 7).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereFullMultipleScatteringGapTest, "Atmosphere.Full.MultipleScatteringGap",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereFloatMatchesDoubleTest, "DeepSpace.Atmosphere.FloatMatchesDouble",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereHomothetyInvarianceTest, "DeepSpace.Atmosphere.HomothetyInvariance",
@@ -4439,92 +5222,38 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAtmosphereHomothetyInvarianceTest, "DeepSpace.
 
 namespace AtmosphereAgreementTestLocal
 {
-    struct FCase
-    {
-        FString Name;
-        FVector3d Eye = FVector3d::ZeroVector;
-        FVector3d Direction = FVector3d::ZeroVector;
-        double Length = AtmosphereLaw::NoEnd;
-        FVector3d Sun = FVector3d::ZeroVector;
-    };
-
-    /**
-     * Decision 1's grid, in one air's radii, the eye on +Z: four eyes (the
-     * ground, inside at 2 H, just above the top, and 7.8 radii out), four
-     * views (nadir, zenith, horizon, limb -- outside, the ray grazing 2 H up;
-     * inside, 5 degrees above the horizon) and three suns (noon, the
-     * terminator, and backlit -- behind the world from outside, low ahead
-     * from inside).
-     */
-    TArray<FCase> Grid(const FAtmosphereAir& Air)
-    {
-        TArray<FCase> Cases;
-        const double H = Air.GasH;
-        const double Heights[] = {1.0e-3 * H, 2.0 * H, Air.Top + 2.0 * H, 6.8};
-        const TCHAR* const EyeNames[] = {TEXT("ground"), TEXT("inside"), TEXT("above"), TEXT("far")};
-        for (int32 E = 0; E < 4; ++E)
-        {
-            const double R = 1.0 + Heights[E];
-            const bool bInside = Heights[E] < Air.Top;
-            FVector3d Limb;
-            if (bInside)
-            {
-                const double Five = FMath::DegreesToRadians(5.0);
-                Limb = FVector3d(std::cos(Five), 0.0, std::sin(Five));
-            }
-            else
-            {
-                const double SinAngle = (1.0 + 2.0 * H) / R;
-                Limb = FVector3d(SinAngle, 0.0, -std::sqrt(1.0 - SinAngle * SinAngle));
-            }
-            const FVector3d Views[] = {FVector3d(0.0, 0.0, -1.0), FVector3d(0.0, 0.0, 1.0), FVector3d(1.0, 0.0, 0.0), Limb};
-            const TCHAR* const ViewNames[] = {TEXT("nadir"), TEXT("zenith"), TEXT("horizon"), TEXT("limb")};
-            const FVector3d Suns[] = {FVector3d(0.0, 0.0, 1.0), FVector3d(0.0, 1.0, 0.0),
-                bInside ? FVector3d(1.0, 0.0, 0.1).GetSafeNormal() : FVector3d(0.0, 0.0, -1.0)};
-            const TCHAR* const SunNames[] = {TEXT("noon"), TEXT("terminator"), TEXT("backlit")};
-            for (int32 V = 0; V < 4; ++V)
-            {
-                for (int32 S = 0; S < 3; ++S)
-                {
-                    FCase Case;
-                    Case.Name = FString::Printf(TEXT("%s eye, %s, %s sun"), EyeNames[E], ViewNames[V], SunNames[S]);
-                    Case.Eye = FVector3d(0.0, 0.0, R);
-                    Case.Direction = Views[V];
-                    Case.Sun = Suns[S];
-                    Cases.Add(Case);
-                }
-            }
-        }
-        return Cases;
-    }
+    using AtmosphereTestFixtures::FRayCase;
 
     /** Decision 1's float extremes on top of the grid: a sun 30 degrees
-     *  below the horizon inside the air, and limbs from 7.8 and 1,000 radii. */
-    TArray<FCase> Extremes(const FAtmosphereAir& Air)
+     *  below the horizon inside the air, and limbs from 7.8 and 1,000 radii
+     *  in no special axes -- turned as .ImpactParameter turns its ray, since
+     *  an eye on an axis makes every cross product exact and would let
+     *  float's cancellation through unseen. */
+    TArray<FRayCase> FloatExtremes(double GasH)
     {
-        TArray<FCase> Cases;
-        const double H = Air.GasH;
+        TArray<FRayCase> Cases;
         const double Thirty = FMath::DegreesToRadians(30.0);
         const FVector3d Under(std::cos(Thirty), 0.0, -std::sin(Thirty));
         for (const FVector3d& View : {FVector3d(0.0, 0.0, 1.0), FVector3d(1.0, 0.0, 0.0), FVector3d(-1.0, 0.0, 0.0)})
         {
-            FCase Case;
+            FRayCase Case;
             Case.Name = TEXT("inside, a sun 30 degrees below the horizon");
-            Case.Eye = FVector3d(0.0, 0.0, 1.0 + 2.0 * H);
+            Case.Eye = FVector3d(0.0, 0.0, 1.0 + 2.0 * GasH);
             Case.Direction = View;
             Case.Sun = Under;
             Cases.Add(Case);
         }
+        const FQuat Turn(FVector(0.3, 0.5, 0.8).GetSafeNormal(), 0.7);
         for (const double R : {7.8, 1000.0})
         {
-            const double SinAngle = (1.0 + 2.0 * H) / R;
+            const double SinAngle = (1.0 + 2.0 * GasH) / R;
             for (const FVector3d& Sun : {FVector3d(1.0, 0.0, 0.0), FVector3d(0.0, 0.0, -1.0)})
             {
-                FCase Case;
+                FRayCase Case;
                 Case.Name = FString::Printf(TEXT("the limb from %.1f radii"), R);
-                Case.Eye = FVector3d(0.0, 0.0, R);
-                Case.Direction = FVector3d(SinAngle, 0.0, -std::sqrt(1.0 - SinAngle * SinAngle));
-                Case.Sun = Sun;
+                Case.Eye = Turn.RotateVector(FVector(0.0, 0.0, R));
+                Case.Direction = Turn.RotateVector(FVector(SinAngle, 0.0, -std::sqrt(1.0 - SinAngle * SinAngle)));
+                Case.Sun = Turn.RotateVector(Sun);
                 Cases.Add(Case);
             }
         }
@@ -4538,59 +5267,44 @@ namespace AtmosphereAgreementTestLocal
 
     /** As a display shows it: no channel below none. The reference's
      *  spectral light can fall outside the sRGB gamut -- a deep orange whose
-     *  blue is negative -- where three non-negative channels cannot follow
-     *  and no screen could show the difference. */
+     *  blue is negative -- where non-negative light cannot follow and no
+     *  screen could show the difference. */
     double Shown(double Channel)
     {
         return FMath::Max(Channel, 0.0);
     }
 
-    /** The float law on the case's inputs rounded to float, and the double
-     *  law on those same rounded inputs: the difference is arithmetic only. */
-    struct FPair
-    {
-        FAtmosphereScatter F64;
-        FAtmosphereScatter F32;
-    };
-
-    FPair RunBoth(const FAtmosphere& Air, const FCase& Case)
-    {
-        const FVector3f Eye(Case.Eye);
-        const FVector3f Direction(Case.Direction);
-        const FVector3f Sun(Case.Sun);
-        const float Length = static_cast<float>(Case.Length);
-        FPair Pair;
-        Pair.F32 = AtmosphereLaw::InScatterF32(Air.GetAir(), Air.GetTable(), Eye, Direction, Length, Sun);
-        Pair.F64 = AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), FVector3d(Eye), FVector3d(Direction), static_cast<double>(Length), FVector3d(Sun));
-        return Pair;
-    }
-}
-
-namespace AtmosphereAgreementTestLocal
-{
     struct FAgreement
     {
         int32 Checked = 0;
+        double Worst = 0.0;
         TArray<FString> Misses;
     };
 
     /**
      * Both builds of the law against the reference, for each air under each
-     * star, over the grid's rays whose eye is one of Eyes ("ground",
-     * "inside", "above", "far"; every eye when Eyes is empty).
+     * star, over the grid's rays whose name starts with one of Rays ("ground
+     * eye, horizon", say; every ray when Rays is empty), each channel
+     * within Relative or Absolute. Isotropic: the reference's second
+     * scattering sent every way alike, as the law's table sends every order
+     * past the first (atmosphere plan ruling 7). Worst is the largest miss
+     * over its allowance, met or not.
      */
-    FAgreement LawAgainstReference(const TArray<AtmosphereTestFixtures::FNamedAir>& Airs, const TArray<double>& Kelvins, const TArray<FString>& Eyes)
+    FAgreement LawAgainstReference(const TArray<AtmosphereTestFixtures::FNamedAir>& Airs, const TArray<double>& Kelvins, const TArray<FString>& Rays,
+                                   bool bIsotropic, double Relative, double Absolute)
     {
         FAgreement Out;
+        FReferenceAir::FOptions Options;
+        Options.bIsotropicSecondOrder = bIsotropic;
         for (const AtmosphereTestFixtures::FNamedAir& Named : Airs)
         {
             for (const double Kelvin : Kelvins)
             {
                 const FAtmosphere Law = FAtmosphere::Build(Named.Air, Kelvin);
                 const FReferenceAir Reference(Named.Air, Kelvin);
-                for (const FCase& Case : Grid(Law.GetAir()))
+                for (const FRayCase& Case : AtmosphereTestFixtures::Grid(Law.GetAir().GasH, Law.GetAir().Top))
                 {
-                    if (!Eyes.IsEmpty() && !Eyes.ContainsByPredicate([&Case](const FString& Eye) { return Case.Name.StartsWith(Eye + TEXT(" eye")); }))
+                    if (!Rays.IsEmpty() && !Rays.ContainsByPredicate([&Case](const FString& Ray) { return Case.Name.StartsWith(Ray); }))
                     {
                         continue;
                     }
@@ -4599,25 +5313,27 @@ namespace AtmosphereAgreementTestLocal
                     Ray.Direction = Case.Direction;
                     Ray.Length = Case.Length;
                     Ray.Sun = Case.Sun;
-                    const FReferenceAir::FResult Want = Reference.Trace(Ray);
+                    const FReferenceAir::FResult Want = Reference.Trace(Ray, Options);
                     const FAtmosphereScatter F64 = AtmosphereLaw::InScatterF64(Law.GetAir(), Law.GetTable(), Case.Eye, Case.Direction, Case.Length, Case.Sun);
                     const FAtmosphereScatter F32 = AtmosphereLaw::InScatterF32(Law.GetAir(), Law.GetTable(),
                         FVector3f(Case.Eye), FVector3f(Case.Direction), static_cast<float>(Case.Length), FVector3f(Case.Sun));
-                    for (const TPair<const TCHAR*, const FAtmosphereScatter*>& Build : {TPair<const TCHAR*, const FAtmosphereScatter*>(TEXT("F64"), &F64),
-                                                                                        TPair<const TCHAR*, const FAtmosphereScatter*>(TEXT("F32"), &F32)})
+                    for (const FAtmosphereScatter* Got : {&F64, &F32})
                     {
                         for (int32 C = 0; C < 3; ++C)
                         {
-                            Out.Checked += 2;
-                            if (!Within(Shown(Build.Value->InScatter[C]), Shown(Want.InScatter[C]), 0.05, 1.0e-3))
+                            const double Pairs[2][2] = {{Shown(Got->InScatter[C]), Shown(Want.InScatter[C])},
+                                                        {Shown(Got->Transmittance[C]), Shown(Want.Transmittance[C])}};
+                            for (int32 Q = 0; Q < 2; ++Q)
                             {
-                                Out.Misses.Add(FString::Printf(TEXT("%s, %.0f K, %s, %s in-scatter channel %d: %.5f against %.5f"),
-                                    Named.Name, Kelvin, *Case.Name, Build.Key, C, Build.Value->InScatter[C], Want.InScatter[C]));
-                            }
-                            if (!Within(Shown(Build.Value->Transmittance[C]), Shown(Want.Transmittance[C]), 0.05, 1.0e-3))
-                            {
-                                Out.Misses.Add(FString::Printf(TEXT("%s, %.0f K, %s, %s transmittance channel %d: %.5f against %.5f"),
-                                    Named.Name, Kelvin, *Case.Name, Build.Key, C, Build.Value->Transmittance[C], Want.Transmittance[C]));
+                                ++Out.Checked;
+                                const double Allowance = FMath::Max(Relative * Pairs[Q][1], Absolute);
+                                const double Over = std::isfinite(Pairs[Q][0]) ? FMath::Abs(Pairs[Q][0] - Pairs[Q][1]) / Allowance : 1.0e30;
+                                Out.Worst = FMath::Max(Out.Worst, Over);
+                                if (!(Over <= 1.0))
+                                {
+                                    Out.Misses.Add(FString::Printf(TEXT("%s, %.0f K, %s, %s %s channel %d: %.5f against %.5f"), Named.Name, Kelvin, *Case.Name,
+                                        Got == &F64 ? TEXT("F64") : TEXT("F32"), Q == 0 ? TEXT("in-scatter") : TEXT("transmittance"), C, Pairs[Q][0], Pairs[Q][1]));
+                                }
                             }
                         }
                     }
@@ -4627,15 +5343,16 @@ namespace AtmosphereAgreementTestLocal
         return Out;
     }
 
-    void Report(FAutomationTestBase& Test, const FAgreement& Result)
+    void Report(FAutomationTestBase& Test, const FAgreement& Result, const TCHAR* Tolerance)
     {
-        Test.AddInfo(FString::Printf(TEXT("the law against the reference: %d channel values checked, %d outside 5%% or 1e-3"), Result.Checked, Result.Misses.Num()));
+        Test.AddInfo(FString::Printf(TEXT("the law against the reference: %d channel values checked, %d outside %s, the worst at %.2f of its allowance"),
+            Result.Checked, Result.Misses.Num(), Tolerance, Result.Worst));
         for (int32 I = 0; I < FMath::Min(Result.Misses.Num(), 40); ++I)
         {
             Test.AddInfo(Result.Misses[I]);
         }
         Test.TestTrue(TEXT("the grid checked something: an empty grid is not agreement"), Result.Checked > 0);
-        Test.TestEqual(TEXT("every channel of both builds within 5% or 1e-3 of the reference"), Result.Misses.Num(), 0);
+        Test.TestEqual(FString::Printf(TEXT("every channel of both builds within %s of the reference"), Tolerance), Result.Misses.Num(), 0);
     }
 }
 
@@ -4644,10 +5361,11 @@ bool FAtmosphereLawMatchesReferenceTest::RunTest(const FString& Parameters)
     using namespace AtmosphereAgreementTestLocal;
     using namespace AtmosphereTestFixtures;
 
-    // The default suite's share of the grid: its hardest air from the ground
-    // and from afar. Atmosphere.Full.LawMatchesReference is the whole grid.
-    const TArray<FNamedAir> Hardest = {{TEXT("nitrogen-oxygen at its ceiling"), NitrogenOxygen(NitrogenOxygenCeilingBar)}};
-    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground"), TEXT("far")}));
+    // The default suite's share of the grid: its hardest air along the
+    // longest paths, the horizon and the limb from the ground under the home
+    // star. Atmosphere.Full.LawMatchesReference is the whole grid.
+    const TArray<FNamedAir> Hardest = {{TEXT("N2/O2 at its ceiling"), NitrogenOxygen(NitrogenOxygenCeilingBar)}};
+    Report(*this, LawAgainstReference(Hardest, {HomeStarK}, {TEXT("ground eye, horizon"), TEXT("ground eye, limb")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));
     return true;
 }
 
@@ -4658,7 +5376,21 @@ bool FAtmosphereFullLawMatchesReferenceTest::RunTest(const FString& Parameters)
 
     // Decision 1's grid: every mix at 0.05 bar and at its ceiling, under the
     // home star and the Sun, from all four eyes.
-    Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {}));
+    Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));
+    return true;
+}
+
+bool FAtmosphereFullMultipleScatteringGapTest::RunTest(const FString& Parameters)
+{
+    using namespace AtmosphereAgreementTestLocal;
+    using namespace AtmosphereTestFixtures;
+
+    // What the law's isotropic multiple scattering costs against the
+    // reference's full second order, over the same grid, held to ruling 7's
+    // bound so the gap cannot grow unseen. Its worst cases are backlit
+    // horizons -- the haze's forward peak, which an isotropic table cannot
+    // aim -- and nadir views from inside the ceiling airs.
+    Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {}, false, 0.25, 1.0e-3), TEXT("25% or 1e-3"));
     return true;
 }
 
@@ -4667,6 +5399,8 @@ bool FAtmosphereFloatMatchesDoubleTest::RunTest(const FString& Parameters)
     using namespace AtmosphereAgreementTestLocal;
     using namespace AtmosphereTestFixtures;
 
+    // The noon table only: a full one costs over a second a world, and float
+    // against double is the same arithmetic whatever the table holds.
     const FAirSpec Airs[] = {NitrogenOxygen(NitrogenOxygenCeilingBar), CarbonDioxide(CarbonDioxideCeilingBar),
                              HydrogenHelium(HydrogenHeliumCeilingBar), Giant()};
     int32 Checked = 0;
@@ -4676,27 +5410,34 @@ bool FAtmosphereFloatMatchesDoubleTest::RunTest(const FString& Parameters)
     {
         for (const double Kelvin : {HomeStarK, SunK})
         {
-            const FAtmosphere Air = FAtmosphere::Build(Spec, Kelvin);
-            TArray<FCase> Cases = Grid(Air.GetAir());
-            Cases.Append(Extremes(Air.GetAir()));
-            for (const FCase& Case : Cases)
+            const FAtmosphere Air = FAtmosphere::Build(Spec, Kelvin, EAtmosphereTable::NoonOnly);
+            TArray<FRayCase> Cases = Grid(Air.GetAir().GasH, Air.GetAir().Top);
+            Cases.Append(FloatExtremes(Air.GetAir().GasH));
+            for (const FRayCase& Case : Cases)
             {
-                const FPair Pair = RunBoth(Air, Case);
-                const FVector3f SunPoint(Case.Eye);
-                const FVector3d SunF32 = AtmosphereLaw::SunThroughF32(Air.GetAir(), SunPoint, FVector3f(Case.Sun));
-                const FVector3d SunF64 = AtmosphereLaw::SunThroughF64(Air.GetAir(), FVector3d(SunPoint), FVector3d(FVector3f(Case.Sun)));
+                // The float law on the case rounded to float, the double law on
+                // the same rounded inputs: the difference is arithmetic only.
+                const FVector3f Eye(Case.Eye);
+                const FVector3f Direction(Case.Direction);
+                const FVector3f Sun(Case.Sun);
+                const float Length = static_cast<float>(Case.Length);
+                const FAtmosphereScatter F32 = AtmosphereLaw::InScatterF32(Air.GetAir(), Air.GetTable(), Eye, Direction, Length, Sun);
+                const FAtmosphereScatter F64 = AtmosphereLaw::InScatterF64(Air.GetAir(), Air.GetTable(), FVector3d(Eye), FVector3d(Direction),
+                    static_cast<double>(Length), FVector3d(Sun));
+                const FVector3d SunF32 = AtmosphereLaw::SunThroughF32(Air.GetAir(), Eye, Sun);
+                const FVector3d SunF64 = AtmosphereLaw::SunThroughF64(Air.GetAir(), FVector3d(Eye), FVector3d(Sun));
                 for (int32 C = 0; C < 3; ++C)
                 {
                     Checked += 3;
-                    bFinite &= std::isfinite(Pair.F32.InScatter[C]) && std::isfinite(Pair.F32.Transmittance[C]) && std::isfinite(SunF32[C]);
-                    if (!Within(Pair.F32.InScatter[C], Pair.F64.InScatter[C], 1.0e-3, 1.0e-5)
-                        || !Within(Pair.F32.Transmittance[C], Pair.F64.Transmittance[C], 1.0e-3, 1.0e-5)
+                    bFinite &= std::isfinite(F32.InScatter[C]) && std::isfinite(F32.Transmittance[C]) && std::isfinite(SunF32[C]);
+                    if (!Within(F32.InScatter[C], F64.InScatter[C], 1.0e-3, 1.0e-5)
+                        || !Within(F32.Transmittance[C], F64.Transmittance[C], 1.0e-3, 1.0e-5)
                         || !Within(SunF32[C], SunF64[C], 1.0e-3, 1.0e-5))
                     {
-                        const double B64 = AtmosphereLaw::ImpactParameterF64(FVector3d(FVector3f(Case.Eye)), FVector3d(FVector3f(Case.Direction)));
-                        const float B32 = AtmosphereLaw::ImpactParameterF32(FVector3f(Case.Eye), FVector3f(Case.Direction));
+                        const double B64 = AtmosphereLaw::ImpactParameterF64(FVector3d(Eye), FVector3d(Direction));
+                        const float B32 = AtmosphereLaw::ImpactParameterF32(Eye, Direction);
                         Misses.Add(FString::Printf(TEXT("%.0f K, %s, channel %d: in-scatter %.6g against %.6g, transmittance %.6g against %.6g, sun %.6g against %.6g; impact parameter %.9f against %.9f"),
-                            Kelvin, *Case.Name, C, Pair.F32.InScatter[C], Pair.F64.InScatter[C], Pair.F32.Transmittance[C], Pair.F64.Transmittance[C],
+                            Kelvin, *Case.Name, C, F32.InScatter[C], F64.InScatter[C], F32.Transmittance[C], F64.Transmittance[C],
                             SunF32[C], SunF64[C], static_cast<double>(B32), B64));
                     }
                 }
@@ -4751,6 +5492,8 @@ bool FAtmosphereHomothetyInvarianceTest::RunTest(const FString& Parameters)
             Altitude / 1.0e5, K, (ProxyEye - TrueEye).Size()));
         TestTrue(TEXT("the proxy's scale is the altitude's: about 1 at 50 km, about 1e-3 at 50,000 km"),
             K > 0.5 * 5.0e6 / Altitude && K < 2.0 * 5.0e6 / Altitude);
+        // Ruling 5: two roundings of one ratio, so 1e-12 on the eyes and
+        // 1e-9 on what the law makes of them, not bit for bit.
         TestTrue(TEXT("the eye in the proxy's radii is the true eye in the world's, to 1e-12"),
             (ProxyEye - TrueEye).Size() <= 1.0e-12 * TrueEye.Size());
         for (const FVector3d& Direction : Views)
@@ -4771,75 +5514,129 @@ bool FAtmosphereHomothetyInvarianceTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 3: Build and run, the full grid too.**
+- [ ] **Step 4: Build and run, the full grids too.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh && ./test.sh DeepSpace.Atmosphere.HomothetyInvariance && ./test.sh DeepSpace.Atmosphere.FloatMatchesDouble && ./test.sh DeepSpace.Atmosphere.LawMatchesReference; grep -hE "the law against the reference|float against double|k = " Saved/Logs/DeepSpace.log | tail -4
 cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh Atmosphere.Full.LawMatchesReference; grep -h "the law against the reference" Saved/Logs/DeepSpace.log | tail -1
+cd /home/matt/Development/deepspace/.worktrees/air-optics && time ./test.sh Atmosphere.Full.MultipleScatteringGap; grep -h "the law against the reference" Saved/Logs/DeepSpace.log | tail -1
 cd /home/matt/Development/deepspace/.worktrees/air-optics && for T in DeepSpace.Atmosphere.HomothetyInvariance DeepSpace.Atmosphere.FloatMatchesDouble DeepSpace.Atmosphere.LawMatchesReference DeepSpace.Sky.Colour; do echo "$T"; time ./test.sh "$T"; done
 ```
 
-Expected: all four pass, under ruling 3's tolerance.
-- The harness measured `.FloatMatchesDouble` at 0 misses of 3,960.
-- `Atmosphere.Full.LawMatchesReference` traces 12 airs and stars times 48 rays, each by the reference at second order. It takes minutes, all on one process behind the lock; the `time` line goes into the commit message. The default `.LawMatchesReference` is 24 of those rays.
-- Under the spec's 5% or 1e-3, the harness measured the **THREE CHANNELS** verdict (*Rulings needed*, 3): 229 of 3,456 values per build, alike in both builds; 16 in the thin airs; the rest the ceiling airs' grazing paths from the ground, the limbs and the inside horizons, worst in the blue channel's transmittance. Ruling 3 is what this run is now held to.
-- The printed misses (up to 40) are the report if anything fails.
-- The four times give the default tests' seconds (*Conventions*). The default `.LawMatchesReference` more than 5 s over start-up stops the task: report it, with the time, rather than shrinking its grid further unasked.
+Expected: all five pass. The harness measured:
+- the full grid, 0 of 6,912 outside 5% or 1e-3, the worst at 0.80;
+- the gap, 0 outside 25% or 1e-3, the worst at 0.75;
+- the default share, 72 values, the worst at 0.66;
+- float against double, 0 of 3,960;
+- times of 3.6 s for the default share and 0.8 s for float against double, at `-O2`.
 
-- [ ] **Step 4: Amend the spec to the rulings.** In `docs/superpowers/specs/2026-09-27-atmospheres-design.md`, *Tests*:
-  - In the `.HomothetyInvariance` item, replace the words `the same term, bit for bit in double, at k = 1 and k = 1e-3,` (they wrap after `in`) with `the same term in double, at k = 1 and k = 1e-3, the eyes within 1e-12 relative and the law's outputs within 1e-9 (atmosphere plan ruling 5: the proxy's eye and the true eye are one ratio formed by two roundings),`, wrapped at the item's width.
-  - If ruling 3 restated the tolerance, in the `.LawMatchesReference` item replace `(decision 1's grid and tolerance),` with `(decision 1's grid; the tolerance as atmosphere plan ruling 3 restates it),`, and in decision 1 put ruling 3's tolerance beside the 5%-or-1e-3 sentence, saying which paths it covers.
-  - In the same item, after `for F64 and F32.`, add ` The default suite runs its hardest air from the ground and from afar; the whole grid is Atmosphere.Full.LawMatchesReference, run by name before a merge (the suite serialises every worktree behind one lock).`
+The harness could not build `.HomothetyInvariance` (it needs `SkyProjection`). The first plan's harness passed it, and its law calls are the entry points, whose signatures did not change. The printed misses (up to 40) are the report if anything fails; the verdict table says what follows. A default test more than 5 s over start-up stops the task: report it, with the time.
 
-- [ ] **Step 5: The whole suite, then commit.**
+- [ ] **Step 5: The whole suite.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./test.sh
-git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp docs/superpowers/specs/2026-09-27-atmospheres-design.md
+```
+
+Expected: green.
+
+- [ ] **Step 6: Amend the spec to the rulings.** In `docs/superpowers/specs/2026-09-27-atmospheres-design.md`:
+  - In decision 1's list, replace the bullet `- **Three colour channels**, with per-world effective coefficients that` / `  already fold in the star's spectrum (decision 3).` with:
+
+```markdown
+- **Eight spectral bins**, not three colour channels (atmosphere plan
+  rulings 3 and 6): each bin a run of the reference's wavelengths, narrow
+  in the blue, its coefficients the star-weighted mean of its wavelengths',
+  folded into linear sRGB only at the end by the star's own light in each
+  bin -- so the star is still in the coefficients (decision 3). Three
+  channels, and any four to six bins, missed the reference on long paths
+  by up to several times the tolerance.
+```
+
+  - Replace the bullet beginning `- **Along the view**, **12 samples**, spaced by the density's own` (three lines, ending `Rayleigh phase and a Henyey-Greenstein phase for the aerosol.`) with:
+
+```markdown
+- **Along the view**, **12 nodes**, spaced by the density's own
+  distribution (dense where the air is); between two, each constituent's
+  exact Chapman column times the logarithmic mean of what it gathers per
+  unit column -- exact for the density and the view's transmittance -- and
+  one node more where single scattering climbs past e^4 (atmosphere plan,
+  planning note 14); single scattering with the Rayleigh phase and a
+  Henyey-Greenstein phase for the aerosol.
+```
+
+  - In the paragraph beginning `**How they are held equal.**`, replace `and requires each channel` / `within 5% relative or 1e-3 absolute of the reference -- **for both the F64` / `and the F32 builds**.` with `and requires each channel within 5% relative or 1e-3 absolute of the reference with its second scattering sent every way alike, as the law's multiple scattering is -- **for both the F64 and the F32 builds** -- and within 25% or 1e-3 of the reference's full second order, the approximation's own cost (atmosphere plan ruling 7).`, re-wrapped at the paragraph's width.
+  - In decision 3's paragraph beginning `**Per-world effective coefficients.**`, replace `Rendering carries three channels, but` with `Rendering carries eight spectral bins (atmosphere plan ruling 6), because`, and replace `fits **per-channel effective scattering and extinction` / `coefficients** exact in the optically thin limit and at the world's own` / `nadir column.` with `averages **per-bin scattering and extinction** exact in the optically thin limit, then folds each bin into colour by the star's light in it.`, re-wrapped; and replace `is what proves three` / `channels good enough across the angles that matter;` with `is what proves the bins good enough across the angles that matter;`.
+  - In the *Tests* section:
+    - In the `.LawMatchesReference` item, replace `(decision 1's grid and tolerance),` with `(decision 1's grid and tolerance, the reference's second scattering isotropic as the law's is: atmosphere plan ruling 7),`. After `for F64 and F32.`, add ` The default suite runs its hardest air along its longest paths; the whole grid is Atmosphere.Full.LawMatchesReference, and the full second order's gap, within 25% or 1e-3, Atmosphere.Full.MultipleScatteringGap, both run by name before a merge.`
+    - In the `.HomothetyInvariance` item, replace the words `the same term, bit for bit in double, at k = 1 and k = 1e-3,` (they wrap after `in`) with `the same term in double, at k = 1 and k = 1e-3, the eyes within 1e-12 relative and the law's outputs within 1e-9 (atmosphere plan ruling 5: the proxy's eye and the true eye are one ratio formed by two roundings),`, wrapped at the item's width.
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/air-optics && grep -c "Three colour channels\|bit for bit in\|proves three" docs/superpowers/specs/2026-09-27-atmospheres-design.md
+```
+
+  Expected: `0`.
+
+- [ ] **Step 7: Commit.**
+
+```bash
+git -C /home/matt/Development/deepspace/.worktrees/air-optics add Source/DeepSpace/Atmosphere/AtmosphereReference.h Source/DeepSpace/Atmosphere/AtmosphereReference.cpp Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp docs/superpowers/specs/2026-09-27-atmospheres-design.md
 git -C /home/matt/Development/deepspace/.worktrees/air-optics commit -F - <<'MSG'
 test(atmosphere): the law against the reference, float against double, the homothety
 
-Decision 1's three agreements. LawMatchesReference: both builds of the
-shipped law against the reference over four eyes, four views and three
-suns, every mix at 0.05 bar and at its ceiling, under the home star and
-the Sun, to atmosphere plan ruling 3's tolerance -- the whole grid as
-Atmosphere.Full.LawMatchesReference, outside the default suite, and its
-hardest air from the ground and from afar as DeepSpace.Atmosphere.
-LawMatchesReference. FloatMatchesDouble: F32 within 1e-3 or 1e-5 of F64 on
-the same float inputs, every output finite, with a sun 30 degrees below
-the horizon and limbs from 7.8 and 1,000 radii. HomothetyInvariance: the
-eye from a real SkyProjection proxy at k = 1 and 1e-3 is the true eye to
-1e-12, and the air term from it the same to 1e-9 (ruling 5: two roundings
-of one ratio, not bit for bit). The spec's Tests section says the same.
+Decision 1's three agreements as atmosphere plan rulings 3, 5, 6 and 7
+leave them. LawMatchesReference: both builds of the eight-bin law against
+the reference, its second scattering isotropic as the law's table is,
+over four eyes, four views and three suns, every mix at 0.05 bar and at
+ruling 2's ceilings, under the home star and the Sun, within 5% or 1e-3
+everywhere -- the whole grid as Atmosphere.Full.LawMatchesReference, its
+hardest air along its longest paths in the default suite.
+Atmosphere.Full.MultipleScatteringGap holds the full second order within
+ruling 7's 25% or 1e-3: what the isotropic table costs, worst on backlit
+horizons. FloatMatchesDouble: F32 within 1e-3 or 1e-5 of F64, every output
+finite, its limbs turned out of the axes where float's cancellation can
+show. HomothetyInvariance: ruling 5's 1e-12 on the eyes and 1e-9 on the
+term. The reference's sphere takes 24 azimuth segments, not 12, which
+left a backlit horizon 5% short of converged. The spec's decision 1 and
+Tests items say the same.
 
 Measured: DeepSpace.Atmosphere.HomothetyInvariance costs N s over start-up.
 Measured: DeepSpace.Atmosphere.FloatMatchesDouble costs N s over start-up.
 Measured: DeepSpace.Atmosphere.LawMatchesReference costs N s over start-up.
 Measured: Atmosphere.Full.LawMatchesReference takes N s.
+Measured: Atmosphere.Full.MultipleScatteringGap takes N s.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 ```
 
-- [ ] **Step 6: Prove the tests can fail.**
+- [ ] **Step 8: Prove the tests can fail.**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush 'return AT_REAL(3.0) / (AT_REAL(16.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);' 'return AT_REAL(3.0) / (AT_REAL(8.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);' DeepSpace.Atmosphere.LawMatchesReference
-cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp 'Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {}));' 'Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {TEXT("nowhere")}));' Atmosphere.Full.LawMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    return AT_REAL(3.0) / (AT_REAL(16.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);' '    return AT_REAL(3.0) / (AT_REAL(8.0) * AT_PI) * (AT_REAL(1.0) + Cos * Cos);' DeepSpace.Atmosphere.LawMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp '        Options.bIsotropicSecondOrder = bIsotropic;' '        Options.bIsotropicSecondOrder = false;' DeepSpace.Atmosphere.LawMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Tests/AtmosphereAgreementTest.cpp 'Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));' 'Report(*this, LawAgainstReference(Extremes(), {HomeStarK, SunK}, {TEXT("nowhere")}, true, 0.05, 1.0e-3), TEXT("5% or 1e-3"));' Atmosphere.Full.LawMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(CosView, A.AerosolG);' '    AT_REAL PhaseAerosol = AT_HenyeyGreenstein(-CosView, A.AerosolG);' Atmosphere.Full.MultipleScatteringGap
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    return PQ + E;' '    return PQ;' DeepSpace.Atmosphere.FloatMatchesDouble
+cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Shaders/Private/Atmosphere.ush '    return (B - AT_REAL(1.0)) + S * S / (AT_sqrt(B * B + S * S) + B);' '    return AT_sqrt(B * B + S * S) - AT_REAL(1.0);' DeepSpace.Atmosphere.FloatMatchesDouble
 cd /home/matt/Development/deepspace/.worktrees/air-optics && Tools/mutate.sh Source/DeepSpace/Sky/SkyProjection.cpp 'const double Centre = View.ProxyRadius / Shape.Sin;' 'const double Centre = View.ProxyRadius / Shape.Sin * 1.001;' DeepSpace.Atmosphere.HomothetyInvariance
 cd /home/matt/Development/deepspace/.worktrees/air-optics && ./build.sh
 ```
 
-Expected: `KILLED` four times:
+Expected: `KILLED` seven times:
 1. The law's Rayleigh phase doubles, and the reference's does not.
-2. The full grid checks no ray at all, which `Report`'s "the grid checked something" catches: an empty grid is not agreement.
-3. The float impact parameter loses the tangent from 1,000 radii, and only the float build moves.
-4. The proxy stops being a homothety.
+2. The default share is held to the full second order at 5%, and the backlit horizon's forward-scattered skylight misses.
+3. The full grid checks no ray at all, which `Report`'s "the grid checked something" catches: an empty grid is not agreement.
+4. The haze scatters backward, and the gap on the backlit horizons passes 25%.
+5. The Dekker product's error term is gone, and the float impact parameter loses the tangent from the turned 1,000-radii limb.
+6. Float loses a near sample's height in `R - 1`.
+7. The proxy stops being a homothety.
 
-The fourth mutation touches `SkyProjection.cpp`, which is not this plan's file: `Tools/mutate.sh` restores it and rebuilds, and nothing of it is committed.
+Mutants 1-6 were run in the plan's harness and killed. The seventh is the first plan's, unchanged. Mutant 4 takes as long as the gap's full grid.
 
-- [ ] **Step 7: The spec's shim rows** (planning note 8). In `docs/superpowers/specs/2026-09-27-atmospheres-design.md`, *Parallel tracks and file ownership*:
+The seventh mutation touches `SkyProjection.cpp`, which is not this plan's file: `Tools/mutate.sh` restores it and rebuilds, and nothing of it is committed.
+
+- [ ] **Step 9: The spec's shim rows** (planning note 8). In `docs/superpowers/specs/2026-09-27-atmospheres-design.md`, *Parallel tracks and file ownership*:
   - In track O's row, replace `-- (its shims are copied from landing's `WR_` ones while (a) is unmerged; **O's first commit after landing (a) merges replaces the copies with landing's shared shim header**, and M waits on that commit)` with `-- (its `AT_` shims stay inline in `Atmosphere.ush`: landing (a) made no shared shim header, and `WorldRelief.ush` keeps its `WR_` shims inline; whether to extract one shared subset header is **orbital slice 1's first decision**, and `WorldRelief.ush` is landing track T's through slice (b))`.
   - In track M's row, replace `landing (a) merged; O's shim-unification commit; G's `AirFacts.h` (agreed first as a header)` with `landing (a) merged; track O merged; the shim decision, orbital slice 1's first; G's `AirFacts.h` (agreed first as a header)`.
   - In the paragraph under the table, replace `after landing (a), O's shim unification, G, then M,` with `after landing (a), G, then M (the shim decision first),`.
@@ -4863,10 +5660,10 @@ MSG
 
 Expected: `0` from the grep (no stale wording left), then the commit.
 
-- [ ] **Step 8: Merge track O.** On the developer's word through the orchestrator, and only when Tasks 1-8 are committed with every ruling they encode (1, 3, 4 and 5) recorded, `./test.sh` is green in `air-optics`, and the full grid is green there:
+- [ ] **Step 10: Merge track O.** On the developer's word through the orchestrator, and only when Tasks 1-8 are committed with every ruling they encode (1 and 3-7) recorded, `./test.sh` is green in `air-optics`, and both full grids are green there:
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && ./build.sh && ./test.sh && ./test.sh Atmosphere.Full.LawMatchesReference
+cd /home/matt/Development/deepspace/.worktrees/air-optics && git merge -q main && ./build.sh && ./test.sh && ./test.sh Atmosphere.Full.LawMatchesReference && ./test.sh Atmosphere.Full.MultipleScatteringGap
 cd /home/matt/Development/deepspace && git merge --no-ff feat/air-optics -m "merge: air-optics (atmospheres slice 1, track O: the pure optics)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -6524,7 +7321,7 @@ This task joins procgen's air to the optics. `PlanetAir::SpecOf` is the one adap
 
 With `PlanetAir` in place, `.GroundSkySwatch` (Task 7) is re-pointed from the fixtures' stand-ins to the drawn worlds R, G and C, found by `AirFixtureWorlds` (Task 10), as the spec names it. `AtmosphereSwatchTest.cpp` is track O's file; O has merged, so it is this task's for that edit.
 
-This task waits for **track O merged into `main`** (Task 8, Step 8) and for **ruling 2** (Step 1).
+This task waits for **track O merged into `main`** (Task 8, Step 10) and for **ruling 2** (Step 1). Ruling 2 is recorded (2026-09-27): `MaxNadirTau450` is lowered to **0.32**, so Step 5 takes its first branch with `T = 0.32`, and Step 8 its first. Track O's optics fixtures already sit at the 0.32 ceilings (Task 4, Step 2), and `AtmosphereLaw` now reads eight bins: `.NadirLegible` compares colours from the entry points, which still return linear sRGB, so its code is unchanged. The re-plan's harness ran it through the eight-bin law: every mix at its 0.32 ceiling and every giant at its disc keeps 0.503-0.556 of its airless contrast, so it passes, with little margin.
 
 **Files:**
 - Create: `Source/DeepSpace/Atmosphere/PlanetAir.h`, `Source/DeepSpace/Atmosphere/PlanetAir.cpp`
@@ -7343,19 +8140,19 @@ Expected: a clean merge and a green suite. Landing's track P merged first, track
 
 This plan stops where `M_SkyBody` needs landing slice (a)'s Custom-node route. The follow-on is spec slice 1's track M, and whatever of O and G this plan leaves. It starts after landing (a) merges, and needs these, in about this order:
 
-1. **The rulings above**, all five recorded and encoded by this plan's gates. Spectral bins, if ruling 3 chose them, change `AT_Air` before any material is written against it.
+1. **The rulings above**, all seven recorded and encoded by this plan's gates. Ruling 3 chose spectral bins and ruling 6 eight of them, so `AT_Air` is 60 scalars (note 2), and no material is written against the old three-channel struct.
 2. **The shim decision** (planning note 8), which the spec's *Parallel tracks* now makes track M wait on (Task 8, Step 7). Keep `AT_` shims inline, or extract one shared subset header with `WorldRelief.ush`. The latter touches `WorldRelief.ush`, which landing's track T owns through slice (b), so it is sequenced after slice (b) or done by T.
 3. **The HLSL half, proven.** `Atmosphere.ush`'s HLSL half has never been compiled. The first material that includes it (`M_SkyAirProbe`, then `M_SkyBody`) is the first compiler, and `DeepSpace.Sky.MaterialContract`'s translator run is where a syntax error first shows. What to check:
    - `precise` on `AT_ProductError`'s and `AT_DiffOfProducts`' locals (DXC and SPIR-V `NoContraction`);
    - the macro `AT_TABLE_PARAM`'s `Texture2D` and `SamplerState` parameters (planning note 1). The Custom node's body calls, for example, `AT_InScatter(..., AirMultiScatter, AirMultiScatterSampler)`;
    - the `static const int` loop bounds, and `int(...)` casts.
 4. **The texture routes** (spec *Risks*):
-   - The per-world table is 32 x 32 RGBA16F, `Texels[Row * 32 + Column]`, with row = altitude and column = sun cosine from -1 to 1, already rounded through half floats. It is uploaded as a transient `UTexture2D` with no mips and no sRGB, and set as `AirMultiScatter` per body.
-   - The GPU's bilinear filter weights are 8-bit fixed point, and the C++ blends exactly. For `Eyes.AtmosphereProbe`'s 1e-3 to hold, the HLSL hook should `Load` the four texels and blend in float, as the C++ does, not `SampleLevel`. That is one edit to the hook in the `.ush`'s HLSL half.
+   - The per-world table is 32 x 32 texels of eight bins, `Texels[(Row * 32 + Column) * 8 + Bin]`, with row = altitude and column = `FAtmosphereTable::ColumnOf` of the sun's cosine (crowded toward the horizon), already rounded through half floats. It is uploaded as one transient 64 x 32 RGBA16F `UTexture2D`, bins 0-3 in the left half and 4-7 in the right, with no mips, no sRGB and clamped addressing, and set as `AirMultiScatter` per body.
+   - The GPU's bilinear filter weights are 8-bit fixed point, and the C++ blends exactly. For `Eyes.AtmosphereProbe`'s 1e-3 to hold, the HLSL hook should `Load` the four texels of each half and blend in float, as the C++ does, not `SampleLevel`. That is one edit to the hook in the `.ush`'s HLSL half.
    - The eye's-air table `T_SkyAirHere` is slice 2's.
-5. **The material contract, re-cut to the law's struct** (planning note 2). Per body, the gas scatter (star colour folded in), gas extinction, aerosol scatter, aerosol extinction (each xyz), and `AirShape` = (`GasH`, `AerosolH`, `AerosolG`, `Top`) in radii, plus the `AirMultiScatter` texture. It goes on all three sides: `SkyMaterialContract.h`, `sky_material_contract.json` and the assets. The spec's `AirRayleigh`, `AirMie`, `AirAbsorb` and `AirShape` names are amended with the reason. The `MPC_Sky` `Here*` block (slice 2) takes the same shape.
+5. **The material contract, re-cut to the law's struct** (planning note 2). Per body, eight bins each of gas scatter, gas extinction, aerosol scatter and aerosol extinction (two float4 apiece), the fold's R, G and B (two float4 apiece), and `AirShape` = (`GasH`, `AerosolH`, `AerosolG`, `Top`) in radii: fifteen float4, plus the `AirMultiScatter` texture. It goes on all three sides: `SkyMaterialContract.h`, `sky_material_contract.json` and the assets. The spec's `AirRayleigh`, `AirMie`, `AirAbsorb` and `AirShape` names are amended with the reason. The `MPC_Sky` `Here*` block (slice 2) takes the same shape.
 6. **`FSkyBody` carries the air.** `FSkySystem::FromSystem` (`SkySystem.*`, free after landing (a)) builds `FAtmosphere::Build(PlanetAir::SpecOf(Planet), Star.TemperatureK)` per airy world, or holds the `FAirSpec` and builds at `AShipSky`'s system change.
-   - At about 0.65 s per world for the full table (measured in the harness at `-O2`), a system of several airy worlds costs seconds. So the build belongs off the game thread (`UE::Tasks`), with the air term drawn table-less (`EAtmosphereTable::None`) until it lands, or at the jump's fold.
+   - At about 1.4 s per world for the full eight-bin table (measured in the harness at `-O2`), a system of several airy worlds costs seconds. So the build belongs off the game thread (`UE::Tasks`), with the air term drawn table-less (`EAtmosphereTable::None`) until it lands, or at the jump's fold.
    - `FSkyBody::Rim` is deleted with its `LookOf` colours, its contract entries, the Fresnel graph, `LocalSystemTest.cpp:144`'s rim assertion and `SkyTestFixtures.h`'s `Home.Rim`.
 7. **The disc term in `M_SkyBody`.** It is `surface x AT_SunThrough(point) x T_view + AT_InScatter(eye to point)` through the Custom node. The eye is `(CameraPosition - ObjectPosition) / ProxyRadius`, per decision 6. Its multipliers are `Brightness` and the 1.5 disc gain (decision 9), and the star's colour is already in the scatter.
 8. **The shell** (`M_SkyAir`, additive, `SM_SkyBody` at `1 + AirTop` radii):
@@ -7368,7 +8165,7 @@ This plan stops where `M_SkyBody` needs landing slice (a)'s Custom-node route. T
 10. **The rest of slice 1's done-when:**
     - `ds.Air.Describe`, `ds.Air.Show` and `ds.Sky.Goto ... backlit`;
     - the level rebuild and `check_blueprints.py`;
-    - the 4K frame at 16.6 ms (12 samples, and the disc filling the view from 500 km);
+    - the 4K frame at 16.6 ms (12 nodes, at most 14 with the refinement, eight bins, two texture reads a node, and the disc filling the view from 500 km);
     - before and after frames of R, G and J to the developer;
     - `.GroundSkySwatch`'s drawn R, G and C (Task 12) and the corpus's spread (Tasks 11 and 13) are this plan's; the follow-on only confirms they reached the developer.
 11. **The documentation "after the merges":**
@@ -7378,4 +8175,5 @@ This plan stops where `M_SkyBody` needs landing slice (a)'s Custom-node route. T
     - the six new priors in CLAUDE.md's *The universe* paragraph.
 12. **The deferred choices this plan named:**
     - aerosol and ozone scaling with `P / g` (planning note 7);
-    - `.BacklitRing`'s reading (planning note 10).
+    - `.BacklitRing`'s reading (planning note 10);
+    - a directional multiple-scattering table, if ruling 7 is ever reopened (planning note 16).
