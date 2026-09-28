@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import procgen_corpus as C
 
 SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procgen_corpus_sample.tsv")
+SKIES_SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procgen_corpus_skies_sample.tsv")
 
 
 def rows():
@@ -200,6 +201,51 @@ def test_air_is_typed():
     assert near(giant["surface_pressure_bar"], 0.474) and near(giant["scale_height_km"], 62.4)
     beta = [r for r in rows() if r["system"] == "Beta"][0]
     assert beta["air_mix"] is None and beta["surface_pressure_bar"] is None
+
+
+def test_the_skies_sample_is_written_to_the_contract():
+    with open(SKIES_SAMPLE) as f:
+        header = f.readline().rstrip("\n").split("\t")
+    assert header == C.load_contract()["sky_columns"], header
+
+
+def test_skies_are_typed_and_keyed_by_world():
+    skies = C.load_skies(SKIES_SAMPLE)
+    assert len(skies) == 2
+    alpha3 = skies[(0, 0, 0, 0, 2)]
+    assert alpha3["designation"] == "Alpha III"
+    assert all(near(a, b) for a, b in zip(alpha3["sky_zenith_rgb"], (0.21, 0.34, 0.62)))
+    assert near(alpha3["sky_zenith_saturation"], 0.66129)
+    assert near(skies[(0, 1, 0, 1, 0)]["sky_zenith_saturation"], 0.175)
+
+
+def test_report_gives_the_spread_of_skies():
+    text = C.report(rows(), skies=C.load_skies(SKIES_SAMPLE))
+    assert "  2 of 2 temperate worlds have a noon sky" in text, text
+    assert "Noon zenith saturation of temperate worlds' skies (share of those with one)" in text, text
+
+
+def test_report_without_skies_says_how_to_write_them():
+    text = C.report(rows())
+    assert "No skies: ./test.sh Atmosphere.Full.CorpusSkies writes Saved/procgen_corpus_skies.tsv" in text, text
+
+
+def test_a_skies_file_missing_a_column_is_refused():
+    with open(SKIES_SAMPLE) as f:
+        lines = f.read().splitlines()
+    cut = [line.split("\t") for line in lines]
+    index = cut[0].index("sky_zenith_saturation")
+    trimmed = "\n".join("\t".join(c[:index] + c[index + 1:]) for c in cut) + "\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as f:
+        f.write(trimmed)
+    try:
+        C.load_skies(f.name)
+    except ValueError as e:
+        assert "sky_zenith_saturation" in str(e)
+    else:
+        raise AssertionError("a skies file without sky_zenith_saturation was read")
+    finally:
+        os.unlink(f.name)
 
 
 def main():
