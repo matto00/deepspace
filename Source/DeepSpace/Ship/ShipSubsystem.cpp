@@ -788,6 +788,11 @@ float UShipSubsystem::GetHoldWatts() const
     return LastSplit.HoldWatts;
 }
 
+float UShipSubsystem::GetHoldWattsPerG()
+{
+    return FMath::Max(0.0f, CVarHoldWatts.GetValueOnGameThread());
+}
+
 void UShipSubsystem::SetFoldDraw(float Watts)
 {
     if (Watts == FoldDrawWatts)

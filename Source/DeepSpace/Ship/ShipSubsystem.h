@@ -234,6 +234,10 @@ public:
      *  share: what the hum's hold term reads, never satisfaction. */
     float GetHoldWatts() const;
 
+    /** ds.Boosters.HoldWatts as read now, never below 0: watts per g of the
+     *  hold's want. The hum's hold term divides by it. */
+    static float GetHoldWattsPerG();
+
     /**
      * Pilot mode. The pilot seat reports who sits at the helm; anything that
      * cares whether the ship is being flown asks here rather than reaching
