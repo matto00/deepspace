@@ -77,6 +77,9 @@ below goes past them, it says so and is on the sign-off list.
 
 **Ruled at R2, same day (all 18 bands):** the float floor reaches past the R1 ruling, since the crater offsets put even the coarsest crater band near noise coordinate 8,000; the engine's own nodes miss double by as much. Parity is held to the *measured* floor: every value and every detail term at 1/12, 1/96 and 1/768 to 1e-3; crater slopes to 5e-3 from 1/96 down; at 1/12288 detail values to 1.5e-3 and detail slopes to 8e-3; the step mask's cap is 1% *per crater band*. **Slice (b) then tightens it at the root**: the shared file keeps each band's lattice offset as an exact integer part apart from its fraction, so the GPU tracks the double C++ far below these floors at the ground's close-up footprints, the look unchanged; the parity tolerances tighten with it. **The DeepSpaceShaders module is removed** (UE 5.8 maps `/Project` to the project's `Shaders/` itself at PreInit, `LaunchEngineLoop.cpp:2557`); a test holds that the engine's mapping finds `WorldRelief.ush`.
 
+**The measured floor as a rule (applying the R2 ruling, same day):** a term's C++-vs-GPU tolerance is 1e-3, or, where the engine's own nodes miss double by more at that footprint and term, 1.25 x that engine-vs-double error. The shared file against the engine's nodes stays held to the ruled table; failing that is a port bug and stops the build. (R2 found detail slope at 1/768, 1.18e-3 with the engine's nodes at 1.04e-3, and crater albedo at 1/12288, 1.01e-3 with the engine's at 1.38e-3.)
+
+
 
 
 ## Context
