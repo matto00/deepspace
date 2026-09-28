@@ -1,3 +1,5 @@
+#include <limits>
+
 #include "Engine/TextureRenderTarget2D.h"
 #include "HAL/FileManager.h"
 #include "Kismet/KismetRenderingLibrary.h"
@@ -29,7 +31,10 @@
  * the shared file's raw face terms over a fixed patch at a fixed footprint,
  * untonemapped -- into a 32-bit float target, reads it back, and holds it
  *
- *   * to FWorldRelief::Face of Baemsekai IV, at the very D the GPU drew.
+ *   * to FWorldRelief::Face of Baemsekai IV, at the very D the GPU drew;
+ *   * and a giant's -- stretch 6, the belts' streaking, the path no barren
+ *     world takes -- to the same file in double (WorldReliefNoise::FaceF64),
+ *     since a giant has no ground and so no FWorldRelief.
  *     (Until landing slice (a) merged it also held the file to the engine's
  *     own noise nodes, which is how "the orbital look unchanged" was proven;
  *     the spike's verdict line below records it.)
@@ -40,12 +45,14 @@
  * 1.25 x the engine's own nodes' distance from double. The engine's nodes
  * are retired with the legacy probe, so that distance is no longer
  * measured each run: it is the last one measured, R4's closing run on
- * Baemsekai IV (Footprints' EngineFloor, below). The table (the rulings
- * after the spike and at R2): every value and every detail term at 1/12,
+ * each world (Footprints' EngineFloor and GiantEngineFloor, below). The
+ * table (the rulings after the spike and at R2): every value and every detail term at 1/12,
  * 1/96 and 1/768 to 1e-3, and every value at 1/3072; crater slopes to 5e-3
  * from 1/96 down; detail slopes to 5e-3 at 1/3072; at 1/12288 detail values
  * to 1.5e-3 and detail slopes to 8e-3. A term over its allowance is the GPU's
  * float missing double by more than the engine's own nodes did: a port bug.
+ * A pixel the GPU drew that is not finite fails outright: a NaN would
+ * otherwise vanish from a running maximum at the next finite sample.
  * What the double file itself computes is
  * DeepSpace.Surface.WorldRelief.KnownValues's to guard (exact double
  * values): an error in the shared text reaches both compilers, and moves
@@ -92,6 +99,8 @@
  * R4 under the port-bug test restated: PASS, both worlds -- shared file vs double within the measured floor as a rule at every footprint and term (Baemsekai IV 1/768 detail slope 1.27e-03 against the engine's 1.25e-03, held to 1.6e-03; the widest ratio over the engine, 1.27, is the giant's 1/3072 detail value, 3.69e-04 under the table's 1.0e-03); FWorldRelief vs the GPU identical to it; SUMMARY shared-vs-double 7.42e-03, engine-vs-double 7.01e-03, FWorldRelief-vs-shared 7.42e-03, shared-vs-engine 7.64e-03 (printed), float-C++-vs-shared 9.36e-03, left out at most 0.462% in one crater band
  *
  * R5, the legacy probe retired, FWorldRelief against the GPU at the recorded floor: PASS -- every term as at R4 (1/768 detail slope 1.27e-03 held to 1.6e-03); SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.444% in one crater band
+ *
+ * R5 after review, the giant restored (stretch 6, held to the file in double at its recorded floor) and every pixel held finite: PASS, both worlds -- the giant's every gap identical to R4's (1/3072 detail 3.69e-04, 1/12288 detail slope 7.21e-03 held to 8.8e-03); 0 pixels not finite; SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.462% in one crater band
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -136,6 +145,23 @@ namespace WorldReliefParityLocal
         { { 1.0 / 3072.0,  1.0e-3, 1.0e-3, 1.0e-3, 5.0e-3, 5.0e-3 }, { 1.0 / 3072.0,  5.69e-5, 4.54e-4, 1.20e-3, 2.42e-3, 4.41e-3 } },
         { { 1.0 / 12288.0, 1.0e-3, 1.5e-3, 1.0e-3, 8.0e-3, 5.0e-3 }, { 1.0 / 12288.0, 5.71e-5, 1.12e-3, 1.28e-3, 6.23e-3, 4.30e-3 } },
     };
+
+    /** The giant's engine floor, footprint by footprint as above: R4's same
+     *  closing run (commit 1dd88fa's report), engine nodes vs double at
+     *  stretch 6. */
+    const FTolerance GiantEngineFloor[] = {
+        { 1.0 / 12.0,    4.57e-6, 0.0,     0.0,     0.0,     0.0     },
+        { 1.0 / 96.0,    2.69e-5, 0.0,     6.90e-4, 0.0,     2.44e-3 },
+        { 1.0 / 768.0,   4.31e-5, 1.06e-4, 1.30e-3, 6.34e-4, 3.97e-3 },
+        { 1.0 / 3072.0,  4.58e-5, 2.91e-4, 1.42e-3, 1.87e-3, 4.40e-3 },
+        { 1.0 / 12288.0, 4.65e-5, 1.18e-3, 1.38e-3, 7.01e-3, 4.97e-3 },
+    };
+    static_assert(UE_ARRAY_COUNT(GiantEngineFloor) == UE_ARRAY_COUNT(Footprints), "a giant floor per footprint");
+
+    /** The giant's seed offset: a made one, multiples of 1/256 as every real
+     *  one is. The barren world is Baemsekai IV, with its own. */
+    const FVector3d GiantOffset(12.5, 200.25, 77.0);
+    constexpr double GiantStretch = 6.0;
 
     /** How much further from double than the engine's own nodes the GPU
      *  may be before it is a port bug (the measured floor as a rule; the
@@ -204,9 +230,21 @@ namespace WorldReliefParityLocal
         return Drawn;
     }
 
-    /** The largest absolute difference seen, term by term. */
+    /** The largest absolute difference seen, term by term. A gap that is
+     *  not finite sticks at infinity: FMath::Max(NaN, x) is x, so a plain
+     *  running maximum loses a NaN at the next finite sample. */
     struct FGap
     {
+        static double Wider(double Seen, double Gap)
+        {
+            return FMath::IsFinite(Gap) ? FMath::Max(Seen, Gap) : std::numeric_limits<double>::infinity();
+        }
+
+        static double AbsMax(const FVector3d& V)
+        {
+            return Wider(Wider(FMath::Abs(V.X), FMath::Abs(V.Y)), FMath::Abs(V.Z));
+        }
+
         double Continent = 0.0;
         double Detail = 0.0;
         double CraterAlbedo = 0.0;
@@ -215,11 +253,11 @@ namespace WorldReliefParityLocal
 
         void Widen(const FFaceTerms& A, const FFaceTerms& B)
         {
-            Continent = FMath::Max(Continent, FMath::Abs(A.Continent - B.Continent));
-            Detail = FMath::Max(Detail, FMath::Abs(A.Detail - B.Detail));
-            CraterAlbedo = FMath::Max(CraterAlbedo, FMath::Abs(A.CraterAlbedo - B.CraterAlbedo));
-            DetailSlope = FMath::Max(DetailSlope, (A.DetailSlope - B.DetailSlope).GetAbsMax());
-            CraterSlope = FMath::Max(CraterSlope, (A.CraterSlope - B.CraterSlope).GetAbsMax());
+            Continent = Wider(Continent, FMath::Abs(A.Continent - B.Continent));
+            Detail = Wider(Detail, FMath::Abs(A.Detail - B.Detail));
+            CraterAlbedo = Wider(CraterAlbedo, FMath::Abs(A.CraterAlbedo - B.CraterAlbedo));
+            DetailSlope = Wider(DetailSlope, AbsMax(A.DetailSlope - B.DetailSlope));
+            CraterSlope = Wider(CraterSlope, AbsMax(A.CraterSlope - B.CraterSlope));
         }
 
         double WorstValue() const
@@ -250,6 +288,11 @@ namespace WorldReliefParityLocal
                 Continent, Detail, CraterAlbedo, DetailSlope, CraterSlope);
         }
     };
+
+    bool IsFinite(const FVector3d& V)
+    {
+        return FMath::IsFinite(V.X) && FMath::IsFinite(V.Y) && FMath::IsFinite(V.Z);
+    }
 
     FString DescribeTolerance(const FTolerance& To)
     {
@@ -352,72 +395,106 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
     const FSkyBody& Fourth = HomeSky.Bodies[4];
     TestEqual(TEXT("the barren world is Baemsekai IV"), Fourth.Id, FName(TEXT("Baemsekai IV")));
     const FWorldRelief Ground(Fourth.Relief);
-    const FVector3d& Offset = Fourth.Relief.SeedOffset;
-    Probe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs));
-    Probe->SetScalarParameterValue(SkyMaterial::Banding, 0.0f);
 
-    for (const FFootprint& Row : Footprints)
+    // Barren: Baemsekai IV, held through FWorldRelief. A giant: stretch 6, a
+    // made offset, no ground, so held to the file in double.
+    struct FWorldCase
     {
-        const FTolerance& To = Row.Table;
-        const double FootprintD = To.Footprint;
-        const float Footprint = static_cast<float>(FootprintD);
-        Probe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
-        const FDrawn Drawn = DrawAll(Test.World, Target, Probe);
-
-        FGap ReliefVsShared;
-        FGap FloatVsShared;
-        int32 LeftOut = 0;
-        const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
-        TArray<int32> LeftOutByBand;
-        LeftOutByBand.Init(0, CraterBands);
-        for (int32 Index = 0; Index < Side * Side; ++Index)
+        const TCHAR* Name;
+        FLinearColor Seed;
+        FVector3d Offset;
+        float Banding;
+        double Stretch;
+        const FWorldRelief* Relief;
+    };
+    const FWorldCase Worlds[] = {
+        { TEXT("Baemsekai IV"), ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs), Fourth.Relief.SeedOffset, 0.0f, 1.0, &Ground },
+        { TEXT("giant"), FLinearColor(static_cast<float>(GiantOffset.X), static_cast<float>(GiantOffset.Y), static_cast<float>(GiantOffset.Z), 8.0f),
+          GiantOffset, 1.0f, GiantStretch, nullptr },
+    };
+    for (const FWorldCase& World : Worlds)
+    {
+        const FVector3d& Offset = World.Offset;
+        Probe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, World.Seed);
+        Probe->SetScalarParameterValue(SkyMaterial::Banding, World.Banding);
+        for (int32 Row = 0; Row < static_cast<int32>(UE_ARRAY_COUNT(Footprints)); ++Row)
         {
-            const FVector3d& D = Drawn.Direction[Index];
-            bool bOnStep = false;
+            const FTolerance& To = Footprints[Row].Table;
+            const FTolerance& EngineFloor = World.Relief ? Footprints[Row].EngineFloor : GiantEngineFloor[Row];
+            const double FootprintD = To.Footprint;
+            const float Footprint = static_cast<float>(FootprintD);
+            Probe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
+            const FDrawn Drawn = DrawAll(Test.World, Target, Probe);
+
+            FGap HeldGap;
+            FGap FloatVsShared;
+            int32 LeftOut = 0;
+            int32 NotFinite = 0;
+            const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
+            TArray<int32> LeftOutByBand;
+            LeftOutByBand.Init(0, CraterBands);
+            for (int32 Index = 0; Index < Side * Side; ++Index)
+            {
+                const FVector3d& D = Drawn.Direction[Index];
+                if (!IsFinite(D) || !IsFinite(Drawn.Terms[Index]) || !IsFinite(Drawn.DetailSlope[Index]) || !IsFinite(Drawn.CraterSlope[Index]))
+                {
+                    // Before the step mask: a NaN D is never near a step
+                    // (every comparison with it is false), so it would be
+                    // compared, and a NaN term would vanish from the gap.
+                    ++NotFinite;
+                    continue;
+                }
+                bool bOnStep = false;
+                for (int32 Band = 0; Band < CraterBands; ++Band)
+                {
+                    if (WorldReliefNoise::CraterBandMargin(D, Footprint, Offset, Band) < StepMarginCells)
+                    {
+                        ++LeftOutByBand[Band];
+                        bOnStep = true;
+                    }
+                }
+                if (bOnStep)
+                {
+                    ++LeftOut;
+                    continue;
+                }
+                const FFaceTerms Gpu = Drawn.At(Index);
+                const FFaceTerms Held = World.Relief
+                    ? World.Relief->Face(D, static_cast<double>(Footprint) * World.Relief->GetParams().RadiusCm)
+                    : WorldReliefNoise::FaceF64(D, Footprint, Offset, World.Stretch);
+                HeldGap.Widen(Held, Gpu);
+                FloatVsShared.Widen(WorldReliefNoise::FaceF32(FVector3f(D), Footprint, FVector3f(Offset), static_cast<float>(World.Stretch)), Gpu);
+            }
+            const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
+            const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
+            FString SetBy;
+            const FTolerance HeldTo = HeldToByTheFloor(To, EngineFloor, SetBy);
+            const FString HeldText = DescribeTolerance(HeldTo);
+            FString ByBand;
+            double MostInABand = 0.0;
             for (int32 Band = 0; Band < CraterBands; ++Band)
             {
-                if (WorldReliefNoise::CraterBandMargin(D, Footprint, Offset, Band) < StepMarginCells)
-                {
-                    ++LeftOutByBand[Band];
-                    bOnStep = true;
-                }
+                const double Share = static_cast<double>(LeftOutByBand[Band]) / (Side * Side);
+                MostInABand = FMath::Max(MostInABand, Share);
+                ByBand += FString::Printf(TEXT("%s%.3f%%"), Band == 0 ? TEXT("") : TEXT(", "), 100.0 * Share);
             }
-            if (bOnStep)
-            {
-                ++LeftOut;
-                continue;
-            }
-            const FFaceTerms Gpu = Drawn.At(Index);
-            ReliefVsShared.Widen(Ground.Face(D, static_cast<double>(Footprint) * Ground.GetParams().RadiusCm), Gpu);
-            FloatVsShared.Widen(WorldReliefNoise::FaceF32(FVector3f(D), Footprint, FVector3f(Offset), 1.0f), Gpu);
+            TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
+            TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
+                MostInABand <= MaxLeftOutPerBand);
+            TestTrue(FString::Printf(TEXT("%s: %s computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
+                *At, World.Relief ? TEXT("FWorldRelief") : TEXT("the file in double"), *HeldText, *HeldGap.Describe()), HeldGap.Within(HeldTo));
+            WorstReliefShared = FMath::Max(WorstReliefShared, HeldGap.Worst());
+            WorstFloatShared = FMath::Max(WorstFloatShared, FloatVsShared.Worst());
+            MostLeftOut = FMath::Max(MostLeftOut, LeftOutShare);
+            MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
+            Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s), %d not finite"),
+                *At, Side * Side - LeftOut - NotFinite, LeftOut, *ByBand, NotFinite));
+            Report.Add(TEXT("  held to (the rule):                 ") + HeldText);
+            Report.Add(TEXT("    set by:                           ") + SetBy);
+            Report.Add(TEXT("  engine floor (recorded, R4):        ") + DescribeTolerance(EngineFloor));
+            Report.Add((World.Relief ? TEXT("  C++ (double) vs GPU (asserted):     ") : TEXT("  file (double) vs GPU (asserted):    ")) + HeldGap.Describe());
+            Report.Add(TEXT("  C++ (float build) vs GPU:           ") + FloatVsShared.Describe());
         }
-        const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
-        const FString At = FString::Printf(TEXT("Baemsekai IV, footprint 1/%.0f"), 1.0 / FootprintD);
-        FString SetBy;
-        const FTolerance HeldTo = HeldToByTheFloor(To, Row.EngineFloor, SetBy);
-        const FString Held = DescribeTolerance(HeldTo);
-        FString ByBand;
-        double MostInABand = 0.0;
-        for (int32 Band = 0; Band < CraterBands; ++Band)
-        {
-            const double Share = static_cast<double>(LeftOutByBand[Band]) / (Side * Side);
-            MostInABand = FMath::Max(MostInABand, Share);
-            ByBand += FString::Printf(TEXT("%s%.3f%%"), Band == 0 ? TEXT("") : TEXT(", "), 100.0 * Share);
-        }
-        TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
-            MostInABand <= MaxLeftOutPerBand);
-        TestTrue(FString::Printf(TEXT("%s: FWorldRelief computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
-            *At, *Held, *ReliefVsShared.Describe()), ReliefVsShared.Within(HeldTo));
-        WorstReliefShared = FMath::Max(WorstReliefShared, ReliefVsShared.Worst());
-        WorstFloatShared = FMath::Max(WorstFloatShared, FloatVsShared.Worst());
-        MostLeftOut = FMath::Max(MostLeftOut, LeftOutShare);
-        MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
-        Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s)"), *At, Side * Side - LeftOut, LeftOut, *ByBand));
-        Report.Add(TEXT("  held to (the rule):                 ") + Held);
-        Report.Add(TEXT("    set by:                           ") + SetBy);
-        Report.Add(TEXT("  engine floor (recorded, R4):        ") + DescribeTolerance(Row.EngineFloor));
-        Report.Add(TEXT("  C++ (double) vs GPU (asserted):     ") + ReliefVsShared.Describe());
-        Report.Add(TEXT("  C++ (float build) vs GPU:           ") + FloatVsShared.Describe());
     }
 
     Report.Add(FString::Printf(TEXT("SUMMARY C++-vs-GPU %.2e, float-C++-vs-GPU %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
