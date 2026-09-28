@@ -90,7 +90,10 @@ namespace TerrainQuadtree
     /** The cube coordinate tan(angle) of grid line Index of Count across a
      *  face, as 2 Index - Count: exactly -1, 0 and 1 at the ends and middle,
      *  and odd, tan of |angle| signed, so a line shared by two faces or two
-     *  levels is the same number to the last bit. */
+     *  levels is the same number to the last bit. This machine's libm tan is
+     *  itself exactly odd (a signed-tan mutant survives DeepSpace.Surface.
+     *  Quadtree), so the explicit sign is a guarantee the platform does not
+     *  promise, kept for the platforms where it is not. */
     DEEPSPACE_API double FaceCoordinate(int64 TwiceIndexMinusCount, int64 Count);
 
     /** Unit direction of grid vertex (I, J), 0..CellsPerTile, of Key: the cube

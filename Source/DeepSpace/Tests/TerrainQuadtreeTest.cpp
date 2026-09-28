@@ -108,7 +108,10 @@ bool FTerrainQuadtreeTest::RunTest(const FString& Parameters)
     // the chain and the prefetch hold under both.
     struct FCount { double Altitude; int32 Tiles; int32 ShellTiles; };
     TArray<FCount> Counts;
-    for (const double Altitude : { 150.0, 2.0e3, 1.0e5, 1.0e6, 5.0e6, 1.0e8 })
+    // 500 m: under ChainFullAltitudeCm the chain is forced to MaxLevel while
+    // the distance rule alone would stop some five levels short, so the 2:1
+    // balance must cascade outward from the chain, level by level.
+    for (const double Altitude : { 150.0, 2.0e3, 5.0e4, 1.0e5, 1.0e6, 5.0e6, 1.0e8 })
     for (const bool bShell : { false, true })
     {
         const FVector3d Nadir = FVector3d(0.31, -0.62, 0.72).GetSafeNormal();
