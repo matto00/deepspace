@@ -28,30 +28,33 @@
  * and slice (a)'s and (b)'s done-when run it. It draws M_SkyReliefProbe --
  * the shared file's raw face terms over a fixed patch at a fixed footprint,
  * untonemapped -- into a 32-bit float target, reads it back, and holds it
+ * against the same file in double (WorldReliefNoise::FaceF64, at the very D
+ * the GPU drew), beside M_SkyReliefProbeLegacy, the same terms from the
+ * engine's own noise nodes, over 256 x 256 samples at each of five
+ * footprints, per footprint and per term.
  *
- *   - to M_SkyReliefProbeLegacy, the same terms from the engine's own noise
- *     nodes: "the orbital look unchanged", as a number;
- *   - to the C++ -- FWorldRelief::Face of Baemsekai IV -- at the very D the GPU drew;
+ * The port-bug test (the developer's ruling at R4, restating the one at
+ * R2): two float evaluations can each sit at the float floor on opposite
+ * sides of double, so the shared file is not judged against the engine's
+ * nodes directly. It is judged against double, by the measured floor as a
+ * rule: each term, at each footprint, to the larger of the ruled table and
+ * 1.25 x the engine's own nodes' distance from double, measured on the same
+ * samples in the same run. A port bug is the shared file's float missing
+ * double by more than that, on either world: worse than the engine's own
+ * nodes, not merely at the floor. Shared file vs engine nodes is printed,
+ * not asserted. The table (the rulings after the spike and at R2): every
+ * value and every detail term at 1/12, 1/96 and 1/768 to 1e-3, and every
+ * value at 1/3072; crater slopes to 5e-3 from 1/96 down; detail slopes to
+ * 5e-3 at 1/3072; at 1/12288 detail values to 1.5e-3 and detail slopes to
+ * 8e-3.
  *
- * over 256 x 256 samples at each of five footprints, per footprint and per
- * term, at the measured float floor (the developer's rulings after the
- * spike and at R2): every value and every detail term at 1/12, 1/96 and
- * 1/768 to a maximum absolute difference of 1e-3, and every value at 1/3072;
- * crater slopes to 5e-3 from 1/96 down (the crater offsets put even the
- * coarsest crater band near noise coordinate 8,000); detail slopes to 5e-3
- * at 1/3072; at 1/12288 detail values to 1.5e-3 and detail slopes to 8e-3.
- * Every float evaluation, the engine's own nodes included, differs from
- * double by that much at those noise coordinates. That table holds the
- * shared file to the engine's nodes; failing it is a port bug.
- *
- * The C++ is held to the GPU by the measured floor as a rule (the
- * developer's ruling applying R2): each term, at each footprint, to the
- * larger of the table's value and 1.25 x the engine's own nodes' distance
- * from the double C++, measured on the same samples in the same run. The
- * report prints what each term was held to, and marks those the floor set.
- * The rule's allowance grows with any C++-only error, so the C++'s own
- * guard is DeepSpace.Surface.WorldRelief.KnownValues (exact double values);
- * this test guards the file the GPU compiles.
+ * FWorldRelief::Face of Baemsekai IV -- what the flight and the terrain
+ * read -- is held to the GPU by the same allowance. The floor is measured
+ * from FaceF64, never through FWorldRelief, so an error of FWorldRelief's
+ * own cannot widen the allowance it is held to. What the double file itself
+ * computes is DeepSpace.Surface.WorldRelief.KnownValues's to guard (exact
+ * double values): an error in the shared text reaches both compilers, and
+ * moves double and the GPU together.
  *
  * Slice (b) tightens both at the root (the lattice offset split into
  * integer and fraction). A
@@ -65,11 +68,10 @@
  * grey default material with every test green. Its first check is the pipe:
  * a probe selecting nothing reads back its bias, exactly, at every pixel.
  *
- * Writes Saved/Eyes/WorldReliefParity/report.txt: every gap, and two
+ * Writes Saved/Eyes/WorldReliefParity/report.txt: every gap, what each
+ * term was held to and whether the table or the floor set it, and two
  * diagnostics reported but not asserted -- the file's float build against
- * the GPU, and the C++ against the engine's nodes -- which tell a file that
- * computes the wrong thing from float's own floor (landing task R1's
- * verdict table).
+ * the GPU, and the shared file against the engine's nodes.
  *
  * Spike verdict (landing R1): FLOAT FLOOR -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 1.376%
  *
@@ -91,6 +93,8 @@
  * those two bands is unguarded until a footprint below 1/12288 is ruled.
  *
  * R4, M_SkyBody on the shared file, the barren world Baemsekai IV through FWorldRelief: STOPPED -- one term over the table, shared file vs engine nodes, Baemsekai IV 1/768 detail slope 1.01e-03 against 1.0e-03 (C++ vs engine 1.25e-03, C++ vs shared 1.27e-03, held to 1.6e-03 by the rule and within it); every other term within the table and the rule; SUMMARY shared-vs-engine 7.64e-03, C++-vs-shared 7.42e-03, float-C++-vs-shared 9.36e-03, C++-vs-engine 6.23e-03, left out at most 0.462% in one crater band
+ *
+ * R4 under the port-bug test restated: PASS, both worlds -- shared file vs double within the measured floor as a rule at every footprint and term (Baemsekai IV 1/768 detail slope 1.27e-03 against the engine's 1.25e-03, held to 1.6e-03; the widest ratio over the engine, 1.27, is the giant's 1/3072 detail value, 3.69e-04 under the table's 1.0e-03); FWorldRelief vs the GPU identical to it; SUMMARY shared-vs-double 7.42e-03, engine-vs-double 7.01e-03, FWorldRelief-vs-shared 7.42e-03, shared-vs-engine 7.64e-03 (printed), float-C++-vs-shared 9.36e-03, left out at most 0.462% in one crater band
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -126,8 +130,9 @@ namespace WorldReliefParityLocal
         { 1.0 / 12288.0, 1.0e-3, 1.5e-3, 1.0e-3, 8.0e-3, 5.0e-3 },
     };
 
-    /** The C++-vs-GPU allowance over the engine's own distance from double
-     *  (the measured floor as a rule). */
+    /** How much further from double than the engine's own nodes the shared
+     *  file may be before it is a port bug (the measured floor as a rule;
+     *  the port-bug test restated at R4). */
     constexpr double FloorRuleFactor = 1.25;
 
     /** The giant's seed offset: a made one, multiples of 1/256 as every real
@@ -241,6 +246,18 @@ namespace WorldReliefParityLocal
             return FString::Printf(TEXT("continent %.2e, detail %.2e, crater albedo %.2e, detail slope %.2e, crater slope %.2e"),
                 Continent, Detail, CraterAlbedo, DetailSlope, CraterSlope);
         }
+
+        /** Term by term, this gap over another; "-" where the other is zero. */
+        FString DescribeRatio(const FGap& Over) const
+        {
+            auto Ratio = [](double A, double B)
+            {
+                return B > 0.0 ? FString::Printf(TEXT("%.2f"), A / B) : FString(A > 0.0 ? TEXT("inf") : TEXT("-"));
+            };
+            return FString::Printf(TEXT("continent %s, detail %s, crater albedo %s, detail slope %s, crater slope %s"),
+                *Ratio(Continent, Over.Continent), *Ratio(Detail, Over.Detail), *Ratio(CraterAlbedo, Over.CraterAlbedo),
+                *Ratio(DetailSlope, Over.DetailSlope), *Ratio(CraterSlope, Over.CraterSlope));
+        }
     };
 
     FString DescribeTolerance(const FTolerance& To)
@@ -251,9 +268,9 @@ namespace WorldReliefParityLocal
 
     /** The measured floor as a rule: each term to the larger of the ruled
      *  table's value and FloorRuleFactor x the engine's own nodes' distance
-     *  from the double C++ at this footprint, in this run. Says, per term,
-     *  whether the table or the floor set it. */
-    FTolerance CppHeldTo(const FTolerance& Table, const FGap& EngineVsDouble, FString& OutSetBy)
+     *  from double at this footprint, in this run. Says, per term, whether
+     *  the table or the floor set it. */
+    FTolerance HeldToByTheFloor(const FTolerance& Table, const FGap& EngineVsDouble, FString& OutSetBy)
     {
         FTolerance To = Table;
         TArray<FString> SetBy;
@@ -327,18 +344,18 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         }
     }
 
-    double WorstNewOld = 0.0;
-    double WorstCppNew = 0.0;
-    double WorstFloatNew = 0.0;
-    double WorstCppOld = 0.0;
+    double WorstSharedEngine = 0.0;
+    double WorstSharedDouble = 0.0;
+    double WorstEngineDouble = 0.0;
+    double WorstReliefShared = 0.0;
+    double WorstFloatShared = 0.0;
     double MostLeftOut = 0.0;
     double MostLeftOutInABand = 0.0;
 
-    // Barren: Baemsekai IV, the landing fixtures' first world, its C++
-    // through FWorldRelief -- what the flight and the terrain read -- held
-    // against both the engine's nodes and the GPU. A giant (stretch 6, the
-    // belts' streaking) against the engine's nodes; its C++ reported only,
-    // since a giant has no ground.
+    // Barren: Baemsekai IV, the landing fixtures' first world, and its
+    // FWorldRelief -- what the flight and the terrain read. A giant (stretch
+    // 6, the belts' streaking), a made offset; a giant has no ground, so no
+    // FWorldRelief. Both are held by the port-bug test.
     const TOptional<FStarSystem> Home = Test.Universe->GetSystem(Test.Universe->GetStartSystem());
     if (!TestTrue(TEXT("home generates"), Home.IsSet()))
     {
@@ -384,10 +401,11 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             const FDrawn New = DrawAll(Test.World, Target, NewProbe);
             const FDrawn Old = DrawAll(Test.World, Target, OldProbe);
 
-            FGap NewVsOld;
-            FGap CppVsNew;
-            FGap FloatVsNew;
-            FGap CppVsOld;
+            FGap SharedVsEngine;
+            FGap SharedVsDouble;
+            FGap EngineVsDouble;
+            FGap ReliefVsShared;
+            FGap FloatVsShared;
             int32 LeftOut = 0;
             int32 Unmatched = 0;
             const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
@@ -413,21 +431,22 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                 }
                 const FFaceTerms Gpu = New.At(Index);
                 const FFaceTerms Engine = Old.At(Index);
-                const FFaceTerms Cpp = World.Relief
-                    ? World.Relief->Face(D, static_cast<double>(Footprint) * World.Relief->GetParams().RadiusCm)
-                    : WorldReliefNoise::FaceF64(D, Footprint, Offset, World.Stretch);
+                const FFaceTerms Double = WorldReliefNoise::FaceF64(D, Footprint, Offset, World.Stretch);
                 const FFaceTerms Float = WorldReliefNoise::FaceF32(FVector3f(D), Footprint, FVector3f(Offset), static_cast<float>(World.Stretch));
-                NewVsOld.Widen(Gpu, Engine);
-                CppVsNew.Widen(Cpp, Gpu);
-                FloatVsNew.Widen(Float, Gpu);
-                CppVsOld.Widen(Cpp, Engine);
+                SharedVsEngine.Widen(Gpu, Engine);
+                SharedVsDouble.Widen(Gpu, Double);
+                EngineVsDouble.Widen(Engine, Double);
+                FloatVsShared.Widen(Float, Gpu);
+                if (World.Relief)
+                {
+                    ReliefVsShared.Widen(World.Relief->Face(D, static_cast<double>(Footprint) * World.Relief->GetParams().RadiusCm), Gpu);
+                }
             }
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
-            const FString Held = DescribeTolerance(To);
-            FString CppSetBy;
-            const FTolerance CppTo = CppHeldTo(To, CppVsOld, CppSetBy);
-            const FString CppHeld = DescribeTolerance(CppTo);
+            FString SetBy;
+            const FTolerance HeldTo = HeldToByTheFloor(To, EngineVsDouble, SetBy);
+            const FString Held = DescribeTolerance(HeldTo);
             TestEqual(At + TEXT(": both probes drew the same directions"), Unmatched, 0);
             FString ByBand;
             double MostInABand = 0.0;
@@ -439,32 +458,37 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             }
             TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
                 MostInABand <= MaxLeftOutPerBand);
-            TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew, held to %s (%s)"),
-                *At, *Held, *NewVsOld.Describe()), NewVsOld.Within(To));
+            TestTrue(FString::Printf(TEXT("%s: the shared file misses double by no more than the engine's nodes allow -- no port bug -- held to %s (%s; engine vs double %s)"),
+                *At, *Held, *SharedVsDouble.Describe(), *EngineVsDouble.Describe()), SharedVsDouble.Within(HeldTo));
             if (World.Relief)
             {
-                TestTrue(FString::Printf(TEXT("%s: FWorldRelief computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
-                    *At, *CppHeld, *CppVsNew.Describe()), CppVsNew.Within(CppTo));
-                WorstCppNew = FMath::Max(WorstCppNew, CppVsNew.Worst());
-                WorstFloatNew = FMath::Max(WorstFloatNew, FloatVsNew.Worst());
-                WorstCppOld = FMath::Max(WorstCppOld, CppVsOld.Worst());
+                TestTrue(FString::Printf(TEXT("%s: FWorldRelief computes what the GPU drew, held to %s (%s)"),
+                    *At, *Held, *ReliefVsShared.Describe()), ReliefVsShared.Within(HeldTo));
+                WorstReliefShared = FMath::Max(WorstReliefShared, ReliefVsShared.Worst());
             }
-            WorstNewOld = FMath::Max(WorstNewOld, NewVsOld.Worst());
+            WorstSharedEngine = FMath::Max(WorstSharedEngine, SharedVsEngine.Worst());
+            WorstSharedDouble = FMath::Max(WorstSharedDouble, SharedVsDouble.Worst());
+            WorstEngineDouble = FMath::Max(WorstEngineDouble, EngineVsDouble.Worst());
+            WorstFloatShared = FMath::Max(WorstFloatShared, FloatVsShared.Worst());
             MostLeftOut = FMath::Max(MostLeftOut, LeftOutShare);
             MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
             Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s)"), *At, Side * Side - LeftOut, LeftOut, *ByBand));
-            Report.Add(TEXT("  shared file held to (the table):    ") + Held);
-            Report.Add(TEXT("  C++ held to (the rule):             ") + CppHeld);
-            Report.Add(TEXT("    set by:                           ") + CppSetBy);
-            Report.Add(TEXT("  shared file vs engine nodes:        ") + NewVsOld.Describe());
-            Report.Add(TEXT("  C++ (double) vs shared file:        ") + CppVsNew.Describe());
-            Report.Add(TEXT("  C++ (float build) vs shared file:   ") + FloatVsNew.Describe());
-            Report.Add(TEXT("  C++ (double) vs engine nodes:       ") + CppVsOld.Describe());
+            Report.Add(TEXT("  held to (the rule):                 ") + Held);
+            Report.Add(TEXT("    set by:                           ") + SetBy);
+            Report.Add(TEXT("  shared file vs double (asserted):   ") + SharedVsDouble.Describe());
+            Report.Add(TEXT("  engine nodes vs double (the floor): ") + EngineVsDouble.Describe());
+            Report.Add(TEXT("  ratio, shared / engine, vs double:  ") + SharedVsDouble.DescribeRatio(EngineVsDouble));
+            if (World.Relief)
+            {
+                Report.Add(TEXT("  FWorldRelief vs shared (asserted):  ") + ReliefVsShared.Describe());
+            }
+            Report.Add(TEXT("  shared file vs engine nodes:        ") + SharedVsEngine.Describe());
+            Report.Add(TEXT("  C++ (float build) vs shared file:   ") + FloatVsShared.Describe());
         }
     }
 
-    Report.Add(FString::Printf(TEXT("SUMMARY shared-vs-engine %.2e, C++-vs-shared %.2e, float-C++-vs-shared %.2e, C++-vs-engine %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
-        WorstNewOld, WorstCppNew, WorstFloatNew, WorstCppOld, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
+    Report.Add(FString::Printf(TEXT("SUMMARY shared-vs-double %.2e, engine-vs-double %.2e, FWorldRelief-vs-shared %.2e, shared-vs-engine %.2e (printed), float-C++-vs-shared %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
+        WorstSharedDouble, WorstEngineDouble, WorstReliefShared, WorstSharedEngine, WorstFloatShared, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes") / TEXT("WorldReliefParity");
     IFileManager::Get().MakeDirectory(*Dir, true);
     FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
