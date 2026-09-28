@@ -72,6 +72,16 @@ past them, it says so and is on the sign-off list.
 9. **No clouds in this sub-project.** Clouds are their own later
    sub-project, with world spin and weather.
 
+**Atmosphere plan ruling 1 (2026-09-27):** keep the physics. In the game's colour space (linear sRGB, D65) a red dwarf's sky is peach, not "pale grey-cyan": the `.StarColour` red-dwarf bounds and ruling 2's words are restated to what the physics gives (saturation about 0.72 at 2,566 K, about 0.96 at 2,000 K; least saturated near 3,500-4,000 K; blue from about 4,000 K). No per-star white balance. A blue sky is still an event.
+
+**Atmosphere plan ruling 2 (2026-09-27):** `MaxNadirTau450` is lowered from 0.5 to 0.32, so `.NadirLegible` holds half the airless contrast at nadir as written.
+
+**Atmosphere plan ruling 3 (2026-09-27):** the spec's named fallback: the shipped law carries four to six spectral bins, not three channels, so it meets the reference within 5% or 1e-3 everywhere, thin airs and grazing paths included. Tasks 4-8 are re-planned first.
+
+**Atmosphere plan ruling 4 (2026-09-27):** "the noon zenith" is straight up from the ground under a sun 45 degrees high (`AtmosphereLaw::NoonSun`), everywhere it is used.
+
+**Atmosphere plan ruling 5 (2026-09-27):** `.HomothetyInvariance` holds the eyes to 1e-12 relative and the law's outputs to 1e-9; not bit for bit.
+
 ## Context
 
 ### What exists, and what does not
