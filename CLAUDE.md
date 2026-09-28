@@ -328,6 +328,7 @@ head turns independently of the ship and a turn reads as *the ship* turning.
 | Shift / Ctrl | the live lever up / down | `IA_LeverUp`, `IA_LeverDown` |
 | F | which lever is live: the drive's or cruise's | `IA_Drive` |
 | X | all stop: both levers to STOP | `IA_Stop` |
+| Space / C | the vertical lever: climb / sink, HOVER at zero (near a world) | `IA_VerticalUp`, `IA_VerticalDown` |
 | Tab | the next world as the target, only on the zoomed map | `IA_CycleTarget` |
 | E | sit, stand, and at the chart chair zoom the chart or the map | `IA_Interact` |
 
