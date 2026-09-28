@@ -50,6 +50,7 @@ places Epic's Linux documentation is wrong for the precompiled binary.
 ./rebuild.sh --force --launch   # close the editor, rebuild, reopen it
 ./launch.sh         # open DeepSpace: rebuilds first only if C++ is stale; focuses an open editor
 unreal-editor DeepSpace.uproject    # open the project
+Tools/eyes.sh Eyes.WorldReliefParity   # a rendered check (Eyes.*): outside ./test.sh, through the lock, never -nullrhi
 
 # Regenerate IDE project files (after moving files or adding modules)
 ~/UnrealEngine/UE_5.8/Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh \
@@ -92,7 +93,8 @@ tree built green and the same code committed failed, and four worktrees that
 were each green broke together at the merge. Off, green in a worktree means
 green merged.
 
-**Prove a test can fail with `Tools/mutate.sh`** before trusting it. It
+**Prove a test can fail with `Tools/mutate.sh`** before trusting it. A rendered check is proven the same way with
+`MUTATE_RUNNER=Tools/eyes.sh`. It
 checks everything that has made a mutation silently prove nothing here -- the
 text not found, the mutant not compiling, the library not rebuilt -- before
 reading a verdict, and restores the file. Rebuild afterwards: its last build
