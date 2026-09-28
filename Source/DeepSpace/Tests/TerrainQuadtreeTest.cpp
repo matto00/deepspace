@@ -209,7 +209,11 @@ bool FTerrainQuadtreeSeamsTest::RunTest(const FString& Parameters)
                                  FVector3d(1.0, 0.0, 1.0).GetSafeNormal() };
     for (const FVector3d& Nadir : Nadirs)
     {
-        for (const double Altitude : { 150.0, 1.0e5, 5.0e6 })
+        // Each node its own box, and the whole shell as every box; 20 m and
+        // 500 m are where the chain, forced to MaxLevel, outruns the distance
+        // rule and the balance must cascade across the seam it sits on.
+        for (const double Altitude : { 150.0, 2.0e3, 5.0e4, 1.0e5, 5.0e6 })
+        for (const bool bShell : { false, true })
         {
             FCutParams Params;
             Params.RadiusCm = Earth;
@@ -217,9 +221,11 @@ bool FTerrainQuadtreeSeamsTest::RunTest(const FString& Parameters)
             Params.MaxTiles = 1000000;
             Params.OccluderRadiusCm = Earth;
             Params.GroundAltitudeCm = Altitude;
-            const FCut Cut = SelectCut(Nadir * (Earth + Altitude), Params, [&](const FTileKey&) { return TOptional<FHeightRange>(Peaks); });
+            const FCut Cut = SelectCut(Nadir * (Earth + Altitude), Params, [&](const FTileKey& Key)
+                { return bShell ? TOptional<FHeightRange>(Peaks) : OwnRange(Key, Earth); });
             const TSet<FTileKey> Leaves(Cut.Leaves);
-            const FString At = FString::Printf(TEXT("(%.2f, %.2f, %.2f) at %.0f m"), Nadir.X, Nadir.Y, Nadir.Z, Altitude / 100.0);
+            const FString At = FString::Printf(TEXT("(%.2f, %.2f, %.2f) at %.0f m%s"), Nadir.X, Nadir.Y, Nadir.Z, Altitude / 100.0,
+                bShell ? TEXT(", every box the whole shell") : TEXT(""));
 
             bool bNoOverlap = true;
             for (const FTileKey& Leaf : Cut.Leaves)
