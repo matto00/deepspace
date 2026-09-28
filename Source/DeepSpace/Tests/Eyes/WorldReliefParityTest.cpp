@@ -38,8 +38,20 @@
  * coarsest crater band near noise coordinate 8,000); detail slopes to 5e-3
  * at 1/3072; at 1/12288 detail values to 1.5e-3 and detail slopes to 8e-3.
  * Every float evaluation, the engine's own nodes included, differs from
- * double by that much at those noise coordinates. Slice (b) tightens these
- * at the root (the lattice offset split into integer and fraction). A
+ * double by that much at those noise coordinates. That table holds the
+ * shared file to the engine's nodes; failing it is a port bug.
+ *
+ * The C++ is held to the GPU by the measured floor as a rule (the
+ * developer's ruling applying R2): each term, at each footprint, to the
+ * larger of the table's value and 1.25 x the engine's own nodes' distance
+ * from the double C++, measured on the same samples in the same run. The
+ * report prints what each term was held to, and marks those the floor set.
+ * The rule's allowance grows with any C++-only error, so the C++'s own
+ * guard is DeepSpace.Surface.WorldRelief.KnownValues (exact double values);
+ * this test guards the file the GPU compiles.
+ *
+ * Slice (b) tightens both at the root (the lattice offset split into
+ * integer and fraction). A
  * crater band's albedo and slope step at a held crater's rim and at the
  * bisector beside one, where any rounding at all can change the side a
  * sample lands on: samples within 2e-3 cells of such a step are left out,
@@ -63,6 +75,8 @@
  * R2, every band (twelve detail, six crater): FLOAT FLOOR past the ruling -- SUMMARY shared-vs-engine 7.64e-03, C++-vs-shared 6.88e-03, float-C++-vs-shared 7.90e-03, C++-vs-engine 6.19e-03, left out at most 2.142%
  *
  * R2 under the ruling at R2 (per term at the measured floor, 1% per crater band): FLOAT FLOOR at two terms the ruling holds to 1e-3 -- C++ vs shared, barren: detail slope 1.18e-03 at 1/768 (float build vs GPU 1.83e-03, C++ vs engine 1.04e-03), crater albedo 1.01e-03 at 1/12288 (C++ vs engine 1.38e-03); shared vs engine within the ruling everywhere; left out at most 0.462% in one crater band
+ *
+ * R2 under the measured floor as a rule: PASS -- barren 1/768 detail slope 1.18e-03 held to 1.3e-03 (floor), 1/12288 crater albedo 1.01e-03 held to 1.7e-03 (floor); shared vs engine within the table everywhere; SUMMARY unchanged
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -97,6 +111,10 @@ namespace WorldReliefParityLocal
         { 1.0 / 3072.0,  1.0e-3, 1.0e-3, 1.0e-3, 5.0e-3, 5.0e-3 },
         { 1.0 / 12288.0, 1.0e-3, 1.5e-3, 1.0e-3, 8.0e-3, 5.0e-3 },
     };
+
+    /** The C++-vs-GPU allowance over the engine's own distance from double
+     *  (the measured floor as a rule). */
+    constexpr double FloorRuleFactor = 1.25;
 
     /** A barren world's seed offset until task R4 hands the test Baemsekai
      *  IV's: multiples of 1/256, as every real one is. */
@@ -210,6 +228,35 @@ namespace WorldReliefParityLocal
                 Continent, Detail, CraterAlbedo, DetailSlope, CraterSlope);
         }
     };
+
+    FString DescribeTolerance(const FTolerance& To)
+    {
+        return FString::Printf(TEXT("continent %.1e, detail %.1e, crater albedo %.1e, detail slope %.1e, crater slope %.1e"),
+            To.Continent, To.Detail, To.CraterAlbedo, To.DetailSlope, To.CraterSlope);
+    }
+
+    /** The measured floor as a rule: each term to the larger of the ruled
+     *  table's value and FloorRuleFactor x the engine's own nodes' distance
+     *  from the double C++ at this footprint, in this run. Says, per term,
+     *  whether the table or the floor set it. */
+    FTolerance CppHeldTo(const FTolerance& Table, const FGap& EngineVsDouble, FString& OutSetBy)
+    {
+        FTolerance To = Table;
+        TArray<FString> SetBy;
+        auto Rule = [&SetBy](const TCHAR* Name, double Ruled, double EngineMiss)
+        {
+            const double Floor = FloorRuleFactor * EngineMiss;
+            SetBy.Add(FString::Printf(TEXT("%s %s"), Name, Floor > Ruled ? TEXT("floor") : TEXT("table")));
+            return FMath::Max(Ruled, Floor);
+        };
+        To.Continent = Rule(TEXT("continent"), Table.Continent, EngineVsDouble.Continent);
+        To.Detail = Rule(TEXT("detail"), Table.Detail, EngineVsDouble.Detail);
+        To.CraterAlbedo = Rule(TEXT("crater albedo"), Table.CraterAlbedo, EngineVsDouble.CraterAlbedo);
+        To.DetailSlope = Rule(TEXT("detail slope"), Table.DetailSlope, EngineVsDouble.DetailSlope);
+        To.CraterSlope = Rule(TEXT("crater slope"), Table.CraterSlope, EngineVsDouble.CraterSlope);
+        OutSetBy = FString::Join(SetBy, TEXT(", "));
+        return To;
+    }
 }
 
 bool FWorldReliefParityTest::RunTest(const FString& Parameters)
@@ -333,8 +380,10 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             }
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
-            const FString Held = FString::Printf(TEXT("continent %.1e, detail %.1e, crater albedo %.1e, detail slope %.1e, crater slope %.1e"),
-                To.Continent, To.Detail, To.CraterAlbedo, To.DetailSlope, To.CraterSlope);
+            const FString Held = DescribeTolerance(To);
+            FString CppSetBy;
+            const FTolerance CppTo = CppHeldTo(To, CppVsOld, CppSetBy);
+            const FString CppHeld = DescribeTolerance(CppTo);
             TestEqual(At + TEXT(": both probes drew the same directions"), Unmatched, 0);
             FString ByBand;
             double MostInABand = 0.0;
@@ -350,8 +399,8 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                 *At, *Held, *NewVsOld.Describe()), NewVsOld.Within(To));
             if (World.bHoldCpp)
             {
-                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, held to %s (%s)"),
-                    *At, *Held, *CppVsNew.Describe()), CppVsNew.Within(To));
+                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
+                    *At, *CppHeld, *CppVsNew.Describe()), CppVsNew.Within(CppTo));
                 WorstCppNew = FMath::Max(WorstCppNew, CppVsNew.Worst());
                 WorstFloatNew = FMath::Max(WorstFloatNew, FloatVsNew.Worst());
                 WorstCppOld = FMath::Max(WorstCppOld, CppVsOld.Worst());
@@ -360,7 +409,9 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             MostLeftOut = FMath::Max(MostLeftOut, LeftOutShare);
             MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
             Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s)"), *At, Side * Side - LeftOut, LeftOut, *ByBand));
-            Report.Add(TEXT("  held to:                            ") + Held);
+            Report.Add(TEXT("  shared file held to (the table):    ") + Held);
+            Report.Add(TEXT("  C++ held to (the rule):             ") + CppHeld);
+            Report.Add(TEXT("    set by:                           ") + CppSetBy);
             Report.Add(TEXT("  shared file vs engine nodes:        ") + NewVsOld.Describe());
             Report.Add(TEXT("  C++ (double) vs shared file:        ") + CppVsNew.Describe());
             Report.Add(TEXT("  C++ (float build) vs shared file:   ") + FloatVsNew.Describe());
