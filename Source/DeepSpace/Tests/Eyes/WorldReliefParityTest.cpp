@@ -9,7 +9,10 @@
 #include "RHI.h"
 #include "RenderingThread.h"
 #include "ShaderCompiler.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Sky/SkySystem.h"
+#include "Universe/UniverseSubsystem.h"
 #include "Surface/WorldRelief.h"
 #include "Tests/SkyTestWorld.h"
 
@@ -28,7 +31,7 @@
  *
  *   - to M_SkyReliefProbeLegacy, the same terms from the engine's own noise
  *     nodes: "the orbital look unchanged", as a number;
- *   - to the C++, at the very D the GPU drew;
+ *   - to the C++ -- FWorldRelief::Face of Baemsekai IV -- at the very D the GPU drew;
  *
  * over 256 x 256 samples at each of five footprints, per footprint and per
  * term, at the measured float floor (the developer's rulings after the
@@ -86,6 +89,8 @@
  * report was identical to the clean run's). KnownValues and
  * DeepSpace.Sky.MaterialContract both KILL it headlessly; the GPU's float at
  * those two bands is unguarded until a footprint below 1/12288 is ruled.
+ *
+ * R4, M_SkyBody on the shared file, the barren world Baemsekai IV through FWorldRelief: STOPPED -- one term over the table, shared file vs engine nodes, Baemsekai IV 1/768 detail slope 1.01e-03 against 1.0e-03 (C++ vs engine 1.25e-03, C++ vs shared 1.27e-03, held to 1.6e-03 by the rule and within it); every other term within the table and the rule; SUMMARY shared-vs-engine 7.64e-03, C++-vs-shared 7.42e-03, float-C++-vs-shared 9.36e-03, C++-vs-engine 6.23e-03, left out at most 0.462% in one crater band
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -125,9 +130,9 @@ namespace WorldReliefParityLocal
      *  (the measured floor as a rule). */
     constexpr double FloorRuleFactor = 1.25;
 
-    /** A barren world's seed offset until task R4 hands the test Baemsekai
-     *  IV's: multiples of 1/256, as every real one is. */
-    const FVector3d Offset(12.5, 200.25, 77.0);
+    /** The giant's seed offset: a made one, multiples of 1/256 as every real
+     *  one is. The barren world is Baemsekai IV, with its own. */
+    const FVector3d GiantOffset(12.5, 200.25, 77.0);
 
     enum class EPass : int32 { Terms = 0, DetailSlope = 1, CraterSlope = 2, Direction = 3 };
 
@@ -329,17 +334,45 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
     double MostLeftOut = 0.0;
     double MostLeftOutInABand = 0.0;
 
-    // Barren (stretch 1) against both the engine's nodes and the C++; a
-    // giant (stretch 6, the belts' streaking) against the engine's nodes,
-    // and the C++ reported only: a giant has no ground.
-    struct FWorldCase { const TCHAR* Name; float Banding; double Stretch; bool bHoldCpp; };
-    const FWorldCase Worlds[] = { { TEXT("barren"), 0.0f, 1.0, true }, { TEXT("giant"), 1.0f, 6.0, false } };
+    // Barren: Baemsekai IV, the landing fixtures' first world, its C++
+    // through FWorldRelief -- what the flight and the terrain read -- held
+    // against both the engine's nodes and the GPU. A giant (stretch 6, the
+    // belts' streaking) against the engine's nodes; its C++ reported only,
+    // since a giant has no ground.
+    const TOptional<FStarSystem> Home = Test.Universe->GetSystem(Test.Universe->GetStartSystem());
+    if (!TestTrue(TEXT("home generates"), Home.IsSet()))
+    {
+        return false;
+    }
+    const FSkySystem HomeSky = FSkySystem::FromSystem(*Home, {});
+    if (!TestTrue(TEXT("home has a fourth world"), HomeSky.Bodies.IsValidIndex(4)))
+    {
+        return false;
+    }
+    const FSkyBody& Fourth = HomeSky.Bodies[4];
+    TestEqual(TEXT("the barren world is Baemsekai IV"), Fourth.Id, FName(TEXT("Baemsekai IV")));
+    const FWorldRelief Ground(Fourth.Relief);
+
+    struct FWorldCase
+    {
+        const TCHAR* Name;
+        FLinearColor Seed;
+        FVector3d Offset;
+        float Banding;
+        double Stretch;
+        const FWorldRelief* Relief;
+    };
+    const FWorldCase Worlds[] = {
+        { TEXT("Baemsekai IV"), ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs), Fourth.Relief.SeedOffset, 0.0f, 1.0, &Ground },
+        { TEXT("giant"), FLinearColor(static_cast<float>(GiantOffset.X), static_cast<float>(GiantOffset.Y), static_cast<float>(GiantOffset.Z), 8.0f),
+          GiantOffset, 1.0f, 6.0, nullptr },
+    };
     for (const FWorldCase& World : Worlds)
     {
+        const FVector3d& Offset = World.Offset;
         for (UMaterialInstanceDynamic* Probe : { NewProbe, OldProbe })
         {
-            Probe->SetVectorParameterValue(SkyMaterial::SurfaceSeed,
-                FLinearColor(static_cast<float>(Offset.X), static_cast<float>(Offset.Y), static_cast<float>(Offset.Z), 8.0f));
+            Probe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, World.Seed);
             Probe->SetScalarParameterValue(SkyMaterial::Banding, World.Banding);
         }
         for (const FTolerance& To : Footprints)
@@ -380,7 +413,9 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                 }
                 const FFaceTerms Gpu = New.At(Index);
                 const FFaceTerms Engine = Old.At(Index);
-                const FFaceTerms Cpp = WorldReliefNoise::FaceF64(D, Footprint, Offset, World.Stretch);
+                const FFaceTerms Cpp = World.Relief
+                    ? World.Relief->Face(D, static_cast<double>(Footprint) * World.Relief->GetParams().RadiusCm)
+                    : WorldReliefNoise::FaceF64(D, Footprint, Offset, World.Stretch);
                 const FFaceTerms Float = WorldReliefNoise::FaceF32(FVector3f(D), Footprint, FVector3f(Offset), static_cast<float>(World.Stretch));
                 NewVsOld.Widen(Gpu, Engine);
                 CppVsNew.Widen(Cpp, Gpu);
@@ -406,9 +441,9 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                 MostInABand <= MaxLeftOutPerBand);
             TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew, held to %s (%s)"),
                 *At, *Held, *NewVsOld.Describe()), NewVsOld.Within(To));
-            if (World.bHoldCpp)
+            if (World.Relief)
             {
-                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
+                TestTrue(FString::Printf(TEXT("%s: FWorldRelief computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
                     *At, *CppHeld, *CppVsNew.Describe()), CppVsNew.Within(CppTo));
                 WorstCppNew = FMath::Max(WorstCppNew, CppVsNew.Worst());
                 WorstFloatNew = FMath::Max(WorstFloatNew, FloatVsNew.Worst());

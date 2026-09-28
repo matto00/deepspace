@@ -453,11 +453,6 @@ def legacy_terms(g, direction, footprint, seed, stretch, detail_bands, crater_ba
     return Terms(coarse, fine, crater_face, crater_slope)
 
 
-def every_band(g, direction, footprint, seed, stretch):
-    """The engine nodes, every band: M_SkyBody until landing task R4."""
-    return legacy_terms(g, direction, footprint, seed, stretch, EVERY_DETAIL, EVERY_CRATER)
-
-
 def shared_terms(g, direction, footprint, seed, stretch):
     """The same raw terms from Shaders/Private/WorldRelief.ush -- the file the
     C++ compiles too (landing decision 1) -- through one Custom node that
@@ -626,6 +621,7 @@ def sky_body():
     """Planets and moons.
 
         N        = relief_normal                      (surface)
+    (the face's every band from Shaders/Private/WorldRelief.ush, through one Custom node: landing decision 1)
         shaded   = gain * saturate(N.L) * smoothstep(-w, w, N.L)
         disc     = shaded * face                      (surface)
         emissive = Colour * Brightness * lerp(disc, 1, PointBlend)
@@ -662,7 +658,7 @@ def sky_body():
 
     axes = body_axes(g)
     direction, footprint = body_direction(g, axes)
-    factor, slope = surface(g, knobs, seed, direction, footprint, every_band)
+    factor, slope = surface(g, knobs, seed, direction, footprint, shared_terms)
     normal = relief_normal(g, direction, slope, axes)
     n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
     lambert = g.unary(unreal.MaterialExpressionSaturate, n_dot_l)
