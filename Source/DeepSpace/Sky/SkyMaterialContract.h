@@ -30,6 +30,21 @@ namespace SkyMaterial
     // SkySphereMesh (Tools/sky_material_contract.json's "meshes").
     inline const TCHAR* const BodyMeshPath = TEXT("/Game/Materials/Sky/SM_SkyBody.SM_SkyBody");
 
+    // The probes Eyes.WorldReliefParity draws (landing decision 1): the raw
+    // face terms over a fixed patch at a fixed footprint, untonemapped.
+    // M_SkyReliefProbe reaches them through the shared file.
+    inline const TCHAR* const ReliefProbePath = TEXT("/Game/Materials/Sky/M_SkyReliefProbe.M_SkyReliefProbe");
+    inline const FName ProbeFootprint = TEXT("ProbeFootprint"); // scalar: D units a pixel, times filter_pixels
+    inline const FName ProbeSelect = TEXT("ProbeSelect");       // vector: one-hot, which terms the pixel carries
+    inline const FName ProbeBias = TEXT("ProbeBias");           // vector: added to the pixel; the pipe check
+
+    // The shared file as a Custom node reaches it: its include, the function
+    // it calls, and its pins, in order.
+    inline const TCHAR* const WorldReliefInclude = TEXT("/Project/Private/WorldRelief.ush");
+    inline const TCHAR* const WorldReliefEntry = TEXT("WR_SurfaceTerms");
+    inline TArray<FName> WorldReliefInputs() { return { TEXT("Direction"), TEXT("Footprint"), TEXT("SeedOffset"), TEXT("Stretch") }; }
+    inline TArray<FName> WorldReliefOutputs() { return { TEXT("Continent"), TEXT("CraterAlbedo"), TEXT("CraterSlope") }; }
+
     // M_SkyBody: planets and moons.
     //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY;
     //   scalars Brightness, PointBlend, Mottle, Detail, Banding, Relief, Cratering.
@@ -76,6 +91,8 @@ namespace SkyMaterial
     inline TArray<FName> StarScalars() { return { Brightness }; }
     inline TArray<FName> StarVectors() { return { Colour }; }
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
+    inline TArray<FName> ProbeScalars() { return { Banding, ProbeFootprint }; }
+    inline TArray<FName> ProbeVectors() { return { SurfaceSeed, ProbeSelect, ProbeBias }; }
 
     /**
      * M_SkyBody's shaded term is this times saturate(N.L). A Lambert sphere's

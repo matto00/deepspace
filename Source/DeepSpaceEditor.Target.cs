@@ -10,6 +10,6 @@ public class DeepSpaceEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
-		ExtraModuleNames.Add("DeepSpace");
+		ExtraModuleNames.AddRange(new string[] { "DeepSpace" });
 	}
 }
