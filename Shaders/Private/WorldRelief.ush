@@ -55,6 +55,9 @@ inline WR_REAL WR_min(WR_REAL A, WR_REAL B) { return A < B ? A : B; }
 inline WR_REAL WR_max(WR_REAL A, WR_REAL B) { return A > B ? A : B; }
 inline WR_REAL WR_sqrt(WR_REAL X) { return std::sqrt(X); }
 inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0) : WR_REAL(0.0); }
+inline WR_REAL WR_asin(WR_REAL X) { return std::asin(X); }
+inline WR_REAL WR_atan2(WR_REAL Y, WR_REAL X) { return std::atan2(Y, X); }
+inline WR_REAL WR_log2(WR_REAL X) { return std::log2(X); }
 #else
 // -- HLSL --------------------------------------------------------------------
 #pragma once
@@ -70,6 +73,9 @@ inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0
 #define WR_max(A, B) max(A, B)
 #define WR_sqrt(X) sqrt(X)
 #define WR_step(Edge, X) step(Edge, X)
+#define WR_asin(X) asin(X)
+#define WR_atan2(Y, X) atan2(Y, X)
+#define WR_log2(X) log2(X)
 #endif
 
 // -- The bands ---------------------------------------------------------------
@@ -708,4 +714,96 @@ WR_GroundNormalOut WR_GroundNormal(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL V
     Out.NY = NY / NL;
     Out.NZ = NZ / NL;
     return Out;
+}
+
+// -- The cast shadow's map (the developer's ruling on slice (b)'s build,
+// 2026-09-28: baked, not marched) --------------------------------------------
+// The orbit reads each solid world's shadow from one texture, baked in C++
+// when the system loads (SunShadowMap::Bake). It is an equirectangular map in
+// the star's own frame -- Z the light, as the sky lights the world, X and Y
+// square to it -- its columns the azimuth about the light from -pi, its rows
+// the star's elevation from PsiLo, the lowest at which any point of the world
+// can see any of it, up to the point under the star. Each texel is Step
+// square at the terminator, where the shadows are. M_SkyBody and M_SkyGround
+// read it through these three functions and eight texel loads, and
+// SunShadowMap::Sample is their C++ mirror.
+static const WR_REAL WR_PI = WR_REAL(3.14159265358979323846);
+
+struct WR_ShadowCoord
+{
+    WR_REAL U;       // the column coordinate, texel centres at whole numbers
+    WR_REAL V;       // the row coordinate, the same
+    int Level0;      // the finer of the two levels read
+    int Level1;      // the coarser
+    WR_REAL Blend;   // how far toward Level1
+    int Night;       // 1 under PsiLo, where the lookup is 0: no point sees any of the star
+};
+
+// D in the body's axes; the frame's X and Z; PsiLo and Step, rad; Footprint
+// one pixel's width, D units (the faces' filtered footprint divided by
+// filter_pixels, which M_SkyBody and M_SkyGround do before the node); Levels
+// the map's.
+WR_ShadowCoord WR_ShadowMapCoord(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL XX, WR_REAL XY, WR_REAL XZ,
+                                 WR_REAL ZX, WR_REAL ZY, WR_REAL ZZ, WR_REAL PsiLo, WR_REAL Step, WR_REAL Footprint, int Levels)
+{
+    const WR_REAL YX = ZY * XZ - ZZ * XY;
+    const WR_REAL YY = ZZ * XX - ZX * XZ;
+    const WR_REAL YZ = ZX * XY - ZY * XX;
+    const WR_REAL S = WR_min(WR_REAL(1.0), WR_max(WR_REAL(-1.0), DX * ZX + DY * ZY + DZ * ZZ));
+    const WR_REAL Psi = WR_asin(S);
+    const WR_REAL Phi = WR_atan2(DX * YX + DY * YY + DZ * YZ, DX * XX + DY * XY + DZ * XZ);
+    WR_ShadowCoord Out;
+    Out.U = (Phi + WR_PI) / Step - WR_REAL(0.5);
+    Out.V = (Psi - PsiLo) / Step - WR_REAL(0.5);
+    Out.Night = Psi < PsiLo ? 1 : 0;
+    // The pixel's footprint in texels along a texel's narrower side: along
+    // the rows a texel is Step cos(psi) across, so toward the point under
+    // the star the map is read coarser; a map coarser than the pixel is read
+    // at its finest.
+    const WR_REAL Across = Step * WR_max(WR_sqrt(WR_max(WR_REAL(0.0), WR_REAL(1.0) - S * S)), WR_REAL(1.0e-4));
+    const WR_REAL Level = WR_min(WR_log2(WR_max(Footprint / Across, WR_REAL(1.0))), WR_REAL(Levels - 1));
+    Out.Level0 = int(WR_floor(Level));
+    Out.Level1 = Out.Level0 + 1 < Levels ? Out.Level0 + 1 : Levels - 1;
+    Out.Blend = Level - WR_floor(Level);
+    return Out;
+}
+
+struct WR_ShadowTaps
+{
+    int X0;
+    int X1;
+    int Y0;
+    int Y1;
+    WR_REAL FX;
+    WR_REAL FY;
+};
+
+// The four texels around (U, V) at Level of a map Width x Rows at level 0:
+// columns wrap, rows clamp, and a level's texel is level 0's halved per
+// level about the texel centres, the GPU's own mip sizes (Width >> Level).
+WR_ShadowTaps WR_ShadowTapsAt(WR_REAL U, WR_REAL V, int Width, int Rows, int Level)
+{
+    const int W = (Width >> Level) > 1 ? (Width >> Level) : 1;
+    const int H = (Rows >> Level) > 1 ? (Rows >> Level) : 1;
+    const WR_REAL Scale = WR_REAL(1 << Level);
+    const WR_REAL UL = (U + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL VL = (V + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL FloorU = WR_floor(UL);
+    const WR_REAL FloorV = WR_floor(VL);
+    const int X = int(FloorU);
+    const int Y = int(FloorV);
+    WR_ShadowTaps Out;
+    // X lies in [-1, W - 1]: one wrap either way is all it can need.
+    Out.X0 = X < 0 ? X + W : (X >= W ? X - W : X);
+    Out.X1 = X + 1 < 0 ? X + 1 + W : (X + 1 >= W ? X + 1 - W : X + 1);
+    Out.Y0 = Y < 0 ? 0 : (Y > H - 1 ? H - 1 : Y);
+    Out.Y1 = Y + 1 < 0 ? 0 : (Y + 1 > H - 1 ? H - 1 : Y + 1);
+    Out.FX = UL - FloorU;
+    Out.FY = VL - FloorV;
+    return Out;
+}
+
+WR_REAL WR_Bilinear(WR_REAL A, WR_REAL B, WR_REAL C, WR_REAL D, WR_REAL FX, WR_REAL FY)
+{
+    return WR_Lerp(WR_Lerp(A, B, FX), WR_Lerp(C, D, FX), FY);
 }

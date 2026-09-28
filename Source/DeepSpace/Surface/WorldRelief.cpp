@@ -37,6 +37,32 @@ namespace WorldReliefLocal
         Face.CraterSlope = FVector3d(Terms.CraterSlopeX, Terms.CraterSlopeY, Terms.CraterSlopeZ);
         return Face;
     }
+
+    template <typename TCoord>
+    WorldReliefNoise::FShadowCoord ToShadowCoord(const TCoord& C)
+    {
+        WorldReliefNoise::FShadowCoord Out;
+        Out.U = C.U;
+        Out.V = C.V;
+        Out.Level0 = C.Level0;
+        Out.Level1 = C.Level1;
+        Out.Blend = C.Blend;
+        Out.Night = C.Night;
+        return Out;
+    }
+
+    template <typename TTaps>
+    WorldReliefNoise::FShadowTaps ToShadowTaps(const TTaps& T)
+    {
+        WorldReliefNoise::FShadowTaps Out;
+        Out.X0 = T.X0;
+        Out.X1 = T.X1;
+        Out.Y0 = T.Y0;
+        Out.Y1 = T.Y1;
+        Out.FX = T.FX;
+        Out.FY = T.FY;
+        return Out;
+    }
 }
 
 FIntVector WorldReliefNoise::Hash16(int32 X, int32 Y, int32 Z)
@@ -78,6 +104,50 @@ FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const
                                        float VertexBandLimit)
 {
     return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch, VertexBandLimit));
+}
+
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo,
+                                                                   double Step, double Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF64::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo,
+                                                                   float Step, float Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF32::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF64::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF32::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+double WorldReliefNoise::BilinearF64(double A, double B, double C, double D, double FX, double FY)
+{
+    return WorldReliefF64::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+float WorldReliefNoise::BilinearF32(float A, float B, float C, float D, float FX, float FY)
+{
+    return WorldReliefF32::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+double WorldReliefNoise::LerpF64(double A, double B, double T)
+{
+    return WorldReliefF64::WR_Lerp(A, B, T);
+}
+
+float WorldReliefNoise::LerpF32(float A, float B, float T)
+{
+    return WorldReliefF32::WR_Lerp(A, B, T);
 }
 
 double WorldReliefNoise::CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band)

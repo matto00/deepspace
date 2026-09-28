@@ -92,6 +92,39 @@ namespace WorldReliefNoise
      *  developer's ruling at R2: 1% per crater band). */
     DEEPSPACE_API double CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band);
 
+    /** The cast shadow's map lookup, from the shared file (WR_ShadowMapCoord,
+     *  WR_ShadowTapsAt, WR_Bilinear, WR_Lerp), in double and in float: the GPU's
+     *  operations in the GPU's precision, for SunShadowMap::Sample and the
+     *  parity test. */
+    struct FShadowCoord
+    {
+        double U = 0.0;
+        double V = 0.0;
+        int32 Level0 = 0;
+        int32 Level1 = 0;
+        double Blend = 0.0;
+        int32 Night = 0;   // under PsiLo: the lookup is 0
+    };
+    struct FShadowTaps
+    {
+        int32 X0 = 0;
+        int32 X1 = 0;
+        int32 Y0 = 0;
+        int32 Y1 = 0;
+        double FX = 0.0;
+        double FY = 0.0;
+    };
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo, double Step,
+                                                 double Footprint, int32 Levels);
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo, float Step,
+                                                 float Footprint, int32 Levels);
+    DEEPSPACE_API FShadowTaps ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API FShadowTaps ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API double BilinearF64(double A, double B, double C, double D, double FX, double FY);
+    DEEPSPACE_API float BilinearF32(float A, float B, float C, float D, float FX, float FY);
+    DEEPSPACE_API double LerpF64(double A, double B, double T);
+    DEEPSPACE_API float LerpF32(float A, float B, float T);
+
     /** The file's tables and constants, for DeepSpace.Sky.MaterialContract. */
     struct FBands
     {
