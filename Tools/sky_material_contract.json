@@ -23,16 +23,21 @@
     "morph":             { "name": "Morph",           "type": "scalar" },
     "band_limit":        { "name": "BandLimit",       "type": "scalar", "custom_primitive_data": 0 },
     "tile_pivot":        { "name": "TilePivot",       "type": "vector", "custom_primitive_data": 1 },
-    "vertex_band_limit": { "name": "VertexBandLimit", "type": "scalar" }
+    "vertex_band_limit": { "name": "VertexBandLimit", "type": "scalar" },
+    "shadows":           { "name": "Shadows",         "type": "scalar" },
+    "shadow_map":        { "name": "ShadowMap",       "type": "texture" },
+    "shadow_frame_x":    { "name": "ShadowFrameX",    "type": "vector" },
+    "shadow_frame_z":    { "name": "ShadowFrameZ",    "type": "vector" }
   },
   "materials": {
-    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "body_axis_x", "body_axis_y", "brightness", "point_blend", "mottle", "detail", "banding", "relief_scale", "cratering"] },
+    "M_SkyBody":      { "parameters": ["colour", "light_direction", "rim", "surface_seed", "body_axis_x", "body_axis_y", "brightness", "point_blend", "mottle", "detail", "banding", "relief_scale", "cratering", "shadows", "shadow_map", "shadow_frame_x", "shadow_frame_z"] },
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
     "M_SkyGlass":     { "parameters": [] },
     "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] },
-    "M_SkyGround":      { "parameters": ["colour", "light_direction", "surface_seed", "brightness", "mottle", "detail", "cratering", "relief_scale", "morph", "band_limit", "tile_pivot"] },
-    "M_SkyGroundProbe": { "parameters": ["surface_seed", "cratering", "relief_scale", "vertex_band_limit", "probe_footprint", "probe_bias"] }
+    "M_SkyGround":      { "parameters": ["colour", "light_direction", "surface_seed", "brightness", "mottle", "detail", "cratering", "relief_scale", "morph", "band_limit", "tile_pivot", "shadows", "shadow_map", "shadow_frame_x", "shadow_frame_z"] },
+    "M_SkyGroundProbe": { "parameters": ["surface_seed", "cratering", "relief_scale", "vertex_band_limit", "probe_footprint", "probe_bias"] },
+    "M_SkyShadowProbe": { "parameters": ["shadow_map", "shadow_frame_x", "shadow_frame_z", "probe_footprint", "probe_bias"] }
   },
   "ground_comment": "M_SkyGround: unlit, M_SkyBody's own law (the light, the colour, the brightness, the 1.5 disc gain, the terminator's smoothstep, the face clamp) and M_SkyBody's own face, composed by the same surface() graph from the shared file's terms; its normal is the tile's vertex normal (UV1.xy, UV2.x, universe axes) plus the pixel's slope of only the bands the vertices do not carry (WR_GroundNormal). BandLimit (the tile's spacing over R) and TilePivot (the tile's pivot from the world's centre, cm) are custom primitive data, so one instance serves every tile. World Position Offset lowers each vertex by (1 - Morph) x its height (UV2.y, km) along its direction: the relief grows in between the handover and the drive floor. No rim: the sky is black.",
   "shared_relief": {
@@ -41,6 +46,12 @@
     "entry": "WR_SurfaceTerms",
     "inputs": ["Direction", "Footprint", "SeedOffset", "Stretch", "VertexBandLimit"],
     "outputs": [["Continent", "CMOT_FLOAT1"], ["CraterAlbedo", "CMOT_FLOAT1"], ["CraterSlope", "CMOT_FLOAT3"]]
+  },
+  "shadow": {
+    "comment": "The cast shadow (baked, not marched): M_SkyBody, M_SkyGround and M_SkyShadowProbe each call the world's map through one Custom node over the shared file -- WR_ShadowMapCoord for the texel coordinates and the level (and Night, under PsiLo, where the map is 0), WR_ShadowTapsAt for the four texels at each of two levels, WR_Bilinear and WR_Lerp to blend them, eight Loads of ShadowMap -- and then lerp(map, Vertex, Morph): the body passes Vertex 1 and Morph 0, the ground its UV0.x and its Morph. Footprint is one pixel's: the body and the ground pass their face's footprint over filter_pixels, the probe ProbeFootprint as it is. SkyMaterialContract.h holds the same entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them. default_texture is what a world without a map reads, white.",
+    "entry": "WR_ShadowMapCoord",
+    "inputs": ["Direction", "Footprint", "FrameX", "FrameZ", "ShadowMap", "Vertex", "Morph"],
+    "default_texture": "/Game/Materials/Sky/T_SkyShadowWhite.T_SkyShadowWhite"
   },
   "meshes": {
     "comment": "SM_SkyBody: the sphere every body and neighbour is drawn with, built by UDeepSpaceEditorScripting::BuildSkySphere as an equal-angle cube sphere, one LOD per entry of cells_per_lod, finest first. SkySphereMesh.h decides the screen size each LOD switches at, from the view it is sized for: no facet more than half a 4K pixel inside the limb. 224 is what LOD 0 needs at the nearest the sky ever draws a world, 1.6e-3 of its radius; each coarser LOD halves the cells and takes over once it is far enough away not to show.",

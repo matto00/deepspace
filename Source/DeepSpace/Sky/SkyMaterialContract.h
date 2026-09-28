@@ -62,8 +62,9 @@ namespace SkyMaterial
     inline TArray<FName> WorldReliefOutputs() { return { TEXT("Continent"), TEXT("CraterAlbedo"), TEXT("CraterSlope") }; }
 
     // M_SkyBody: planets and moons.
-    //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY;
-    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering.
+    //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY, ShadowFrameX, ShadowFrameZ;
+    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows;
+    //   texture ShadowMap.
     inline const FName Colour = TEXT("Colour");                 // vector: albedo colour, or the star's
     inline const FName LightDirection = TEXT("LightDirection"); // vector: world space, body toward its star
     inline const FName Rim = TEXT("Rim");                       // vector: atmosphere rim, black for none
@@ -81,6 +82,23 @@ namespace SkyMaterial
     // SkyProjection::RenderedScaleBits), so the face turns with the ship here.
     inline const FName BodyAxisX = TEXT("BodyAxisX");           // vector: world space, unit
     inline const FName BodyAxisY = TEXT("BodyAxisY");           // vector: world space, unit, square to X
+
+    // The cast shadow (the developer's ruling on slice (b)'s build: baked,
+    // not marched). M_SkyBody reads the world's map, M_SkyGround the same map
+    // blended into its vertices' shadow by Morph, both through one Custom node
+    // over the shared file's WR_ShadowMapCoord (SunShadowMap::Sample is its
+    // C++ mirror). The strength is ds.Sky.Shadows, lerp(1, shadow, Shadows).
+    inline const FName Shadows = TEXT("Shadows");           // scalar: the cast shadow's strength, 0..1
+    inline const FName ShadowMap = TEXT("ShadowMap");       // texture: the world's map, G16, a mip per level (SunShadowMap)
+    inline const FName ShadowFrameX = TEXT("ShadowFrameX"); // vector: the map's X axis, body axes; w its PsiLo, rad
+    inline const FName ShadowFrameZ = TEXT("ShadowFrameZ"); // vector: its Z axis, the light, body axes; w its Step, rad
+    inline const TCHAR* const ShadowProbePath = TEXT("/Game/Materials/Sky/M_SkyShadowProbe.M_SkyShadowProbe");
+    /** What a world without a baked map reads: a white 16-bit texture, so the
+     *  lookup is 1, no shadow. Authored by setup_sky_materials.py. */
+    inline const TCHAR* const ShadowDefaultTexturePath = TEXT("/Game/Materials/Sky/T_SkyShadowWhite.T_SkyShadowWhite");
+    /** The shadow node's include is WorldReliefInclude; it calls this, and takes these pins, in order. */
+    inline const TCHAR* const ShadowCoordEntry = TEXT("WR_ShadowMapCoord");
+    inline TArray<FName> ShadowInputs() { return { TEXT("Direction"), TEXT("Footprint"), TEXT("FrameX"), TEXT("FrameZ"), TEXT("ShadowMap"), TEXT("Vertex"), TEXT("Morph") }; }
 
     // M_SkyStar: the local star, the motes, navigation's course marker.
     //   vector Colour; scalar Brightness.
@@ -102,17 +120,22 @@ namespace SkyMaterial
     // Each asset's parameters, exactly: the test checks the JSON against
     // these and every loaded asset against the JSON, so a parameter added on
     // one side and not the other is a red test, not a silent no-op.
-    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering }; }
-    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY }; }
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows }; }
+    inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY, ShadowFrameX, ShadowFrameZ }; }
+    inline TArray<FName> BodyTextures() { return { ShadowMap }; }
     inline TArray<FName> StarScalars() { return { Brightness }; }
     inline TArray<FName> StarVectors() { return { Colour }; }
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
     inline TArray<FName> ProbeScalars() { return { Banding, ProbeFootprint }; }
     inline TArray<FName> ProbeVectors() { return { SurfaceSeed, ProbeSelect, ProbeBias }; }
-    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit }; }
-    inline TArray<FName> GroundVectors() { return { Colour, LightDirection, SurfaceSeed, TilePivot }; }
+    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit, Shadows }; }
+    inline TArray<FName> GroundVectors() { return { Colour, LightDirection, SurfaceSeed, TilePivot, ShadowFrameX, ShadowFrameZ }; }
+    inline TArray<FName> GroundTextures() { return { ShadowMap }; }
     inline TArray<FName> GroundProbeScalars() { return { Cratering, ReliefScale, VertexBandLimit, ProbeFootprint }; }
     inline TArray<FName> GroundProbeVectors() { return { SurfaceSeed, ProbeBias }; }
+    inline TArray<FName> ShadowProbeScalars() { return { ProbeFootprint }; }
+    inline TArray<FName> ShadowProbeVectors() { return { ShadowFrameX, ShadowFrameZ, ProbeBias }; }
+    inline TArray<FName> ShadowProbeTextures() { return { ShadowMap }; }
 
     /**
      * M_SkyBody's shaded term is this times saturate(N.L). A Lambert sphere's
