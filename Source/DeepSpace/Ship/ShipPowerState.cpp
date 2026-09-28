@@ -1,5 +1,7 @@
 #include "Ship/ShipPowerState.h"
 
+#include "Ship/ShipGravity.h"
+
 namespace ShipPower
 {
     const FName Lights(TEXT("Power.Lights"));
@@ -213,4 +215,27 @@ TArray<FName> FShipPowerState::GetConsumers() const
     // which.
     Ids.Sort(FNameLexicalLess());
     return Ids;
+}
+
+float ShipPower::HoldWant(double GravityCmS2, double DepthUnderFloorCm, float WattsPerG, bool bAirborne)
+{
+    if (!bAirborne || !(DepthUnderFloorCm > 0.0) || !(WattsPerG > 0.0f))
+    {
+        return 0.0f;
+    }
+    const double Gs = FMath::Min(FMath::Max(GravityCmS2, 0.0) / ShipFlight::StandardGravityCmS2, HoldGCap);
+    const double Ramp = FMath::Clamp(DepthUnderFloorCm / HoldRampCm, 0.0, 1.0);
+    return static_cast<float>(WattsPerG * Gs * Ramp);
+}
+
+ShipPower::FBoosterSplit ShipPower::SplitBoosters(float Share, float HoldWant, float ManoeuvreWant)
+{
+    FBoosterSplit Split;
+    const float Available = FMath::Max(Share, 0.0f);
+    const float Hold = FMath::Max(HoldWant, 0.0f);
+    Split.HoldWatts = FMath::Min(Available, Hold);
+    Split.HoldFed = Hold > 0.0f ? Split.HoldWatts / Hold : 1.0f;
+    const float Left = Available - Split.HoldWatts;
+    Split.ManoeuvreFeed = ManoeuvreWant > 0.0f ? FMath::Clamp(Left / ManoeuvreWant, 0.0f, 1.0f) : 1.0f;
+    return Split;
 }

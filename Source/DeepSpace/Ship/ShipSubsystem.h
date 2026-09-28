@@ -225,6 +225,15 @@ public:
     UFUNCTION(BlueprintPure, Category = "Flight")
     float GetLinearAcceleration() const;
 
+    /** Watts the boosters want to hold the ship against gravity: 150 W a g
+     *  under a solid world's drive floor, airborne, and nothing anywhere a
+     *  ship can be parked (landing decision 5). */
+    float GetHoldWant() const;
+
+    /** Watts actually reaching the hold, paid first inside the boosters'
+     *  share: what the hum's hold term reads, never satisfaction. */
+    float GetHoldWatts() const;
+
     /**
      * Pilot mode. The pilot seat reports who sits at the helm; anything that
      * cares whether the ship is being flown asks here rather than reaching
@@ -643,6 +652,13 @@ private:
 
     /** What SetFoldDraw last put on the reactor; 0 is none. */
     float FoldDrawWatts = 0.0f;
+
+    /** The hold's want, W: rewritten by ApplyAllocation only when it moves by
+     *  more than a watt (landing decision 5). */
+    float HoldWant = 0.0f;
+
+    /** The boosters' split between the hold and the manoeuvre, this frame's. */
+    ShipPower::FBoosterSplit LastSplit;
 
     bool bLightsOn = true;
 

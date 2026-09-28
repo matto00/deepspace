@@ -183,7 +183,7 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<float> CVarHoldWatts(
-        TEXT("ds.Boosters.HoldWatts"), 150.0f,
+        TEXT("ds.Boosters.HoldWatts"), ShipPower::DefaultHoldWattsPerG,
         TEXT("Watts per g the boosters want to hold the ship, only under a solid world's drive floor, airborne (capped at 3 g)."),
         ECVF_Default);
 
@@ -697,21 +697,31 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     }
     SetFoldDraw(bWinding ? FMath::Max(0.0f, CVarFoldDraw.GetValueOnGameThread()) : 0.0f);
 
+    // The hold (landing decision 5): only under a solid world's drive floor,
+    // airborne -- landed is slice (c)'s, always airborne here. Recomputed only
+    // when it moves by more than a watt, so the split is not re-solved every
+    // frame for nothing.
+    const float WantNow = ShipPower::HoldWant(FlightState.GetLocalGravity().Size(), FlightState.GetDepthUnderDriveFloor(),
+                                              FMath::Max(0.0f, CVarHoldWatts.GetValueOnGameThread()), true);
+    if (FMath::Abs(WantNow - HoldWant) > 1.0f || (WantNow == 0.0f && HoldWant != 0.0f))
+    {
+        HoldWant = WantNow;
+    }
+
     // The boosters' want has one writer, here (wear sign-off 29): the fitted
-    // part's rating. A fit changes the ratings and this pass writes the want
-    // from them, so a fit and anything else that adds to the want -- landing's
-    // hold -- never write it from two places in one frame.
-    const float BoostersWantNow = static_cast<float>(Ratings.BoostersWant);
+    // part's rating plus the hold. A fit changes the rating and this pass
+    // writes the sum, so a fit and the hold never write it from two places.
+    const float ManoeuvreWant = static_cast<float>(Ratings.BoostersWant);
+    const float BoostersWantNow = ManoeuvreWant + HoldWant;
     if (PowerState.GetWant(ShipPower::Boosters) != BoostersWantNow)
     {
         PowerState.SetWant(ShipPower::Boosters, BoostersWantNow);
     }
 
-    // Asked for fresh every frame and never stored. A cached satisfaction is
-    // how two things that read the same allocation start disagreeing.
-    const float BoosterFeed = PowerState.GetSatisfaction(ShipPower::Boosters);
+    // Asked for fresh every frame and never stored beyond it.
+    LastSplit = ShipPower::SplitBoosters(PowerState.GetShare(ShipPower::Boosters), HoldWant, ManoeuvreWant);
     const float EngineFeed = PowerState.GetSatisfaction(ShipPower::Engine);
-    const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed;
+    const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * LastSplit.ManoeuvreFeed;
 
     FShipFlightLimits Limits = FlightState.GetLimits();
     Limits.LinearAcceleration = Ratings.LinearAcceleration * Thrust;
@@ -744,6 +754,10 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     Limits.DriveHandbackCm = FMath::Max(0.0f, CVarDriveHandback.GetValueOnGameThread()) * 100.0;
     Limits.VerticalTop = FMath::Max(0.0f, CVarVerticalTop.GetValueOnGameThread()) * 100.0;
     Limits.VerticalHeavyFloor = FMath::Clamp(CVarHeavyFloor.GetValueOnGameThread(), 0.0f, 1.0f);
+
+    // The starved sink: a bias the flight applies only under the floor, and
+    // only to HOVER or a sink -- a starved ship always lifts.
+    Limits.SinkBias = FMath::Max(0.0f, CVarStarvedSink.GetValueOnGameThread()) * 100.0 * (1.0 - LastSplit.HoldFed);
     FlightState.SetLimits(Limits);
 
     // The charge winds only while engaged, and otherwise holds exactly where
@@ -762,6 +776,16 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
         ChargeRequestedFor.Reset();
         FlightState.ChargeJumpDrive(FMath::Max(ChargeSeconds, 1.0), 1.0, ChargeSeconds);
     }
+}
+
+float UShipSubsystem::GetHoldWant() const
+{
+    return HoldWant;
+}
+
+float UShipSubsystem::GetHoldWatts() const
+{
+    return LastSplit.HoldWatts;
 }
 
 void UShipSubsystem::SetFoldDraw(float Watts)
