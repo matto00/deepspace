@@ -153,6 +153,11 @@ been abandoned. Say so.
   height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
   compiles too (the engine maps `/Project` to `Shaders/` by itself);
   `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
+  Landing slice b adds `IGroundField` (`GroundField.*`, WorldRelief behind
+  the flight's interface), the pure quadtree and tile builder
+  (`TerrainQuadtree.*`, `TerrainTile.*`), and `AWorldGround`, which streams
+  the nearest solid world's tiles off the game thread into pooled meshes on
+  the counter-frame (*The ground*).
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -1215,6 +1220,7 @@ tests that assert it.
 | `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
 | `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`, from `TerrainQuadtree` |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |

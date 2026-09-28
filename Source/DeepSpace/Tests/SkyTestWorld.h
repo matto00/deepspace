@@ -8,12 +8,14 @@
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Surface/WorldGround.h"
 #include "Universe/UniverseSubsystem.h"
 
 /**
@@ -55,6 +57,7 @@ namespace SkyTestWorld
         UUniverseSubsystem* Universe = nullptr;
         AShipCounterFrame* Frame = nullptr;
         AShipSky* Sky = nullptr;
+        AWorldGround* Ground = nullptr;
         UStaticMesh* Sphere = nullptr;
 
         /** DistantStars is kept small unless a test needs the real dome: the
@@ -93,6 +96,14 @@ namespace SkyTestWorld
                 Sky->PointStarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarfieldPath);
                 Sky->SkyParameters = LoadObject<UMaterialParameterCollection>(nullptr, SkyMaterial::ParametersPath);
             }
+            // What place_ground assigns, and all it assigns: the ground's
+            // material. Before M_SkyGround exists (Task T7), the engine's.
+            Ground = World->SpawnActor<AWorldGround>();
+            if (Ground)
+            {
+                UMaterialInterface* GroundMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/Sky/M_SkyGround.M_SkyGround"));
+                Ground->GroundMaterial = GroundMaterial ? GroundMaterial : UMaterial::GetDefaultMaterial(MD_Surface);
+            }
         }
 
         /** The subsystems' OnWorldBeginPlay -- where the opening placement
@@ -113,6 +124,10 @@ namespace SkyTestWorld
         {
             Ship->Tick(DeltaSeconds);
             Frame->SyncToShip();
+            if (Ground)
+            {
+                Ground->SyncToShip();
+            }
             Sky->SyncToShip();
         }
 
