@@ -15,6 +15,7 @@
 #include "Surface/GroundField.h"
 #include "Surface/WorldGround.h"
 #include "TextureResource.h"
+#include "Tests/Eyes/EyesFrames.h"
 #include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -36,14 +37,28 @@
  * at the start, and four at a dusk placed as Eyes.ReliefLook places it --
  * 50 km, 1.5 m and 200 km at the dusk goto's 10 degrees, and 1.5 m at 3,
  * where every pixel of the ground marches. Each case prints its sun's
- * elevation. Each is timed with ds.Sky.Shadows 0 and 1 (when it exists) in
- * ABBA order, five times over, and the medians are reported with their
- * interquartile spread and the raw times. The gate is Tools/landing_frame_gate.py: the frame with the term
- * against this run with EYES_TAG=baseline, taken before the term existed.
- * On minus off is reported beside it, not gated on: at 0 the pixel still
- * runs the larger shader. The one assertion is that the switch reaches the
- * materials, proven by pixels: at the 3-degree dusk the term shades at least
- * 1% of the lit ground.
+ * elevation, and its height over the ground itself (agl_m, before and
+ * after timing). Each is timed with ds.Sky.Shadows 0 and 1 (when it exists)
+ * in ABBA order, five times over after one untimed round, and the medians
+ * are reported with their interquartile spread and the raw times. The gate
+ * is Tools/landing_frame_gate.py: the frame with the term against this run
+ * with EYES_TAG=baseline, taken before the term existed, read against the
+ * medians' own error. On minus off is reported beside it, not gated on: at 0
+ * the pixel still runs the larger shader.
+ *
+ * The one assertion, when the switch exists, is that it reaches the
+ * materials, proven by pixels at 1.5m_dusk3. Not by comparing one capture
+ * with another over the whole frame: the far tiles flicker between captures,
+ * and that alone read 6% "coverage" there with no term at all (21-89% in the
+ * spike's runs, over a frame nearly black at the game's exposure). So the
+ * proof is drawn at the game's exposure some stops brighter (ReadStops;
+ * EyesFrames.h), 1080p, twice without
+ * the term and once with it, and read only on the pixels the two without it
+ * held still: at least 1% of the frame must be lit and held, and the term
+ * must take at least 10% of those under half (planning measured 40-60% at 3 degrees). With no switch that coverage
+ * is the flicker inside held pixels, which the baselines read at 0.5-2.3% (switch_cov),
+ * and it must stay far under 10% for the proof to mean anything. Each line
+ * says `switch present` or `switch absent`; absent, a warning says so.
  *
  *   EYES_TAG=baseline Tools/eyes.sh Eyes.LandingFrame      (before any shader change)
  *   EYES_TAG=shadows  Tools/eyes.sh Eyes.LandingFrame
@@ -91,6 +106,24 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
     // halves of each A/B draw the same frame.
     IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
     const float ShadowsWere = Shadows ? Shadows->GetFloat() : 1.0f;
+    if (!Shadows)
+    {
+        AddWarning(TEXT("ds.Sky.Shadows does not exist: on and off time one frame, and the switch is not proven (switch absent). Right before the term is built; after it, the name is wrong."));
+    }
+    // The switch's proof is read at 1080p: 8M pixels three times over at 4K
+    // would add nothing a 2M-pixel frame cannot show.
+    UTextureRenderTarget2D* ProofTarget = NewObject<UTextureRenderTarget2D>(Test.Sky);
+    ProofTarget->InitCustomFormat(1920, 1080, PF_B8G8R8A8, false);
+    ProofTarget->UpdateResourceImmediate(true);
+    // Its own capture, so the timed one is never given a view state: the
+    // first run that switched the timed capture's on for the proof and off
+    // again had 100-190 ms frames in the cases after it.
+    USceneCaptureComponent2D* ProofCapture = NewObject<USceneCaptureComponent2D>(Test.Sky);
+    ProofCapture->RegisterComponent();
+    ProofCapture->TextureTarget = ProofTarget;
+    ProofCapture->bCaptureEveryFrame = false;
+    ProofCapture->FOVAngle = 90.0f;
+    ProofCapture->CaptureSource = SCS_FinalColorLDR;
 
     // The game step's share of the timed frames, reported beside them.
     double StepSeconds = 0.0;
@@ -155,20 +188,21 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
         }
         return Out;
     };
-    const auto Luma = [](const FColor& C) { return (C.R * 19595 + C.G * 38470 + C.B * 7471 + 0x8000) >> 16; };
 
     struct FCase
     {
         const TCHAR* Slug;     // one word: Tools/landing_frame_gate.py splits on spaces
         double AglCm;
         double DuskDegrees;    // 0: the start's own sun
+        double ReadStops;      // the switch proof's exposure, brighter than the game's exposure
     };
     const FCase Cases[] = {
-        { TEXT("50km"), 5.0e6, 0.0 },
-        { TEXT("1.5m"), 150.0, 0.0 },
-        { TEXT("50km_dusk10"), 5.0e6, 10.0 },
-        { TEXT("1.5m_dusk3"), 150.0, 3.0 },
-        { TEXT("200km_dusk10"), 2.0e7, 10.0 },
+        { TEXT("50km"), 5.0e6, 0.0, 0.0 },
+        { TEXT("1.5m"), 150.0, 0.0, 0.0 },
+        { TEXT("50km_dusk10"), 5.0e6, 10.0, 3.0 },
+        // Metered as Eyes.ReliefLook's IV ground_low, the same geometry.
+        { TEXT("1.5m_dusk3"), 150.0, 3.0, 5.0 },
+        { TEXT("200km_dusk10"), 2.0e7, 10.0, 3.0 },
         // Last, on purpose. Taken straight after 50km_dusk10 -- the same
         // ground, from 50 km -- every frame here cost more than the one
         // before (150 ms rising past 1.4 s over 200 frames, the game step a
@@ -177,7 +211,7 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
         // Taken last, after 200km_dusk10, it is 16.0 ms. A render-side
         // accumulation that depends on the order, found by the cast-shadow
         // plan's baseline and not diagnosed there.
-        { TEXT("1.5m_dusk10"), 150.0, 10.0 },
+        { TEXT("1.5m_dusk10"), 150.0, 10.0, 4.0 },
     };
     FString Report;
     // EYES_CASES=1.5m_dusk10,... runs only those cases: for looking into one,
@@ -247,7 +281,19 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
 
         StepSeconds = 0.0;
         StepFrames = 0;
-        const double AglBefore = Ship->GetFlightState().GetUniversePosition().DistanceTo(Fourth.Position) - Fourth.Radius;
+        // Over the ground itself, not the datum: the 1.5 m cases printed
+        // -1701.89 when the datum was the reference.
+        const auto Agl = [&]()
+        {
+            const FVector3d Offset = Ship->GetFlightState().GetUniversePosition() - Fourth.Position;
+            return Offset.Length() - Fourth.Radius - Field->Height(Offset.GetSafeNormal(), 0.0);
+        };
+        const double AglBefore = Agl();
+        // One untimed round first: the first frame timed after the settle
+        // was 3-5 ms slow in every case, and ABBA always put it in the off
+        // slot.
+        TimeFrame(0.0f);
+        TimeFrame(1.0f);
         // ABBA, five times over: 0 1 1 0, ... The first baseline, three
         // rounds, read a half-range of 2-3 ms in every case: too wide for a
         // 1 ms gate (the plan's remedy: five rounds).
@@ -259,32 +305,42 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
                 Times[On].Add(TimeFrame(static_cast<float>(On)));
             }
         }
-        // The two frames themselves, for the switch's proof and the report.
-        TArray<FColor> Frames[2];
-        for (int32 On = 0; On < 2; ++On)
+        const double AglAfter = Agl();
+        // The switch's proof, at the read exposure: without the term twice,
+        // back to back, then with it (the class comment says why).
+        TArray<FColor> Frames[3];
+        ProofCapture->SetWorldLocationAndRotation(Capture->GetComponentLocation(), Capture->GetComponentRotation());
+        EyesFrames::Expose(ProofCapture, Case.ReadStops);
+        for (int32 Pass = 0; Pass < 3; ++Pass)
         {
-            TimeFrame(static_cast<float>(On));
-            Target->GameThread_GetRenderTargetResource()->ReadPixels(Frames[On]);
+            if (Shadows)
+            {
+                Shadows->Set(Pass == 2 ? 1.0f : 0.0f, ECVF_SetByCode);
+            }
+            for (int32 Frame = 0; Frame < 8; ++Frame)
+            {
+                if (GShaderCompilingManager)
+                {
+                    GShaderCompilingManager->FinishAllCompilation();
+                }
+                Test.Step(1.0f / 60.0f);
+                Test.World->SendAllEndOfFrameUpdates();
+                ProofCapture->CaptureScene();
+            }
+            ProofTarget->GameThread_GetRenderTargetResource()->ReadPixels(Frames[Pass]);
         }
-        int32 Lit = 0;
-        int32 Taken = 0;
-        for (int32 Index = 0; Index < Frames[0].Num() && Index < Frames[1].Num(); ++Index)
-        {
-            const int32 Was = Luma(Frames[0][Index]);
-            Lit += Was >= 8 ? 1 : 0;
-            Taken += Was >= 8 && 2 * Luma(Frames[1][Index]) < Was ? 1 : 0;
-        }
-        const double Coverage = Lit > 0 ? static_cast<double>(Taken) / Lit : 0.0;
+        const EyesFrames::FShade Shade = EyesFrames::Shade(Frames[0], Frames[1], Frames[2]);
         const double On = Median(Times[1]);
         const double Off = Median(Times[0]);
         const double Spread = FMath::Max(Iqr(Times[0]), Iqr(Times[1]));
         const FString Line = FString::Printf(
-            TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f coverage %.4f frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f agl_m %.2f..%.2f times_on %s times_off %s\n%s\n"),
-            Case.Slug, SunDegrees, On, Off, Spread, Coverage,
-            FCrc::MemCrc32(Frames[1].GetData(), Frames[1].Num() * sizeof(FColor)),
+            TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f switch %s switch_cov %.4f switch_lit %.4f flicker %.4f read_stops %.0f read_p95 %d frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f agl_m %.2f..%.2f times_on %s times_off %s\n%s\n"),
+            Case.Slug, SunDegrees, On, Off, Spread, Shadows ? TEXT("present") : TEXT("absent"),
+            Shade.Coverage, Shade.LitShare, Shade.Flicker, Case.ReadStops, EyesFrames::LumaPercentile(Frames[0], 0.95),
+            FCrc::MemCrc32(Frames[2].GetData(), Frames[2].Num() * sizeof(FColor)),
             FCrc::MemCrc32(Frames[0].GetData(), Frames[0].Num() * sizeof(FColor)),
             Test.Ground->GetDrawnKeys().Num(), StepFrames > 0 ? StepSeconds * 1000.0 / StepFrames : 0.0,
-            AglBefore / 100.0, (Ship->GetFlightState().GetUniversePosition().DistanceTo(Fourth.Position) - Fourth.Radius) / 100.0,
+            AglBefore / 100.0, AglAfter / 100.0,
             *Joined(Times[1]), *Joined(Times[0]), *Test.Ground->Describe());
         Report += Line;
         AddInfo(Line);
@@ -294,8 +350,10 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
         }
         if (Shadows && Case.DuskDegrees > 0.0 && Case.DuskDegrees < 5.0 && Case.AglCm < 1.0e5)
         {
-            TestTrue(FString::Printf(TEXT("the switch reaches the materials: at %s the term shades at least 1%% of the lit ground (%.2f%%)"),
-                Case.Slug, 100.0 * Coverage), Coverage >= 0.01);
+            TestTrue(FString::Printf(TEXT("the switch's proof can see: at %s at least 1%% of the frame is lit and held still (%.2f%%)"),
+                Case.Slug, 100.0 * Shade.LitShare), Shade.LitShare >= 0.01);
+            TestTrue(FString::Printf(TEXT("the switch reaches the materials: at %s the term shades at least 10%% of the lit, held ground (%.2f%%)"),
+                Case.Slug, 100.0 * Shade.Coverage), Shade.Coverage >= 0.10);
         }
     }
     if (Shadows)
