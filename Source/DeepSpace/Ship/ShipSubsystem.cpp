@@ -903,6 +903,7 @@ void UShipSubsystem::UpdateSurfaces()
         Edge.bInsideOut = true;
         Surfaces.Add(Edge);
     }
+    Wells.Append(TestWells);
     FlightState.SetSurfaces(MoveTemp(Surfaces));
     FlightState.SetWells(MoveTemp(Wells));
 }

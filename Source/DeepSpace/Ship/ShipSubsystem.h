@@ -248,6 +248,11 @@ public:
      *  hold's want. The hum's hold term divides by it. */
     static float GetHoldWattsPerG();
 
+    /** Tests only: a pull added to every body's, every frame, in
+     *  UpdateSurfaces -- a synthetic world's gravity where procgen made none
+     *  that heavy (HeavyWorldStillClimbs' 3.3 g). Nothing in the game calls it. */
+    void AddWellForTest(const FGravityWell& Well) { TestWells.Add(Well); }
+
     /**
      * Pilot mode. The pilot seat reports who sits at the helm; anything that
      * cares whether the ship is being flown asks here rather than reaching
@@ -647,6 +652,9 @@ private:
         FGroundFieldRef Ground;
     };
     TMap<FName, FGroundCacheEntry> GroundCache;
+
+    /** AddWellForTest's pulls; empty in the game. */
+    TArray<FGravityWell> TestWells;
 
     /** World, resolved in Here; empty for an id that names nothing there. */
     static TOptional<FWorldFix> FixWorld(const FStarSystem& Here, const FBodyId& World);
