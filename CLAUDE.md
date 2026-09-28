@@ -228,7 +228,15 @@ proportion to a weight the player sets, capped at each one's want with the
 surplus redistributed. Consumers degrade and never fail: lights dim and brown
 out, boosters push down to a quarter thrust, the jump drive charges slower.
 **There is deliberately no cutoff, no alarm, no timer and no failure state**,
-and nothing in the model changes on its own with time. If a change here
+and nothing in the model changes on its own with time -- with one sanctioned,
+bounded exception, the **starved sink** (landing decision 5): under a solid
+world's drive floor, airborne, the boosters want to hold the ship against
+gravity (`ds.Boosters.HoldWatts`, 150 W a g to 3 g, paid first inside their
+share, `ShipPower::SplitBoosters`), and a hold short of watts becomes a sink
+of at most `ds.Boosters.StarvedSink` (2 m/s), never while the vertical lever
+asks a climb, ending always at rest on the ground at no cost. That want
+exists only there, so **staying put is never taxed** anywhere a ship can be
+parked: at any floor, between worlds, or (slice c) landed. If a change here
 introduces a rate the player must keep up with, it has broken the anti-chore
 principle -- say so rather than tuning it.
 
