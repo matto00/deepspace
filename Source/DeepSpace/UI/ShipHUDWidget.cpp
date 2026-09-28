@@ -597,14 +597,22 @@ FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState, const FS
     {
         return Blank;
     }
-    const FShipFlightState& Flight = ShipState.GetFlightState();
+    return AltitudeLineText(ShipState.GetFlightState(), Here);
+}
+
+FText UShipHUDWidget::AltitudeLineText(const FShipFlightState& Flight, const FSkySystem& Here)
+{
     // Below the regime's top over solid ground the corner reads the rock --
     // unless the drive flies the ship, which the ground never does: its
     // approach ends AT THE FLOOR, and the corner keeps saying so (spec,
     // decision 5: "at rest AT THE FLOOR, where every drive approach ends").
-    if (Flight.IsInNearRegime() && Flight.GetMode() != EFlightMode::Drive)
+    // The rock of the regime's own world: over an ocean or a giant the
+    // regime holds the floor sphere and the corner reads it, never some
+    // solid world elsewhere in the system.
+    const FFlightSurface* RegimeWorld = Flight.GetRegimeSurface();
+    if (Flight.IsInNearRegime() && Flight.GetMode() != EFlightMode::Drive && RegimeWorld && RegimeWorld->HasGround())
     {
-        if (const TOptional<double> Agl = Flight.GetGroundAltitude())
+        if (const TOptional<double> Agl = ShipFlight::GroundAt(*RegimeWorld, Flight.GetUniversePosition()))
         {
             return FText::FromString(GroundLine(*Agl, Flight.GetVerticalSpeed(), ShownHold(Flight.GetHold(), Flight.GetHeldFraction())));
         }

@@ -825,6 +825,10 @@ TOptional<double> FShipFlightState::GroundAhead(int32 SurfaceIndex, const FVecto
 }
 
 bool FShipFlightState::IsInNearRegime() const { return bInRegime; }
+const FFlightSurface* FShipFlightState::GetRegimeSurface() const
+{
+    return Surfaces.IsValidIndex(RegimeSurface) ? &Surfaces[RegimeSurface] : nullptr;
+}
 double FShipFlightState::GetRegimeWeight() const { return RegimeWeight; }
 
 double FShipFlightState::GetVerticalSpeed() const
