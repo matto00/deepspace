@@ -35,6 +35,16 @@ struct DEEPSPACE_API FHelmInput
      *  the fresh press cruise's detent at zero asks for. */
     int32 UpPresses = 0;
     int32 DownPresses = 0;
+
+    /** Space and C held: the vertical lever's up and down (landing decision
+     *  8). Always the vertical lever's, never switched by F. */
+    bool bVerticalUpHeld = false;
+    bool bVerticalDownHeld = false;
+
+    /** Their presses since the last hand-over: the fresh press that leaves
+     *  HOVER, and after X the press that catches the ship where it is. */
+    int32 VerticalUpPresses = 0;
+    int32 VerticalDownPresses = 0;
 };
 
 /**
@@ -298,6 +308,10 @@ public:
      *  transit. */
     bool SetDriveLever(APawn* Commander, int32 Notch);
 
+    /** The vertical lever to Lever, -1..1, absolute: for tests and tools, as
+     *  SetDriveLever is. Pilot-gated; refused in transit. */
+    bool SetVerticalLever(APawn* Commander, double Lever);
+
     /**
      * How low the ship may go over Body, cm (flight-feel decision 6): over a
      * planet or moon the larger of ds.Flight.Floor and the sky's own rendered
@@ -343,7 +357,7 @@ public:
 
     /** Read-only. There is no non-const accessor: the only write paths are
      *  SetFlightCommand, SetHelmInput, AllStop, SetDriveLever,
-     *  SetDriveEngaged, ClearPilot and this subsystem's own tick -- which is
+     *  SetVerticalLever, SetDriveEngaged, ClearPilot and this subsystem's own tick -- which is
      *  where the jump's JumpTo happens -- and that is what makes the state
      *  trustworthy. */
     const FShipFlightState& GetFlightState() const;
@@ -596,6 +610,11 @@ private:
      *  is let go. A held key never undoes a stop. */
     bool bUpHoldSpent = false;
     bool bDownHoldSpent = false;
+
+    /** Space and C held through an all stop or from before sitting down:
+     *  spent until let go, as Shift and Ctrl are. */
+    bool bVerticalUpHoldSpent = false;
+    bool bVerticalDownHoldSpent = false;
 
     /** Set by SetPilot for a new pilot; the first hands it hands over mark
      *  whatever they already hold as spent. Shift is sprint as well as the

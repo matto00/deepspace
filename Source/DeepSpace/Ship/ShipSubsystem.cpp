@@ -922,6 +922,12 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const int32 DownPresses = Helm.DownPresses;
     Helm.UpPresses = 0;
     Helm.DownPresses = 0;
+    const int32 VerticalUps = Helm.VerticalUpPresses;
+    const int32 VerticalDowns = Helm.VerticalDownPresses;
+    Helm.VerticalUpPresses = 0;
+    Helm.VerticalDownPresses = 0;
+    bVerticalUpHoldSpent &= Helm.bVerticalUpHeld;
+    bVerticalDownHoldSpent &= Helm.bVerticalDownHeld;
 
     // A key held through an all stop moves nothing until it is let go.
     bUpHoldSpent &= Helm.bUpHeld;
@@ -930,7 +936,10 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const bool bDownHeld = Helm.bDownHeld && !bDownHoldSpent;
 
     FShipFlightCommand Command = FlightState.GetCommand();
-    if (Command.bDrive)
+    // The drive's notches only while the drive takes the ship: under a solid
+    // world's floor (DriveBelowFloor) the ship flies cruise, and Shift and
+    // Ctrl move cruise's lever.
+    if (FlightState.GetMode() == EFlightMode::Drive)
     {
         // A press is one notch from what the ship is doing, not from where
         // the lever was (decision 3): Ctrl always slows the ship and Shift
@@ -960,6 +969,17 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
         Command.Throttle = ShipDriveLever::SweepCruise(Command.Throttle, bUpHeld, bDownHeld, UpPresses, DownPresses,
             DeltaSeconds, FMath::Max(0.0f, CVarCruiseSweep.GetValueOnGameThread()), FlightState.CruiseAsternLimit());
     }
+
+    // The vertical lever (landing decision 8), whichever lever F has live: a
+    // press the way the ship is already moving catches it there when the
+    // lever is at HOVER (after X, the 2026-09-26 ruling), then the sweep,
+    // which stops at HOVER and leaves it only on a fresh press.
+    const bool bVerticalUp = Helm.bVerticalUpHeld && !bVerticalUpHoldSpent;
+    const bool bVerticalDown = Helm.bVerticalDownHeld && !bVerticalDownHoldSpent;
+    const double Top = FlightState.GetLimits().VerticalTop;
+    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalSpeed(), Top);
+    Command.Vertical = ShipVerticalLever::Sweep(Command.Vertical, bVerticalUp, bVerticalDown, VerticalUps, VerticalDowns,
+                                                DeltaSeconds, FMath::Max(0.0f, CVarVerticalSweep.GetValueOnGameThread()));
     FlightState.SetCommand(Command);
 }
 
@@ -998,6 +1018,7 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
         FShipFlightCommand Stopped = FlightState.GetCommand();
         Stopped.Throttle = 0.0;
         Stopped.DriveNotch = 0;
+        Stopped.Vertical = 0.0;   // HOVER: all stop means the ship holds where it is (sign-off 17)
         FlightState.SetCommand(Stopped);
         Helm = FHelmInput();
 
@@ -1574,12 +1595,18 @@ bool UShipSubsystem::SetHelmInput(APawn* Commander, const FHelmInput& Input)
         bAwaitingFirstHands = false;
         bUpHoldSpent = Input.bUpHeld;
         bDownHoldSpent = Input.bDownHeld;
+        bVerticalUpHoldSpent = Input.bVerticalUpHeld;
+        bVerticalDownHoldSpent = Input.bVerticalDownHeld;
     }
     Helm.Attitude = Input.Attitude;
     Helm.bUpHeld = Input.bUpHeld;
     Helm.bDownHeld = Input.bDownHeld;
     Helm.UpPresses += FMath::Max(0, Input.UpPresses);
     Helm.DownPresses += FMath::Max(0, Input.DownPresses);
+    Helm.bVerticalUpHeld = Input.bVerticalUpHeld;
+    Helm.bVerticalDownHeld = Input.bVerticalDownHeld;
+    Helm.VerticalUpPresses += FMath::Max(0, Input.VerticalUpPresses);
+    Helm.VerticalDownPresses += FMath::Max(0, Input.VerticalDownPresses);
     return true;
 }
 
@@ -1592,6 +1619,7 @@ bool UShipSubsystem::AllStop(APawn* Commander)
     FShipFlightCommand Command = FlightState.GetCommand();
     Command.Throttle = 0.0;
     Command.DriveNotch = 0;
+    Command.Vertical = 0.0;
     FlightState.SetCommand(Command);
 
     // Nothing pressed before the stop survives it, and nothing held through
@@ -1600,6 +1628,10 @@ bool UShipSubsystem::AllStop(APawn* Commander)
     Helm.DownPresses = 0;
     bUpHoldSpent = Helm.bUpHeld;
     bDownHoldSpent = Helm.bDownHeld;
+    Helm.VerticalUpPresses = 0;
+    Helm.VerticalDownPresses = 0;
+    bVerticalUpHoldSpent = Helm.bVerticalUpHeld;
+    bVerticalDownHoldSpent = Helm.bVerticalDownHeld;
     return true;
 }
 
@@ -1611,6 +1643,18 @@ bool UShipSubsystem::SetDriveLever(APawn* Commander, int32 Notch)
     }
     FShipFlightCommand Command = FlightState.GetCommand();
     Command.DriveNotch = Notch;
+    FlightState.SetCommand(Command);
+    return true;
+}
+
+bool UShipSubsystem::SetVerticalLever(APawn* Commander, double Lever)
+{
+    if (!MayCommand(Commander))
+    {
+        return false;
+    }
+    FShipFlightCommand Command = FlightState.GetCommand();
+    Command.Vertical = Lever;
     FlightState.SetCommand(Command);
     return true;
 }
