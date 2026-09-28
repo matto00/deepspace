@@ -88,6 +88,10 @@ struct DEEPSPACE_API FShipFlightLimits
     /** ds.Land.Regime, cm: the near regime's reach over a world's cruise floor. */
     double RegimeCm = ShipFlight::DefaultRegimeCm;
 
+    /** ds.Land.DriveHandback, cm: how far over a solid world's drive floor
+     *  the drive takes the ship back. */
+    double DriveHandbackCm = ShipFlight::DefaultDriveHandbackCm;
+
     /** ds.Vertical.Top (cm/s) and .HeavyFloor: the lever's top and the climb
      *  top's floor on heavy worlds. */
     double VerticalTop = ShipVerticalLever::DefaultTopCmPerSecond;
@@ -167,6 +171,17 @@ enum class EFlightMode : uint8
      * Leaving the drive never clamps (decision 4).
      */
     SpoolingDown,
+
+    /**
+     * F live under a solid world's drive floor (landing decision 10): the
+     * drive does not take the ship. It flies cruise and the vertical lever,
+     * Shift and Ctrl move cruise, the notch keeps its setting and the drive's
+     * position is held at the ship's forward speed, so the drive takes over
+     * from what the ship is doing -- once the ship is DriveHandbackCm over the
+     * floor with the nose's ray clear of it within the drive's hold. F is
+     * never refused.
+     */
+    DriveBelowFloor,
 };
 
 /** What the soft cap did in the last substep (decision 5): the one thing that
@@ -509,6 +524,11 @@ private:
      *  and the blend weight. */
     void UpdateRegime();
 
+    /** Once a substep, after the regime: whether a live drive is under a
+     *  solid world's drive floor (DriveBelowFloor), entering under the floor
+     *  and leaving DriveHandbackCm over it with the nose clear. */
+    void UpdateDriveBelowFloor();
+
     /** The cruise floor's clearance over one surface, cm. */
     double CruiseFloorClearance(const FFlightSurface& Surface) const;
 
@@ -553,6 +573,9 @@ private:
     bool bInRegime = false;
     double RegimeWeight = 0.0;
     int32 RegimeSurface = INDEX_NONE;
+
+    /** F live under a solid world's drive floor (EFlightMode::DriveBelowFloor). */
+    bool bDriveBelowFloor = false;
 
     FShipFlightLimits Limits = FShipFlightLimits::Cruise();
     FShipFlightCommand Command;
