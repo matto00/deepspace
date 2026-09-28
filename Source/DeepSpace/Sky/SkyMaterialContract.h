@@ -32,11 +32,8 @@ namespace SkyMaterial
 
     // The probes Eyes.WorldReliefParity draws (landing decision 1): the raw
     // face terms over a fixed patch at a fixed footprint, untonemapped.
-    // M_SkyReliefProbe reaches them through the shared file;
-    // M_SkyReliefProbeLegacy through the engine's noise nodes, as M_SkyBody
-    // did before landing slice (a), and is deleted when slice (a) merges.
+    // M_SkyReliefProbe reaches them through the shared file.
     inline const TCHAR* const ReliefProbePath = TEXT("/Game/Materials/Sky/M_SkyReliefProbe.M_SkyReliefProbe");
-    inline const TCHAR* const ReliefProbeLegacyPath = TEXT("/Game/Materials/Sky/M_SkyReliefProbeLegacy.M_SkyReliefProbeLegacy");
     inline const FName ProbeFootprint = TEXT("ProbeFootprint"); // scalar: D units a pixel, times filter_pixels
     inline const FName ProbeSelect = TEXT("ProbeSelect");       // vector: one-hot, which terms the pixel carries
     inline const FName ProbeBias = TEXT("ProbeBias");           // vector: added to the pixel; the pipe check

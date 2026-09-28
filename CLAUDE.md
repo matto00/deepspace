@@ -149,6 +149,10 @@ been abandoned. Say so.
   interaction trace.
 - `Source/DeepSpace/Universe/` — procgen: pure generators behind
   `UUniverseSubsystem`, the one authority on what exists (*The universe*).
+- `Source/DeepSpace/Surface/` — the ground: `FWorldRelief`, pure, the one
+  height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
+  compiles too (the engine maps `/Project` to `Shaders/` by itself);
+  `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model

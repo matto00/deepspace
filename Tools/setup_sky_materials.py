@@ -42,10 +42,6 @@ DIRECTORY = CONTRACT["directory"]
 CONSTANTS = CONTRACT["constants"]
 SHARED = CONTRACT["shared_relief"]
 
-# Every band, by band number: what M_SkyBody draws.
-EVERY_DETAIL = list(range(1, len(CONSTANTS["detail_frequencies"]) + 1))
-EVERY_CRATER = list(range(101, 101 + len(CONSTANTS["crater_frequencies"])))
-
 # The raw terms a face is composed from, whichever noise made them.
 Terms = collections.namedtuple("Terms", "coarse fine crater_face crater_slope")
 
@@ -211,143 +207,12 @@ class Graph:
 
 # -- the materials -------------------------------------------------------------
 
-def noise_band(g, position, offset, frequency, levels, filter_width, stretch):
-    """One band of the face: GradientALU noise of `levels` octaves on
-    position * frequency + offset, -1..1, mean zero.
-
-    The noise gets its own pixel footprint through FilterWidth, which the
-    engine's noise loop uses exactly as a fade: every octave is multiplied by
-    saturate(1 - footprint * its frequency), so an octave is gone once its
-    wavelength is under filter_pixels and all there by a few times that.
-    That per-pixel fade is what makes the finer bands arrive as the world
-    grows on screen -- and arrive near the ground before the horizon, where
-    one pixel covers far more of it -- without anything counting pixels on
-    the CPU. A faded octave contributes 0, the band's middle, so a world
-    too small to hold its detail is exactly its coarse face.
-
-    The frequency is applied here rather than as the node's Scale so the
-    seed offset can be added after it: the offset is then a few hundred
-    units against positions up to fifty thousand, and costs the finest band
-    nothing in float precision. `stretch` is the most the position is
-    stretched along any axis, so the footprint is taken at the highest
-    frequency the band really has.
-    """
-    scaled = g.add(g.mul(position, g.constant(frequency)), offset)
-    width = g.mul(g.mul(filter_width, g.constant(frequency)), stretch)
-    noise = g.node(unreal.MaterialExpressionNoise,
-                   scale=1.0, output_min=-1.0, output_max=1.0, levels=int(levels),
-                   level_scale=float(CONSTANTS["level_scale"]), turbulence=False,
-                   noise_function=unreal.NoiseFunction.NOISEFUNCTION_GRADIENT_ALU)
-    # Position is the first input, connected by index: its pin is named for
-    # a world-space origin it does not have here.
-    g.link(scaled, noise, "")
-    link_any(g, width, noise, ("FilterWidth", "Filter Width"))
-    return noise
-
-
-def link_any(g, source, target, names):
-    """Connect to whichever spelling of a pin this engine uses."""
-    for pin in names:
-        if MEL.connect_material_expressions(source, "", target, pin):
-            return
-    raise RuntimeError("could not connect %s -> %s.%s" % (source.get_name(), target.get_name(), "/".join(names)))
-
-
-def fade(g, width, frequency):
-    """saturate(1 - width * frequency): the engine noise loop's own fade,
-    written out for the vector noise, which has no FilterWidth. An octave of
-    this frequency is gone once its wavelength is under filter_pixels and
-    all there by a few times that."""
-    return g.unary(unreal.MaterialExpressionSaturate,
-                   g.unary(unreal.MaterialExpressionOneMinus, g.mul(width, g.constant(frequency))))
-
-
 def mask(g, source, channels, output_name=""):
     """A ComponentMask of `channels` ("rgb", "a") from source."""
     node = g.node(unreal.MaterialExpressionComponentMask,
                   r="r" in channels, g="g" in channels, b="b" in channels, a="a" in channels)
     g.link(source, node, "", output_name=output_name)
     return node
-
-
-def detail_band(g, stretched, offset, frequency, width):
-    """One detail band as simplex noise with its gradient, from the vector
-    noise's Perlin Gradient: rgb the gradient in noise space, a the value,
-    -1..1. The one evaluation feeds both the face (a) and the relief (rgb),
-    so the ground that lights up and the ground that tilts are the same
-    ground. Faded by the footprint, as the scalar bands fade themselves."""
-    scaled = g.add(g.mul(stretched, g.constant(frequency)), offset)
-    noise = g.node(unreal.MaterialExpressionVectorNoise,
-                   noise_function=unreal.VectorNoiseFunction.VNF_GRADIENT_ALU)
-    g.link(scaled, noise, "")
-    return noise, fade(g, width, frequency)
-
-
-def crater_band(g, direction, offset, frequency, footprint):
-    """One band of craters: a Voronoi cell per crater site, its seed the
-    crater's centre, and whether the site holds a crater at all from the
-    cell's own hash, so the lattice the seeds are jittered from never shows.
-
-    The cells are 3D and the sphere slices them, so a seed off the surface
-    makes a smaller, shallower crater than one on it: sizes vary within a
-    band without anything drawing them. Across bands the cells shrink by
-    four and their number on the surface grows by sixteen, so the count of
-    craters wider than D goes as D^-2 -- the size-frequency law of the
-    Moon's and Mercury's highlands. That is the distribution; nothing here
-    is uniform but where on the noise a world is.
-
-    Returns (face, slope): the crater's albedo -- darker floor, brighter rim
-    -- for the face, and its height's gradient for the relief. Over q, the
-    distance from the centre in crater radii, the height is
-
-        q < 1         depth * (q^2 - 1 + rim)          the bowl
-        1 <= q < 1.5  depth * rim * (3 - 2q)^2         the rim falling away
-
-    whose slope is depth * 2q inside and -4 depth rim (3 - 2q) outside, along
-    the direction away from the centre."""
-    radius = float(CONSTANTS["crater_radius"])
-    depth = float(CONSTANTS["crater_depth"])
-    rim = float(CONSTANTS["crater_rim"])
-
-    scaled = g.add(g.mul(direction, g.constant(frequency)), offset)
-    cells = g.node(unreal.MaterialExpressionVectorNoise,
-                   noise_function=unreal.VectorNoiseFunction.VNF_VORONOI_ALU, quality=1)
-    g.link(scaled, cells, "")
-    centre = mask(g, cells, "rgb")
-    distance = mask(g, cells, "a")
-
-    # Every seed is within 0.26 of its lattice corner, so the corner --
-    # floor(seed + 0.5) -- names the cell, and the hash of it decides once
-    # and for good whether this site is a crater.
-    site = g.add(centre, g.constant(0.5))
-    hashed = g.node(unreal.MaterialExpressionVectorNoise,
-                    noise_function=unreal.VectorNoiseFunction.VNF_CELLNOISE_ALU)
-    g.link(site, hashed, "")
-    held = g.node(unreal.MaterialExpressionStep, const_x=0.0)
-    g.link(mask(g, hashed, "r"), held, "Y")
-    g.link(g.constant(CONSTANTS["crater_keep"]), held, "X")
-
-    q = g.mul(distance, g.constant(1.0 / radius))
-    outside = g.node(unreal.MaterialExpressionStep, const_y=1.0)
-    g.link(q, outside, "X")
-    inside = g.unary(unreal.MaterialExpressionOneMinus, outside)
-    falling = g.unary(unreal.MaterialExpressionSaturate,
-                      g.add(g.mul(q, g.constant(-2.0)), g.constant(3.0)))
-
-    wall = g.add(g.mul(g.mul(q, g.constant(2.0 * depth)), inside),
-                 g.mul(g.mul(falling, g.constant(-4.0 * depth * rim)), outside))
-    # Away from the centre, unit -- over a floored distance rather than
-    # normalised, because at the exact centre a normalised zero is NaN, and a
-    # NaN pixel is a black hole the bloom spreads. The wall's slope is 0 there.
-    apart = g.binary(unreal.MaterialExpressionMax, distance, g.constant(1.0e-4))
-    away = g.binary(unreal.MaterialExpressionDivide, g.binary(unreal.MaterialExpressionSubtract, scaled, centre), apart)
-
-    floor_dark = g.mul(g.unary(unreal.MaterialExpressionOneMinus, g.mul(q, q)),
-                       g.mul(inside, g.constant(-float(CONSTANTS["crater_floor_dark"]))))
-    rim_bright = g.mul(g.mul(falling, outside), g.constant(float(CONSTANTS["crater_rim_bright"])))
-
-    weight = g.mul(held, fade(g, footprint, frequency))
-    return g.mul(g.add(floor_dark, rim_bright), weight), g.mul(g.mul(away, wall), weight)
 
 
 def body_axes(g):
@@ -380,13 +245,6 @@ def to_world(g, axes, body):
     x, y, z = axes
     along = lambda row, channel: g.mul(row, mask(g, body, channel))
     return g.add(g.add(along(x, "r"), along(y, "g")), along(z, "b"))
-
-
-def band_offset(g, offset, index):
-    """Each band from its own corner of the noise, so no band's features sit
-    on the one below's and the octaves read as separate scales. The shared
-    file adds the same (37, 59, 83) x band number."""
-    return g.add(offset, g.colour((37.0 * index, 59.0 * index, 83.0 * index)))
 
 
 def seed_offset(g, seed):
@@ -423,34 +281,6 @@ def body_direction(g, axes):
     ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
     footprint = g.mul(g.binary(unreal.MaterialExpressionMax, ddx, ddy), g.constant(CONSTANTS["filter_pixels"]))
     return direction, footprint
-
-
-def legacy_terms(g, direction, footprint, seed, stretch, detail_bands, crater_bands):
-    """The raw terms from the engine's own noise nodes, as M_SkyBody drew
-    them before landing slice (a): the coarse band of GradientALU octaves,
-    one VectorNoise GradientALU per detail band (rgb its gradient, a its
-    value), one Voronoi per crater band. The bands are named by number, so
-    the legacy probe can draw exactly the bands the shared file carries."""
-    offset = seed_offset(g, seed)
-    stretched = g.mul(direction, stretch_axes(g, stretch))
-    coarse = noise_band(g, stretched, band_offset(g, offset, 0), CONSTANTS["continent_frequency"],
-                        CONSTANTS["continent_levels"], footprint, stretch)
-    width = g.mul(footprint, stretch)
-    fine = None
-    for index in detail_bands:
-        frequency = CONSTANTS["detail_frequencies"][index - 1]
-        weight = CONSTANTS["detail_weights"][index - 1]
-        noise, faded = detail_band(g, stretched, band_offset(g, offset, index), frequency, width)
-        term = g.mul(noise, g.mul(faded, g.constant(weight)))
-        fine = term if fine is None else g.add(fine, term)
-    crater_face = None
-    crater_slope = None
-    for index in crater_bands:
-        frequency = CONSTANTS["crater_frequencies"][index - 101]
-        albedo, slope = crater_band(g, direction, band_offset(g, offset, index), frequency, footprint)
-        crater_face = albedo if crater_face is None else g.add(crater_face, albedo)
-        crater_slope = slope if crater_slope is None else g.add(crater_slope, slope)
-    return Terms(coarse, fine, crater_face, crater_slope)
 
 
 def shared_terms(g, direction, footprint, seed, stretch):
@@ -497,8 +327,7 @@ def surface(g, knobs, seed, direction, footprint, terms):
         slope     = Relief * lerp(1, relief_giant, Banding) * fine.rgb * (1, 1, stretch)
                   + craters.slope
 
-    terms is legacy_terms' engine nodes or shared_terms' file; the
-    composition is the same either way, so the face is the terms' alone.
+    terms is shared_terms: the shared file.
     Rock gets basins and highlands with craters, fewer in the basins; a giant
     gets belts wandered by the same coarse noise and a third of rock's relief.
     The face is centred on zero, so the disc keeps its flux on average, and
@@ -828,10 +657,7 @@ def main():
     sky_star()
     sky_starfield()
     sky_glass(collections)
-    bands = CONSTANTS["probe_bands"]
     relief_probe("M_SkyReliefProbe", shared_terms)
-    relief_probe("M_SkyReliefProbeLegacy",
-                 lambda g, d, fp, s, st: legacy_terms(g, d, fp, s, st, bands["detail"], bands["crater"]))
     log("ok")
 
 

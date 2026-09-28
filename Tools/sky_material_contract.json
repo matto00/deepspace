@@ -26,8 +26,7 @@
     "M_SkyStar":      { "parameters": ["colour", "brightness"] },
     "M_SkyStarfield": { "parameters": [], "custom_data": 4 },
     "M_SkyGlass":     { "parameters": [] },
-    "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] },
-    "M_SkyReliefProbeLegacy": { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] }
+    "M_SkyReliefProbe":       { "parameters": ["surface_seed", "banding", "probe_footprint", "probe_select", "probe_bias"] }
   },
   "shared_relief": {
     "comment": "M_SkyBody's face as one Custom node over Shaders/Private/WorldRelief.ush, the file the C++ compiles too (landing decision 1). SkyMaterialContract.h holds the same include, entry and pins; DeepSpace.Sky.MaterialContract holds the built nodes to them, and the file's tables to this file's constants.",
@@ -72,8 +71,7 @@
     "glass_opacity": 0.12,
     "glass_tint": [0.0, 0.004, 0.005],
     "veil_colour": [0.5, 0.47, 0.42],
-    "probe_comment": "Eyes.WorldReliefParity's probes: D over a fixed patch -- normalize(centre + (u - 0.5) span east + (v - 0.5) span north), the three an orthonormal frame -- and the bands the legacy probe draws, by band number (detail n is detail_frequencies[n - 1], crater n is crater_frequencies[n - 101]); the shared file must carry exactly these.",
-    "probe_patch": { "centre": [0.6, -0.48, 0.64], "east": [0.8, 0.36, -0.48], "north": [0.0, 0.8, 0.6], "span": 0.5 },
-    "probe_bands": { "detail": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "crater": [101, 102, 103, 104, 105, 106] }
+    "probe_comment": "Eyes.WorldReliefParity's probes: D over a fixed patch -- normalize(centre + (u - 0.5) span east + (v - 0.5) span north), the three an orthonormal frame.",
+    "probe_patch": { "centre": [0.6, -0.48, 0.64], "east": [0.8, 0.36, -0.48], "north": [0.0, 0.8, 0.6], "span": 0.5 }
   }
 }

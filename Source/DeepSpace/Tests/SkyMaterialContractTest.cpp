@@ -249,19 +249,6 @@ namespace
         Test.TestEqual(TEXT("with its octaves"), Bands.ContinentLevels, static_cast<int32>(Constants->GetNumberField(TEXT("continent_levels"))));
         Test.TestEqual(TEXT("at its step"), Bands.LevelScale, Constants->GetNumberField(TEXT("level_scale")));
 
-        const TSharedPtr<FJsonObject> Probe = Constants->GetObjectField(TEXT("probe_bands"));
-        TArray<int32> ProbeDetail;
-        for (const TSharedPtr<FJsonValue>& Value : Probe->GetArrayField(TEXT("detail")))
-        {
-            ProbeDetail.Add(static_cast<int32>(Value->AsNumber()));
-        }
-        TArray<int32> ProbeCrater;
-        for (const TSharedPtr<FJsonValue>& Value : Probe->GetArrayField(TEXT("crater")))
-        {
-            ProbeCrater.Add(static_cast<int32>(Value->AsNumber()));
-        }
-        Test.TestTrue(TEXT("the shared file carries exactly the probes' detail bands"), Bands.DetailIndices == ProbeDetail);
-        Test.TestTrue(TEXT("and exactly their crater bands"), Bands.CraterIndices == ProbeCrater);
         TArray<int32> EveryDetail;
         for (int32 Number = 1; Number <= Constants->GetArrayField(TEXT("detail_frequencies")).Num(); ++Number)
         {
@@ -823,7 +810,6 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {} },
         { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {} },
         { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
-        { TEXT("M_SkyReliefProbeLegacy"), SkyMaterial::ReliefProbeLegacyPath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
     };
 
     const TSharedPtr<FJsonObject> JsonMaterials = Contract->GetObjectField(TEXT("materials"));
