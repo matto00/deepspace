@@ -409,6 +409,136 @@ WR_Crater WR_CraterBand(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Frequency,
     return C;
 }
 
+// -- Craters as a height (landing decision 3) --------------------------------
+// A crater band is a sum of compact kernels, one per kept site in the
+// 3 x 3 x 3 cells round the sample: the profile unchanged, reaching 0 with
+// zero slope at q = 1.5; a dropped site contributes 0; overlapping craters
+// add. With jitter 0.2588 cells a 3 x 3 x 3 neighbourhood sees every site
+// within 0.74 cells, past the profile's 0.525, so the sum is continuous --
+// where Voronoi F1, the nearest site only, jumped to 0 at the bisector with
+// a dropped neighbour.
+//
+// Sites are exactly WR_Voronoi's: each lattice corner's jitter is
+// WR_VoronoiJitter of that corner, and whether it holds a crater is the
+// corner's own hash's first channel against WR_CRATER_KEEP -- what
+// WR_CraterBand reads as WR_CellHash(site + 0.5).
+static const WR_REAL WR_CRATER_REACH = WR_REAL(1.5);
+// At most four lattice corners lie within 0.525 + 0.2588 cells of any point
+// (checked by sampling for the landing spec), so at most four kernels overlap.
+static const WR_REAL WR_CRATER_BOUND_COUNT = WR_REAL(4.0);
+
+struct WR_CraterTerm
+{
+    WR_REAL H;       // the band's height in cells (radius units once over the frequency)
+    WR_REAL GX;      // its gradient with respect to D, radius units per unit of D
+    WR_REAL GY;
+    WR_REAL GZ;
+    WR_REAL Albedo;  // darker floors and brighter rims, summed
+};
+
+WR_CraterTerm WR_CraterZero()
+{
+    WR_CraterTerm T;
+    T.H = WR_REAL(0.0);
+    T.GX = WR_REAL(0.0);
+    T.GY = WR_REAL(0.0);
+    T.GZ = WR_REAL(0.0);
+    T.Albedo = WR_REAL(0.0);
+    return T;
+}
+
+// How much of a band of Frequency a tile's vertices carry at VertexBandLimit
+// (radius units): the fade the vertices were built with. A radius (1.0) or
+// more is no vertices at all, the orbit: they carry nothing.
+WR_REAL WR_VertexCarries(WR_REAL VertexBandLimit, WR_REAL Frequency)
+{
+    return WR_saturate(WR_REAL(1.0) - VertexBandLimit * Frequency);
+}
+
+// One band, P = D x frequency + the band's offset, in cells.
+WR_CraterTerm WR_CraterKernelBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ)
+{
+    WR_CraterTerm Sum = WR_CraterZero();
+    const int CX = int(WR_floor(PX + WR_REAL(0.5)));
+    const int CY = int(WR_floor(PY + WR_REAL(0.5)));
+    const int CZ = int(WR_floor(PZ + WR_REAL(0.5)));
+    for (int I = -1; I <= 1; ++I)
+    {
+        for (int J = -1; J <= 1; ++J)
+        {
+            for (int K = -1; K <= 1; ++K)
+            {
+                const int X = CX + I;
+                const int Y = CY + J;
+                const int Z = CZ + K;
+                const WR_REAL Keep = WR_REAL(WR_Rand3DPCG16(X, Y, Z).X) / WR_REAL(65535.0);
+                if (Keep > WR_CRATER_KEEP)
+                {
+                    continue;
+                }
+                const WR_Vec3 Jitter = WR_VoronoiJitter(WR_REAL(X), WR_REAL(Y), WR_REAL(Z));
+                const WR_REAL AX = PX - (WR_REAL(X) + Jitter.X);
+                const WR_REAL AY = PY - (WR_REAL(Y) + Jitter.Y);
+                const WR_REAL AZ = PZ - (WR_REAL(Z) + Jitter.Z);
+                const WR_REAL Dist = WR_sqrt(AX * AX + AY * AY + AZ * AZ);
+                const WR_REAL Q = Dist * WR_CRATER_INV_RADIUS;
+                if (Q >= WR_CRATER_REACH)
+                {
+                    continue;
+                }
+                // The bowl, depth (q^2 - 1 + rim), then the rim falling away,
+                // depth rim (3 - 2q)^2: continuous at q = 1, 0 with zero slope
+                // at 1.5. Heights in cells: radius x profile; the slope with
+                // respect to P is d(profile)/dq along the way out.
+                const WR_REAL Fall = WR_REAL(3.0) - WR_REAL(2.0) * Q;
+                const WR_REAL Profile = Q < WR_REAL(1.0) ? WR_CRATER_DEPTH * (Q * Q - WR_REAL(1.0) + WR_CRATER_RIM)
+                                                : WR_CRATER_DEPTH * WR_CRATER_RIM * Fall * Fall;
+                const WR_REAL Wall = Q < WR_REAL(1.0) ? WR_REAL(2.0) * WR_CRATER_DEPTH * Q
+                                                      : WR_REAL(-4.0) * WR_CRATER_DEPTH * WR_CRATER_RIM * Fall;
+                const WR_REAL Apart = WR_max(Dist, WR_REAL(1.0e-4));
+                Sum.H += WR_CRATER_RADIUS * Profile;
+                Sum.GX += Wall * AX / Apart;
+                Sum.GY += Wall * AY / Apart;
+                Sum.GZ += Wall * AZ / Apart;
+                Sum.Albedo += Q < WR_REAL(1.0) ? -(WR_REAL(1.0) - Q * Q) * WR_CRATER_FLOOR_DARK
+                                               : WR_saturate(Fall) * WR_CRATER_RIM_BRIGHT;
+            }
+        }
+    }
+    return Sum;
+}
+
+// Every crater band at a footprint (radius units). The height and the albedo
+// fade with the footprint as every band does; the slope is also shared out
+// with a tile's vertices: it keeps only what the vertices at VertexBandLimit
+// do not carry, max(0, fade - carried), which at the orbit (VertexBandLimit
+// 1) is the fade alone and on ground finer than its pixels is exactly the
+// orbit's total -- nothing counted twice (landing decision 9).
+WR_CraterTerm WR_CraterSum(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL OX, WR_REAL OY, WR_REAL OZ,
+                           WR_REAL FootprintRadius, WR_REAL VertexBandLimit)
+{
+    WR_CraterTerm Sum = WR_CraterZero();
+    for (int Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
+    {
+        const WR_REAL F = WR_CRATER_FREQUENCY[Crater];
+        const int Index = WR_CRATER_INDEX[Crater];
+        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - FootprintRadius * F);
+        if (Fade > WR_REAL(0.0))
+        {
+            const WR_CraterTerm T = WR_CraterKernelBand(DX * F + OX + WR_REAL(37 * Index),
+                                                        DY * F + OY + WR_REAL(59 * Index),
+                                                        DZ * F + OZ + WR_REAL(83 * Index));
+            const WR_REAL Slope = WR_max(WR_REAL(0.0), Fade - WR_VertexCarries(VertexBandLimit, F));
+            Sum.H += Fade * T.H / F;
+            Sum.GX += Slope * T.GX;
+            Sum.GY += Slope * T.GY;
+            Sum.GZ += Slope * T.GZ;
+            Sum.Albedo += Fade * T.Albedo;
+        }
+    }
+    return Sum;
+}
+
 // -- The entry point --------------------------------------------------------
 // Every raw term of M_SkyBody's face at D, for footprint Footprint (D units a
 // pixel, times filter_pixels), seed offset O, and Stretch (1 for ground,

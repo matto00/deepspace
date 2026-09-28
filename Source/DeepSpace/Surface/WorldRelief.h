@@ -126,9 +126,12 @@ namespace WorldReliefNoise
  * exactly PeakCm, by construction. The bands
  * are the GPU's twelve and, in C++ only, finer octaves down to BandLimitCm:
  * the GPU's float cannot hold them, and nothing finer than 5 m exists, so
- * the finest tiles' 0.6 m vertices never alias it. Slice (a): the detail
- * bands only; the craters are the material's (Face) until slice (b) makes
- * them continuous (decision 3).
+ * the finest tiles' 0.6 m vertices never alias it. Since slice (b) S also
+ * carries Cratering x the crater bands, each a sum of compact kernels so a
+ * crater is a continuous height (decision 3; the shared file's
+ * WR_CraterSum). S_max stays the detail bands' measured maximum: craters
+ * carve into the ground the detail raised, and the cap takes what they add
+ * past it.
  *
  * Every evaluation takes a footprint, cm: the material's own fade,
  * saturate(1 - footprint x frequency) per band, made explicit. 0 is every
@@ -181,12 +184,13 @@ public:
      *  from the bound on what each band's fade removed. */
     double OmittedBoundCm(double FootprintCm) const;
 
-    double MaxHeightCm() const { return Params.PeakCm; }
-    double MinHeightCm() const { return -Params.PeakCm; }
+    /** PeakCm on solid ground, 0 on a world with none. */
+    double MaxHeightCm() const;
+    double MinHeightCm() const;
 
     /** A Lipschitz bound on the ground's slope, cm of height per cm along
      *  it: for the ray march (slice b). Proven -- PeakCap's slope is at most
-     *  1 -- and loose (the bounds above). */
+     *  1 -- and loose (the bounds above), craters in. */
     double MaxSlope() const;
 
     /** The finest band's wavelength, cm: RadiusCm over its frequency. */
@@ -198,8 +202,7 @@ public:
     /** The detail bands' sum S at D, radius units (each band its value over
      *  its frequency), before any PeakCm scaling, at a footprint in D units
      *  (radius units); its gradient with respect to D into Grad if given.
-     *  Height is PeakCm x PeakCap(S / SMax()); slice (b)'s craters add to
-     *  S (Task T1). */
+     *  Height is PeakCm x PeakCap((DetailSum + Cratering x CraterSum) / SMax()). */
     double DetailSum(const FVector3d& D, double FootprintRadius, FVector3d* Grad = nullptr) const;
 
     /** S's proven bound, radius units: |DetailSum| never exceeds it. */
@@ -214,8 +217,33 @@ public:
     /** The most a footprint (D units) can have removed from S, radius units. */
     double DetailOmittedBound(double FootprintRadius) const;
 
+    /** The crater bands' sum at D, radius units, every kept crater whole
+     *  (Cratering is the caller's), at a footprint in D units; its gradient
+     *  with respect to D into Grad if given. The shared file's WR_CraterSum
+     *  at the orbit's VertexBandLimit, 1: no vertices carry any of it. */
+    double CraterSum(const FVector3d& D, double FootprintRadius, FVector3d* Grad = nullptr) const;
+
+    /** The crater bands' bound, slope bound and omitted bound, radius units:
+     *  WR_CRATER_BOUND_COUNT kernels at the profile's largest magnitude (or
+     *  its steepest wall), per band. Proven, like the detail's. */
+    static double CraterBound();
+    static double CraterSlopeBound();
+    static double CraterOmittedBound(double FootprintRadius);
+
+    /** PeakCm / (RadiusCm x SMax): the band sum's gradient times this is the
+     *  height's slope in radius units under the cap's knee -- what
+     *  M_SkyBody's ReliefScale becomes, so the orbit's relief shading is the
+     *  ground's own slope (decision 3). 0 on a world with no ground. */
+    double SlopeScale() const;
+
 private:
     double FootprintOf(double FootprintCm) const;
+
+    /** Whether this world has a ground to draw: solid, a peak, a radius. */
+    bool HasGround() const;
+
+    /** Cratering, never below 0. */
+    double Kept() const;
 
     FWorldReliefParams Params;
     TArray<double> Frequencies;
