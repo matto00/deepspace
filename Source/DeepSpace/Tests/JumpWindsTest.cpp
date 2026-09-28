@@ -82,7 +82,7 @@ bool FJumpWindsTest::RunTest(const FString& Parameters)
     double ModuleDraw = 0.0;
     for (UShipModuleDataAsset* Module : Modules)
     {
-        TestTrue(FString::Printf(TEXT("%s installs"), *Module->GetName()), Ship->InstallModule(Module));
+        TestTrue(FString::Printf(TEXT("%s fits"), *Module->GetName()), Ship->FitPart(Module));
         ModuleDraw += Module->PowerDraw;
     }
 
@@ -148,7 +148,7 @@ bool FJumpWindsTest::RunTest(const FString& Parameters)
     UShipSubsystem* Default = Fresh->GetSubsystem<UShipSubsystem>();
     for (UShipModuleDataAsset* Module : Modules)
     {
-        Default->InstallModule(Module);
+        Default->FitPart(Module);
     }
     {
         FOutputDeviceNull Quiet;

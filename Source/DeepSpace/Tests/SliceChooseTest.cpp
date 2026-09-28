@@ -448,7 +448,7 @@ bool FSliceChooseLampsTest::RunTest(const FString& Parameters)
         {
             if (UShipModuleDataAsset* Module = Soft.LoadSynchronous())
             {
-                Test.Ship->InstallModule(Module);
+                Test.Ship->FitPart(Module);
             }
         }
     }

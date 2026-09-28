@@ -830,34 +830,6 @@ void UShipSubsystem::LetGoOfNearWorldCourse()
     }
 }
 
-bool UShipSubsystem::InstallModule(UShipModuleDataAsset* Module)
-{
-    if (!Module)
-    {
-        return false;
-    }
-    if (!PowerState.AddDraw(Module->ModuleId, Module->PowerDraw))
-    {
-        return false;
-    }
-    InstalledModules.Add(Module);
-    return true;
-}
-
-bool UShipSubsystem::RemoveModule(UShipModuleDataAsset* Module)
-{
-    if (!Module)
-    {
-        return false;
-    }
-    if (!PowerState.RemoveDraw(Module->ModuleId))
-    {
-        return false;
-    }
-    InstalledModules.Remove(Module);
-    return true;
-}
-
 bool UShipSubsystem::Register(UShipModuleDataAsset* Part)
 {
     if (!Part || Part->Bay == EShipBay::None || Part->ModuleId.IsNone())
@@ -987,6 +959,19 @@ UShipModuleDataAsset* UShipSubsystem::GetFittedPart(EShipBay Bay) const
     const FShipBayState* Entry = ShipParts::FindBay(Loadout, Bay);
     const TObjectPtr<UShipModuleDataAsset>* Part = Entry ? KnownParts.Find(Entry->Part.PartId) : nullptr;
     return Part ? Part->Get() : nullptr;
+}
+
+TArray<UShipModuleDataAsset*> UShipSubsystem::GetInstalledModules() const
+{
+    TArray<UShipModuleDataAsset*> Fitted;
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        if (UShipModuleDataAsset* Part = GetFittedPart(Bay))
+        {
+            Fitted.Add(Part);
+        }
+    }
+    return Fitted;
 }
 
 const FShipLoadoutState& UShipSubsystem::GetLoadoutState() const

@@ -1,13 +1,16 @@
+#include "Core/DeepSpaceGameMode.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
+#include "Ship/ShipFlightState.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipNavState.h"
 #include "Ship/ShipParts.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
 #include "Tests/SkyTestWorld.h"
+#include "Tests/StockShip.h"
 #include "Universe/StarSystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -304,6 +307,180 @@ bool FShipPartsWantsFollowTheFitTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("it can be taken off"), Ship->RemoveLoad(TEXT("Test.Hog")));
     TestEqual(TEXT("leaving the lights' fittings"), Draws(*Ship), 90.0f, 1e-2f);
     TestFalse(TEXT("and it is gone"), Ship->RemoveLoad(TEXT("Test.Hog")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsStockIsTodayTest, "DeepSpace.Ship.Parts.StockIsToday",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsRatingsFollowPartsTest, "DeepSpace.Ship.Parts.RatingsFollowParts",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace ShipLoadoutTestLocal
+{
+    UShipModuleDataAsset* LoadPart(const TCHAR* Asset)
+    {
+        return LoadObject<UShipModuleDataAsset>(nullptr, *FString::Printf(TEXT("/Game/Ship/Parts/%s.%s"), Asset, Asset));
+    }
+
+    /** Seconds from the drive's top to rest after an all stop, flown in a
+     *  flight state of its own on Limits: no floor to hold it back, full
+     *  thrust. -1 if it never reached the top. */
+    double SecondsToRestFromTop(FShipFlightLimits Limits)
+    {
+        Limits.DriveThrust = 1.0;
+        FShipFlightState Flight;
+        Flight.SetLimits(Limits);
+        FShipFlightCommand Command;
+        Command.bDrive = true;
+        Command.DriveNotch = Flight.GetDriveNotchCount() - 1;
+        Flight.SetCommand(Command);
+        constexpr double Step = 1.0 / 60.0;
+        for (int32 Frame = 0; Frame < 60 * 120 && Flight.GetSpeed() < 0.999 * Limits.DriveTop; ++Frame)
+        {
+            Flight.Step(Step);
+        }
+        if (Flight.GetSpeed() < 0.999 * Limits.DriveTop)
+        {
+            return -1.0;
+        }
+        Command.DriveNotch = 0;
+        Flight.SetCommand(Command);
+        double Seconds = 0.0;
+        while (Flight.GetSpeed() > 100.0 && Seconds < 120.0)
+        {
+            Flight.Step(Step);
+            Seconds += Step;
+        }
+        return Seconds;
+    }
+}
+
+/*
+ * Ruling 1: the ship play flies is today's ship, bit for bit, now as six
+ * parts. On StockShip::Install -- the Blueprint's list, which overrides the
+ * C++ one -- the supply is 1400 W, the ship asks 1370 W at rest, the chart
+ * reaches 12 ly and a full charge takes 45 s at full feed.
+ */
+bool FShipPartsStockIsTodayTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    FSkyWorld Test(TEXT("StockIsTodayWorld"));
+    UShipSubsystem* Ship = Test.Ship;
+    if (!TestNotNull(TEXT("the world has a ship"), Ship))
+    {
+        return false;
+    }
+    Test.BeginPlay();
+
+    // The C++ list and the Blueprint's are the same six, so neither can be stale.
+    TArray<FString> Cpp;
+    for (const TSoftObjectPtr<UShipModuleDataAsset>& Soft : GetDefault<ADeepSpaceGameMode>()->GetStartingModules())
+    {
+        Cpp.Add(Soft.ToSoftObjectPath().ToString());
+    }
+    TArray<FString> Play;
+    for (const UShipModuleDataAsset* Part : StockShip::Modules())
+    {
+        Play.Add(FSoftObjectPath(Part).ToString());
+    }
+    TestEqual(TEXT("play starts with six parts"), Play.Num(), 6);
+    TestEqual(TEXT("and the C++ default list is the Blueprint's"), FString::Join(Cpp, TEXT(",")), FString::Join(Play, TEXT(",")));
+
+    TestEqual(TEXT("all six fit"), StockShip::Install(Ship), 6);
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        const UShipModuleDataAsset* Part = Ship->GetFittedPart(Bay);
+        if (ShipBay::IsCore(Bay))
+        {
+            TestTrue(FString::Printf(TEXT("the %s bay holds %s"), *ShipBay::Name(Bay).ToString(), *ShipBay::StockPartId(Bay).ToString()),
+                     Part && Part->ModuleId == ShipBay::StockPartId(Bay));
+        }
+        else
+        {
+            TestNull(FString::Printf(TEXT("%s is empty"), *ShipBay::Name(Bay).ToString()), Part);
+        }
+    }
+    Ship->Tick(0.01f);
+    TestEqual(TEXT("the supply is 1400 W"), Ship->GetReactorOutput(), 1400.0f);
+    TestEqual(TEXT("620 W is drawn off the top"), Draws(*Ship), 620.0f, 1e-2f);
+    TestEqual(TEXT("and the ship asks 1370 W at rest"), Ship->GetPowerDraw(), 1370.0f, 1e-2f);
+    TestEqual(TEXT("whole at rest: the lights"), Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f);
+    TestEqual(TEXT("and the boosters"), Ship->GetConsumerSatisfaction(ShipPower::Boosters), 1.0f);
+    TestEqual(TEXT("which push their full 2 km/s^2"), Ship->GetLinearAcceleration(), 2.0e5f);
+    TestEqual(TEXT("the chart reaches 12 ly"), Ship->GetChartRangeLy(), 12.0f);
+    TestEqual(TEXT("the jump winds on 380 W"), Ship->GetWindingWant(), 380.0f);
+    TestEqual(TEXT("in 45 s at full feed"), Ship->GetChargeSeconds(), 45.0f);
+    TestEqual(TEXT("and the drive follows at 3 notches a second"), Ship->GetDriveResponse(), 3.0f);
+    TestEqual(TEXT("the view of the fitted parts lists the six"), Ship->GetInstalledModules().Num(), 6);
+    return true;
+}
+
+/*
+ * The two example upgrades change their bay's numbers and nothing else. The
+ * twin core winds the jump fully fed with everything whole (sign-off 5); the
+ * quick lever brings the ship to rest from 0.1 c sooner, measured through
+ * the flight state (sign-off 24).
+ */
+bool FShipPartsRatingsFollowPartsTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    FSkyWorld Test(TEXT("RatingsFollowPartsWorld"));
+    UShipSubsystem* Ship = Test.Ship;
+    UShipModuleDataAsset* TwinCore = LoadPart(TEXT("DA_Reactor_TwinCore"));
+    UShipModuleDataAsset* ReactorStock = LoadPart(TEXT("DA_Reactor_Stock"));
+    UShipModuleDataAsset* QuickLever = LoadPart(TEXT("DA_Drive_QuickLever"));
+    UShipModuleDataAsset* DriveStock = LoadPart(TEXT("DA_Drive_Stock"));
+    if (!TestNotNull(TEXT("the world has a ship"), Ship) || !TestNotNull(TEXT("the twin core is authored"), TwinCore)
+        || !TestNotNull(TEXT("the quick lever is authored"), QuickLever) || !TestNotNull(TEXT("and both stock parts"), ReactorStock)
+        || !TestNotNull(TEXT("the stock drive"), DriveStock))
+    {
+        return false;
+    }
+    Test.BeginPlay();
+    TestEqual(TEXT("the stock ship fits"), StockShip::Install(Ship), 6);
+
+    // -- the twin core ------------------------------------------------------------
+    TestTrue(TEXT("the twin core fits"), Ship->FitPart(TwinCore));
+    TestEqual(TEXT("and the supply is 1800 W"), Ship->GetReactorOutput(), 1800.0f);
+    const TArray<FStarSystemStub> Chart = Ship->GetChart();
+    if (!TestTrue(TEXT("a course can be plotted"), Chart.Num() > 0 && Ship->PlotCourse(Chart[0].Id)))
+    {
+        return false;
+    }
+    if (const TOptional<FVector> Course = Ship->GetCourseDirection())
+    {
+        Ship->PlaceShip(Ship->GetFlightState().GetUniversePosition(), FRotationMatrix::MakeFromX(-*Course).ToQuat());
+    }
+    TestTrue(TEXT("the jump engages"), Ship->SetJumpEngaged(true));
+    Ship->Tick(0.01f);
+    Ship->Tick(0.01f);
+    TestTrue(TEXT("and winds"), Ship->GetJumpState() == EJumpState::Winding);
+    TestEqual(TEXT("fully fed on the twin core, at the default split"), Ship->GetConsumerSatisfaction(ShipPower::Engine), 1.0f, 1e-4f);
+    TestEqual(TEXT("with the lights whole"), Ship->GetConsumerSatisfaction(ShipPower::Lights), 1.0f, 1e-4f);
+    TestEqual(TEXT("and the boosters whole"), Ship->GetConsumerSatisfaction(ShipPower::Boosters), 1.0f, 1e-4f);
+    TestTrue(TEXT("the stock reactor fits back"), Ship->FitPart(ReactorStock));
+    Ship->Tick(0.01f);
+    TestTrue(TEXT("and on it the split bites again: the lights dim while the jump winds"),
+             Ship->GetConsumerSatisfaction(ShipPower::Lights) < 1.0f - 1e-3f);
+    Ship->SetJumpEngaged(false);
+    Ship->Tick(0.01f);
+
+    // -- the quick lever ------------------------------------------------------------
+    TestTrue(TEXT("the quick lever fits"), Ship->FitPart(QuickLever));
+    Ship->Tick(0.01f);
+    TestEqual(TEXT("and the drive follows at 4.5 notches a second"), Ship->GetDriveResponse(), 4.5f);
+    TestEqual(TEXT("which the flight is handed"), Ship->GetFlightState().GetLimits().DriveResponse, 4.5);
+    TestEqual(TEXT("and the reactor's number is its own, untouched"), Ship->GetReactorOutput(), 1400.0f);
+    const double Quick = SecondsToRestFromTop(Ship->GetFlightState().GetLimits());
+    TestTrue(TEXT("the stock drive fits back"), Ship->FitPart(DriveStock));
+    Ship->Tick(0.01f);
+    TestEqual(TEXT("and the response is 3 again"), Ship->GetFlightState().GetLimits().DriveResponse, 3.0);
+    const double Stock = SecondsToRestFromTop(Ship->GetFlightState().GetLimits());
+    AddInfo(FString::Printf(TEXT("from 0.1 c to rest after X: %.2f s on the quick lever, %.2f s on the stock drive"), Quick, Stock));
+    TestTrue(TEXT("both reach the top"), Quick > 0.0 && Stock > 0.0);
+    TestTrue(TEXT("and the quick lever brings the ship to rest sooner"), Quick < Stock);
     return true;
 }
 

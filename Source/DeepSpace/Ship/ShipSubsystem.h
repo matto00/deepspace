@@ -77,16 +77,9 @@ public:
     virtual void Tick(float DeltaTime) override;
     virtual TStatId GetStatId() const override;
 
-    /** Returns false if the module is null or already installed. */
-    UFUNCTION(BlueprintCallable, Category = "Ship")
-    bool InstallModule(UShipModuleDataAsset* Module);
-
-    /** What is installed, as installed; ask rather than keep a copy. */
-    const TArray<TObjectPtr<UShipModuleDataAsset>>& GetInstalledModules() const { return InstalledModules; }
-
-    /** Returns false if the module is null or was not installed. */
-    UFUNCTION(BlueprintCallable, Category = "Ship")
-    bool RemoveModule(UShipModuleDataAsset* Module);
+    /** Every fitted part, in bay order: a read-only view, for tests. The
+     *  loadout itself is GetLoadoutState. */
+    TArray<UShipModuleDataAsset*> GetInstalledModules() const;
 
     // -- parts: one per bay (the wear and upgrades spec) -----------------------
 
@@ -472,9 +465,6 @@ private:
 
     /** Weak: the subsystem must not keep a pawn alive. */
     TWeakObjectPtr<APawn> Pilot;
-
-    UPROPERTY()
-    TArray<TObjectPtr<UShipModuleDataAsset>> InstalledModules;
 
     /** The fitted parts and the spares: the one truth about what is aboard,
      *  plain and serialisable (decision 11). Every bay is listed. */

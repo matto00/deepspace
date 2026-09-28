@@ -666,24 +666,22 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             // dark: a weight of 0 would take them out of the split entirely,
             // and a satisfaction of exactly 0 cannot tell following from any
             // curve that merely shares the endpoints.
-            UShipModuleDataAsset* Hog = NewObject<UShipModuleDataAsset>();
-            Hog->ModuleId = TEXT("Test.VeilHog");
-            // Most of whatever the reactor has left after what is already
-            // installed, so it stays "most of the headroom" on any loadout.
+            // Most of whatever the reactor has left after what is fitted, so
+            // it stays "most of the headroom" on any loadout. A test load,
+            // not a part (wear decision 8).
             float Installed = 0.0f;
             for (const UShipModuleDataAsset* Module : Ship->GetInstalledModules())
             {
                 Installed += Module->PowerDraw;
             }
-            Hog->PowerDraw = 0.8f * (Ship->GetReactorOutput() - Installed);
-            TestTrue(TEXT("a heavy module installs"), Ship->InstallModule(Hog));
+            Ship->AddLoad(TEXT("Test.VeilHog"), 0.8f * (Ship->GetReactorOutput() - Installed));
             Ship->Tick(0.016f);
             Sky->SyncToShip();
             const float Starved = Ship->GetConsumerSatisfaction(ShipPower::Lights);
             TestTrue(FString::Printf(TEXT("a heavy draw dims the lights part way (%.3f from %.3f)"), Starved, Fed),
                 Starved > 0.1f && Starved < 0.9f * Fed);
             TestEqual(TEXT("and the reflection dims exactly with them"), Read(SkyMaterial::InteriorLight), Starved);
-            Ship->RemoveModule(Hog);
+            Ship->RemoveLoad(TEXT("Test.VeilHog"));
             Ship->Tick(0.016f);
 
             Ship->SetLightsOn(false);
