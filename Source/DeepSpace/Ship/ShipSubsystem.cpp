@@ -1821,7 +1821,21 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
                 const FVector Up = (FlightState.GetUniversePosition() - Fix->Centre).GetSafeNormal();
                 const ShipFlight::FGroundLaw Law{ Limits.LinearAcceleration, Limits.ApproachSeconds, Limits.TouchdownSpeed,
                                                   Limits.SkimSeconds, Limits.SkimFloor };
-                View->EtaSeconds = ShipFlight::SecondsToGround(*Hit, Speed, FMath::Max(-(Along | Up), 1.0e-6), Law);
+                const double Sine = FMath::Max(-(Along | Up), 1.0e-6);
+                // What arrives is the footprint's least point, which the
+                // approach law holds (FootprintClearance 0), not the origin:
+                // over uneven ground a foot meets the rock sooner than the ray
+                // under the origin says, by the shortfall between the two
+                // heights. Without it the ETA's last ten seconds ran slow.
+                double Path = *Hit;
+                const TOptional<double> Agl = FlightState.GetGroundAltitude();
+                const TOptional<double> Foot = FlightState.GetFootprintClearance();
+                if (Agl && Foot)
+                {
+                    const double Shortfall = FMath::Max(0.0, (*Agl - Limits.GearClearanceCm) - *Foot);
+                    Path = FMath::Max(0.0, Path - Shortfall / Sine);
+                }
+                View->EtaSeconds = ShipFlight::SecondsToGround(Path, Speed, Sine, Law);
             }
             else
             {
