@@ -394,6 +394,19 @@ bool FWorldReliefFootprintTest::RunTest(const FString& Parameters)
     {
         Left += Relief.Height(D, Radius / 12.0) == 0.0 ? 0 : 1;
     }
+    // The detail bands alone are gone by R/24, their coarsest 24 cycles a
+    // radius: held apart, since the height below still carries the craters
+    // there.
+    int32 DetailLeft = 0;
+    for (const FVector3d& D : Directions(1000, 29))
+    {
+        FVector3d Gradient;
+        const double Detail = Relief.DetailSum(D, 1.0 / 24.0, &Gradient);
+        DetailLeft += Detail == 0.0 && Gradient == FVector3d::ZeroVector ? 0 : 1;
+    }
+    TestEqual(TEXT("a footprint of R/24 fades every detail band away, value and slope"), DetailLeft, 0);
+    TestTrue(TEXT("and then the detail's omitted bound is all of it"),
+        FMath::IsNearlyEqual(Relief.DetailOmittedBound(1.0 / 24.0), Relief.DetailBound(), 1.0e-12 * Relief.DetailBound()));
     // R/12: the coarsest crater band is 12 cycles a radius, below the
     // detail's 24 (slice (b) put the craters in the height).
     TestEqual(TEXT("a footprint of R/12 fades every band away, craters too, to the datum"), Left, 0);
