@@ -795,6 +795,58 @@ wants one eventually, and the map spec's *Open questions* records why any
 design must start from its tension with the anti-chore principle -- it is a
 wait imposed on the player.
 
+## Landing (slice b: fly down, hover over real ground)
+
+**Two floors.** Over a solid world (`EGround::Solid`: barren, ice,
+terrestrial; oceans and giants keep the floor sphere) the **drive's** floor
+is 10 km above the highest peak (`FloorFor`), and **cruise and the vertical
+lever read the ground** -- `FFlightSurface::Ground`, an `IGroundField` over
+WorldRelief, the one height function -- at every altitude, never the sphere.
+`ShipFlight::RayToGround` marches the ground by its slope bound, once a frame
+per direction; an exhausted march is a hit.
+
+**Gravity is held, never flown** (ADR 0005, amended): `ShipFlight::GravityAt`
+sums every body; the velocity never gets g dt. It is felt only under a solid
+world's drive floor, airborne: the boosters' hold (`ds.Boosters.HoldWatts`,
+paid first in their share), the hold's hiss, slower climbs on heavy worlds
+(`ds.Vertical.HeavyFloor`, by gravity alone), and the starved sink
+(`ds.Boosters.StarvedSink`), which the ground always catches.
+
+**The vertical lever** (Space up, C down) is ship state like the other two:
+a log rate 0.1-200 m/s, HOVER at zero, a detent, X and every fold set HOVER,
+and after X a press the way the ship is moving catches it. It is live within
+`ds.Land.Regime` (50 km, leaving over 55) of a world's cruise floor, where
+cruise flies the nose's horizontal projection -- looking down never dives the
+ship -- and across 40-50 km both blend out. Under a solid world's drive floor
+F gives **DriveBelowFloor**: the ship flies cruise, Shift/Ctrl move cruise,
+and the drive takes over 500 m above the floor with the nose clear of it.
+
+**The ground always catches.** In the regime horizontal speed is held to the
+**skim cap**, max(20 m/s, AGL / 2.5 s); a ridge ahead slows the ship to rest
+against it; and the descent is held to the **approach law**, an exponential
+ease (`ds.Land.ApproachSeconds`, 4 s) with a knee the boosters can follow, to
+contact at `ds.Land.TouchdownSpeed` (0.5 m/s), measured on the **footprint**
+-- four gear feet 1.5 m under the origin and the belly's four corners
+(`GEAR`, `BELLY` in `hauler_layout.py`, `ShipLanding` in C++). If a point is
+ever under the ground the **ground's hard stop lifts** the ship (sphere
+floors still never lift). `DeepSpace.Ship.Landing.GroundAlwaysCatches*` is
+the invariant. LANDED is slice (c).
+
+**The ground** (`AWorldGround`, `hauler_ground`): the nearest solid world's
+cube-sphere quadtree, CDLOD from the ship, 2:1, tiles 33 x 33 with skirts,
+built on two workers, uploaded four a frame, on the counter-frame, shaded by
+`M_SkyGround` exactly as the orbit shades (the vertex normal carries what the
+tile resolves, the pixel the rest). The tiles are `UTerrainTileComponent`,
+not `ProceduralMeshComponent`: PMC failed the first-day gate
+(`Eyes.TerrainBudget`, the verdict in landing decision 6). It takes the body
+from the sky under 50 km and grows the relief in to the drive floor.
+Residency never gates motion. `ds.Terrain.Describe` prints the cut.
+
+**The HUD below the floor:** `840 M ABOVE GROUND · SINKING 3 M/S`, the
+vertical lever in the motion line (`HOVER`, `CLIMB 5 M/S`, `SINK 3 M/S`, `ABOVE
+THE GROUND'S REACH`), `DRIVE ABOVE THE FLOOR`; the target's ETA in cruise over
+a solid world counts to the ground.
+
 ## The hum and the lamps
 
 **The hum** is synthesised, not sampled. `FShipHumVoice` is the pure
