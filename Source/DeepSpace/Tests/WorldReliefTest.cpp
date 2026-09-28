@@ -424,7 +424,12 @@ bool FWorldReliefMeasuredMaxTest::RunTest(const FString& Parameters)
     for (int32 World = 0; World < 256; ++World)
     {
         FWorldReliefParams Params;
-        Params.SeedOffset = FVector3d(Stream.RandRange(0, 65535), Stream.RandRange(0, 65535), Stream.RandRange(0, 65535)) / 256.0;
+        // Drawn into named locals, X then Y then Z: a constructor's arguments
+        // are evaluated in an unspecified order, and the recipe is this one.
+        const int32 X = Stream.RandRange(0, 65535);
+        const int32 Y = Stream.RandRange(0, 65535);
+        const int32 Z = Stream.RandRange(0, 65535);
+        Params.SeedOffset = FVector3d(X, Y, Z) / 256.0;
         Params.RadiusCm = 6.3781e8;
         Params.PeakCm = 6.0e5;
         Params.Ground = EGround::Solid;

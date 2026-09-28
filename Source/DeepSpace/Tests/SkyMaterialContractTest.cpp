@@ -224,7 +224,7 @@ namespace
 
     /** The JSON's shared_relief and band constants against the header and
      *  against the shared file's own tables: the file is the source, the
-     *  JSON the list the legacy graph and the docs are built from. */
+     *  JSON the list the Custom-node graphs and the docs are built from. */
     void CheckSharedTables(FAutomationTestBase& Test, const TSharedPtr<FJsonObject>& Contract)
     {
         const TSharedPtr<FJsonObject> Shared = Contract->GetObjectField(TEXT("shared_relief"));
