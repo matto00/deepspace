@@ -206,8 +206,11 @@ double FWorldRelief::DetailSum(const FVector3d& D, double FootprintD, FVector3d*
     for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
     {
         const int32 Index = Indices[Band];
+        // The band's lattice offset split as the shared file splits it
+        // (Task 31b): the same function as the whole sum, rounded where the
+        // GPU's float build rounds.
         const WorldReliefF64::WR_Noise4 Noise = WorldReliefF64::WR_DetailBand(D.X, D.Y, D.Z, Frequencies[Band],
-            Params.SeedOffset.X + 37.0 * Index, Params.SeedOffset.Y + 59.0 * Index, Params.SeedOffset.Z + 83.0 * Index,
+            WorldReliefF64::WR_SplitOffset(Params.SeedOffset.X, Params.SeedOffset.Y, Params.SeedOffset.Z, Index),
             FootprintD, Weights[Band]);
         // A band's height is its value over its frequency, so its gradient
         // in D is the noise's own gradient: every band has the same slope.
