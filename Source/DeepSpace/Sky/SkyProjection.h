@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Sky/SkySystem.h"
 #include "Universe/UniversePosition.h"
+#include "Surface/SunShadow.h"
 
 /**
  * Where to draw what is out there, and how bright: pure arithmetic from a
@@ -156,6 +157,20 @@ namespace SkyProjection
     DEEPSPACE_API FSkyFrame Project(const FSkySystem& System,
                                     const FUniversePosition& Ship,
                                     const FSkyViewParams& Params);
+
+    /** The one light a world is lit and shadowed by: the unit direction from
+     *  its centre to its star, universe axes -- FSkyBodyView::LightDirection,
+     *  and the cast shadow's (SunShadow::FSunLight). Zero if they coincide. */
+    DEEPSPACE_API FVector LightDirection(const FSkyBody& Body, const FSkyBody& Star);
+
+    /** The star's angular radius from the body's centre, rad: asin(R / d),
+     *  or pi/2 from inside it. */
+    DEEPSPACE_API double StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star);
+
+    /** The light the cast shadow of body Body is baked under: its star's
+     *  LightDirection and StarAngularRadius. Unset for a star, for an index
+     *  the system does not have, and in a system with no star. */
+    DEEPSPACE_API SunShadow::FSunLight SunLightOf(const FSkySystem& System, int32 Body);
 
     /**
      * Disc-averaged Lambert brightness at phase angle Alpha, 1 at full phase:
