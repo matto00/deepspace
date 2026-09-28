@@ -11,18 +11,21 @@
  * 4 and 5 at 1 g: the gas 0.097 per bar at 550 nm times its cross-section
  * relative to air and its column (28.97 / mu); aerosol and ozone per bar.
  * The pressures are the two extremes the law is held at: 0.05 bar, and each
- * mix's ceiling under MaxNadirTau450, where tau at 450 nm is 0.5 straight
- * down. Nothing outside Tests/ may include this.
+ * mix's ceiling under MaxNadirTau450, where tau at 450 nm is 0.32 straight
+ * down (atmosphere plan ruling 2; at 0.5 they were 1.8013, 1.1710 and
+ * 0.8968 bar, and every ceiling scales with the guarantee). Nothing
+ * outside Tests/ may include this.
  */
 namespace AtmosphereTestFixtures
 {
     inline constexpr double EarthRadiusCm = 6.3781e8;
     inline constexpr double HomeStarK = 2566.0;   // Baemsekai
     inline constexpr double SunK = 5772.0;
+    inline constexpr double CoolestStarK = 2400.0;   // procgen's coolest star: ClassBands' M floor (StarSystemGenerator.cpp)
     inline constexpr double LowBar = 0.05;
-    inline constexpr double NitrogenOxygenCeilingBar = 1.8013;
-    inline constexpr double CarbonDioxideCeilingBar = 1.1710;
-    inline constexpr double HydrogenHeliumCeilingBar = 0.8968;
+    inline constexpr double NitrogenOxygenCeilingBar = 1.1528;
+    inline constexpr double CarbonDioxideCeilingBar = 0.7494;
+    inline constexpr double HydrogenHeliumCeilingBar = 0.5740;
 
     inline FAirSpec Airless()
     {
@@ -86,16 +89,16 @@ namespace AtmosphereTestFixtures
     }
 
     /** A Jupiter at its disc: 11 Earth radii, 2.63 g, 110 K, the gas's
-     *  scale height 15.4 km, 2.36 bar of hydrogen and helium above the level
-     *  where tau at 450 nm reaches 0.5. */
+     *  scale height 15.4 km, 1.51 bar of hydrogen and helium above the level
+     *  where tau at 450 nm reaches 0.32 (ruling 2; 2.36 bar at 0.5). */
     inline FAirSpec Giant()
     {
         FAirSpec Air;
         Air.RadiusCm = 11.0 * EarthRadiusCm;
         Air.GasScaleHeightCm = 1.542e6;
-        Air.GasTau550 = 0.2192;
+        Air.GasTau550 = 0.1403;
         Air.AerosolScaleHeightCm = 1.0e5;
-        Air.AerosolTau550 = 0.00896;
+        Air.AerosolTau550 = 0.005734;
         Air.AerosolAngstrom = 1.0;
         Air.AerosolAsymmetry = 0.7;
         Air.AerosolAlbedo450 = 0.99;
