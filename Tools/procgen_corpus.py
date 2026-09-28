@@ -24,6 +24,7 @@ The columns are Tools/procgen_corpus_contract.json's, read by name.
 """
 
 import collections
+import colorsys
 import json
 import math
 import os
@@ -328,10 +329,52 @@ def report(rows, contract=None, skies=None):
         if seen:
             out += _render_histogram("Noon zenith saturation of temperate worlds' skies (share of those with one)",
                                      histogram(seen, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]), len(seen))
+            out += sky_colours(temperate_worlds, skies)
     out.append("")
 
     out += places_or_rolls(found)
     return "\n".join(out)
+
+
+def zenith_hue(rgb):
+    """The hue of a zenith colour in degrees, 0 red, 120 green, 240 blue;
+    None for a grey sky, which has none."""
+    h, sat, _ = colorsys.rgb_to_hsv(*rgb)
+    return None if sat <= 0.0 else 360.0 * h
+
+
+def _median(values):
+    values = sorted(values)
+    return values[len(values) // 2]
+
+
+def sky_colours(temperate_worlds, skies):
+    """The zenith colour's spread, which is what the mix weights are judged
+    by (atmospheres spec, decision 2): by mix, so a carbon-dioxide sky that
+    reads like a nitrogen-oxygen one shows, and as a hue histogram, which
+    saturation alone cannot give -- a peach red-dwarf sky and Earth's blue
+    land in the same saturation bin."""
+    by_mix = collections.OrderedDict((mix, []) for mix in ("none",) + AIR_MIXES)
+    for r in temperate_worlds:
+        sky = skies.get((r["sector_x"], r["sector_y"], r["sector_z"], r["slot"], r["planet"]))
+        if sky is not None:
+            by_mix.setdefault(r["air_mix"] or "none", []).append(sky)
+    out = ["Noon zenith colour of temperate worlds' skies, by mix (worlds, median RGB, hue range, median saturation)"]
+    for mix, seen in by_mix.items():
+        if not seen:
+            out.append("  %-16s none" % mix)
+            continue
+        rgb = tuple(_median(s["sky_zenith_rgb"][i] for s in seen) for i in range(3))
+        hues = [h for h in (zenith_hue(s["sky_zenith_rgb"]) for s in seen) if h is not None]
+        hue = "hue %3.0f-%3.0f deg" % (min(hues), max(hues)) if hues else "hue none (grey)"
+        out.append("  %-16s n=%-6d rgb %.2f,%.2f,%.2f  %s  saturation %.2f" % (
+            mix, len(seen), rgb[0], rgb[1], rgb[2], hue, _median(s["sky_zenith_saturation"] for s in seen)))
+    hues = [h for h in (zenith_hue(s["sky_zenith_rgb"]) for seen in by_mix.values() for s in seen) if h is not None]
+    if hues:
+        out += _render_histogram("Noon zenith hue of temperate worlds' skies, degrees: 0 red, 60 yellow, 120 green, "
+                                 "240 blue (share of those with a hue)",
+                                 histogram(hues, [30.0 * i for i in range(13)]), len(hues))
+    return out
 
 
 def places_or_rolls(found):

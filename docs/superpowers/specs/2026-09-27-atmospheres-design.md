@@ -461,11 +461,20 @@ judged by.
 
 **The corpus** gains `air_mix`, `surface_pressure_bar`, `scale_height_km`
 and `nadir_tau_450` (procgen's facts) in `Tools/procgen_corpus_contract.json`,
-`procgen_corpus.py` and the corpus test together, and `sky_zenith_rgb` and
-`sky_zenith_saturation` at noon from the ground, computed by the corpus test
-through the sky's side (decision 3), so `procgen_corpus.py` can show the
-spread of skies across the 10,000 nearest systems and answer the question
-this project asks of everything generated: places, or rolls.
+`procgen_corpus.py` and the corpus test together. `sky_zenith_rgb` and
+`sky_zenith_saturation`, the noon zenith from the ground computed through the
+sky's side (decision 3), are **a file of their own**:
+`Atmosphere.Full.CorpusSkies` (`CorpusSkiesTest.cpp`), run by name outside
+the default suite, writes `Saved/procgen_corpus_skies.tsv`, a row per
+temperate world of the 10,000 systems, under the contract's separate
+`sky_columns`. A noon zenith costs about 50 ms and there are about 7,800
+temperate worlds, six or seven minutes that cannot go in
+`DeepSpace.Universe.Corpus`, which every worktree's suite runs behind the one
+lock (the atmosphere plan's Task 13). `procgen_corpus.py` reads the skies
+beside the corpus when the file exists and shows their spread -- the zenith
+colour by mix, its hue and its saturation -- across the 10,000 nearest
+systems, to answer the question this project asks of everything generated:
+places, or rolls.
 
 **Rejected: derive from kind alone, no draws.** Every habitable-kind world
 would have the same column; variety only from star and gravity. **Rejected:
@@ -1197,7 +1206,8 @@ the ring). Not `ds.Sky.Goto n 30`: 30 km is inside the air, which is slice
 - `Universe/StarSystem.h` (`FPlanet::AirMix`, `SurfacePressureBar`),
   `StarSystemGenerator.*` (the two draws), `GenPriors.*` (priors,
   guarantees, domain), `Config/DefaultGame.ini`, the corpus contract,
-  `procgen_corpus.py` and `ProcGenCorpusTest.cpp`.
+  `procgen_corpus.py`, `ProcGenCorpusTest.cpp` and `CorpusSkiesTest.cpp`
+  (the noon skies, decision 2).
 - `Sky/SkyColour.*` (`ThroughFilter`), `SkySystem.*` (`FSkyBody::Air`,
   the outer radius; `Rim` deleted), `SkyProjection.*` (stacking on the
   outer radius for an airy body not first in order), `ShipSky.*` (the new
@@ -1441,8 +1451,9 @@ rebuild.
   filling the view from 500 km and from the opening framing, `stat unit`'s
   game, render-thread and GPU times reported;
 - the corpus reads: `procgen_corpus.py` shows the mixes, pressures and
-  noon zenith colours across the 10,000 nearest systems, and the developer
-  has seen the spread;
+  noon zenith colours across the 10,000 nearest systems (the colours from
+  `Atmosphere.Full.CorpusSkies`'s file), and the developer has seen the
+  spread;
 - **the ground skies, before the ground slices**: `Atmosphere.Full.GroundSkySwatch`'s
   noon and dusk fisheyes under fixtures R, G and C are in `Saved/` and
   have gone to the developer, so an honest red-dwarf sky seen *from the
@@ -1623,12 +1634,13 @@ reasonable person could make differently.
    multiplied by retention before the draw; pressure log-normal (medians
    0.8 bar terrestrial, 1.0 ocean, sigma 0.9) under a smooth ceiling;
    giants fixed at H2/He, their drawn disc defined at the depth where the
-   air above reaches `MaxNadirTau450` (0.11 bar on a 15 M_E giant, about
-   2.4 on a Jupiter), not drawn.** *Alternatives:* clamp instead of the
+   air above reaches `MaxNadirTau450` (0.07 bar on a 15 M_E giant, about
+   1.5 on a Jupiter, at ruling 2's 0.32), not drawn.** *Alternatives:* clamp instead of the
    smooth ceiling (a spike at the cap in the corpus); giants drawn too (a
    giant's "surface pressure" means nothing); giants at a 1-bar datum and
    exempt from the guarantee (a 15 M_E giant then sits under tau450 4.5, a
-   featureless haze from orbit; most giants under 134 M_E exceed the cap).
+   featureless haze from orbit; every giant under about 210 M_E exceeds the
+   cap, 134 M_E at the first 0.5).
    *Recommended:* as specified. *Cost to change later:* low for priors;
    medium once worlds have been visited.
 3. **`SkyColour::ThroughFilter` integrates the star's spectrum, and if the
@@ -1644,12 +1656,13 @@ reasonable person could make differently.
    would keep hydrogen); a hard threshold (a cliff in the corpus).
    *Recommended:* as specified. *Cost to change later:* low in code; it
    decides which worlds may have hydrogen skies.
-5. **The nadir cap bounds the fact: `MaxNadirTau450` 0.5, applied as a
+5. **The nadir cap bounds the fact: `MaxNadirTau450` 0.32 (ruling 2; 0.5 as first put up), applied as a
    per-world pressure ceiling, with a legibility test (half the airless
    contrast at nadir under a G star).** *Alternatives:* cap the rendering
    and keep the fact (orbit and ground disagree); a lower cap (thinner,
    clearer worlds; less air variety); a higher one. *Recommended:* bound
-   the fact at 0.5. *Cost to change later:* medium: it moves pressures
+   the fact; ruled at 0.32, the value that holds the legibility test as
+   written. *Cost to change later:* medium: it moves pressures
    across the corpus.
 6. **Aerosol and absorber follow the mix (decision 5's table); N2/O2
    carries ozone.** *Alternatives:* a third draw now; no aerosol or ozone

@@ -17,6 +17,7 @@ bug the code already had. No editor, no corpus run.
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -180,12 +181,29 @@ def test_gravity_and_relief_are_typed():
 def test_report_gives_air_by_mix():
     text = C.report(rows())
     assert "Air, by mix (worlds, median surface pressure, median nadir tau at 450 nm)" in text, text
-    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.8 bar 0.34; Gamma II h2/he 0.474 bar 0.32
+    # Alpha III n2/o2 1 bar 0.277; Gamma I co2 0.6 bar 0.255; Gamma II h2/he 0.474 bar 0.32
     # (a 0.826 g giant's disc under AirFacts: 0.32 / NadirTau450(H2/He, 1 bar, 1 g) x g,
-    # MaxNadirTau450 as atmosphere plan ruling 2 lowered it).
+    # MaxNadirTau450 as atmosphere plan ruling 2 lowered it). Gamma I sits under the
+    # 1 g carbon-dioxide ceiling that cap sets, about 0.75 bar: 0.425 of tau a bar.
     assert "  nitrogen-oxygen  n=1      median   1.000 bar  tau450 0.277" in text, text
-    assert "  carbon-dioxide   n=1      median   0.800 bar  tau450 0.340" in text, text
+    assert "  carbon-dioxide   n=1      median   0.600 bar  tau450 0.255" in text, text
     assert "  hydrogen-helium  n=1      median   0.474 bar  tau450 0.320" in text, text
+
+
+def test_every_sample_air_fits_the_nadir_guarantee():
+    # The sample's airs are worked examples of the law, so none may be a
+    # world procgen cannot make: GenGuarantees::MaxNadirTau450, read from the
+    # C++ so a lowered cap fails here rather than leaving a stale row. The
+    # cap once fell from 0.5 to 0.32 and Gamma I's 0.34 outlived it.
+    header = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "Source", "DeepSpace", "Universe", "GenPriors.h")
+    with open(header) as f:
+        found = re.findall(r"MaxNadirTau450\s*=\s*([0-9.]+)", f.read())
+    assert len(found) == 1, found
+    cap = float(found[0])
+    over = [(r["designation"], r["nadir_tau_450"]) for r in rows()
+            if r["air_mix"] not in (None, "none") and r["nadir_tau_450"] > cap + 1e-9]
+    assert not over, "above MaxNadirTau450 %.3f: %s" % (cap, over)
 
 
 def test_air_is_typed():
@@ -223,6 +241,13 @@ def test_report_gives_the_spread_of_skies():
     text = C.report(rows(), skies=C.load_skies(SKIES_SAMPLE))
     assert "  2 of 2 temperate worlds have a noon sky" in text, text
     assert "Noon zenith saturation of temperate worlds' skies (share of those with one)" in text, text
+    # The colour, not only its saturation, by mix (spec decision 2: the
+    # zenith RGB's spread is what the mix weights are judged by).
+    assert "Noon zenith colour of temperate worlds' skies, by mix" in text, text
+    assert "  nitrogen-oxygen  n=1      rgb 0.21,0.34,0.62  hue 221-221 deg  saturation 0.66" in text, text
+    assert "  carbon-dioxide   n=1      rgb 0.40,0.38,0.33  hue  43- 43 deg  saturation 0.17" in text, text
+    assert "  hydrogen-helium  none" in text, text
+    assert "Noon zenith hue of temperate worlds' skies, degrees" in text, text
 
 
 def test_report_without_skies_says_how_to_write_them():
