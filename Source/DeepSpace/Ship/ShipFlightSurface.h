@@ -178,6 +178,11 @@ namespace ShipFlight
     /** The ground march's step budget: an exhausted march is a hit. */
     inline constexpr int32 GroundMarchSteps = 64;
 
+    /** How much clearance a ground ray reused within a frame may have lost
+     *  against the one marched, cm, before it is marched again: the ground's
+     *  invariant's centimetre (FShipFlightState's ray cache). */
+    inline constexpr double RayReuseToleranceCm = 1.0;
+
     /** ds.Land.Regime's default, cm: the vertical lever is live within 50 km
      *  of the nearest world's cruise floor, leaves over RegimeExitFactor of
      *  it, and both levers blend across its top RegimeBlendFraction. */

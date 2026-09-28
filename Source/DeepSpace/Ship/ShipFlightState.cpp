@@ -653,20 +653,25 @@ TOptional<double> FShipFlightState::NearestOnCruisePath(const FVector& Direction
 
 int32 FShipFlightState::NearestGround() const
 {
+    // The nearest world by the regime's own measure (UpdateRegime), and only
+    // if it is solid. Taken over the solid worlds alone, a ship at a giant's
+    // or an ocean's floor -- in that world's regime -- read the ground of a
+    // barren world an AU away as "below it", and the corner printed it.
     int32 Best = INDEX_NONE;
     double Least = TNumericLimits<double>::Max();
     for (int32 Index = 0; Index < Surfaces.Num(); ++Index)
     {
-        if (const TOptional<double> Agl = ShipFlight::GroundAt(Surfaces[Index], Position))
+        if (Surfaces[Index].bWorld && !Surfaces[Index].bInsideOut)
         {
-            if (*Agl < Least)
+            const double Clear = CruiseFloorClearance(Surfaces[Index]);
+            if (Clear < Least)
             {
-                Least = *Agl;
+                Least = Clear;
                 Best = Index;
             }
         }
     }
-    return Best;
+    return Best != INDEX_NONE && Surfaces[Best].HasGround() ? Best : INDEX_NONE;
 }
 
 TOptional<double> FShipFlightState::GetGroundAltitude() const
@@ -883,14 +888,33 @@ TOptional<double> FShipFlightState::CachedRay(int32 Slot, int32 SurfaceIndex, co
     });
     if (Cache && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
     {
-        const double Flown = FMath::Max(0.0, (Position - Cache->From) | Cache->Direction);
-        if (Cache->Hit)
+        // The march proved the old ray clear by Clearance to its hit. Flown
+        // along it, the rest of it is still that ray. Moved across it, or
+        // turned, the new ray is a different line: over rising ground a
+        // sinking ship's horizontal ray meets the slope nearer by the drop
+        // over the slope's tangent, and no distance bound covers a ray that
+        // only grazed a crest. What is bounded is the clearance the new ray
+        // can have lost against the old one -- its offset, plus the ground's
+        // rise over it -- so the old hit is reused only while that stays
+        // under RayReuseToleranceCm, and marched again otherwise.
+        const FVector Moved = Position - Cache->From;
+        const double Along = Moved | Cache->Direction;
+        const double Flown = FMath::Max(0.0, Along);
+        const double Remaining = FMath::Max(0.0, (Cache->Hit ? *Cache->Hit : Cache->SeenTo) - Flown);
+        const double Across = (Moved - Cache->Direction * Along).Size();
+        const double Turn = FMath::Sqrt(FMath::Max(0.0, 1.0 - FMath::Square(FMath::Min(1.0, Cache->Direction | U))));
+        const FFlightSurface& Surface = Surfaces[SurfaceIndex];
+        const double Rise = 1.0 + (Surface.HasGround() ? FMath::Max(0.0, Surface.Ground->MaxSlope()) : 0.0);
+        if ((Across + Remaining * Turn) * Rise <= ShipFlight::RayReuseToleranceCm)
         {
-            return FMath::Max(0.0, *Cache->Hit - Flown);
-        }
-        if (Cache->SeenTo - Flown >= Lookahead)
-        {
-            return {};
+            if (Cache->Hit)
+            {
+                return Remaining;
+            }
+            if (Remaining >= Lookahead)
+            {
+                return {};
+            }
         }
     }
     if (!Cache)

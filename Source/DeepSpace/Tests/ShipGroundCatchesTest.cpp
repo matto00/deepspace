@@ -35,6 +35,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCatchesRealTest, "DeepSpace.Ship.Landing
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundRayOnceAFrameTest, "DeepSpace.Ship.Landing.GroundRayOnceAFrame",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundRayAcrossTest, "DeepSpace.Ship.Landing.GroundRayMovedAcross",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace GroundCatchesLocal
 {
@@ -354,6 +356,75 @@ bool FGroundRayOnceAFrameTest::RunTest(const FString& Parameters)
         SpeedBefore / 100.0, Fine.GetSpeed() / 100.0, Coarse.GetSpeed() / 100.0,
         (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size(), Fine.GetGroundAltitude().Get(0.0) / 1.0e5));
     TestTrue(TEXT("still braking at the frame's end"), Fine.GetSpeed() < SpeedBefore - 100.0 && Fine.GetRegimeWeight() == 0.0);
+    TestTrue(TEXT("a frame of 240 substeps flies the speed of 240 frames of one, within 1 cm/s"),
+        FMath::Abs(Fine.GetSpeed() - Coarse.GetSpeed()) <= 1.0);
+    TestTrue(TEXT("and to the same place, within 10 cm"), (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size() <= 10.0);
+    return true;
+}
+
+/*
+ * The ray reused within a frame is only the old ray while the ship flies
+ * along it. Sinking in the regime, the horizontal ray's origin drops across
+ * it, and against rising ground the slope is nearer than the old hit less
+ * the distance flown: a frame of 240 substeps must still fly as 240 frames
+ * of one, the ship sinking toward a hill with the ground ahead holding it
+ * back.
+ */
+bool FGroundRayAcrossTest::RunTest(const FString& Parameters)
+{
+    using namespace GroundCatchesLocal;
+    const double Radius = 6.0e8;
+    const FGroundFieldRef Ground = MakeShared<FCrossedSines, ESPMode::ThreadSafe>(FCrossedSines::WithSlope(Radius, 4.0e5, 0.5));
+    const FFlightSurface World = SurfaceOver(Ground, 1.02e6 + Ground->MaxHeightCm());
+    // In the trough of both sines, the ground rising ahead along +X.
+    const FVector3d D = FVector3d(-1.0e5 / Radius, -1.0e5 / Radius, 1.0).GetSafeNormal();
+
+    auto Start = [&](FShipFlightState& Flight)
+    {
+        Flight.SetSurfaces({ World });
+        Flight.SetWells({ { World.Centre, ShipFlight::StandardGravityCmS2 * World.Radius * World.Radius, World.Radius } });
+        Flight.SetUniverseTransform(Above(World, D, 3.0e4), Level(D));
+        FShipFlightCommand Command;
+        Command.Throttle = ThrottleFor(1.0e4, Flight.GetLimits());
+        Command.Vertical = ShipVerticalLever::LeverOf(-500.0, Flight.GetLimits().VerticalTop);
+        Flight.SetCommand(Command);
+    };
+
+    // Fine frames until the ground ahead has held the ship back for a
+    // quarter second.
+    FShipFlightState Fine;
+    Start(Fine);
+    int32 Holding = -1;
+    int32 Steps = 0;
+    for (; Steps < 120 * 120 && (Holding < 0 || Steps < Holding + 30); ++Steps)
+    {
+        Fine.Step(FShipFlightState::FixedStep);
+        if (Holding < 0 && Fine.GetHold() != EFlightHold::Free && Fine.GetHeldFraction() > 0.05)
+        {
+            Holding = Steps;
+        }
+    }
+    if (!TestTrue(TEXT("the ground ahead holds the ship back"), Holding >= 0))
+    {
+        return false;
+    }
+    TestTrue(TEXT("in the regime, sinking"), Fine.IsVerticalLive() && Fine.GetVerticalSpeed() < -100.0);
+
+    FShipFlightState Coarse;
+    Start(Coarse);
+    for (int32 I = 0; I < Steps; ++I)
+    {
+        Coarse.Step(FShipFlightState::FixedStep);
+    }
+    const double SpeedBefore = Coarse.GetSpeed();
+    Coarse.Step(240.0 * FShipFlightState::FixedStep);
+    for (int32 I = 0; I < 240; ++I)
+    {
+        Fine.Step(FShipFlightState::FixedStep);
+    }
+    AddInfo(FString::Printf(TEXT("from %.2f m/s: fine %.3f m/s, one frame %.3f m/s; %.3f cm apart; %.1f m up"),
+        SpeedBefore / 100.0, Fine.GetSpeed() / 100.0, Coarse.GetSpeed() / 100.0,
+        (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size(), Fine.GetGroundAltitude().Get(0.0) / 100.0));
     TestTrue(TEXT("a frame of 240 substeps flies the speed of 240 frames of one, within 1 cm/s"),
         FMath::Abs(Fine.GetSpeed() - Coarse.GetSpeed()) <= 1.0);
     TestTrue(TEXT("and to the same place, within 10 cm"), (Fine.GetUniversePosition() - Coarse.GetUniversePosition()).Size() <= 10.0);

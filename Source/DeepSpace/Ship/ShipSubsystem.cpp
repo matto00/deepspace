@@ -1815,7 +1815,14 @@ TOptional<FTargetView> UShipSubsystem::GetTargetView(const FStarSystem& Here) co
         const double Reach = FlightState.GetUniversePosition().DistanceTo(Fix->Centre);
         if (const TOptional<double> Hit = ShipFlight::RayToGround(Surface, FlightState.GetUniversePosition(), Along, Limits.GearClearanceCm, 2.0 * Reach))
         {
-            if (FlightState.IsInNearRegime())
+            // Inside the regime of the target itself: the regime is any
+            // world's, and a ship at a giant's floor is in the giant's, while
+            // the laws it flies there toward a solid target far off are the
+            // ones above the regime. The regime is left above 1.1 x its top.
+            const TOptional<double> TargetAgl = ShipFlight::GroundAt(Surface, FlightState.GetUniversePosition());
+            const bool bTargetsRegime = FlightState.IsInNearRegime() && TargetAgl
+                && *TargetAgl - Limits.GearClearanceCm <= FMath::Max(Limits.RegimeCm, 1.0) * ShipFlight::RegimeExitFactor;
+            if (bTargetsRegime)
             {
                 // Inside the regime: the approach law with its knee, and the
                 // skim cap where the path is shallow.

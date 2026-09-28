@@ -21,6 +21,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSkimAndLookTest, "DeepSpace.Ship.Landin
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingSinkOntoFloorSphereTest, "DeepSpace.Ship.Landing.SinkOntoFloorSphere",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandingGroundIsTheNearWorldsTest, "DeepSpace.Ship.Landing.GroundIsTheNearWorlds",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 namespace LandingRegimeLocal
 {
@@ -326,6 +328,45 @@ bool FLandingSinkOntoFloorSphereTest::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("braked by the boosters all the way: no velocity step past them (worst %.3f of them)"), WorstStep),
              WorstStep <= 1.0 + 1.0e-6);
     TestFalse(TEXT("and there is no ground altitude: oceans keep the floor"), State.GetGroundAltitude().IsSet());
+    return true;
+}
+
+/*
+ * The ground below is the nearest world's, and only if it has one (decision
+ * 12: the ground line is "in the near regime over solid ground"). At a
+ * giant's or an ocean's floor the ship is in that world's regime, and a
+ * barren world an AU off is not below it: over the groundless world there
+ * is no ground altitude and no footprint clearance, whatever other ground
+ * the system holds.
+ */
+bool FLandingGroundIsTheNearWorldsTest::RunTest(const FString& Parameters)
+{
+    using namespace LandingRegimeLocal;
+    FFlightSurface Ocean;
+    Ocean.Centre = Somewhere();
+    Ocean.Radius = 0.9 * UniverseUnits::CmPerEarthRadius;
+    Ocean.Floor = 1.0e6;
+    Ocean.bWorld = true;
+    const FGroundFieldRef Ground = Swells(GroundFixtures::FixtureParams().RadiusCm);
+    const FFlightSurface Barren = SurfaceOver(Ground, 1.02e6 + Ground->MaxHeightCm(),
+                                              Somewhere() + FVector(1.5e13, 0.0, 0.0));
+    const FVector3d D = FVector3d(0.002, -0.001, 1.0).GetSafeNormal();
+
+    FShipFlightState State;
+    State.SetSurfaces({ Barren, Ocean });
+    State.SetWells({ WellOf(Ocean, 0.84), WellOf(Barren, 0.84) });
+    State.SetUniverseTransform(Ocean.Centre + FVector(D) * (Ocean.Radius + Ocean.Floor + 1.0e5), Level(D));
+    State.Step(Dt);
+    TestTrue(TEXT("1 km over an ocean's floor the ship is in the ocean's regime"), State.IsInNearRegime());
+    TestFalse(TEXT("and there is no ground below it, though a barren world 1 AU off has one"), State.GetGroundAltitude().IsSet());
+    TestFalse(TEXT("nor any footprint clearance"), State.GetFootprintClearance().IsSet());
+
+    State.SetUniverseTransform(Above(Barren, D, 1.0e5), Level(D));
+    State.Step(Dt);
+    const TOptional<double> Agl = State.GetGroundAltitude();
+    TestTrue(FString::Printf(TEXT("1 km over the barren world its ground is below (%.1f m)"), Agl.Get(-100.0) / 100.0),
+             Agl.IsSet() && FMath::IsNearlyEqual(*Agl, 1.0e5, 100.0));
+    TestTrue(TEXT("and the footprint reads it too"), State.GetFootprintClearance().IsSet());
     return true;
 }
 

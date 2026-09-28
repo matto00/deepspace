@@ -293,12 +293,15 @@ public:
 
     /** The ship's origin above the ground directly below it, cm, radially,
      *  clearance included -- the HUD's number, "1.5 M ABOVE GROUND" at rest
-     *  on flat ground -- over the nearest solid world. Unset with none. */
+     *  on flat ground -- over the nearest world (the regime's measure), if
+     *  it is solid. Unset when that world has no ground: over an ocean or a
+     *  giant there is nothing below to measure, however near another
+     *  world's ground is. */
     TOptional<double> GetGroundAltitude() const;
 
     /** The least height of any footprint point above that ground, cm: 0 when
      *  a foot touches. What the descent cap, the hard stop and contact read;
-     *  the HUD never prints it. Unset with no solid world. */
+     *  the HUD never prints it. Unset as GetGroundAltitude is. */
     TOptional<double> GetFootprintClearance() const;
 
     /** How far under a solid world's drive floor the ship is, cm; 0 when it
@@ -507,7 +510,8 @@ private:
      *  brake from Speed. */
     TOptional<double> NearestOnCruisePath(const FVector& Direction, double Speed);
 
-    /** The solid world whose ground is nearest, into Surfaces; INDEX_NONE. */
+    /** The nearest world, by the regime's measure (CruiseFloorClearance),
+     *  into Surfaces, if it has a ground; INDEX_NONE otherwise. */
     int32 NearestGround() const;
 
     /** After the translation: if any footprint point is under the ground,
@@ -543,9 +547,13 @@ private:
     /**
      * The ground rays, marched once a frame per direction (decision 10's
      * cost): each later substep of the frame takes the distance flown along
-     * the ray off the proven-clear distance, and marches again only if the
-     * direction turned by more than a degree. Slot 0 is cruise's path along
-     * the nose, slot 1 the horizontal heading in the regime.
+     * the ray off the proven-clear distance -- a true lower bound only for
+     * motion along the ray -- and marches again as soon as the clearance the
+     * new ray could have lost against the old one, (offset across it + the
+     * distance left x the turn) x (1 + MaxSlope), passes
+     * ShipFlight::RayReuseToleranceCm: a sinking or sliding ship, or a turn,
+     * marches each substep. Slot 0 is cruise's path along the nose, slot 1
+     * the horizontal heading in the regime.
      */
     struct FGroundRayCache
     {
