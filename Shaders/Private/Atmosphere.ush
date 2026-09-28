@@ -248,7 +248,8 @@ inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenit
 // The Custom node hands its texture and sampler down as the trailing
 // arguments: a 64 x 32 RGBA16F texture, bins 0-3 in its left half and 4-7
 // in its right, each half read as the C++ reads the table -- 32 texels
-// across, 0 and 1 at the first and last centre.
+// across, 0 and 1 at the first and last centre, the sun's columns crowded
+// toward the horizon as FAtmosphereTable::ColumnOf crowds them.
 // Load, never SampleLevel: the GPU's bilinear weights are 8-bit fixed
 // point, and FAtmosphereTable::Sample blends in full precision, so each
 // half's four texels are loaded and blended in float, as the C++ blends
@@ -260,7 +261,9 @@ inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenit
 static const float AT_SPLITTER = 4097.0;
 AT_Bins AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_PARAM)
 {
-    float FX = saturate((CosSunZenith + 1.0) * 0.5) * 31.0;
+    float Cos = clamp(CosSunZenith, -1.0, 1.0);
+    float T = Cos < 0.0 ? -sqrt(-Cos) : sqrt(Cos);
+    float FX = saturate((T + 1.0) * 0.5) * 31.0;
     float FY = saturate(Altitude01) * 31.0;
     int X0 = min(int(floor(FX)), 30);
     int Y0 = min(int(floor(FY)), 30);

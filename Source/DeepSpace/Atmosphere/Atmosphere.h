@@ -49,7 +49,7 @@ struct FAtmosphereAir
 /**
  * One airy world's multiple-scattering table (decision 11): Size x Size
  * texels, row = altitude over the air's depth (0 at the surface), column =
- * the sun's zenith cosine from -1 to 1, each a value per bin
+ * the sun's zenith cosine from -1 to 1 (ColumnOf), each a value per bin
  * -- two RGBA16F texels on the GPU, a 64 x 32 texture with bins 0-3 in its
  * left half and 4-7 in its right, which is why the values stored here have
  * already been through a half float. Texels[(Row * Size + Column) * Count +
@@ -63,6 +63,15 @@ struct DEEPSPACE_API FAtmosphereTable
     TArray<float> Texels;
 
     bool IsEmpty() const { return Texels.Num() != Size * Size * AtmosphereBins::Count; }
+
+    /** The column, fractional, that holds a sun at CosSunZenith: the
+     *  columns are equal steps in T with CosSunZenith = T |T|, crowded
+     *  toward the horizon, where the light that has scattered changes
+     *  fastest with the sun. */
+    static double ColumnOf(double CosSunZenith);
+
+    /** The sun's zenith cosine at a column's centre. */
+    static double CosOfColumn(int32 Column);
 
     float Texel(int32 Row, int32 Column, int32 Bin) const { return Texels[(Row * Size + Column) * AtmosphereBins::Count + Bin]; }
 

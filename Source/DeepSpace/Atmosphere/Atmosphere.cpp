@@ -77,6 +77,19 @@ float AtmosphereLaw::LogChapmanF32(float X, float CosZenith)
 }
 
 
+double FAtmosphereTable::ColumnOf(double CosSunZenith)
+{
+    const double Cos = FMath::Clamp(CosSunZenith, -1.0, 1.0);
+    const double T = Cos < 0.0 ? -std::sqrt(-Cos) : std::sqrt(Cos);
+    return (T + 1.0) * 0.5 * (Size - 1);
+}
+
+double FAtmosphereTable::CosOfColumn(int32 Column)
+{
+    const double T = -1.0 + 2.0 * Column / (Size - 1);
+    return T * std::fabs(T);
+}
+
 void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double (&Out)[AtmosphereBins::Count]) const
 {
     if (IsEmpty())
@@ -87,7 +100,7 @@ void FAtmosphereTable::Sample(double Altitude01, double CosSunZenith, double (&O
         }
         return;
     }
-    const double FX = FMath::Clamp((CosSunZenith + 1.0) * 0.5, 0.0, 1.0) * (Size - 1);
+    const double FX = ColumnOf(CosSunZenith);
     const double FY = FMath::Clamp(Altitude01, 0.0, 1.0) * (Size - 1);
     const int32 X0 = FMath::Min(FMath::FloorToInt32(FX), Size - 2);
     const int32 Y0 = FMath::Min(FMath::FloorToInt32(FY), Size - 2);
@@ -151,7 +164,7 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
         Out.Table.Texels.SetNumZeroed(Size * Size * AtmosphereBins::Count);
         // NoonOnly: the two columns either side of the noon sun's, which
         // every sample of a zenith view under that sun reads.
-        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32((AtmosphereLaw::NoonSun().Z + 1.0) * 0.5 * (Size - 1)), Size - 2);
+        const int32 NoonColumn = FMath::Min(FMath::FloorToInt32(FAtmosphereTable::ColumnOf(AtmosphereLaw::NoonSun().Z)), Size - 2);
         const int32 FirstColumn = Coverage == EAtmosphereTable::Full ? 0 : NoonColumn;
         const int32 LastColumn = Coverage == EAtmosphereTable::Full ? Size - 1 : NoonColumn + 1;
         for (int32 Row = 0; Row < Size; ++Row)
@@ -159,8 +172,7 @@ FAtmosphere FAtmosphere::Build(const FAirSpec& Spec, double StarTemperatureK, EA
             for (int32 Column = FirstColumn; Column <= LastColumn; ++Column)
             {
                 const double Altitude01 = static_cast<double>(Row) / (Size - 1);
-                const double Cos = -1.0 + 2.0 * Column / (Size - 1);
-                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, Cos, Empty);
+                const AtmosphereF64::AT_Bins Cell = AtmosphereF64::AT_MultiScatterCell(Air64, Altitude01, FAtmosphereTable::CosOfColumn(Column), Empty);
                 for (int32 K = 0; K < AtmosphereBins::Count; ++K)
                 {
                     Out.Table.Texels[(Row * Size + Column) * AtmosphereBins::Count + K] = FFloat16(static_cast<float>(Cell.V[K])).GetFloat();

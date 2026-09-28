@@ -32,6 +32,19 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
     constexpr int32 Size = FAtmosphereTable::Size;
     constexpr int32 Bins = AtmosphereBins::Count;
 
+    // The columns: equal steps in T, the sun's cosine T |T|, crowded at the
+    // horizon; ColumnOf undoes CosOfColumn.
+    bool bColumns = true;
+    for (int32 I = 0; I < Size; ++I)
+    {
+        bColumns &= FMath::Abs(FAtmosphereTable::ColumnOf(FAtmosphereTable::CosOfColumn(I)) - I) < 1.0e-9;
+    }
+    TestTrue(TEXT("ColumnOf finds each column's own sun"), bColumns);
+    TestTrue(TEXT("the ends are the sun overhead and underfoot"),
+        FAtmosphereTable::CosOfColumn(0) == -1.0 && FAtmosphereTable::CosOfColumn(Size - 1) == 1.0);
+    TestTrue(TEXT("and the two columns either side of the horizon hold suns within a tenth of a degree of it"),
+        FMath::Abs(FAtmosphereTable::CosOfColumn(Size / 2)) < std::sin(FMath::DegreesToRadians(0.1)));
+
     const FAtmosphere Full = FAtmosphere::Build(EarthAir(), SunK);
     const FAtmosphere CarbonDioxideAir = FAtmosphere::Build(CarbonDioxide(CarbonDioxideCeilingBar), SunK);
     const FAirSpec Specs[] = {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar)};
@@ -54,15 +67,15 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
         }
         TestTrue(TEXT("every texel finite and not negative"), bFinite);
 
-        // Texel centres: altitude J / 31 of the air's depth, sun cosine
-        // -1 + 2 I / 31 -- overhead, 29 degrees up, 5.6 up, 5.6 down -- each
-        // bin against the reference's source averaged into it.
+        // Texel centres: altitude J / 31 of the air's depth, the sun at
+        // CosOfColumn(I) -- overhead, 17.5 degrees up, 1.5 up, 1.5
+        // down -- each bin against the reference's source averaged into it.
         for (const int32 J : {0, 3, 9})
         {
-            for (const int32 I : {31, 23, 17, 14})
+            for (const int32 I : {31, 24, 18, 13})
             {
                 const double Altitude01 = static_cast<double>(J) / (Size - 1);
-                const double Cos = -1.0 + 2.0 * I / (Size - 1);
+                const double Cos = FAtmosphereTable::CosOfColumn(I);
                 const AtmosphereBins::FBins Want = AtmosphereBins::Average(Star, Reference.MultiScatterSpectrum(Altitude01, Cos));
                 for (int32 K = 0; K < Bins; ++K)
                 {
@@ -74,15 +87,30 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
             }
         }
 
+        // A sun on the horizon, read between the columns either side of it:
+        // there the light the air hands on changes fastest with the sun, and
+        // a blend across a coarse step reads the lit side's light into the
+        // shadow's.
+        const AtmosphereBins::FBins Horizon = AtmosphereBins::Average(Star, Reference.MultiScatterSpectrum(0.0, 0.0));
+        double AtHorizon[Bins];
+        Table.Sample(0.0, 0.0, AtHorizon);
+        for (int32 K = 0; K < Bins; ++K)
+        {
+            TestTrue(FString::Printf(TEXT("the sun on the horizon, bin %d: the table reads %.5f against the reference's %.5f"), K, AtHorizon[K], Horizon.Value[K]),
+                FMath::Abs(AtHorizon[K] - Horizon.Value[K]) <= FMath::Max(0.10 * Horizon.Value[K], 1.0e-3));
+        }
+
         // Read between texel centres, bilinearly.
+        const double Between = 0.5 * (FAtmosphereTable::CosOfColumn(30) + FAtmosphereTable::CosOfColumn(31));
         double Read[Bins];
-        Table.Sample(0.0, -1.0 + 2.0 * 30.5 / (Size - 1), Read);
-        TestTrue(TEXT("halfway between two texels the table reads their mean"),
-            FMath::Abs(Read[0] - 0.5 * (Table.Texel(0, 30, 0) + Table.Texel(0, 31, 0))) < 1.0e-6);
+        Table.Sample(0.0, Between, Read);
+        const double Column = FAtmosphereTable::ColumnOf(Between) - 30.0;
+        TestTrue(TEXT("between two texels the table reads their blend at the sun's own column"),
+            FMath::Abs(Read[0] - FMath::Lerp(static_cast<double>(Table.Texel(0, 30, 0)), static_cast<double>(Table.Texel(0, 31, 0)), Column)) < 1.0e-6);
     }
 
-    // Coverage. The noon sun's cosine, sin 45 degrees = 0.7071, lies between
-    // columns 26 (0.677) and 27 (0.742).
+    // Coverage. The noon sun's cosine, sin 45 degrees, lies between columns
+    // 28 and 29 (T = 0.8409, column 28.53).
     const FAtmosphere Noon = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::NoonOnly);
     const FAtmosphere NoTable = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
     bool bNoonColumns = true;
@@ -94,7 +122,7 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
             for (int32 K = 0; K < Bins; ++K)
             {
                 const float Only = Noon.GetTable().Texel(J, I, K);
-                if (I == 26 || I == 27)
+                if (I == 28 || I == 29)
                 {
                     bNoonColumns &= Only == Full.GetTable().Texel(J, I, K);
                 }
