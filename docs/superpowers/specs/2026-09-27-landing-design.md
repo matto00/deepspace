@@ -696,6 +696,18 @@ day. If either fails, the fallback is a small custom primitive,
 and no CPU copy beyond a test hook; the pure core is unchanged by the
 swap. Sign-off item 15.
 
+**Measured, the first day of (b)** (`Eyes.TerrainBudget`, this machine's RTX 4070 Ti SUPER, 4K):
+PMC's CPU copies 508.4 MB at 2,500 tiles; 2,200 tiles cost 68.86 ms of a 4K capture over the
+empty scene; moving every tile 1.17 ms of game thread and 108.36 ms more to draw; one
+`UpdateMeshSection` 0.013 ms. **Verdict: CUSTOM PRIMITIVE.** Three of the four budgets failed:
+the CPU copies (508.4 MB against 400; `FProcMeshVertex` is 148 bytes a vertex and a tile has
+1,221, so this one is arithmetic, not timing), the draw (68.86 ms against 6) and the draw after
+moving every tile (108.36 ms against 2); only the move's game thread (1.17 ms against 2) passed.
+A second run agreed to within 1 ms on the draw (69.47, 105.86) and exactly on the copies.
+`UTerrainTileComponent` (Task T5) replaces PMC in `AWorldGround`. The draw numbers are so far
+past the budget that T5 must measure its static path through the same gate before T6 builds on
+it: a draw cost that is the GPU's, not the dynamic path's, would fail the custom primitive too.
+
 **The frame.** `AWorldGround` (new, `Source/DeepSpace/Surface/`) attaches
 to `AShipCounterFrame`, identity relative, and is spawned by
 `build_hauler.py` as `hauler_ground` (tagged `Sky.Ground`). Each tile's
