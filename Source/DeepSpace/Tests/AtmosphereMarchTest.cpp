@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "Atmosphere/Atmosphere.h"
 #include "Atmosphere/AtmosphereReference.h"
+#include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
@@ -47,7 +48,7 @@ bool FAtmosphereSingleScatteringTest::RunTest(const FString& Parameters)
         for (const double Kelvin : {HomeStarK, CoolestStarK, SunK})
         {
             const FAtmosphere Law = FAtmosphere::Build(Named.Air, Kelvin, EAtmosphereTable::None);
-            const FReferenceAir Reference(Named.Air, Kelvin);
+            const FReferenceAir& Reference = AtmosphereTestCache::Reference(Named.Air, Kelvin);
             for (const FRayCase& Case : Grid(Law.GetAir().GasH, Law.GetAir().Top))
             {
                 FReferenceAir::FRay Ray;

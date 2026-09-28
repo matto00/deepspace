@@ -4,6 +4,7 @@
 #include "ImageUtils.h"
 #include "Misc/Paths.h"
 #include "Sky/ShipSky.h"
+#include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
@@ -156,7 +157,7 @@ bool FAtmosphereGroundSkySwatchTest::RunTest(const FString& Parameters)
     int32 Written = 0;
     for (const FSky& Sky : All)
     {
-        const FAtmosphere Air = FAtmosphere::Build(Sky.Spec, Sky.StarTemperatureK);
+        const FAtmosphere& Air = AtmosphereTestCache::Law(Sky.Spec, Sky.StarTemperatureK);
         const TPair<const TCHAR*, FVector3d> Times[] = {
             TPair<const TCHAR*, FVector3d>(TEXT("noon"), AtmosphereLaw::NoonSun()),
             TPair<const TCHAR*, FVector3d>(TEXT("dusk"), SunAt(DuskSunElevationDeg))};
@@ -179,7 +180,7 @@ bool FAtmosphereStarColourTest::RunTest(const FString& Parameters)
 {
     using namespace AtmosphereSwatchTestLocal;
     using namespace AtmosphereTestFixtures;
-    const auto Zenith = [](double Kelvin) { return NoonZenith(FAtmosphere::Build(EarthAir(), Kelvin, EAtmosphereTable::NoonOnly)); };
+    const auto Zenith = [](double Kelvin) { return NoonZenith(AtmosphereTestCache::Law(EarthAir(), Kelvin, EAtmosphereTable::NoonOnly)); };
 
     // Decision 3's table, pinned as atmosphere plan ruling 1 restates it: no
     // palette, no floor, no white balance per star. In linear sRGB with a

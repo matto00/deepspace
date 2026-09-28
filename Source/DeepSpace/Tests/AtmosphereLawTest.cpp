@@ -1,5 +1,6 @@
 #include "Misc/AutomationTest.h"
 #include "Atmosphere/Atmosphere.h"
+#include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
@@ -41,8 +42,7 @@ namespace AtmosphereLawTestLocal
 
     const FAtmosphere& Earth()
     {
-        static const FAtmosphere Air = FAtmosphere::Build(AtmosphereTestFixtures::EarthAir(), AtmosphereTestFixtures::SunK);
-        return Air;
+        return AtmosphereTestCache::Law(AtmosphereTestFixtures::EarthAir(), AtmosphereTestFixtures::SunK);
     }
 
     FAtmosphereScatter Look(const FAtmosphere& Air, const FVector3d& Eye, const FVector3d& Direction, double Length, const FVector3d& Sun)
@@ -180,7 +180,7 @@ bool FAtmosphereBacklitRingTest::RunTest(const FString& Parameters)
     // where the grazing path is still optically thin and the haze is dense,
     // the aerosol's g carries the ring: the gas alone could make it at most
     // twice the lit limb, and the haze makes it many times that.
-    const FAtmosphere Thin = FAtmosphere::Build(AtmosphereTestFixtures::NitrogenOxygen(AtmosphereTestFixtures::LowBar), AtmosphereTestFixtures::SunK);
+    const FAtmosphere& Thin = AtmosphereTestCache::Law(AtmosphereTestFixtures::NitrogenOxygen(AtmosphereTestFixtures::LowBar), AtmosphereTestFixtures::SunK);
     const double ThinH = Thin.GetAir().GasH;
     const double HazyRing = Luminance(Limb(Thin, 0.25 * ThinH, Behind).InScatter);
     const double HazyLit = Luminance(Limb(Thin, 0.25 * ThinH, Quarter).InScatter);

@@ -3,6 +3,7 @@
 #include "Atmosphere/AtmosphereReference.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
+#include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
@@ -105,8 +106,8 @@ namespace AtmosphereAgreementTestLocal
         {
             for (const double Kelvin : Kelvins)
             {
-                const FAtmosphere Law = FAtmosphere::Build(Named.Air, Kelvin);
-                const FReferenceAir Reference(Named.Air, Kelvin);
+                const FAtmosphere& Law = AtmosphereTestCache::Law(Named.Air, Kelvin);
+                const FReferenceAir& Reference = AtmosphereTestCache::Reference(Named.Air, Kelvin);
                 for (const FRayCase& Case : AtmosphereTestFixtures::Grid(Law.GetAir().GasH, Law.GetAir().Top))
                 {
                     if (!Rays.IsEmpty() && !Rays.ContainsByPredicate([&Case](const FString& Ray) { return Case.Name.StartsWith(Ray); }))

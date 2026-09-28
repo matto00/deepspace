@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "Atmosphere/Atmosphere.h"
 #include "Atmosphere/AtmosphereReference.h"
+#include "Tests/AtmosphereTestCache.h"
 #include "Tests/AtmosphereTestFixtures.h"
 
 #include <cmath>
@@ -45,15 +46,15 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and the two columns either side of the horizon hold suns within a tenth of a degree of it"),
         FMath::Abs(FAtmosphereTable::CosOfColumn(Size / 2)) < std::sin(FMath::DegreesToRadians(0.1)));
 
-    const FAtmosphere Full = FAtmosphere::Build(EarthAir(), SunK);
-    const FAtmosphere CarbonDioxideAir = FAtmosphere::Build(CarbonDioxide(CarbonDioxideCeilingBar), SunK);
+    const FAtmosphere& Full = AtmosphereTestCache::Law(EarthAir(), SunK);
+    const FAtmosphere& CarbonDioxideAir = AtmosphereTestCache::Law(CarbonDioxide(CarbonDioxideCeilingBar), SunK);
     const FAirSpec Specs[] = {EarthAir(), CarbonDioxide(CarbonDioxideCeilingBar)};
     const FAtmosphere* const Laws[] = {&Full, &CarbonDioxideAir};
     for (int32 Index = 0; Index < 2; ++Index)
     {
         const FAirSpec& Spec = Specs[Index];
         const FAtmosphere& Law = *Laws[Index];
-        const FReferenceAir Reference(Spec, SunK);
+        const FReferenceAir& Reference = AtmosphereTestCache::Reference(Spec, SunK);
         const AtmosphereReference::FSpectrum Star = AtmosphereReference::StarSpectrum(SunK);
         const FAtmosphereTable& Table = Law.GetTable();
         if (!TestFalse(TEXT("an airy world has a table"), Table.IsEmpty()))
@@ -111,8 +112,8 @@ bool FAtmosphereMultiScatterTableTest::RunTest(const FString& Parameters)
 
     // Coverage. The noon sun's cosine, sin 45 degrees, lies between columns
     // 28 and 29 (T = 0.8409, column 28.53).
-    const FAtmosphere Noon = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::NoonOnly);
-    const FAtmosphere NoTable = FAtmosphere::Build(EarthAir(), SunK, EAtmosphereTable::None);
+    const FAtmosphere& Noon = AtmosphereTestCache::Law(EarthAir(), SunK, EAtmosphereTable::NoonOnly);
+    const FAtmosphere& NoTable = AtmosphereTestCache::Law(EarthAir(), SunK, EAtmosphereTable::None);
     bool bNoonColumns = true;
     bool bRestZero = true;
     for (int32 J = 0; J < Size; ++J)
