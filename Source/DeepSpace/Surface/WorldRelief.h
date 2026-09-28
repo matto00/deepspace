@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Surface/WorldReliefParams.h"
 
 /**
  * A world's ground in C++, from Shaders/Private/WorldRelief.ush: the one noise
@@ -35,6 +36,20 @@ struct FFaceTerms
  *  to the GPU, and the material contract that holds the JSON to their tables. */
 namespace WorldReliefNoise
 {
+    /** |value| of one simplex band never exceeds this. Per corner the smoothed
+     *  term is scale x (1 - 2 r^2)^3 x (g . f), with g a cube corner, so at
+     *  most scale x sqrt(3) x max_r r (1 - 2 r^2)^3 = 0.7960, at r^2 = 1/14;
+     *  four corners. A proof, not a sample: 200,000 samples reach 0.9997, so it
+     *  is about three times loose. Height is therefore not normalised by it
+     *  (the developer's ruling on planning note 3): it is FWorldRelief's
+     *  guarantee argument, the most S could ever reach against SMax. */
+    inline constexpr double SimplexValueBound = 3.1840869651792727;
+
+    /** |gradient| of one simplex band never exceeds this: per corner
+     *  sqrt(3) x scale x max_x (1 - 2x)^2 (1 + 10x) = 6.054, at x = r^2 = 0.1;
+     *  four corners. Samples reach 5.93. */
+    inline constexpr double SimplexGradientBound = 24.21582543463124;
+
     /** Rand3DPCG16: 16 random bits in each of X, Y, Z. */
     DEEPSPACE_API FIntVector Hash16(int32 X, int32 Y, int32 Z);
 
@@ -94,3 +109,117 @@ namespace WorldReliefNoise
     };
     DEEPSPACE_API FBands Bands();
 }
+
+/**
+ * A world's height function (landing decision 1). Every consumer -- the
+ * flight's ground query, the terrain's tiles, the HUD, the material -- reads
+ * this, and the material compiles the same noise, so they agree by
+ * construction. Built from FSkyBody::Relief.
+ *
+ * Height is PeakCm x PeakCap(S(D) / S_max): S is the detail bands' sum, each
+ * band's height its value over its frequency so every scale has the same
+ * slope, and S_max its *measured* maximum (SMaxMeasured), under a smooth
+ * hard cap (the developer's ruling, 2026-09-27, on planning note 3). The
+ * proven bound is about 4.4 times S_max, and normalising by it drew peaks at
+ * a fifth of PeakCm; by the measured maximum they reach it, and the cap
+ * holds every S the proof allows below PeakCm, so MaxHeightCm is still
+ * exactly PeakCm, by construction. The bands
+ * are the GPU's twelve and, in C++ only, finer octaves down to BandLimitCm:
+ * the GPU's float cannot hold them, and nothing finer than 5 m exists, so
+ * the finest tiles' 0.6 m vertices never alias it. Slice (a): the detail
+ * bands only; the craters are the material's (Face) until slice (b) makes
+ * them continuous (decision 3).
+ *
+ * Every evaluation takes a footprint, cm: the material's own fade,
+ * saturate(1 - footprint x frequency) per band, made explicit. 0 is every
+ * band (the flight); a tile passes its vertex spacing; the parity test the
+ * probe's. D is the unit direction from the body's centre in universe axes,
+ * which are the body's: worlds do not spin.
+ */
+class DEEPSPACE_API FWorldRelief
+{
+public:
+    /** Nothing in the ground is finer than this, cm. */
+    static constexpr double BandLimitCm = 500.0;
+
+    /** S's measured maximum, radius units: the largest |DetailSum(D, 0)| of
+     *  262,144 samples -- 256 worlds, each a seed offset of three multiples of
+     *  1/256 from RandRange(0, 65535), times 1,024 directions from
+     *  GetUnitVector, all from one FRandomStream(20260927), in that order --
+     *  on an Earth's radius (6.3781e8 cm: the GPU's twelve bands and four
+     *  finer). DeepSpace.Surface.WorldRelief.MeasuredMax re-measures it and
+     *  fails if the noise has moved. The proven bound (DetailBound) is 4.43
+     *  times this; one world swept densely reaches about 0.97 of it. */
+    static constexpr double SMaxMeasured = 0.029932993600784347;
+
+    /** Where PeakCap stops being the identity: S under 0.8 S_max is drawn
+     *  true, and only the top of the range bends toward the peak. */
+    static constexpr double PeakCapKnee = 0.8;
+
+    /** The smooth hard cap, odd in X: X itself up to the knee, then
+     *  knee + (1 - knee) tanh((|X| - knee) / (1 - knee)), which has the
+     *  identity's value, slope and curvature at the knee and never passes 1.
+     *  At X = 1, the measured maximum, it is 0.952. Its slope into OutSlope,
+     *  0..1, if given. */
+    static double PeakCap(double X, double* OutSlope = nullptr);
+
+    explicit FWorldRelief(const FWorldReliefParams& InParams);
+
+    const FWorldReliefParams& GetParams() const { return Params; }
+
+    /** cm above the datum. */
+    double Height(const FVector3d& D, double FootprintCm = 0.0) const;
+
+    /** The same, and Grad = dHeight/dD in cm per unit of D, not projected
+     *  onto the ground: its part along D is the caller's to drop. */
+    double HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm = 0.0) const;
+
+    /** M_SkyBody's raw face terms at D, rocky (stretch 1), at this footprint. */
+    FFaceTerms Face(const FVector3d& D, double FootprintCm) const;
+
+    /** At most how far Height(D, 0) and Height(D, FootprintCm) can differ,
+     *  from the bound on what each band's fade removed. */
+    double OmittedBoundCm(double FootprintCm) const;
+
+    double MaxHeightCm() const { return Params.PeakCm; }
+    double MinHeightCm() const { return -Params.PeakCm; }
+
+    /** A Lipschitz bound on the ground's slope, cm of height per cm along
+     *  it: for the ray march (slice b). Proven -- PeakCap's slope is at most
+     *  1 -- and loose (the bounds above). */
+    double MaxSlope() const;
+
+    /** The finest band's wavelength, cm: RadiusCm over its frequency. */
+    double FinestWavelengthCm() const;
+
+    /** Every detail band, cycles per radius, coarsest first. */
+    TConstArrayView<double> GetDetailFrequencies() const { return Frequencies; }
+
+    /** The detail bands' sum S at D, radius units (each band its value over
+     *  its frequency), before any PeakCm scaling, at a footprint in D units
+     *  (radius units); its gradient with respect to D into Grad if given.
+     *  Height is PeakCm x PeakCap(S / SMax()); slice (b)'s craters add to
+     *  S (Task T1). */
+    double DetailSum(const FVector3d& D, double FootprintRadius, FVector3d* Grad = nullptr) const;
+
+    /** S's proven bound, radius units: |DetailSum| never exceeds it. */
+    double DetailBound() const { return SumBound; }
+
+    /** What S is normalised by, radius units: SMaxMeasured. */
+    double SMax() const { return SMaxMeasured; }
+
+    /** S's Lipschitz bound with respect to D: sum of weight x SimplexGradientBound. */
+    double DetailSlopeBound() const;
+
+    /** The most a footprint (D units) can have removed from S, radius units. */
+    double DetailOmittedBound(double FootprintRadius) const;
+
+private:
+    double FootprintOf(double FootprintCm) const;
+
+    FWorldReliefParams Params;
+    TArray<double> Frequencies;
+    TArray<double> Weights;
+    TArray<int32> Indices;
+    double SumBound = 0.0;
+};

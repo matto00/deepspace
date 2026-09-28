@@ -165,3 +165,159 @@ WorldReliefNoise::FBands WorldReliefNoise::Bands()
     Out.CraterRimBright = WR_CRATER_RIM_BRIGHT;
     return Out;
 }
+
+FWorldRelief::FWorldRelief(const FWorldReliefParams& InParams)
+    : Params(InParams)
+{
+    const WorldReliefNoise::FBands Bands = WorldReliefNoise::Bands();
+    Frequencies = Bands.DetailFrequencies;
+    Weights = Bands.DetailWeights;
+    Indices = Bands.DetailIndices;
+    // The C++ goes on where the GPU stops: an octave a band, each from its
+    // own corner of the noise at the next band number, at the finest band's
+    // weight, down to BandLimitCm and never past it.
+    while (Params.RadiusCm > 0.0 && Params.RadiusCm / (2.0 * Frequencies.Last()) >= BandLimitCm)
+    {
+        // Copies first: Add must never be handed a reference into the array it grows.
+        const double Frequency = 2.0 * Frequencies.Last();
+        const double Weight = Weights.Last();
+        const int32 Index = Indices.Last() + 1;
+        Frequencies.Add(Frequency);
+        Weights.Add(Weight);
+        Indices.Add(Index);
+    }
+    for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
+    {
+        SumBound += Weights[Band] * WorldReliefNoise::SimplexValueBound / Frequencies[Band];
+    }
+}
+
+double FWorldRelief::FootprintOf(double FootprintCm) const
+{
+    return Params.RadiusCm > 0.0 ? FMath::Max(FootprintCm, 0.0) / Params.RadiusCm : 0.0;
+}
+
+double FWorldRelief::DetailSum(const FVector3d& D, double FootprintD, FVector3d* OutGradient) const
+{
+    double Total = 0.0;
+    FVector3d Gradient = FVector3d::ZeroVector;
+    for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
+    {
+        const int32 Index = Indices[Band];
+        const WorldReliefF64::WR_Noise4 Noise = WorldReliefF64::WR_DetailBand(D.X, D.Y, D.Z, Frequencies[Band],
+            Params.SeedOffset.X + 37.0 * Index, Params.SeedOffset.Y + 59.0 * Index, Params.SeedOffset.Z + 83.0 * Index,
+            FootprintD, Weights[Band]);
+        // A band's height is its value over its frequency, so its gradient
+        // in D is the noise's own gradient: every band has the same slope.
+        Total += Noise.Value / Frequencies[Band];
+        Gradient += FVector3d(Noise.GX, Noise.GY, Noise.GZ);
+    }
+    if (OutGradient)
+    {
+        *OutGradient = Gradient;
+    }
+    return Total;
+}
+
+double FWorldRelief::DetailSlopeBound() const
+{
+    double GradientBound = 0.0;
+    for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
+    {
+        GradientBound += Weights[Band] * WorldReliefNoise::SimplexGradientBound;
+    }
+    return GradientBound;
+}
+
+double FWorldRelief::DetailOmittedBound(double FootprintD) const
+{
+    double Omitted = 0.0;
+    for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
+    {
+        // Faded by saturate(1 - footprint x frequency): the fade took at most
+        // that share of the band's bound.
+        Omitted += FMath::Min(1.0, FMath::Max(FootprintD, 0.0) * Frequencies[Band]) * Weights[Band] * WorldReliefNoise::SimplexValueBound / Frequencies[Band];
+    }
+    return Omitted;
+}
+
+double FWorldRelief::PeakCap(double X, double* OutSlope)
+{
+    const double Magnitude = FMath::Abs(X);
+    if (Magnitude <= PeakCapKnee)
+    {
+        if (OutSlope)
+        {
+            *OutSlope = 1.0;
+        }
+        return X;
+    }
+    constexpr double Room = 1.0 - PeakCapKnee;
+    const double Bent = std::tanh((Magnitude - PeakCapKnee) / Room);
+    if (OutSlope)
+    {
+        *OutSlope = 1.0 - Bent * Bent;
+    }
+    // Never past 1: tanh stays below 1 until it rounds to it, and then this
+    // is the knee plus exactly the room left.
+    return FMath::Sign(X) * FMath::Min(1.0, PeakCapKnee + Room * Bent);
+}
+
+double FWorldRelief::Height(const FVector3d& D, double FootprintCm) const
+{
+    FVector3d Unused;
+    return HeightAndGradient(D, Unused, FootprintCm);
+}
+
+double FWorldRelief::HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm) const
+{
+    if (Params.PeakCm <= 0.0 || SumBound <= 0.0)
+    {
+        Grad = FVector3d::ZeroVector;
+        return 0.0;
+    }
+    FVector3d Gradient;
+    const double Total = DetailSum(D, FootprintOf(FootprintCm), &Gradient);
+    double CapSlope = 1.0;
+    const double Capped = PeakCap(Total / SMax(), &CapSlope);
+    Grad = Gradient * (Params.PeakCm / SMax() * CapSlope);
+    return Params.PeakCm * Capped;
+}
+
+FFaceTerms FWorldRelief::Face(const FVector3d& D, double FootprintCm) const
+{
+    return WorldReliefNoise::FaceF64(D, FootprintOf(FootprintCm), Params.SeedOffset, 1.0);
+}
+
+double FWorldRelief::OmittedBoundCm(double FootprintCm) const
+{
+    if (Params.PeakCm <= 0.0 || SumBound <= 0.0)
+    {
+        return 0.0;
+    }
+    // PeakCap is 1-Lipschitz, so the height moves at most PeakCm / S_max
+    // times what S lost. And what remains of S, at most SumBound less what
+    // was omitted, bounds the faded height: with every band faded it is 0,
+    // and the difference is at most the peak itself.
+    const double Omitted = DetailOmittedBound(FootprintOf(FootprintCm));
+    const double Remaining = FMath::Max(0.0, SumBound - Omitted);
+    const double ByLipschitz = Params.PeakCm * Omitted / SMax();
+    const double ByRange = Params.PeakCm * (1.0 + FMath::Min(1.0, Remaining / SMax()));
+    return FMath::Min(ByLipschitz, ByRange);
+}
+
+double FWorldRelief::MaxSlope() const
+{
+    if (Params.PeakCm <= 0.0 || SumBound <= 0.0 || Params.RadiusCm <= 0.0)
+    {
+        return 0.0;
+    }
+    // dHeight/dD is bounded by PeakCm / S_max x PeakCap's slope (at most 1)
+    // x sum(w G), and an arc of length s along the ground moves D by s / R.
+    return Params.PeakCm / SMax() * DetailSlopeBound() / Params.RadiusCm;
+}
+
+double FWorldRelief::FinestWavelengthCm() const
+{
+    return Frequencies.IsEmpty() ? 0.0 : Params.RadiusCm / Frequencies.Last();
+}
