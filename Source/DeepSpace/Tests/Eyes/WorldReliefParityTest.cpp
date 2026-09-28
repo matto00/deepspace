@@ -77,6 +77,15 @@
  * R2 under the ruling at R2 (per term at the measured floor, 1% per crater band): FLOAT FLOOR at two terms the ruling holds to 1e-3 -- C++ vs shared, barren: detail slope 1.18e-03 at 1/768 (float build vs GPU 1.83e-03, C++ vs engine 1.04e-03), crater albedo 1.01e-03 at 1/12288 (C++ vs engine 1.38e-03); shared vs engine within the ruling everywhere; left out at most 0.462% in one crater band
  *
  * R2 under the measured floor as a rule: PASS -- barren 1/768 detail slope 1.18e-03 held to 1.3e-03 (floor), 1/12288 crater albedo 1.01e-03 held to 1.7e-03 (floor); shared vs engine within the table everywhere; SUMMARY unchanged
+ *
+ * R2 Step 6, proven: detail band 6144 -> 6143 in the shared file KILLED here
+ * (1/12288 detail 4.2e-1 against the engine's nodes); the floor rule taken
+ * out KILLED here (the two excesses above). The plan's own mutant, band
+ * 24576 -> 24575, SURVIVED here and is equivalent for this check: every
+ * footprint it draws at fades bands 24576 and 49152 to exactly nothing (the
+ * report was identical to the clean run's). KnownValues and
+ * DeepSpace.Sky.MaterialContract both KILL it headlessly; the GPU's float at
+ * those two bands is unguarded until a footprint below 1/12288 is ruled.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
