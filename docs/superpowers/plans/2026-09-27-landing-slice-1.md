@@ -75,7 +75,7 @@ These are the five classes of input the spec implies that no planner's tests exe
 | b | orchestrator | 13 (B0), 39 (Z) | git; the 4K frame test; the *Landing* section of CLAUDE.md |
 | b | **F: flight**, `.worktrees/landing-b-f`, `feat/landing-b-f` | 15-22 (F1-F8) | `Ship/ShipFlightState.*`, `ShipFlightSurface.*`, `ShipVerticalLever.*`, `ShipLanding.*`, `ShipGravity.*`, `Surface/GroundField.*`, their pure tests, `Tests/GroundFixtures.h`, `Tools/hauler_layout.py` (`GEAR`, `BELLY`), `Tools/test_placement.py` |
 | b | **S: subsystem, power, input, HUD**, `.worktrees/landing-b-s`, `feat/landing-b-s` | 23-30 (S1-S8) | `ShipSubsystem.*` (including `UpdateSurfaces`), `ShipPowerState.*`, `ShipHum*`, `DeepSpaceCharacter.*`, `setup_flight_input.py`, `UI/ShipHUDWidget.*`, `UI/TargetMarker.*`, the Playtest tests |
-| b | **T: terrain and sky**, `.worktrees/landing-b-t`, `feat/landing-b-t` | 14 (B1), 31-38 (T1-T8) | `Surface/TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `DeepSpace.Build.cs`, `DeepSpace.uproject` (B1's plugin entry; R's in slice (a)), `SkyProjection.*`, `ShipSky.*`, `Tools/sky_probe.py`, `build_hauler.py`/`verify_level.py` for `hauler_ground`; in slice (b), handed over from R, `setup_sky_materials.py`, the contract and `Surface/WorldRelief.*` |
+| b | **T: terrain and sky**, `.worktrees/landing-b-t`, `feat/landing-b-t` | 14 (B1), 31-38 (T1-T8), 31b | `Surface/TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `DeepSpace.Build.cs`, `DeepSpace.uproject` (B1's plugin entry; R's in slice (a)), `SkyProjection.*`, `ShipSky.*`, `Tools/sky_probe.py`, `build_hauler.py`/`verify_level.py` for `hauler_ground`; in slice (b), handed over from R, `setup_sky_materials.py`, the contract and `Surface/WorldRelief.*` |
 | c | **one tree**, `.worktrees/landing-c`, `feat/landing-c` | 40-47 (C1-C8) | F's files for C1-C3, S's for C4-C6, docs for C7 |
 
 **Order and merge points:**
@@ -91,7 +91,7 @@ Task 1 (A0) preconditions, both slice-(a) trees
   Slice (a) done when the developer sees no change on Baemsekai III, IV and V.
 
 Task 13 (B0) the feat/landing-b branch and the three trees          (slice (a) and wear slice 1 merged)
-  T:  14 (B1, the PMC gate, first) -> 31 (T1) -> 33 (T3) -> 34 (T4) -> 32 (T2) -> 36 (T6)
+  T:  14 (B1, the PMC gate, first) -> 31 (T1) -> 31b (the offset split) -> 33 (T3) -> 34 (T4) -> 32 (T2) -> 36 (T6)
         -> [35 (T5) only on a CUSTOM PRIMITIVE verdict] -> 37 (T7) -> 38 (T8)
         (T4 and T6 wait on F2 merged into feat/landing-b; T6 also on S1; T8 also on S4)
   F:  15 (F1) -> 16 (F2) -> 17 (F3) -> 18 (F4) -> 19 (F5) -> 20 (F6) -> 21 (F7) -> 22 (F8)
@@ -12410,6 +12410,74 @@ Tools/mutate.sh Source/DeepSpace/Surface/WorldRelief.cpp 'Bound += WR64::WR_CRAT
 Expected: `KILLED` twice (a flat-topped rim ending in a step at q = 1.5 is a cliff; a bound for
 one kernel is exceeded where craters overlap). If the second survives the 100,000 samples,
 double the sample count and say so; the bound must be shown to matter.
+
+---
+
+## Task 31b: the shared file keeps each band's lattice offset as an integer part apart from its fraction
+
+**Owner:** T. **Depends on:** T1. **Added after planning** (RULINGS AFTER PLANNING; the spec's
+*Ruled at R2*: "slice (b) then tightens it at the root"). Written and executed on
+`feat/landing-b-t`; this entry records what was done.
+
+A band's noise coordinate was `D x frequency + SeedOffset + (37, 59, 83) x band number`, summed
+in the GPU's float: about 1,250 for the detail bands and 9,000 for the craters, where a float's
+step is 1e-4 to 1e-3 of a cell. Split, the float arithmetic sees `D x frequency` and a fraction
+only, and the integer part reaches the lattice hash alone, in integer arithmetic. In exact
+arithmetic it is the same function, so double moves by rounding only (`.KnownValues` unchanged at
+1e-6) and the look is unchanged.
+
+**Files:**
+- Modify: `Shaders/Private/WorldRelief.ush` -- `WR_Offset {IX, IY, IZ, FX, FY, FZ}`,
+  `WR_SplitOffset(OX, OY, OZ, Index)`, `WR_FloorDiv3`; `WR_GradientNoiseAt`, `WR_SimplexAt`,
+  `WR_VoronoiAt`, `WR_VoronoiJitterAt` take the integer shift (the old names are the shift-0
+  wrappers, so `WorldReliefNoise::Simplex`/`GradientNoise`/`Voronoi` are unchanged);
+  `WR_Continent`, `WR_DetailBand`, `WR_CraterBand`, `WR_CraterKernelBand` take the split; the
+  entry point splits every band's offset.
+- Modify: `Source/DeepSpace/Surface/WorldRelief.cpp` (`DetailSum` passes the split offset).
+- Create: `Source/DeepSpace/Tests/WorldReliefOffsetSplitTest.cpp`
+  (`DeepSpace.Surface.WorldRelief.OffsetSplit`).
+- Modify: `Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp` (`SplitHeld`,
+  `GiantSplitHeld`; the verdict line).
+
+**The lattices.** The Voronoi and gradient-noise lattices are the integer lattice: `floor(P) =
+floor(P_small) + I`, `frac(P) = frac(P_small)`. The simplex lattice is the *skewed* one, and an
+integer shift in `V` is not one of its points; so the shift goes to the skewed point
+`K = I + q (1, 1, 1)`, `q = floor((Ix + Iy + Iz) / 3)`, `r = Ix + Iy + Iz - 3q`, which leaves
+`V_small = D x F + frac + r / 6` in each axis and moves every corner's hash input by
+`6 U(K) = 6 I + 3q - (Ix + Iy + Iz)`. Skewing is linear and `U(K)` skews back to `K` exactly, so
+the base corner is `V_small`'s own plus `K` and the offsets from it are `V_small`'s own.
+
+- [x] **Step 1: the failing test.** `.OffsetSplit` holds the file's float build (`FaceF32`, the
+  GPU's operations in the GPU's precision) to its double build at the parity test's five
+  footprints, at float D, 20,000 samples, a far offset and the giant, crater steps masked as
+  there. Before the split it measured, at 1/96 to 1/12288: continent 8.3e-5 to 9.2e-5, crater
+  albedo 3.9e-4 to 7.4e-4, crater slope 2.4e-3 to 3.9e-3, detail 1.5e-4 to 1.5e-3, detail slope
+  6.5e-4 to 8.7e-3 -- red against 1e-4 / 1e-3.
+- [x] **Step 2: the split** (above). `./build.sh`; `./test.sh DeepSpace.Surface`: 15 green,
+  `.KnownValues` included.
+- [x] **Step 3: pin what it measures.** `.OffsetSplit`'s table is 1.25 x its own run, rounded up,
+  never under 1e-7: at 1/96 crater slope 7.8e-6 (was 2.4e-3), at 1/12288 crater slope 6.6e-4
+  (3.9e-3), detail slope 8.9e-3 (8.7e-3: the finest detail bands' error is `D x frequency`'s own
+  rounding, which no offset split reaches).
+- [x] **Step 4: the GPU, and the parity tolerances tightened.** `Tools/eyes.sh
+  Eyes.WorldReliefParity`, then every term held to 1.25 x what the GPU then measured from double
+  (`SplitHeld`, `GiantSplitHeld`), asserted never looser than the R2-R5 rule, which is still
+  computed and printed. Baemsekai IV, C++ vs GPU, before -> after: 1/96 crater slope 2.16e-3 ->
+  5.67e-6, crater albedo 3.87e-4 -> 1.18e-6, continent 5.18e-5 -> 1.15e-6; 1/768 detail slope
+  1.27e-3 -> 4.55e-4; 1/12288 crater slope 4.30e-3 -> 5.26e-4, crater albedo 8.37e-4 -> 1.13e-4,
+  detail 1.28e-3 -> 1.06e-3, detail slope 7.42e-3 -> 5.71e-3; SUMMARY 7.42e-3 -> 6.10e-3.
+- [x] **Step 5: the orbital look unchanged, a before/after render diff.** Slice (a)'s stills test
+  (`Eyes.LandingStills`, restored from `c7aa4c3^` uncommitted, then deleted) at Baemsekai III, IV
+  and V 30 km up, IV at dusk, and 12 km up over IV and at dusk over III and V, 1920 x 1080,
+  before and after, compared pixel for pixel. Two "before" runs were identical, so any difference
+  is the split's. After against before: at most 0.06% of pixels differ by more than 8 of 255 and
+  0.56% by more than 2, mean under 0.12 of 255, as isolated speckle with no structure (the
+  pixels whose float rounding moved across a crater step or a steep face); side by side the
+  frames cannot be told apart. The stills and x20 diffs are kept outside git in the tree's
+  `Saved/landing-b-31b/`.
+- [x] **Step 6: prove them.** `Tools/mutate.sh` on the split in the entry point (the offset
+  passed whole again) KILLS `.OffsetSplit` headlessly; `MUTATE_RUNNER=Tools/eyes.sh` with the
+  same mutant KILLS `Eyes.WorldReliefParity`.
 
 ---
 

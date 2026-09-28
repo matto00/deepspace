@@ -58,8 +58,13 @@
  * values): an error in the shared text reaches both compilers, and moves
  * double and the GPU together.
  *
- * Slice (b) tightens it at the root (the lattice offset split into
- * integer and fraction). A
+ * Slice (b) tightened it at the root (Task 31b): the shared file keeps each
+ * band's lattice offset as an exact integer part apart from its fraction,
+ * so the GPU's float sees only D x frequency and a fraction, and every term
+ * is now held to 1.25 x what the GPU then measured from double
+ * (SplitHeld, GiantSplitHeld), each never looser than the rule above, which
+ * is still computed and printed. What is left at the finest footprints is
+ * D x frequency's own rounding in float, which no offset split reaches. A
  * crater band's albedo and slope step at a held crater's rim and at the
  * bisector beside one, where any rounding at all can change the side a
  * sample lands on: samples within 2e-3 cells of such a step are left out,
@@ -99,6 +104,8 @@
  * R4 under the port-bug test restated: PASS, both worlds -- shared file vs double within the measured floor as a rule at every footprint and term (Baemsekai IV 1/768 detail slope 1.27e-03 against the engine's 1.25e-03, held to 1.6e-03; the widest ratio over the engine, 1.27, is the giant's 1/3072 detail value, 3.69e-04 under the table's 1.0e-03); FWorldRelief vs the GPU identical to it; SUMMARY shared-vs-double 7.42e-03, engine-vs-double 7.01e-03, FWorldRelief-vs-shared 7.42e-03, shared-vs-engine 7.64e-03 (printed), float-C++-vs-shared 9.36e-03, left out at most 0.462% in one crater band
  *
  * R5, the legacy probe retired, FWorldRelief against the GPU at the recorded floor: PASS -- every term as at R4 (1/768 detail slope 1.27e-03 held to 1.6e-03); SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.444% in one crater band
+ *
+ * Task 31b, the lattice offsets split (landing slice (b)): PASS, both worlds, held to the split's own measure -- C++ vs GPU at 1/96 crater slope 5.67e-06 (was 2.16e-03), crater albedo 1.18e-06 (3.87e-04), continent 1.15e-06 (5.18e-05); at 1/12288 crater slope 5.26e-04 (4.30e-03), crater albedo 1.13e-04 (8.37e-04), detail 1.06e-03 (1.28e-03), detail slope 5.71e-03 (7.42e-03); the giant alike; SUMMARY C++-vs-GPU 6.10e-03 (7.42e-03), float-C++-vs-GPU 5.95e-03, left out at most 0.462% in one crater band. The orbital look unchanged: Baemsekai III, IV and V at 30 km and 12 km, dusk included, rendered before and after and diffed pixel for pixel (Task 31b's note in the plan).
  *
  * R5 after review, the giant restored (stretch 6, held to the file in double at its recorded floor) and every pixel held finite: PASS, both worlds -- the giant's every gap identical to R4's (1/3072 detail 3.69e-04, 1/12288 detail slope 7.21e-03 held to 8.8e-03); 0 pixels not finite; SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.462% in one crater band
  */
@@ -157,6 +164,29 @@ namespace WorldReliefParityLocal
         { 1.0 / 12288.0, 4.65e-5, 1.18e-3, 1.38e-3, 7.01e-3, 4.97e-3 },
     };
     static_assert(UE_ARRAY_COUNT(GiantEngineFloor) == UE_ARRAY_COUNT(Footprints), "a giant floor per footprint");
+
+    /** What each term is held to since the lattice offsets were split (Task
+     *  31b): 1.25 x the GPU's distance from double that the split's first run
+     *  measured, per footprint and per term, rounded up and never under 1e-7
+     *  (a term every band of which has faded is exactly 0 on both sides).
+     *  Baemsekai IV through FWorldRelief, then the giant against the file in
+     *  double. */
+    const FTolerance SplitHeld[] = {
+        { 1.0 / 12.0,    1.2e-6, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
+        { 1.0 / 96.0,    1.5e-6, 1.1e-5, 1.5e-6, 5.8e-5, 7.1e-6 },
+        { 1.0 / 768.0,   1.5e-6, 8.9e-5, 7.6e-6, 5.7e-4, 4.0e-5 },
+        { 1.0 / 3072.0,  1.5e-6, 3.4e-4, 3.2e-5, 2.5e-3, 1.7e-4 },
+        { 1.0 / 12288.0, 1.5e-6, 1.4e-3, 1.5e-4, 7.2e-3, 6.6e-4 },
+    };
+    const FTolerance GiantSplitHeld[] = {
+        { 1.0 / 12.0,    2.7e-7, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
+        { 1.0 / 96.0,    1.9e-6, 1.0e-7, 1.4e-6, 1.0e-7, 7.1e-6 },
+        { 1.0 / 768.0,   3.4e-6, 5.8e-5, 7.2e-6, 3.8e-4, 4.1e-5 },
+        { 1.0 / 3072.0,  3.6e-6, 2.9e-4, 3.0e-5, 1.7e-3, 1.7e-4 },
+        { 1.0 / 12288.0, 3.7e-6, 1.3e-3, 1.3e-4, 7.7e-3, 6.4e-4 },
+    };
+    static_assert(UE_ARRAY_COUNT(SplitHeld) == UE_ARRAY_COUNT(Footprints), "a split tolerance per footprint");
+    static_assert(UE_ARRAY_COUNT(GiantSplitHeld) == UE_ARRAY_COUNT(Footprints), "a giant split tolerance per footprint");
 
     /** The giant's seed offset: a made one, multiples of 1/256 as every real
      *  one is. The barren world is Baemsekai IV, with its own. */
@@ -468,8 +498,13 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
             FString SetBy;
-            const FTolerance HeldTo = HeldToByTheFloor(To, EngineFloor, SetBy);
+            const FTolerance Rule = HeldToByTheFloor(To, EngineFloor, SetBy);
+            const FTolerance& HeldTo = World.Relief ? SplitHeld[Row] : GiantSplitHeld[Row];
             const FString HeldText = DescribeTolerance(HeldTo);
+            TestTrue(FString::Printf(TEXT("%s: the split's tolerances are never looser than the rule they tighten (%s against %s)"),
+                *At, *HeldText, *DescribeTolerance(Rule)),
+                HeldTo.Continent <= Rule.Continent && HeldTo.Detail <= Rule.Detail && HeldTo.CraterAlbedo <= Rule.CraterAlbedo
+                    && HeldTo.DetailSlope <= Rule.DetailSlope && HeldTo.CraterSlope <= Rule.CraterSlope);
             FString ByBand;
             double MostInABand = 0.0;
             for (int32 Band = 0; Band < CraterBands; ++Band)
@@ -481,7 +516,7 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
             TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
                 MostInABand <= MaxLeftOutPerBand);
-            TestTrue(FString::Printf(TEXT("%s: %s computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
+            TestTrue(FString::Printf(TEXT("%s: %s computes what the GPU drew, held to %s, the split's own measure (%s)"),
                 *At, World.Relief ? TEXT("FWorldRelief") : TEXT("the file in double"), *HeldText, *HeldGap.Describe()), HeldGap.Within(HeldTo));
             WorstReliefShared = FMath::Max(WorstReliefShared, HeldGap.Worst());
             WorstFloatShared = FMath::Max(WorstFloatShared, FloatVsShared.Worst());
@@ -489,7 +524,8 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
             Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s), %d not finite"),
                 *At, Side * Side - LeftOut - NotFinite, LeftOut, *ByBand, NotFinite));
-            Report.Add(TEXT("  held to (the rule):                 ") + HeldText);
+            Report.Add(TEXT("  held to (the split, Task 31b):      ") + HeldText);
+            Report.Add(TEXT("  the rule it tightens:               ") + DescribeTolerance(Rule));
             Report.Add(TEXT("    set by:                           ") + SetBy);
             Report.Add(TEXT("  engine floor (recorded, R4):        ") + DescribeTolerance(EngineFloor));
             Report.Add((World.Relief ? TEXT("  C++ (double) vs GPU (asserted):     ") : TEXT("  file (double) vs GPU (asserted):    ")) + HeldGap.Describe());
