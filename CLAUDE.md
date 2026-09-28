@@ -792,7 +792,11 @@ ds.Nav.WindingWant, 0, 1)`**: watts delivered, never satisfaction (conflict
 hum on satisfaction would sit at full whenever the ship is idle. On watts, it
 idles low, rises and brightens as the jump winds, and settles when charged,
 which makes it the jump's wind-up cue. The hiss follows the boosters
-(`ds.Hum.CruiseHiss`). `ds.Hum.Volume` is the first knob if it wears. Each air
+(`ds.Hum.CruiseHiss`). Under a solid world's drive floor the hiss also
+follows the boosters' **hold**, in watts delivered (`ds.Hum.HoldHiss` x
+watts / (3 x `ds.Boosters.HoldWatts`), never above cruise's hiss), so it is
+silent wherever a ship can be parked. `ds.Hum.Volume` is the first knob if
+it wears. Each air
 source seeds its noise from where it stands: two at one point would hiss the
 same noise and comb into a whistle, and `test_placement.py` forbids it.
 Headless, the mixer is real, so `DeepSpace.Ship.HumComponent` proves samples
@@ -1226,7 +1230,7 @@ tests that assert it.
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
-| `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
+| `ds.Hum.Volume`, `ds.Hum.CruiseHiss`, `ds.Hum.HoldHiss` | 1.0, 0.35, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
 | `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |

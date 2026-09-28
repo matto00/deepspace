@@ -23,6 +23,11 @@ namespace
         TEXT("How much of the boosters' hiss holding a cruise keeps, at full throttle (0: the hiss only while the speed changes)."),
         ECVF_Default);
 
+    TAutoConsoleVariable<float> CVarHoldHiss(
+        TEXT("ds.Hum.HoldHiss"), 0.35f,
+        TEXT("The hold's hiss at the 3 g cap: under a solid world's drive floor the boosters hiss with the watts holding the ship. Never above ds.Hum.CruiseHiss."),
+        ECVF_Default);
+
     /** The voice on the audio thread. Owns its FShipHumVoice outright; the
      *  only thing it shares with the component is the mailbox. */
     class FShipHumGenerator final : public ISoundGenerator
@@ -110,10 +115,13 @@ FShipHumInputs UShipHumComponent::AskShip(const UShipSubsystem& Ship)
     const double Lever = Mode == EFlightMode::Drive ? Travel
         : Mode == EFlightMode::SpoolingDown ? FMath::Max(Travel, Cruising)
         : Cruising;
+    const float CruiseHiss = CVarCruiseHiss.GetValueOnGameThread();
     Inputs.Push = ShipHum::Push(static_cast<float>(Flight.GetLinearAcceleration().Size()), Rated,
                                 static_cast<float>(Lever),
                                 Rated > 0.0f ? Ship.GetLinearAcceleration() / Rated : 0.0f,
-                                CVarCruiseHiss.GetValueOnGameThread());
+                                CruiseHiss,
+                                ShipHum::HoldTerm(Ship.GetHoldWatts(), UShipSubsystem::GetHoldWattsPerG(),
+                                                  CVarHoldHiss.GetValueOnGameThread(), CruiseHiss));
     return Inputs;
 }
 

@@ -52,4 +52,21 @@ namespace ShipLanding
      *  turned by Orientation. Nothing (Point INDEX_NONE) without a ground. */
     DEEPSPACE_API FFootprintClearance FootprintClearance(const FFlightSurface& Surface, const FUniversePosition& Origin,
                                                          const FQuat& Orientation, double GearClearanceCm);
+
+    /** One footprint point over the ground: its height above the ground
+     *  under it, cm, radially; where it is from the world's centre, cm; and
+     *  the unit direction to it, where the ground's normal under it is read
+     *  (ShipGround::NormalAt). */
+    struct FFootprintHeight
+    {
+        double Above = TNumericLimits<double>::Max();
+        FVector FromCentre = FVector::ZeroVector;
+        FVector3d Direction = FVector3d::UnitZ();
+    };
+
+    /** Every footprint point's height over Surface's ground, in
+     *  FootprintPoints' order; empty without a ground. FootprintClearance is
+     *  the least of them. */
+    DEEPSPACE_API TArray<FFootprintHeight, TFixedAllocator<8>> FootprintHeights(const FFlightSurface& Surface, const FUniversePosition& Origin,
+                                                                                const FQuat& Orientation, double GearClearanceCm);
 }
