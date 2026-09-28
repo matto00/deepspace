@@ -1,5 +1,10 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
+#include "Dom/JsonObject.h"
+#include "Misc/FileHelper.h"
+#include "Modules/ModuleManager.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "ShaderCore.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Surface/WorldRelief.h"
@@ -103,17 +108,44 @@ bool FWorldReliefKnownValuesTest::RunTest(const FString& Parameters)
     return true;
 }
 
+/**
+ * The engine's own /Project mapping finds the shared file (the developer's
+ * ruling at R2). UE 5.8's FEngineLoop::PreInit maps /Project to
+ * <project>/Shaders whenever that directory exists, before any module loads
+ * (LaunchEngineLoop.cpp), so the project maps nothing itself: the
+ * DeepSpaceShaders module that once did is gone, and this holds that it is
+ * gone and that the engine's mapping is the one M_SkyBody's include meets.
+ */
 bool FShaderMappingTest::RunTest(const FString& Parameters)
 {
+    // No project module maps /Project: DeepSpaceShaders is out of the
+    // descriptor and never loaded. (Not ModuleExists: UBT keeps a removed
+    // module's line in Binaries' manifest until a clean build.)
+    FString Descriptor;
+    TSharedPtr<FJsonObject> Project;
+    TestTrue(TEXT("DeepSpace.uproject reads"), FFileHelper::LoadFileToString(Descriptor, *FPaths::GetProjectFilePath())
+        && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Descriptor), Project) && Project.IsValid());
+    TArray<FString> Modules;
+    if (Project.IsValid())
+    {
+        for (const TSharedPtr<FJsonValue>& Module : Project->GetArrayField(TEXT("Modules")))
+        {
+            Modules.Add(Module->AsObject()->GetStringField(TEXT("Name")));
+        }
+    }
+    TestEqual(TEXT("the project's one module is DeepSpace: DeepSpaceShaders is removed"), FString::Join(Modules, TEXT(", ")), FString(TEXT("DeepSpace")));
+    TestFalse(TEXT("and it is not loaded"), FModuleManager::Get().IsModuleLoaded(TEXT("DeepSpaceShaders")));
     const FString* Mapped = AllShaderSourceDirectoryMappings().Find(TEXT("/Project"));
-    if (!TestNotNull(TEXT("/Project is mapped before any shader compiles (the engine at PreInit, or DeepSpaceShaders at PostConfigInit)"), Mapped))
+    if (!TestNotNull(TEXT("the engine maps /Project at PreInit, before any shader compiles"), Mapped))
     {
         return false;
     }
     TestEqual(TEXT("to this project's Shaders/"), FPaths::ConvertRelativePathToFull(*Mapped),
         FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Shaders"))));
     const FString Real = GetShaderSourceFilePath(SkyMaterial::WorldReliefInclude);
-    TestTrue(FString::Printf(TEXT("and %s is a file (%s)"), SkyMaterial::WorldReliefInclude, *Real), FPaths::FileExists(Real));
+    TestTrue(FString::Printf(TEXT("and it finds %s, a file (%s)"), SkyMaterial::WorldReliefInclude, *Real), FPaths::FileExists(Real));
+    TestEqual(TEXT("the very file the C++ compiles"), FPaths::ConvertRelativePathToFull(Real),
+        FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Shaders"), TEXT("Private"), TEXT("WorldRelief.ush"))));
     return true;
 }
 

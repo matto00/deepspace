@@ -76,15 +76,15 @@ FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const
     return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch));
 }
 
-double WorldReliefNoise::CraterMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset)
+double WorldReliefNoise::CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band)
 {
     double Margin = TNumericLimits<double>::Max();
-    for (int32 Band = 0; Band < WR_CRATER_BANDS; ++Band)
+    check(Band >= 0 && Band < WR_CRATER_BANDS);
     {
         const double Frequency = WorldReliefF64::WR_CRATER_FREQUENCY[Band];
         if (FootprintD * Frequency >= 1.0)
         {
-            continue; // faded to nothing: no step to land on either side of
+            return Margin; // faded to nothing: no step to land on either side of
         }
         const int32 Index = WorldReliefF64::WR_CRATER_INDEX[Band];
         const FVector3d V = D * Frequency + Offset + FVector3d(37.0 * Index, 59.0 * Index, 83.0 * Index);
@@ -124,6 +124,16 @@ double WorldReliefNoise::CraterMargin(const FVector3d& D, double FootprintD, con
         {
             Margin = FMath::Min(Margin, Second - Nearest);
         }
+    }
+    return Margin;
+}
+
+double WorldReliefNoise::CraterMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset)
+{
+    double Margin = TNumericLimits<double>::Max();
+    for (int32 Band = 0; Band < WR_CRATER_BANDS; ++Band)
+    {
+        Margin = FMath::Min(Margin, CraterBandMargin(D, FootprintD, Offset, Band));
     }
     return Margin;
 }

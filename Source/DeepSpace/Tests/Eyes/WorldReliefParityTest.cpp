@@ -31,15 +31,19 @@
  *   - to the C++, at the very D the GPU drew;
  *
  * over 256 x 256 samples at each of five footprints, per footprint and per
- * term (the developer's ruling after the spike): every value (continent,
- * detail, crater albedo) at every footprint, and the slopes at 1/12, 1/96
- * and 1/768, to a maximum absolute difference of 1e-3; the slopes at 1/3072
- * and 1/12288 to 5e-3, the measured float floor there -- every float
- * evaluation, the engine's own nodes included, differs from double by 1e-3
- * to 5e-3 at those noise coordinates. A crater band's albedo and slope step
- * at a held crater's rim and at the bisector beside one, where any rounding
- * at all can change the side a sample lands on: samples within 2e-3 cells
- * of such a step are left out, and no more than 1% may be.
+ * term, at the measured float floor (the developer's rulings after the
+ * spike and at R2): every value and every detail term at 1/12, 1/96 and
+ * 1/768 to a maximum absolute difference of 1e-3, and every value at 1/3072;
+ * crater slopes to 5e-3 from 1/96 down (the crater offsets put even the
+ * coarsest crater band near noise coordinate 8,000); detail slopes to 5e-3
+ * at 1/3072; at 1/12288 detail values to 1.5e-3 and detail slopes to 8e-3.
+ * Every float evaluation, the engine's own nodes included, differs from
+ * double by that much at those noise coordinates. Slice (b) tightens these
+ * at the root (the lattice offset split into integer and fraction). A
+ * crater band's albedo and slope step at a held crater's rim and at the
+ * bisector beside one, where any rounding at all can change the side a
+ * sample lands on: samples within 2e-3 cells of such a step are left out,
+ * and no crater band's steps may leave out more than 1%.
  *
  * It must compile the Custom node to draw anything, so it also catches what
  * the headless suite cannot see: an HLSL error in WorldRelief.ush ships the
@@ -57,6 +61,8 @@
  * Verdict under the ruling (per footprint and per term; held sites' steps only): GO -- SUMMARY shared-vs-engine 3.11e-03, C++-vs-shared 3.63e-03, float-C++-vs-shared 5.22e-03, C++-vs-engine 3.51e-03, left out at most 0.462%
  *
  * R2, every band (twelve detail, six crater): FLOAT FLOOR past the ruling -- SUMMARY shared-vs-engine 7.64e-03, C++-vs-shared 6.88e-03, float-C++-vs-shared 7.90e-03, C++-vs-engine 6.19e-03, left out at most 2.142%
+ *
+ * R2 under the ruling at R2 (per term at the measured floor, 1% per crater band): FLOAT FLOOR at two terms the ruling holds to 1e-3 -- C++ vs shared, barren: detail slope 1.18e-03 at 1/768 (float build vs GPU 1.83e-03, C++ vs engine 1.04e-03), crater albedo 1.01e-03 at 1/12288 (C++ vs engine 1.38e-03); shared vs engine within the ruling everywhere; left out at most 0.462% in one crater band
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -66,17 +72,31 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 namespace WorldReliefParityLocal
 {
     constexpr int32 Side = 256;
-    constexpr double Tolerance = 1.0e-3;
-    /** The slopes' float floor at the two finest footprints (the ruling). */
-    constexpr double FineSlopeTolerance = 5.0e-3;
-    /** Footprints at or under this are the fine ones. */
-    constexpr double FineFootprint = 1.0 / 3072.0;
     constexpr double StepMarginCells = 2.0e-3;
-    constexpr double MaxLeftOut = 0.01;
+    /** At most this share of the samples may lie on one crater band's steps. */
+    constexpr double MaxLeftOutPerBand = 0.01;
+
+    /** What each term is held to at one footprint: the measured float floor
+     *  (the developer's rulings after the spike and at R2). */
+    struct FTolerance
+    {
+        double Footprint;
+        double Continent;
+        double Detail;
+        double CraterAlbedo;
+        double DetailSlope;
+        double CraterSlope;
+    };
 
     /** D units a pixel, times filter_pixels: from continents alone down to
      *  every band coarser than 1/12288 of the radius. */
-    const double Footprints[] = { 1.0 / 12.0, 1.0 / 96.0, 1.0 / 768.0, 1.0 / 3072.0, 1.0 / 12288.0 };
+    const FTolerance Footprints[] = {
+        { 1.0 / 12.0,    1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3 },
+        { 1.0 / 96.0,    1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 5.0e-3 },
+        { 1.0 / 768.0,   1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 5.0e-3 },
+        { 1.0 / 3072.0,  1.0e-3, 1.0e-3, 1.0e-3, 5.0e-3, 5.0e-3 },
+        { 1.0 / 12288.0, 1.0e-3, 1.5e-3, 1.0e-3, 8.0e-3, 5.0e-3 },
+    };
 
     /** A barren world's seed offset until task R4 hands the test Baemsekai
      *  IV's: multiples of 1/256, as every real one is. */
@@ -172,10 +192,11 @@ namespace WorldReliefParityLocal
             return FMath::Max(DetailSlope, CraterSlope);
         }
 
-        /** Held per term: values to Tolerance, slopes to SlopeTolerance. */
-        bool Within(double SlopeTolerance) const
+        /** Held per term, each to its own tolerance at this footprint. */
+        bool Within(const FTolerance& To) const
         {
-            return WorstValue() <= Tolerance && WorstSlope() <= SlopeTolerance;
+            return Continent <= To.Continent && Detail <= To.Detail && CraterAlbedo <= To.CraterAlbedo
+                && DetailSlope <= To.DetailSlope && CraterSlope <= To.CraterSlope;
         }
 
         double Worst() const
@@ -250,6 +271,7 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
     double WorstFloatNew = 0.0;
     double WorstCppOld = 0.0;
     double MostLeftOut = 0.0;
+    double MostLeftOutInABand = 0.0;
 
     // Barren (stretch 1) against both the engine's nodes and the C++; a
     // giant (stretch 6, the belts' streaking) against the engine's nodes,
@@ -264,8 +286,9 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                 FLinearColor(static_cast<float>(Offset.X), static_cast<float>(Offset.Y), static_cast<float>(Offset.Z), 8.0f));
             Probe->SetScalarParameterValue(SkyMaterial::Banding, World.Banding);
         }
-        for (const double FootprintD : Footprints)
+        for (const FTolerance& To : Footprints)
         {
+            const double FootprintD = To.Footprint;
             const float Footprint = static_cast<float>(FootprintD);
             NewProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
             OldProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
@@ -278,11 +301,23 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             FGap CppVsOld;
             int32 LeftOut = 0;
             int32 Unmatched = 0;
+            const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
+            TArray<int32> LeftOutByBand;
+            LeftOutByBand.Init(0, CraterBands);
             for (int32 Index = 0; Index < Side * Side; ++Index)
             {
                 const FVector3d& D = New.Direction[Index];
                 Unmatched += D == Old.Direction[Index] ? 0 : 1;
-                if (WorldReliefNoise::CraterMargin(D, Footprint, Offset) < StepMarginCells)
+                bool bOnStep = false;
+                for (int32 Band = 0; Band < CraterBands; ++Band)
+                {
+                    if (WorldReliefNoise::CraterBandMargin(D, Footprint, Offset, Band) < StepMarginCells)
+                    {
+                        ++LeftOutByBand[Band];
+                        bOnStep = true;
+                    }
+                }
+                if (bOnStep)
                 {
                     ++LeftOut;
                     continue;
@@ -298,23 +333,34 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             }
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
-            const double SlopeTolerance = FootprintD <= FineFootprint * (1.0 + 1.0e-9) ? FineSlopeTolerance : Tolerance;
+            const FString Held = FString::Printf(TEXT("continent %.1e, detail %.1e, crater albedo %.1e, detail slope %.1e, crater slope %.1e"),
+                To.Continent, To.Detail, To.CraterAlbedo, To.DetailSlope, To.CraterSlope);
             TestEqual(At + TEXT(": both probes drew the same directions"), Unmatched, 0);
-            TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on a crater's step (%.3f%%)"), *At, 100.0 * LeftOutShare),
-                LeftOutShare <= MaxLeftOut);
-            TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew, values to %.0e, slopes to %.0e (%s)"),
-                *At, Tolerance, SlopeTolerance, *NewVsOld.Describe()), NewVsOld.Within(SlopeTolerance));
+            FString ByBand;
+            double MostInABand = 0.0;
+            for (int32 Band = 0; Band < CraterBands; ++Band)
+            {
+                const double Share = static_cast<double>(LeftOutByBand[Band]) / (Side * Side);
+                MostInABand = FMath::Max(MostInABand, Share);
+                ByBand += FString::Printf(TEXT("%s%.3f%%"), Band == 0 ? TEXT("") : TEXT(", "), 100.0 * Share);
+            }
+            TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
+                MostInABand <= MaxLeftOutPerBand);
+            TestTrue(FString::Printf(TEXT("%s: the shared file draws what the engine's nodes drew, held to %s (%s)"),
+                *At, *Held, *NewVsOld.Describe()), NewVsOld.Within(To));
             if (World.bHoldCpp)
             {
-                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, values to %.0e, slopes to %.0e (%s)"),
-                    *At, Tolerance, SlopeTolerance, *CppVsNew.Describe()), CppVsNew.Within(SlopeTolerance));
+                TestTrue(FString::Printf(TEXT("%s: the C++ computes what the GPU drew, held to %s (%s)"),
+                    *At, *Held, *CppVsNew.Describe()), CppVsNew.Within(To));
                 WorstCppNew = FMath::Max(WorstCppNew, CppVsNew.Worst());
                 WorstFloatNew = FMath::Max(WorstFloatNew, FloatVsNew.Worst());
                 WorstCppOld = FMath::Max(WorstCppOld, CppVsOld.Worst());
             }
             WorstNewOld = FMath::Max(WorstNewOld, NewVsOld.Worst());
             MostLeftOut = FMath::Max(MostLeftOut, LeftOutShare);
-            Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out"), *At, Side * Side - LeftOut, LeftOut));
+            MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
+            Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s)"), *At, Side * Side - LeftOut, LeftOut, *ByBand));
+            Report.Add(TEXT("  held to:                            ") + Held);
             Report.Add(TEXT("  shared file vs engine nodes:        ") + NewVsOld.Describe());
             Report.Add(TEXT("  C++ (double) vs shared file:        ") + CppVsNew.Describe());
             Report.Add(TEXT("  C++ (float build) vs shared file:   ") + FloatVsNew.Describe());
@@ -322,8 +368,8 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         }
     }
 
-    Report.Add(FString::Printf(TEXT("SUMMARY shared-vs-engine %.2e, C++-vs-shared %.2e, float-C++-vs-shared %.2e, C++-vs-engine %.2e, left out at most %.3f%%"),
-        WorstNewOld, WorstCppNew, WorstFloatNew, WorstCppOld, 100.0 * MostLeftOut));
+    Report.Add(FString::Printf(TEXT("SUMMARY shared-vs-engine %.2e, C++-vs-shared %.2e, float-C++-vs-shared %.2e, C++-vs-engine %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
+        WorstNewOld, WorstCppNew, WorstFloatNew, WorstCppOld, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes") / TEXT("WorldReliefParity");
     IFileManager::Get().MakeDirectory(*Dir, true);
     FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),

@@ -68,6 +68,11 @@ namespace WorldReliefNoise
      *  step is real the margin is the largest double. */
     DEEPSPACE_API double CraterMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset);
 
+    /** The same margin in one crater band alone (0-based, the file's order),
+     *  so a test can cap the samples each band's steps leave out (the
+     *  developer's ruling at R2: 1% per crater band). */
+    DEEPSPACE_API double CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band);
+
     /** The file's tables and constants, for DeepSpace.Sky.MaterialContract. */
     struct FBands
     {

@@ -2,8 +2,9 @@
 // (landing spec decision 1; ADR 0006, amended).
 //
 // The GPU includes this file into M_SkyBody's Custom node through the
-// /Project mapping to Shaders/ (the engine's own, at PreInit; DeepSpaceShaders
-// is its guard). The C++ includes
+// /Project mapping to Shaders/, the engine's own (FEngineLoop::PreInit maps
+// it whenever the directory exists; DeepSpace.Surface.ShaderMapping holds
+// it). The C++ includes
 // it into Source/DeepSpace/Surface/WorldRelief.cpp twice: in double, for the
 // ground the flight and the terrain read, and in float, as the parity test's
 // mirror of the GPU. A syntax one compiler refuses fails that compiler:
