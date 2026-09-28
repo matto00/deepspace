@@ -33,9 +33,11 @@ CONTRACT_PATH = os.path.join(TOOLS, "procgen_corpus_contract.json")
 DEFAULT_TSV = os.path.join(os.path.dirname(TOOLS), "Saved", "procgen_corpus.tsv")
 
 INT_COLUMNS = {"sector_x", "sector_y", "sector_z", "slot", "planet_count", "planet"}
-TEXT_COLUMNS = {"system", "star_class", "designation", "given_name", "kind"}
+TEXT_COLUMNS = {"system", "star_class", "designation", "given_name", "kind", "air_mix"}
 PLANET_COLUMNS = ("designation", "given_name", "kind", "semi_major_axis_au", "mass_earth",
-                  "radius_earth", "equilibrium_k", "population", "surface_gravity_g", "relief_km")
+                  "radius_earth", "equilibrium_k", "population", "surface_gravity_g", "relief_km",
+                  "air_mix", "surface_pressure_bar", "scale_height_km", "nadir_tau_450")
+AIR_MIXES = ("nitrogen-oxygen", "carbon-dioxide", "hydrogen-helium")
 SOLID = ("barren", "ice", "terrestrial")
 
 # One letter per kind, for a system's shape written in orbit order.
@@ -266,6 +268,19 @@ def report(rows, contract=None):
     if gravity:
         out += _render_histogram("Surface gravity of solid worlds, g (share of solid worlds)",
                                  histogram(gravity, 8), len(gravity))
+    out.append("")
+
+    airy = [p for p in planets if p["air_mix"] not in (None, "none")]
+    out.append("Air, by mix (worlds, median surface pressure, median nadir tau at 450 nm)")
+    for mix in AIR_MIXES:
+        worlds = [p for p in airy if p["air_mix"] == mix]
+        if worlds:
+            pressures = sorted(p["surface_pressure_bar"] for p in worlds)
+            taus = sorted(p["nadir_tau_450"] for p in worlds)
+            out.append("  %-16s n=%-6d median %7.3f bar  tau450 %5.3f" % (
+                mix, len(worlds), pressures[len(pressures) // 2], taus[len(taus) // 2]))
+        else:
+            out.append("  %-16s none" % mix)
     out.append("")
 
     out += places_or_rolls(found)

@@ -128,6 +128,59 @@ namespace
         return Ceiling * Share;
     }
 
+    /**
+     * A world's air, from its own two streams (atmospheres decision 2).
+     * Giants draw nothing: hydrogen and helium at their disc. Barren and ice
+     * worlds draw nothing: airless. A temperate world's mix is categorical
+     * over the ini's weights, each multiplied by how well the world holds
+     * that gas, so what it cannot hold is never drawn and nothing drawn is
+     * thrown away (ADR 0008); if the weights leave it nothing it can hold,
+     * it is airless and draws nothing. Its pressure is log-normal by kind --
+     * a product of many factors -- bent under the world's ceiling by the
+     * smooth ceiling, so the corpus shows no pile at the cap.
+     */
+    FAirDraw DrawAir(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors)
+    {
+        FAirDraw Air;
+        const double Gravity = Planet.SurfaceGravityEarth();
+        if (Planet.Kind == EPlanetKind::GasGiant)
+        {
+            Air.Mix = EAirMix::HydrogenHelium;
+            Air.CeilingBar = AirFacts::GiantDiscPressureBar(Gravity);
+            Air.DrawnBar = Air.CeilingBar;
+            Air.PressureBar = Air.CeilingBar;
+            return Air;
+        }
+        if (Planet.Kind != EPlanetKind::Terrestrial && Planet.Kind != EPlanetKind::Ocean)
+        {
+            return Air;
+        }
+        const EAirMix Mixes[AirFacts::NumMixes] = {EAirMix::NitrogenOxygen, EAirMix::CarbonDioxide, EAirMix::HydrogenHelium};
+        const double Weights[AirFacts::NumMixes] = {Priors.AirMixWeightNitrogenOxygen, Priors.AirMixWeightCarbonDioxide, Priors.AirMixWeightHydrogenHelium};
+        double Retained[AirFacts::NumMixes];
+        double Shaped[AirFacts::NumMixes];
+        double Total = 0.0;
+        for (int32 Index = 0; Index < AirFacts::NumMixes; ++Index)
+        {
+            Retained[Index] = AirFacts::Retention(Mixes[Index], Planet.MassEarth, Planet.RadiusEarth, Planet.EquilibriumK);
+            Shaped[Index] = Weights[Index] * Retained[Index];
+            Total += Shaped[Index];
+        }
+        if (!(Total > 0.0))
+        {
+            return Air;
+        }
+        FGenStream MixStream(GenSeed::Derive(PlanetSeed, GenSeed::Label("air.mix")));
+        const int32 Chosen = MixStream.Categorical(MakeArrayView(Shaped, AirFacts::NumMixes));
+        Air.Mix = Mixes[Chosen];
+        const double Median = Planet.Kind == EPlanetKind::Ocean ? Priors.AirPressureMedianOceanBar : Priors.AirPressureMedianTerrestrialBar;
+        FGenStream PressureStream(GenSeed::Derive(PlanetSeed, GenSeed::Label("air.pressure")));
+        Air.DrawnBar = PressureStream.LogNormal(Median, Priors.AirPressureSigma);
+        Air.CeilingBar = AirFacts::PressureCeilingBar(Air.Mix, Gravity, Retained[Chosen]);
+        Air.PressureBar = AirFacts::SmoothCeiling(Air.DrawnBar, Air.CeilingBar);
+        return Air;
+    }
+
     /** Kind is decided by mass and temperature, and drawn only where both
      *  allow either of two answers (procgen decision 5). */
     bool IsTemperate(double MassEarth, double EquilibriumK)
@@ -207,7 +260,7 @@ FStarSystem FStarSystemGenerator::Generate(const FStarSystemStub& Stub, const FG
     return GenerateWithPlanetCount(Stub, Priors, GeneratePlanetCount(Stub.Seed, Priors));
 }
 
-FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub& Stub, const FGenPriors& Priors, int32 PlanetCount)
+FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub& Stub, const FGenPriors& Priors, int32 PlanetCount, EAirDraws AirDraws)
 {
     const uint64 Seed = Stub.Seed;
 
@@ -283,6 +336,15 @@ FStarSystem FStarSystemGenerator::GenerateWithPlanetCount(const FStarSystemStub&
         // Its own stream too: a world's relief moves nothing else about it.
         Planet.ReliefKm = DrawRelief(PlanetSeed, Planet, Priors);
 
+        // Its own two streams: a world's air moves nothing else about it,
+        // which the draws-off comparison holds.
+        if (AirDraws == EAirDraws::On)
+        {
+            const FAirDraw Air = DrawAir(PlanetSeed, Planet, Priors);
+            Planet.AirMix = Air.Mix;
+            Planet.SurfacePressureBar = Air.PressureBar;
+        }
+
         // An orbit seen at an unknown epoch has no preferred phase: one of the
         // two places uniform is the distribution that describes the thing.
         FGenStream Phase(GenSeed::Derive(PlanetSeed, GenSeed::Label("phase")));
@@ -330,4 +392,9 @@ uint64 FStarSystemGenerator::PlanetSeed(uint64 SystemSeed, int32 Index)
 double FStarSystemGenerator::GenerateRelief(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors)
 {
     return DrawRelief(PlanetSeed, Planet, Priors);
+}
+
+FAirDraw FStarSystemGenerator::GenerateAir(uint64 PlanetSeed, const FPlanet& Planet, const FGenPriors& Priors)
+{
+    return DrawAir(PlanetSeed, Planet, Priors);
 }
