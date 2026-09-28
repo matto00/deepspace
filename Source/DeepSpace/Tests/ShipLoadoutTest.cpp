@@ -9,8 +9,11 @@
 #include "Ship/ShipParts.h"
 #include "Ship/ShipPowerState.h"
 #include "Ship/ShipSubsystem.h"
+#include "Tests/ShipPartsJson.h"
 #include "Tests/SkyTestWorld.h"
 #include "Tests/StockShip.h"
+#include "UI/EngineeringConsoleWidget.h"
+#include "UI/ShipHUDWidget.h"
 #include "Universe/StarSystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -481,6 +484,274 @@ bool FShipPartsRatingsFollowPartsTest::RunTest(const FString& Parameters)
     AddInfo(FString::Printf(TEXT("from 0.1 c to rest after X: %.2f s on the quick lever, %.2f s on the stock drive"), Quick, Stock));
     TestTrue(TEXT("both reach the top"), Quick > 0.0 && Stock > 0.0);
     TestTrue(TEXT("and the quick lever brings the ship to rest sooner"), Quick < Stock);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsNameplatesAreFactsTest, "DeepSpace.Ship.Parts.NameplatesAreFacts",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace ShipLoadoutTestLocal
+{
+    template <typename TWidget>
+    TWidget* MakeScreen(UWorld* World)
+    {
+        TWidget* Widget = NewObject<TWidget>(World);
+        Widget->Initialize();
+        Widget->TakeWidget();
+        return Widget;
+    }
+
+    /** A plate's columns: runs of two or more spaces separate them. */
+    TArray<FString> Columns(const FString& Line)
+    {
+        TArray<FString> Pieces;
+        Line.ParseIntoArray(Pieces, TEXT("  "), true);
+        TArray<FString> Out;
+        for (FString& Piece : Pieces)
+        {
+            Piece.TrimStartAndEndInline();
+            if (!Piece.IsEmpty())
+            {
+                Out.Add(Piece);
+            }
+        }
+        return Out;
+    }
+
+    /** Every number in Text, as a value: digits, commas grouping them, one
+     *  decimal point between digits. */
+    TArray<double> Numbers(const FString& Text)
+    {
+        TArray<double> Found;
+        FString Current;
+        for (int32 Index = 0; Index <= Text.Len(); ++Index)
+        {
+            const TCHAR Char = Index < Text.Len() ? Text[Index] : TEXT(' ');
+            const bool bJoin = !Current.IsEmpty() && (Char == TEXT(',') || Char == TEXT('.'))
+                && Index + 1 < Text.Len() && FChar::IsDigit(Text[Index + 1]);
+            if (FChar::IsDigit(Char) || bJoin)
+            {
+                if (Char != TEXT(','))
+                {
+                    Current.AppendChar(Char);
+                }
+            }
+            else if (!Current.IsEmpty())
+            {
+                Found.Add(FCString::Atod(*Current));
+                Current.Reset();
+            }
+        }
+        return Found;
+    }
+
+    /** A word no plate may carry (decision 9), or empty. */
+    FString Forbidden(const FString& Line)
+    {
+        if (Line.Contains(TEXT("%")))
+        {
+            return TEXT("%");
+        }
+        static const TCHAR* Words[] = {
+            TEXT("mk"), TEXT("tier"), TEXT("ii"), TEXT("iii"), TEXT("iv"), TEXT("upgrade"), TEXT("upgraded"), TEXT("basic"),
+            TEXT("stock"), TEXT("improved"), TEXT("better"), TEXT("best"), TEXT("standard"), TEXT("draw"), TEXT("drawn"),
+            TEXT("spare"), TEXT("condition"), TEXT("worn"),
+        };
+        TArray<FString> Tokens;
+        FString Token;
+        for (int32 Index = 0; Index <= Line.Len(); ++Index)
+        {
+            const TCHAR Char = Index < Line.Len() ? Line[Index] : TEXT(' ');
+            if (FChar::IsAlnum(Char))
+            {
+                Token.AppendChar(FChar::ToLower(Char));
+            }
+            else if (!Token.IsEmpty())
+            {
+                Tokens.Add(Token);
+                Token.Reset();
+            }
+        }
+        for (const TCHAR* Word : Words)
+        {
+            if (Tokens.Contains(Word))
+            {
+                return Word;
+            }
+        }
+        return FString();
+    }
+
+    /** The one number decision 9's table says Part's plate carries, as
+     *  printed (whole watts; tenths otherwise), and its unit. */
+    double PlateFigure(EShipBay Bay, const UShipModuleDataAsset& Part, FString& Unit)
+    {
+        FShipRatings Rated = FShipRatings::Stock();
+        ShipParts::Apply(Rated, Part.Ratings);
+        const auto Tenths = [](double Value) { return FMath::RoundToDouble(10.0 * Value) / 10.0; };
+        switch (Bay)
+        {
+        case EShipBay::Reactor:     Unit = TEXT("W"); return FMath::RoundToDouble(Rated.ReactorWatts);
+        case EShipBay::Drive:       Unit = TEXT("notches/s"); return Tenths(Rated.DriveResponse);
+        case EShipBay::Boosters:    Unit = TEXT("km/s²"); return Tenths(Rated.LinearAcceleration / 1.0e5);
+        case EShipBay::Lights:      Unit = TEXT("W"); return FMath::RoundToDouble(Rated.LightsWant);
+        case EShipBay::LifeSupport: Unit = TEXT("W"); return FMath::RoundToDouble(Part.PowerDraw);
+        case EShipBay::Sensors:     Unit = TEXT("ly"); return Tenths(Rated.RangeLy);
+        default:                    Unit.Reset(); return 0.0;
+        }
+    }
+
+    void CheckPlate(FAutomationTestBase& Test, const FString& Line, EShipBay Bay, const UShipModuleDataAsset& Part, const TCHAR* When)
+    {
+        const FString Id = Part.ModuleId.ToString();
+        const bool bAux = ShipBay::IsAux(Bay);
+        const TArray<FString> Cols = Columns(Line);
+        if (!Test.TestEqual(FString::Printf(TEXT("%s, %s: bay, name, %swords ('%s')"), When, *Id, bAux ? TEXT("") : TEXT("one figure, "), *Line),
+                            Cols.Num(), bAux ? 3 : 4))
+        {
+            return;
+        }
+        Test.TestEqual(FString::Printf(TEXT("%s, %s: the bay"), When, *Id), Cols[0], ShipBay::PlateLabel(Bay));
+        Test.TestEqual(FString::Printf(TEXT("%s, %s: its name"), When, *Id), Cols[1], Part.DisplayName.ToString());
+        Test.TestEqual(FString::Printf(TEXT("%s, %s: its words"), When, *Id), Cols.Last(), Part.Words.ToString());
+        const FString Word = Forbidden(Line);
+        Test.TestTrue(FString::Printf(TEXT("%s, %s: no percentage, tier, comparison, total or condition (found '%s')"), When, *Id, *Word),
+                      Word.IsEmpty());
+        const TArray<double> InLine = Numbers(Line);
+        if (bAux)
+        {
+            Test.TestEqual(FString::Printf(TEXT("%s, %s: an aux plate carries no number"), When, *Id), InLine.Num(), 0);
+            return;
+        }
+        FString Unit;
+        const double Want = PlateFigure(Bay, Part, Unit);
+        Test.TestEqual(FString::Printf(TEXT("%s, %s: exactly one number on the line"), When, *Id), InLine.Num(), 1);
+        Test.TestTrue(FString::Printf(TEXT("%s, %s: in %s ('%s')"), When, *Id, *Unit, *Cols[2]), Cols[2].EndsWith(TEXT(" ") + Unit));
+        Test.TestTrue(FString::Printf(TEXT("%s, %s: the part's own %g"), When, *Id, Want),
+                      InLine.Num() == 1 && FMath::IsNearlyEqual(InLine[0], Want, 1e-9));
+    }
+}
+
+/*
+ * Decision 9: one nameplate per fitted part, BAY Name figure Words, each
+ * figure the part's own. Never a percentage, a tier, a comparison, a
+ * condition or a symptom; no line for an empty slot; never the charge; and
+ * no total drawn or headroom anywhere on the console (the lived-in spec's
+ * decision 11). No console variable moves a plate.
+ */
+bool FShipPartsNameplatesAreFactsTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    using namespace ShipLoadoutTestLocal;
+    FSkyWorld Test(TEXT("NameplatesWorld"));
+    UShipSubsystem* Ship = Test.Ship;
+    if (!TestNotNull(TEXT("the world has a ship"), Ship))
+    {
+        return false;
+    }
+    Test.BeginPlay();
+    TestEqual(TEXT("the stock ship fits"), StockShip::Install(Ship), 6);
+    Ship->Tick(0.01f);
+    UEngineeringConsoleWidget* Console = MakeScreen<UEngineeringConsoleWidget>(Test.World);
+    const auto Shown = [&]()
+    {
+        Console->RefreshFromShip();
+        return Console->GetShownText().ToString();
+    };
+    const auto CheckScreen = [&](const TCHAR* When)
+    {
+        const FString Text = Shown();
+        TArray<FString> Lines;
+        Text.ParseIntoArrayLines(Lines);
+        TArray<EShipBay> Fitted;
+        for (const EShipBay Bay : ShipBay::All())
+        {
+            if (Ship->GetFittedPart(Bay))
+            {
+                Fitted.Add(Bay);
+            }
+        }
+        if (!TestEqual(FString::Printf(TEXT("%s: one plate per fitted part, in bay order, and none for an empty slot"), When),
+                       Lines.Num(), Fitted.Num()))
+        {
+            return;
+        }
+        for (int32 Index = 0; Index < Lines.Num(); ++Index)
+        {
+            CheckPlate(*this, Lines[Index], Fitted[Index], *Ship->GetFittedPart(Fitted[Index]), When);
+        }
+        TestFalse(FString::Printf(TEXT("%s: never the charge"), When), Numbers(Text).Contains(static_cast<double>(Ship->GetChargeSeconds())));
+    };
+
+    CheckScreen(TEXT("the stock ship"));
+
+    // Every row of the catalogue, as its own plate.
+    const ShipPartsJson::FCatalogue Catalogue = ShipPartsJson::Read();
+    for (const ShipPartsJson::FRow& Row : Catalogue.Rows)
+    {
+        const UShipModuleDataAsset* Part = LoadObject<UShipModuleDataAsset>(nullptr, *ShipPartsJson::ObjectPath(Catalogue, Row.Asset));
+        if (TestNotNull(FString::Printf(TEXT("%s is authored"), *Row.Spec.Id.ToString()), Part))
+        {
+            CheckPlate(*this, UEngineeringConsoleWidget::Nameplate(Part->Bay, *Part), Part->Bay, *Part, TEXT("the catalogue"));
+        }
+    }
+
+    // Each example upgrade, fitted.
+    for (const TCHAR* Asset : { TEXT("DA_Reactor_TwinCore"), TEXT("DA_Drive_QuickLever") })
+    {
+        TestTrue(FString::Printf(TEXT("%s fits"), Asset), Ship->FitPart(LoadPart(Asset)));
+        Ship->Tick(0.01f);
+        CheckScreen(*FString::Printf(TEXT("with %s"), Asset));
+    }
+
+    // An aux part: its plate carries no number, and once it is stowed no line is left.
+    TestTrue(TEXT("an aux part fits"), Ship->FitPart(MakePart(TEXT("Aux.Scope"), EShipBay::Aux1, 0.0f, {},
+        TEXT("Long-focus telescope"), TEXT("Somebody scratched a chart into its hood."))));
+    CheckScreen(TEXT("with an aux part"));
+    TestTrue(TEXT("and is stowed"), Ship->RemovePart(EShipBay::Aux1));
+    CheckScreen(TEXT("the aux part stowed"));
+
+    // No total drawn and no headroom. A 13 W load makes both numbers no part
+    // rates, so if either were printed it would be seen.
+    Ship->AddLoad(TEXT("Test.Hog"), 13.0f);
+    Ship->Tick(0.01f);
+    const double Drawn = FMath::RoundToDouble(Ship->GetPowerDraw());
+    const double Headroom = FMath::RoundToDouble(Ship->GetPowerHeadroom());
+    TArray<double> Figures;
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        if (const UShipModuleDataAsset* Part = Ship->GetFittedPart(Bay))
+        {
+            FString Unit;
+            Figures.Add(PlateFigure(Bay, *Part, Unit));
+        }
+    }
+    AddInfo(FString::Printf(TEXT("drawn %.0f W, headroom %.0f W"), Drawn, Headroom));
+    TestTrue(TEXT("the load makes the draw and the headroom numbers no plate carries"),
+             !Figures.Contains(Drawn) && !Figures.Contains(Headroom));
+    const TArray<double> OnScreen = Numbers(Shown());
+    TestFalse(TEXT("no total drawn on the console"), OnScreen.Contains(Drawn));
+    TestFalse(TEXT("and no headroom"), OnScreen.Contains(Headroom));
+
+    // The HUD's power corner goes the same way (ruled on the plan,
+    // 2026-09-27, with sign-off 11): the reactor's rating, and no SPARE.
+    const FString Corner = UShipHUDWidget::PowerLineText(*Ship).ToString();
+    TestFalse(FString::Printf(TEXT("the HUD shows no SPARE ('%s')"), *Corner), Corner.Contains(TEXT("SPARE")));
+    TestFalse(TEXT("and no headroom"), Numbers(Corner).Contains(Headroom));
+    TestTrue(TEXT("only the reactor's rating"),
+             Numbers(Corner).Num() == 1 && Numbers(Corner)[0] == FMath::RoundToDouble(Ship->GetReactorOutput()));
+    TestTrue(TEXT("the load comes off"), Ship->RemoveLoad(TEXT("Test.Hog")));
+
+    // No console variable moves a plate.
+    const FString Before = Shown();
+    {
+        FScopedCVar Range(TEXT("ds.Nav.RangeLy"), 15.0f);
+        FScopedCVar Response(TEXT("ds.Drive.Response"), 1.0f);
+        FScopedCVar Top(TEXT("ds.Drive.Top"), 0.05f);
+        Ship->Tick(0.01f);
+        TestEqual(TEXT("ds.Nav.RangeLy 15, ds.Drive.Response 1 and ds.Drive.Top 0.05 change no plate"), Shown(), Before);
+    }
+    Ship->Tick(0.01f);
     return true;
 }
 
