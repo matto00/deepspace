@@ -4,6 +4,7 @@
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipPartCatalogue.h"
 #include "Ship/ShipParts.h"
+#include "Tests/ShipPartsJson.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -127,6 +128,108 @@ bool FShipPartsAssetSpecTest::RunTest(const FString& Parameters)
     UShipPartCatalogue* Catalogue = NewObject<UShipPartCatalogue>();
     Catalogue->Parts.Add(Part);
     TestTrue(TEXT("a catalogue holds its parts by soft pointer"), Catalogue->Parts.Num() == 1 && Catalogue->Parts[0].Get() == Part);
+    return true;
+}
+
+/*
+ * Decision 7 over the whole catalogue: no loadout has a right answer. Every
+ * combination is whole at rest under the stock reactor; every upgrade is at
+ * least as open as stock on every axis of its bay; no part in a bay
+ * dominates another (equal numbers do not); a core part rates only its own
+ * bay; an aux part rates nothing and wants nothing at rest (decision 8).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShipPartsCatalogueRulesTest, "DeepSpace.Ship.Parts.CatalogueRules",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+namespace ShipPartsTestLocal
+{
+    FShipPartSpec Part(const TCHAR* Id, EShipBay Bay, double Draw, const TArray<TPair<EShipRating, double>>& Ratings = {})
+    {
+        FShipPartSpec Spec;
+        Spec.Id = Id;
+        Spec.Bay = Bay;
+        Spec.Draw = Draw;
+        for (const TPair<EShipRating, double>& Rated : Ratings)
+        {
+            Spec.Ratings.Add(Rated.Key, Rated.Value);
+        }
+        return Spec;
+    }
+
+    bool Says(const TArray<FString>& Problems, const TCHAR* Needle)
+    {
+        return Problems.ContainsByPredicate([Needle](const FString& Problem) { return Problem.Contains(Needle); });
+    }
+}
+
+bool FShipPartsCatalogueRulesTest::RunTest(const FString& Parameters)
+{
+    using namespace ShipPartsTestLocal;
+    const ShipPartsJson::FCatalogue Catalogue = ShipPartsJson::Read();
+    TestTrue(FString::Printf(TEXT("the catalogue reads cleanly (%s)"), *FString::Join(Catalogue.Problems, TEXT("; "))),
+             Catalogue.Problems.IsEmpty());
+    const TArray<FShipPartSpec> Specs = ShipPartsJson::Specs(Catalogue);
+    TestEqual(TEXT("six stock parts and the two examples"), Specs.Num(), 8);
+    const TArray<FString> Problems = ShipParts::Validate(Specs);
+    TestTrue(FString::Printf(TEXT("every rule holds over every row (%s)"), *FString::Join(Problems, TEXT("; "))), Problems.IsEmpty());
+
+    // The stock loadout, the heaviest there is, asks 1370 W at rest.
+    double Heaviest = 0.0;
+    for (const EShipBay Bay : ShipBay::All())
+    {
+        double Worst = 0.0;
+        for (const FShipPartSpec& Spec : Specs)
+        {
+            Worst = Spec.Bay == Bay ? FMath::Max(Worst, ShipParts::AtRestWatts(Spec)) : Worst;
+        }
+        Heaviest += Worst;
+    }
+    TestEqual(TEXT("the heaviest loadout asks 1370 W at rest"), Heaviest, 1370.0);
+
+    // Each rule, broken once, is refused by name.
+    const auto Refused = [&](const TCHAR* What, const FShipPartSpec& Added, const TCHAR* Needle)
+    {
+        TArray<FShipPartSpec> With = Specs;
+        With.Add(Added);
+        const TArray<FString> Found = ShipParts::Validate(With);
+        TestTrue(FString::Printf(TEXT("%s is refused (%s)"), What, *FString::Join(Found, TEXT("; "))), Says(Found, Needle));
+    };
+    Refused(TEXT("a brighter lights part, wanting 350 W"),
+            Part(TEXT("Lights.Bright"), EShipBay::Lights, 120.0, { { EShipRating::LightsWant, 350.0 } }), TEXT("at rest"));
+    Refused(TEXT("a shorter array"),
+            Part(TEXT("Sensors.Short"), EShipBay::Sensors, 200.0, { { EShipRating::RangeLy, 10.0 } }), TEXT("less open than stock"));
+    Refused(TEXT("a slower drive than the quick lever on one axis and no better on any"),
+            Part(TEXT("Drive.Middling"), EShipBay::Drive, 0.0, { { EShipRating::DriveResponse, 4.0 } }), TEXT("dominates"));
+    Refused(TEXT("a reactor that rates the range"),
+            Part(TEXT("Reactor.Odd"), EShipBay::Reactor, 0.0, { { EShipRating::RangeLy, 20.0 } }), TEXT("owns"));
+    Refused(TEXT("an aux part with a number"),
+            Part(TEXT("Aux.Booster"), EShipBay::Aux1, 0.0, { { EShipRating::RangeLy, 20.0 } }), TEXT("verbs"));
+    Refused(TEXT("an aux part that draws at rest"),
+            Part(TEXT("Aux.Lamp"), EShipBay::Aux1, 40.0), TEXT("wants nothing"));
+    Refused(TEXT("a second part under a known id"),
+            Part(TEXT("Reactor.TwinCore"), EShipBay::Reactor, 0.0, { { EShipRating::ReactorWatts, 1800.0 } }), TEXT("share the id"));
+    Refused(TEXT("a part that fits no bay"), Part(TEXT("Nowhere.Part"), EShipBay::None, 0.0), TEXT("fits no bay"));
+    {
+        TArray<FShipPartSpec> Without = Specs;
+        Without.RemoveAll([](const FShipPartSpec& Spec) { return Spec.Id == FName(TEXT("Sensors.Stock")); });
+        TestTrue(TEXT("a core bay with no stock part is refused"), Says(ShipParts::Validate(Without), TEXT("no stock part")));
+    }
+
+    // Equal numbers do not dominate: a part that differs only in character is legal.
+    {
+        TArray<FShipPartSpec> Twins = Specs;
+        Twins.Add(Part(TEXT("Drive.QuickLeverTwin"), EShipBay::Drive, 0.0,
+                       { { EShipRating::WindingWant, 380.0 }, { EShipRating::ChargeSeconds, 45.0 }, { EShipRating::DriveResponse, 4.5 } }));
+        const TArray<FString> Found = ShipParts::Validate(Twins);
+        TestTrue(FString::Printf(TEXT("two parts with equal numbers are both legal (%s)"), *FString::Join(Found, TEXT("; "))), Found.IsEmpty());
+    }
+    // And two parts that trade one axis for another neither dominates.
+    {
+        TArray<FShipPartSpec> Traded = Specs;
+        Traded.Add(Part(TEXT("Drive.Frugal"), EShipBay::Drive, 0.0, { { EShipRating::WindingWant, 300.0 } }));
+        const TArray<FString> Found = ShipParts::Validate(Traded);
+        TestTrue(FString::Printf(TEXT("a lower-want drive beside the quick lever is legal (%s)"), *FString::Join(Found, TEXT("; "))), Found.IsEmpty());
+    }
     return true;
 }
 
