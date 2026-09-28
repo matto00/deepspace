@@ -13,19 +13,23 @@ turning rather than the camera swinging.
             The levers are the ship's and stay where they are left.
     F       which lever is live, the drive's or cruise's (IA_Drive); each
             keeps its own setting across it
+    Space / C   the vertical lever, up and down (IA_VerticalUp,
+            IA_VerticalDown; landing decision 8): a climb or sink rate the
+            boosters hold, HOVER at zero. Seated they fly; standing they are
+            jump and crouch, which refuse in any seat.
     X       all stop: both levers to STOP (IA_Stop)
     Tab     the next world as the target, on the zoomed system map
             (IA_CycleTarget; the system map spec's decision 13)
 
-All four are Boolean presses: the character counts Started and reads held
+All but IA_Attitude are Boolean presses: the character counts Started and reads held
 from Triggered and Completed, so a tap released inside one frame is still a
 press (flight-feel decision 3). IA_Throttle, the old axis lever the pawn
 swept, is dropped from the context and deleted.
 
 F, X and Tab are checked against every other mapping in IMC_Default before
-they are bound, and Shift and Ctrl against everything but the walking
-actions, which they share as the old throttle did: seated they are the
-lever, standing Shift is sprint. The script fails rather than bind a key
+they are bound, and Shift, Ctrl, Space and C against everything but the
+walking actions, which they share as the old throttle did: seated they are
+the levers, standing Shift is sprint and Space and C jump and crouch. The script fails rather than bind a key
 something else already uses.
 
 Idempotent: re-running rebuilds the mappings rather than appending to them.
@@ -128,6 +132,8 @@ PRESS_KEYS = {
     "IA_Drive": "F",
     "IA_Stop": "X",
     "IA_CycleTarget": "Tab",
+    "IA_VerticalUp": "SpaceBar",
+    "IA_VerticalDown": "C",
 }
 
 # The Blueprint property each action is assigned to.
@@ -138,14 +144,18 @@ PROPERTIES = {
     "IA_Drive": "drive_action",
     "IA_Stop": "stop_action",
     "IA_CycleTarget": "cycle_target_action",
+    "IA_VerticalUp": "vertical_up_action",
+    "IA_VerticalDown": "vertical_down_action",
 }
 
 RETIRED = f"{ACTIONS_DIR}/IA_Throttle"
 
 # What a helm key may share, and only on the lever keys: the walking actions,
 # which do nothing while seated, as W/A/S/D share with IA_Move. Shift is
-# sprint standing and the lever seated, as it was when it was the throttle.
-SHARES_WITH_WALKING = {"LeftShift", "LeftControl"}
+# sprint standing and the lever seated; Space and C are jump and crouch
+# standing and the vertical lever seated (the character refuses both in any
+# seat, so a seated press is only ever the lever).
+SHARES_WITH_WALKING = {"LeftShift", "LeftControl", "SpaceBar", "C"}
 WALKING = {"IA_Move", "IA_Sprint", "IA_Crouch", "IA_Jump"}
 
 

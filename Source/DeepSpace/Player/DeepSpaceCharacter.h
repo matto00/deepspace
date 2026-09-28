@@ -157,6 +157,17 @@ public:
      *  Triggered and Completed do; public for the tests. */
     void HoldLever(int32 Direction);
 
+    /** A vertical key pressed (+1 Space, -1 C), counted as a press: what
+     *  IA_VerticalUp and IA_VerticalDown's Started do. Public for tests. */
+    void TapVertical(int32 Direction);
+
+    /** Which vertical key is held: +1 Space, -1 C, 0 neither. */
+    void HoldVertical(int32 Direction);
+
+    /** Both vertical actions are assigned: what setup_flight_input.py
+     *  guarantees on the Blueprint, asked by the playtest. */
+    bool HasVerticalActions() const { return VerticalUpAction && VerticalDownAction; }
+
     /** What the drive key does, exposed so a test can press it without an
      *  input stack. */
     void PressDrive() { ToggleDrive(); }
@@ -322,6 +333,18 @@ protected:
     TObjectPtr<UInputAction> LeverDownAction;
 
     /**
+     * The vertical lever's keys (Space up, C down; landing decision 8),
+     * Boolean, counted and held like the lever keys. Seated they fly and
+     * standing they jump and crouch: movement is disabled seated, and Jump
+     * and ToggleCrouch refuse in any seat. See Tools/setup_flight_input.py.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> VerticalUpAction;
+
+    UPROPERTY(EditDefaultsOnly, Category = "Input")
+    TObjectPtr<UInputAction> VerticalDownAction;
+
+    /**
      * Pressed to toggle which lever is live (F): the drive's or cruise's.
      * Each keeps its own setting across the toggle, so the speed F goes to is
      * the one left there. See Tools/setup_flight_input.py.
@@ -367,6 +390,15 @@ private:
     void ReleaseLeverUp() { bLeverUpHeld = false; }
     void HoldLeverDown() { bLeverDownHeld = true; }
     void ReleaseLeverDown() { bLeverDownHeld = false; }
+    void PressVerticalUp() { TapVertical(1); }
+    void PressVerticalDown() { TapVertical(-1); }
+    void HoldVerticalUp() { bVerticalUpHeld = true; }
+    void ReleaseVerticalUp() { bVerticalUpHeld = false; }
+    void HoldVerticalDown() { bVerticalDownHeld = true; }
+    void ReleaseVerticalDown() { bVerticalDownHeld = false; }
+
+    /** Jump, refused in any seat: Space is the vertical lever there. */
+    void TryJump();
 
     /** Flips the drive. Refused by the subsystem unless we are the pilot. */
     void ToggleDrive();
@@ -497,4 +529,8 @@ private:
     bool bLeverDownHeld = false;
     int32 LeverUpPresses = 0;
     int32 LeverDownPresses = 0;
+    bool bVerticalUpHeld = false;
+    bool bVerticalDownHeld = false;
+    int32 VerticalUpPresses = 0;
+    int32 VerticalDownPresses = 0;
 };
