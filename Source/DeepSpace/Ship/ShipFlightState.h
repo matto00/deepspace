@@ -313,6 +313,12 @@ public:
      *  floor sphere otherwise -- entering under it and leaving over 1.1 x it. */
     bool IsInNearRegime() const;
 
+    /** The world the regime is taken over -- the nearest world's cruise
+     *  floor, a ground or a floor sphere -- or null with none. What the
+     *  vertical speed is measured against; the HUD reads its ground, if it
+     *  has one, never another world's. */
+    const FFlightSurface* GetRegimeSurface() const;
+
     /** 1 at 40 km and under, 0 at 50 km and over: how far cruise flies the
      *  plan view and the vertical lever counts. 0 outside the regime. */
     double GetRegimeWeight() const;

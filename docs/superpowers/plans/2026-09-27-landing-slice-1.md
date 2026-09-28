@@ -10090,11 +10090,21 @@ EOF
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-s && \
 Tools/mutate.sh Source/DeepSpace/Ship/ShipPowerState.cpp 'Split.HoldWatts = FMath::Min(Available, Hold);' 'Split.HoldWatts = 0.0f;' DeepSpace.Ship.Power.SplitBoosters && \
-Tools/mutate.sh Source/DeepSpace/Ship/ShipPowerState.cpp 'if (!bAirborne || !(DepthUnderFloorCm > 0.0) || !(WattsPerG > 0.0f))' 'if (!bAirborne || !(WattsPerG > 0.0f))' DeepSpace.Ship.Power.ParkedIsWhole && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp $'        if (Surface.HasGround())\n        {\n            Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' $'        if (true)\n        {\n            Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' DeepSpace.Ship.Power.ParkedIsWhole && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp 'FlightState.GetDepthUnderDriveFloor(),' 'FlightState.GetDepthUnderDriveFloor() + 1.0e5,' DeepSpace.Ship.Power.ParkedIsWhole && \
 ./build.sh
 ```
 
-Expected: `KILLED` twice.
+Expected: `KILLED` three times.
+
+*Amended after review (2026-09-28):* this step first mutated `HoldWant`'s guard,
+`!(DepthUnderFloorCm > 0.0)`, away. That mutant is equivalent: the ramp,
+`Clamp(Depth / HoldRampCm, 0, 1)`, is 0 for any depth at or under 0, and
+`GetDepthUnderDriveFloor` never returns a negative or NaN, so no test can kill
+it. And every `ParkedIsWhole` leg parked at or above a floor, where the depth is
+0 with or without the `HasGround()` filter. `ParkedIsWhole` now also parks 3 km
+under Sova V's floor sphere (an ocean) and asks for depth 0 and no hold; the
+mutants above drop that filter, and ask for a hold at every floor.
 
 ---
 
@@ -11913,6 +11923,21 @@ Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp '    Wells.Append(TestWe
 ```
 
 Expected: `KILLED` three times (the third: without the well the 3.3 g leg flies at III's 1.97 g).
+
+*Amended after review (2026-09-28):* the other three flights had no mutant.
+Each central assertion is proven here too:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-s && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp '100.0 * (1.0 - LastSplit.HoldFed)' '100.0 * (1.01 - LastSplit.HoldFed)' DeepSpace.Playtest.HoverHoldsWhenPilotStands && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' 'Depth = FMath::Max(Depth, 1.0e5 - ShipFlight::FloorClearance(Surface, Position));' DeepSpace.Playtest.ParkedShipNeverDrifts && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);' '2.0 * Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);' DeepSpace.Playtest.DescendsInTime && \
+./build.sh
+```
+
+Expected: `KILLED` three times: a fed hover sinking 2 cm/s drifts a minute's
+worth; a drive floor taken 1 km high puts a parked, starved ship under it and it
+sinks; an approach law twice as long misses the descent's time by about 20 % (133.8 s against 109.9 s, measured).
 
 ---
 

@@ -218,6 +218,10 @@ public:
     /** The same, asking LocalSystem::Here itself. */
     static FText AltitudeLineText(const UShipSubsystem& Ship);
 
+    /** The same of a flight state out of transit: what the two above say
+     *  once the subsystem has answered that it is not folding. */
+    static FText AltitudeLineText(const FShipFlightState& Flight, const FSkySystem& Here);
+
     /**
      * The nose caret (nav decision 3): a ring on the HUD where the ship's nose
      * meets the sky, which sits on the teal course marker exactly when the

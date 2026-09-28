@@ -239,9 +239,13 @@ world's drive floor, airborne, the boosters want to hold the ship against
 gravity (`ds.Boosters.HoldWatts`, 150 W a g to 3 g, paid first inside their
 share, `ShipPower::SplitBoosters`), and a hold short of watts becomes a sink
 of at most `ds.Boosters.StarvedSink` (2 m/s), never while the vertical lever
-asks a climb, ending always at rest on the ground at no cost. That want
-exists only there, so **staying put is never taxed** anywhere a ship can be
-parked: at any floor, between worlds, or (slice c) landed. If a change here
+asks a climb, ending at rest on the ground. That want exists only there,
+so **staying put is never taxed** anywhere a ship can be parked: at any
+floor or between worlds. Until slice (c)'s LANDED, a ship at rest on the
+ground is still airborne to the hold (`ApplyAllocation` passes `bAirborne`
+true): it keeps paying the hold, and starved it keeps asking the sink the
+ground holds it against. Touchdown (slice c) is what makes resting on the
+ground free. If a change here
 introduces a rate the player must keep up with, it has broken the anti-chore
 principle -- say so rather than tuning it.
 
@@ -1240,7 +1244,7 @@ tests that assert it.
 | `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
 | `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g, counted to 3 g and ramped in over the first km under the floor; 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp`, from `ShipPower::DefaultHoldWattsPerG` and `DefaultStarvedSinkMetresPerSecond` (`ShipPowerState.h`), beside the named constants `HoldGCap` (3 g) and `HoldRampCm` (1 km) |
-| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`, from `TerrainQuadtree` |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`: the first two from `TerrainQuadtree::DefaultSplitFactor` and `DefaultMaxTiles` (`TerrainQuadtree.h`), the other three literals in their declarations |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |
