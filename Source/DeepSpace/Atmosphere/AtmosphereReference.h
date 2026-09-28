@@ -146,15 +146,21 @@ public:
 
     /** The second order's sphere is SphereRings rings, equal steps in T
      *  with cos(zenith) = T |T| -- crowded at the horizon, where the long
-     *  paths and most of the light are -- by SphereSegments of azimuth. */
+     *  paths and most of the light are -- by SphereSegments of azimuth.
+     *  Twelve segments left a backlit horizon 5% short of its converged
+     *  value; 24 are within 0.5% of 48. */
     struct FOptions
     {
         int32 ViewSteps = 256;
         bool bSecondOrder = true;
         int32 SecondOrderViewSteps = 24;
         int32 SphereRings = 24;
-        int32 SphereSegments = 12;
+        int32 SphereSegments = 24;
         int32 SecondarySteps = 32;
+        /** The second scattering sent every way alike, as the law's table
+         *  sends every order past the first: what the law is held to
+         *  (atmosphere plan ruling 7). */
+        bool bIsotropicSecondOrder = false;
     };
 
     struct FResult
@@ -215,5 +221,5 @@ private:
     double LogColumnLookup(const TArray<double>& Table, double R, double Cos, double H) const;
     AtmosphereReference::FSpectrum SunExact(double R, double Cos) const;
     AtmosphereReference::FSpectrum SunLookup(double R, double Cos) const;
-    FSecond SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 Steps) const;
+    FSecond SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 Steps, bool bIsotropic) const;
 };

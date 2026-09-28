@@ -253,18 +253,26 @@ AT_Scatter AT_InScatter    (AT_Air A, AT_REAL EX, AT_REAL EY, AT_REAL EZ,
                             AT_REAL SX, AT_REAL SY, AT_REAL SZ);
 AT_Rgb     AT_SunThrough   (AT_Air A, AT_REAL PX, AT_REAL PY, AT_REAL PZ,
                             AT_REAL SX, AT_REAL SY, AT_REAL SZ);  // transmittance to the star
-AT_REAL    AT_LogChapman   (AT_REAL X, AT_REAL CosZenith);       // ln(airmass), Schueler's form
+AT_REAL    AT_LogChapman   (AT_REAL X, AT_REAL CosZenith);       // ln(airmass), asymptotic form
 AT_REAL    AT_SheathProfile(AT_REAL U, AT_REAL V, AT_REAL Facing, AT_REAL Glow); // decision 13
 ```
 
-`AT_Air` is a plain struct of scalars (the per-channel coefficients and the
-shape). The multiple-scattering table (below) is read through a hook each
-side defines *before* including the file, `AT_MultiScatter(AT_Air A,
-AT_REAL Altitude01, AT_REAL CosSunZenith)`, returning an `AT_Rgb`: in HLSL
-a `SampleLevel` of the table the Custom node is handed, in C++ a bilinear
-read of `FAtmosphere`'s own table. The interface is fixed in this form
-before track O writes a line against it, so it is not re-cut when landing
-(a) merges.
+`AT_Air` is a plain struct of scalars: per spectral bin, the gas's and the
+aerosol's scattering and extinction, colourless, and the star's light in
+the bin as `FoldR`, `FoldG` and `FoldB`; then the shape, `GasH`,
+`AerosolH`, `AerosolG` and `Top` -- 60 scalars, fifteen float4 (amended
+by atmosphere plan rulings 3 and 6). The multiple-scattering table (below)
+is read through a hook each side defines *before* including the file,
+`AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenith
+AT_TABLE_PARAM)`, returning an `AT_Bins`, a value per bin: in HLSL four
+`Load`s of each half of the texture the Custom node is handed, blended in
+float, in C++ a bilinear read of `FAtmosphere`'s own table. The table
+travels as the trailing macro argument `AT_TABLE_PARAM` (`AT_TABLE_ARG` at
+a call), which every law function that reaches the hook takes, because a
+Custom node's texture is a parameter of the function it generates, not a
+global (atmosphere optics plan, planning note 1). The entry points'
+arguments are otherwise as above, and they still return linear sRGB,
+folded from the bins at the end.
 
 **Float-safe by construction.** Two failures are predictable in `float`
 and invisible in `double`, and the law is written against both:
@@ -287,19 +295,32 @@ and invisible in `double`, and the law is written against both:
   an ozone-like absorber for the N2/O2 mix (decision 5).
 - **Optical depth to the sun** at every sample is analytic: the vertical
   column times the **Chapman function**, the exact airmass of a curved
-  exponential atmosphere, in Schueler's (2012) closed-form approximation,
-  which also handles a sun below the horizon by the planet's occultation.
+  exponential atmosphere, in the asymptotic form sqrt(pi X / 2)
+  erfcx(sqrt(X / 2) cos z) with its first correction in 1 / X (Schueler's
+  (2012) closed form missed it by 2.5% at 60 degrees: atmosphere optics
+  plan, planning note 5), which also handles a sun below the horizon by the planet's occultation.
   That is what makes the terminator soft and the Earth's shadow rise in the
   sky without an inner loop.
-- **Along the view**, **12 samples**, spaced by the density's own
-  distribution (dense where the air is), single scattering with the
-  Rayleigh phase and a Henyey-Greenstein phase for the aerosol.
+- **Along the view**, **12 nodes**, spaced by the density's own
+  distribution (dense where the air is); between two, each constituent's
+  exact Chapman column times the logarithmic mean of what it gathers per
+  unit column -- exact for the density and the view's transmittance -- and
+  one node more where single scattering climbs past e^4 (atmosphere plan,
+  planning note 14); single scattering with the Rayleigh phase and a
+  Henyey-Greenstein phase for the aerosol.
 - **Multiple scattering** is Hillaire's (2020) isotropic approximation, read
   from a **32 x 32 table per airy world** (sun zenith by altitude) that
   C++ builds from the same `.ush` when the system loads and uploads as a
   transient texture (decision 11).
-- **Three colour channels**, with per-world effective coefficients that
-  already fold in the star's spectrum (decision 3).
+- **Eight spectral bins**, not three colour channels (atmosphere plan
+  rulings 3 and 6): each bin a run of the reference's wavelengths, narrow
+  in the blue, its coefficients the star-weighted mean of its wavelengths'
+  and themselves colourless, folded into linear sRGB only at the end by the
+  star's own light in each bin -- so the star enters through the bins'
+  weights and the folds, which C++ computes, and the shader still never
+  sees a temperature (decision 3). Three channels, and any four to six
+  bins, missed the reference on long paths by up to several times the
+  tolerance.
 
 **How they are held equal.** The `.ush` runs in C++ exactly as it runs on
 the GPU, so its *approximations* are testable headlessly:
@@ -307,8 +328,11 @@ the GPU, so its *approximations* are testable headlessly:
 the reference over a grid of eye heights (inside and outside the air), view
 directions (nadir, limb, horizon, zenith) and sun angles (noon, terminator,
 backlit), for each mix and pressure extreme, and requires each channel
-within 5% relative or 1e-3 absolute of the reference -- **for both the F64
-and the F32 builds**. `DeepSpace.Atmosphere.FloatMatchesDouble` holds F32 to
+within 5% relative or 1e-3 absolute of the reference with its second
+scattering sent every way alike, as the law's multiple scattering is --
+**for both the F64 and the F32 builds** -- and within 25% or 1e-3 of the
+reference's full second order, the approximation's own cost (atmosphere
+plan ruling 7). `DeepSpace.Atmosphere.FloatMatchesDouble` holds F32 to
 F64 over the same grid plus the extremes (a sun 30 degrees below the
 horizon, the limb from 7.8 R and from 1e3 R) at 1e-3 relative or 1e-5
 absolute, and requires every F32 output finite. What cannot be tested
@@ -471,17 +495,18 @@ they disagree by more, **`Blackbody` is re-based onto the integral** --
 every star's colour moves slightly, once -- rather than keeping two
 blackbodies (sign-off item 3).
 
-**Per-world effective coefficients.** Rendering carries three channels, but
-scattering is spectral, and a naive three-wavelength model goes wrong at
+**Per-world effective coefficients.** Rendering carries eight spectral bins
+(atmosphere plan ruling 6), because scattering is spectral, and a naive three-wavelength model goes wrong at
 the extremes: a 2,500 K star has almost nothing at 440 nm to scatter.
 So when a system loads, for each airy world, `FAtmosphere::Build`
 integrates the star's spectrum through the world's own Rayleigh law
 (lambda^-4 x the column), aerosol law (lambda^-alpha, alpha by mix) and
-absorber band, and fits **per-channel effective scattering and extinction
-coefficients** exact in the optically thin limit and at the world's own
-nadir column. `LawMatchesReference` (decision 1) is what proves three
-channels good enough across the angles that matter; the star colour is
-already in the coefficients, so the shader never sees a temperature.
+absorber band, and averages **per-bin scattering and extinction** exact in
+the optically thin limit, then folds each bin into colour by the star's
+light in it. `LawMatchesReference` (decision 1) is what proves the bins
+good enough across the angles that matter; the star enters through the
+bins' weights and folds, which C++ computes, so the shader never sees a
+temperature.
 
 **No palette, no floor** (ruling 2). What that produces, estimated from the
 integral (the table illustrates; `.StarColour` pins the bounds stated in
@@ -876,11 +901,12 @@ costs a capture per frame at 4K.
   whichever material covers it (with the early depth pass; measured): the
   ceiling at 4K is 8.3 million 12-sample marches, plus, from outside, the
   additive shells' pixels.
-- **One 32 x 32 multiple-scattering table per airy world**, RGBA16F (8 KB),
-  built in C++ from the `.ush` when the system loads (so its values are
+- **One 32 x 32 multiple-scattering table per airy world**, a value per
+  bin in each cell, as one 64 x 32 RGBA16F texture (16 KB; bins 0-3 in the
+  left half, 4-7 in the right: atmosphere plan ruling 6), built in C++ from the `.ush` when the system loads (so its values are
   the law's, tested headlessly), uploaded as a transient texture, and set
   as `AirMultiScatter` on that world's own body and shell instances, which
-  `AShipSky` already owns. A system of twelve airy worlds is under 100 KB.
+  `AShipSky` already owns. A system of twelve airy worlds is under 200 KB.
   It is rebuilt with the system (a jump, a priors reload), never per frame.
 - **The eye's air's table cannot go through `MPC_Sky`**: a Material
   Parameter Collection holds scalars and vectors only (UE 5.8's
@@ -889,8 +915,8 @@ costs a capture per frame at 4K.
   instance would fan out to the starfield ISM (which has no instance
   material today), the neighbours, the backdrop, every body and every
   `M_SkyGround` tile. So the route is **one shared texture asset**,
-  `T_SkyAirHere` (32 x 32, RGBA16F, uncompressed, no mips, never
-  streamed), authored by `setup_sky_materials.py` and set as the *default*
+  `T_SkyAirHere` (64 x 32, RGBA16F, a world's table's layout,
+  uncompressed, no mips, never streamed), authored by `setup_sky_materials.py` and set as the *default*
   of the `HereMultiScatter` texture parameter in every material that reads
   the eye's air. No instance sets it; C++ overwrites its contents with
   `UpdateTextureRegions` when `AirHere` changes body (a jump, a descent
@@ -1263,13 +1289,20 @@ sign-off (ruling 1).
   - **[1, O]** `.Chapman`: `exp(AT_LogChapman)` against numerical
     integration, within 0.5% to 89 degrees and through the horizon to 30
     degrees below it; finite in F32 throughout.
-  - **[1, O]** `.LawMatchesReference` (decision 1's grid and tolerance),
-    for F64 and F32.
+  - **[1, O]** `.LawMatchesReference` (decision 1's grid and tolerance,
+    the reference's second scattering isotropic as the law's is: atmosphere
+    plan ruling 7), for F64 and F32. The default suite runs its hardest air
+    along its longest paths; the whole grid is
+    Atmosphere.Full.LawMatchesReference, and the full second order's gap,
+    within 25% or 1e-3, Atmosphere.Full.MultipleScatteringGap, both run by
+    name before a merge.
   - **[1, O]** `.FloatMatchesDouble` (decision 1): F32 against F64 at 1e-3
     relative or 1e-5 absolute, every output finite, including a sun 30
     degrees below the horizon and the limb from 7.8 R and 1e3 R.
-  - **[1, O]** `.HomothetyInvariance`: the same term, bit for bit in
-    double, at k = 1 and k = 1e-3, with the eye formed as `SkyProjection`
+  - **[1, O]** `.HomothetyInvariance`: the same term in double, at k = 1
+    and k = 1e-3, the eyes within 1e-12 relative and the law's outputs
+    within 1e-9 (atmosphere plan ruling 5: the proxy's eye and the true eye
+    are one ratio formed by two roundings), with the eye formed as `SkyProjection`
     forms it after `RenderableScale`'s rounding (the GPU's float path is
     `Eyes.AtmosphereProbe`'s).
   - **[1, O]** `.StarColour`, in linear sRGB, HSV saturation `S = 1 -

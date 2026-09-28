@@ -379,7 +379,7 @@ AtmosphereReference::FSpectrum FReferenceAir::SunLookup(double R, double Cos) co
     return Out;
 }
 
-FReferenceAir::FSecond FReferenceAir::SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 StepsPerRay) const
+FReferenceAir::FSecond FReferenceAir::SecondOrderAt(const FVector3d& Point, const FVector3d& View, const FVector3d& Sun, int32 Rings, int32 Segments, int32 StepsPerRay, bool bIsotropic) const
 {
     using namespace AtmosphereReferenceLocal;
     FSecond Out;
@@ -420,8 +420,10 @@ FReferenceAir::FSecond FReferenceAir::SecondOrderAt(const FVector3d& Point, cons
         // Scattered again at Point into the view: light arriving from W
         // travels along -W, and leaves along -View toward the eye.
         const double CosView = FVector3d::DotProduct(W, View);
-        const double IntoGas = RayleighPhase(CosView) * Solid;
-        const double IntoAerosol = HenyeyGreenstein(CosView, Air.AerosolG) * Solid;
+        // Isotropic, the second scattering sends light every way alike: the
+        // law's own assumption for every order past the first.
+        const double IntoGas = bIsotropic ? Direction.Share : RayleighPhase(CosView) * Solid;
+        const double IntoAerosol = bIsotropic ? Direction.Share : HenyeyGreenstein(CosView, Air.AerosolG) * Solid;
         for (int32 I = 0; I < Count; ++I)
         {
             Out.IntoViewGas.Value[I] += IntoGas * Arriving.Value[I];
@@ -492,7 +494,7 @@ FReferenceAir::FResult FReferenceAir::Trace(const FRay& In, const FOptions& Opti
             const double R = std::sqrt(Path.B * Path.B + Step.S * Step.S);
             const double GasDensity = std::exp(-(R - 1.0) / Air.GasH);
             const double AerosolDensity = std::exp(-(R - 1.0) / Air.AerosolH);
-            const FSecond Second = SecondOrderAt(P, D, S, Options.SphereRings, Options.SphereSegments, Options.SecondarySteps);
+            const FSecond Second = SecondOrderAt(P, D, S, Options.SphereRings, Options.SphereSegments, Options.SecondarySteps, Options.bIsotropicSecondOrder);
             for (int32 I = 0; I < Count; ++I)
             {
                 const double GasScatter = Air.GasScatter.Value[I] / Air.GasH * GasDensity;
@@ -545,7 +547,7 @@ AtmosphereReference::FSpectrum FReferenceAir::MultiScatterSpectrum(double Altitu
     const FVector3d Point(0.0, 0.0, 1.0 + FMath::Clamp(Altitude01, 0.0, 1.0) * Air.Top);
     const FVector3d Sun(std::sqrt(FMath::Max(1.0 - CosSunZenith * CosSunZenith, 0.0)), 0.0, CosSunZenith);
     // The View only weights IntoView*, which this does not read.
-    const FSecond Second = SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay);
+    const FSecond Second = SecondOrderAt(Point, FVector3d(0.0, 0.0, 1.0), Sun, Rings, Segments, StepsPerRay, false);
     for (int32 I = 0; I < Count; ++I)
     {
         const double F = FMath::Min(Second.Transfer.Value[I], 0.999);
