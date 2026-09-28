@@ -126,11 +126,13 @@ void FShipFlightState::JumpTo(const FUniversePosition& Arrival)
     RegimeWeight = 0.0;
     RegimeSurface = INDEX_NONE;
     bDriveBelowFloor = false;
+    RayCache.Reset();
 }
 
 void FShipFlightState::SetSurfaces(TArray<FFlightSurface> NewSurfaces)
 {
     Surfaces = MoveTemp(NewSurfaces);
+    RayCache.Reset();
 }
 
 TConstArrayView<FFlightSurface> FShipFlightState::GetSurfaces() const
@@ -212,6 +214,7 @@ void FShipFlightState::Step(double DeltaSeconds)
     {
         return;
     }
+    ++FrameCount;
 
     Accumulator = FMath::Min(Accumulator + DeltaSeconds, MaxSubStepsPerCall * FixedStep);
 
@@ -630,7 +633,7 @@ TOptional<double> FShipFlightState::NearestOnCruisePath(const FVector& Direction
         TOptional<double> D;
         if (Surface.HasGround())
         {
-            D = ShipFlight::RayToGround(Surface, Position, Direction, Limits.GearClearanceCm, Lookahead);
+            D = CachedRay(0, Index, Direction, Limits.GearClearanceCm, Lookahead);
             if (D)
             {
                 D = FMath::Max(0.0, *D - Reach);   // the hull reaches ahead of its origin
@@ -817,7 +820,7 @@ TOptional<double> FShipFlightState::GroundAhead(int32 SurfaceIndex, const FVecto
     const double Braking = 2.0 * ShipFlight::BrakingMargin * FMath::Max(Limits.LinearAcceleration, 1.0);
     const double Lookahead = 1.5 * (Speed * Speed / Braking + Speed * FMath::Max(Limits.ApproachSeconds, ShipFlight::MinApproachSeconds))
                            + Reach + 1.0e3;
-    const TOptional<double> D = ShipFlight::RayToGround(Surfaces[SurfaceIndex], Position, Heading, Limits.GearClearanceCm, Lookahead);
+    const TOptional<double> D = CachedRay(1, SurfaceIndex, Heading, Limits.GearClearanceCm, Lookahead);
     return D ? TOptional<double>(FMath::Max(0.0, *D - Reach)) : TOptional<double>();
 }
 
@@ -864,4 +867,37 @@ void FShipFlightState::UpdateDriveBelowFloor()
         bKeep |= D.IsSet() && *D <= Hold;
     }
     bDriveBelowFloor = bDriveBelowFloor ? bKeep : bUnder;
+}
+
+TOptional<double> FShipFlightState::CachedRay(int32 Slot, int32 SurfaceIndex, const FVector& Direction, double Clearance, double Lookahead)
+{
+    const FVector U = Direction.GetSafeNormal();
+    FGroundRayCache* Cache = RayCache.FindByPredicate([&](const FGroundRayCache& Entry)
+    {
+        return Entry.Slot == Slot && Entry.Surface == SurfaceIndex;
+    });
+    if (Cache && Cache->Frame == FrameCount && (Cache->Direction | U) >= FMath::Cos(FMath::DegreesToRadians(1.0)))
+    {
+        const double Flown = FMath::Max(0.0, (Position - Cache->From) | Cache->Direction);
+        if (Cache->Hit)
+        {
+            return FMath::Max(0.0, *Cache->Hit - Flown);
+        }
+        if (Cache->SeenTo - Flown >= Lookahead)
+        {
+            return {};
+        }
+    }
+    if (!Cache)
+    {
+        Cache = &RayCache.AddDefaulted_GetRef();
+        Cache->Slot = Slot;
+        Cache->Surface = SurfaceIndex;
+    }
+    Cache->Direction = U;
+    Cache->From = Position;
+    Cache->Frame = FrameCount;
+    Cache->SeenTo = Lookahead;
+    Cache->Hit = ShipFlight::RayToGround(Surfaces[SurfaceIndex], Position, U, Clearance, Lookahead);
+    return Cache->Hit;
 }
