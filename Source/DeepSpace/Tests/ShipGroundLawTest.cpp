@@ -133,6 +133,37 @@ bool FGroundRayTest::RunTest(const FString& Parameters)
     }
     TestEqual(FString::Printf(TEXT("no march of %d runs out of steps before 2.5 x AGL"), Trials), Exhausted, 0);
     TestEqual(TEXT("and none reports clear ground that is not"), Lies, 0);
+
+    // On ground steeper than any real world, where only the slope bound keeps
+    // a step from carrying the ray through a flank (real relief is gentle
+    // enough that a step of the whole clearance would rarely cross it): every
+    // ray, level or diving, from 10 cm to 300 m up, reports only what is true,
+    // re-checked every 20 cm.
+    int32 SteepLies = 0;
+    for (int32 Trial = 0; Trial < 100; ++Trial)
+    {
+        const FVector3d D = FVector3d(Random.FRandRange(-1.0e-5, 1.0e-5), Random.FRandRange(-1.0e-5, 1.0e-5), 1.0).GetSafeNormal();
+        const FUniversePosition From = Above(Cliffs, D, FMath::Pow(10.0, Random.FRandRange(1.0, 4.5)));
+        const FVector Up(D);
+        const FVector Level = FVector::CrossProduct(Up, FVector(Random.GetUnitVector())).GetSafeNormal();
+        const FVector Heading = (Level - Up * Random.FRandRange(0.0, 1.0)).GetSafeNormal();
+        const double Lookahead = 1.0e5;
+        const TOptional<double> Hit = ShipFlight::RayToGround(Cliffs, From, Heading, 0.0, Lookahead);
+        const double Seen = Hit ? *Hit : Lookahead;
+        const int32 Samples = FMath::Clamp(FMath::CeilToInt32(Seen / 20.0), 1, 5000);
+        for (int32 Sample = 0; Sample <= Samples; ++Sample)
+        {
+            const double T = Seen * Sample / Samples * 0.999;
+            const FVector P = (From + Heading * T) - Cliffs.Centre;
+            const double R = P.Size();
+            if (R - Cliffs.Radius - Steep->Height(FVector3d(P / R), 0.0) < -1.0)
+            {
+                ++SteepLies;
+                break;
+            }
+        }
+    }
+    TestEqual(TEXT("on slopes of 60, no ray reports clear ground that is not"), SteepLies, 0);
     return true;
 }
 

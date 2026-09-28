@@ -203,9 +203,13 @@ TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const F
         }
     }
 
+    // Along: how far down the ray the centre's foot lies (positive heading
+    // in, as in RayToFloor), so the shell's roots are Along -/+ Half. Miss:
+    // how far the ray passes from the centre, from a cross product rather
+    // than two planetary squares agreeing to every digit that matters.
     const double Shell = Surface.Radius + Ground.MaxHeightCm() + Clear;
-    const double Along = FVector::DotProduct(Start, U);
-    const double Miss2 = FMath::Max(Start.SizeSquared() - Along * Along, 0.0);
+    const double Along = -FVector::DotProduct(Start, U);
+    const double Miss2 = FVector::CrossProduct(Start, U).SizeSquared();
     const double Half2 = Shell * Shell - Miss2;
     if (Half2 <= 0.0)
     {
