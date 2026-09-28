@@ -51,6 +51,20 @@ namespace ShipHum
      */
     DEEPSPACE_API float Push(float AccelerationCmS2, float RatedAccelerationCmS2,
                              float Throttle, float ThrustFraction, float CruiseHiss);
+
+    /** Push with the hold's hiss beside the other two ways: the largest. */
+    DEEPSPACE_API float Push(float AccelerationCmS2, float RatedAccelerationCmS2,
+                             float Throttle, float ThrustFraction, float CruiseHiss, float Holding);
+
+    /**
+     * The hold's hiss (landing decision 5): HoldHiss x HoldWattsDelivered /
+     * (3 x WattsPerG), in watts delivered, never satisfaction (plan conflict
+     * 8's trap), so it is silent wherever the hold wants nothing -- every
+     * place a ship can be parked -- swells as the ship goes under a solid
+     * world's floor, and reaches cruise's hiss only at the 3 g cap, never
+     * above it.
+     */
+    DEEPSPACE_API float HoldTerm(float HoldWattsDelivered, float WattsPerG, float HoldHiss, float CruiseHiss);
 }
 
 /**

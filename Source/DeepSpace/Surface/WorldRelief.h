@@ -21,7 +21,7 @@ struct FFaceTerms
     double Detail = 0.0;
 
     /** Their gradient in noise space per unit of the stretched direction:
-     *  the relief's slope before ds.Sky.Relief. */
+     *  the relief's slope before ReliefScale. */
     FVector3d DetailSlope = FVector3d::ZeroVector;
 
     /** The crater bands' albedo: darker floors, brighter rims. */
@@ -67,9 +67,13 @@ namespace WorldReliefNoise
 
     /** Every raw term at D, for a footprint in D units, a seed offset and a
      *  stretch: the file's entry point in double, and in float -- the
-     *  float build performs the GPU's operations in the GPU's precision. */
-    DEEPSPACE_API FFaceTerms FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch);
-    DEEPSPACE_API FFaceTerms FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch);
+     *  float build performs the GPU's operations in the GPU's precision.
+     *  VertexBandLimit is what a tile's vertices carry (radius units): the
+     *  slopes keep only the rest; 1.0, the default, is the orbit's. */
+    DEEPSPACE_API FFaceTerms FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch,
+                                     double VertexBandLimit = 1.0);
+    DEEPSPACE_API FFaceTerms FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch,
+                                     float VertexBandLimit = 1.0f);
 
     /** How near D lies to a crater's step, in cells, across every crater
      *  band the footprint has not faded: the least of the rim's distance

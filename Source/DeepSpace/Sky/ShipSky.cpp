@@ -22,6 +22,7 @@
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/WorldRelief.h"
 #include "Universe/UniverseUnits.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogShipSky, Log, All);
@@ -148,24 +149,6 @@ namespace
     TAutoConsoleVariable<float> CVarSurfaceDetail(
         TEXT("ds.Sky.SurfaceDetail"), 0.3f,
         TEXT("Amplitude of the finer bands of a world's face, which fade in as the world grows on screen."));
-
-    /**
-     * The relief: how steeply the ground the detail bands draw tilts, which
-     * is what makes the terminator ragged and the ground close in read as
-     * ground rather than as fog. Every band's slope is alike, so this is
-     * the relief of whatever the screen holds at any distance; it shows
-     * where the light is low and hardly at all under a high sun, as relief
-     * does.
-     */
-    TAutoConsoleVariable<float> CVarRelief(
-        TEXT("ds.Sky.Relief"), 0.2f,
-        TEXT("Slope of a world's relief, per detail band. Shows at the terminator; 0 is a smooth sphere."));
-
-    /** Craters, times each world's own Cratering: 1 is the look's word on
-     *  how much a world has kept, 0 none anywhere. */
-    TAutoConsoleVariable<float> CVarCraters(
-        TEXT("ds.Sky.Craters"), 1.0f,
-        TEXT("Scale on every world's craters, relief and albedo alike. 0 removes them."));
 
     TAutoConsoleVariable<float> CVarVeil(
         TEXT("ds.Sky.Veil"), 1.0f,
@@ -439,8 +422,6 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
     const float Radiance = CVarRadiance.GetValueOnGameThread();
     const float Mottle = CVarMottle.GetValueOnGameThread();
     const float Detail = CVarSurfaceDetail.GetValueOnGameThread();
-    const float Relief = CVarRelief.GetValueOnGameThread();
-    const float Craters = CVarCraters.GetValueOnGameThread();
 
     for (int32 Index = 0; Index < Proxies.Num(); ++Index)
     {
@@ -468,9 +449,8 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             Instance->SetScalarParameterValue(SkyMaterial::PointBlend, static_cast<float>(View.PointBlend));
             Instance->SetScalarParameterValue(SkyMaterial::Mottle, Mottle);
             Instance->SetScalarParameterValue(SkyMaterial::Detail, Detail);
-            Instance->SetScalarParameterValue(SkyMaterial::Relief, Relief);
-            Instance->SetScalarParameterValue(SkyMaterial::Cratering,
-                static_cast<float>(System.Bodies[Index].Cratering) * Craters);
+            Instance->SetScalarParameterValue(SkyMaterial::ReliefScale, static_cast<float>(ShipSky::ReliefScaleOf(System.Bodies[Index])));
+            Instance->SetScalarParameterValue(SkyMaterial::Cratering, static_cast<float>(System.Bodies[Index].Cratering));
             // The material shades with world-space normals, and the proxy's
             // world is the counter-frame's rotation of universe axes. Asked
             // of the flight state rather than of the actor, so the phase is
@@ -768,6 +748,15 @@ int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
     }
     const FName Name(*Trimmed);
     return System.Bodies.IndexOfByPredicate([&Name](const FSkyBody& Body) { return Body.Id == Name; });
+}
+
+double ShipSky::ReliefScaleOf(const FSkyBody& Body)
+{
+    if (Body.Ground == EGround::Solid)
+    {
+        return FWorldRelief(Body.Relief).SlopeScale();
+    }
+    return Body.Surface == ESkySurface::Banded ? GiantReliefScale : 0.0;
 }
 
 TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,

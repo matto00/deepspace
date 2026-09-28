@@ -5,11 +5,15 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/OutputDevice.h"
 #include "Ship/NavStart.h"
+#include "Ship/ShipLanding.h"
 #include "Ship/ShipModuleDataAsset.h"
 #include "Ship/ShipPartCatalogue.h"
+#include "Ship/ShipVerticalLever.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
+#include "Surface/GroundField.h"
+#include "Surface/WorldRelief.h"
 #include "UI/NavText.h"
 #include "UI/TargetMarker.h"
 #include "Universe/UniverseSubsystem.h"
@@ -124,6 +128,68 @@ namespace
     TAutoConsoleVariable<float> CVarCruiseSweep(
         TEXT("ds.Cruise.Sweep"), static_cast<float>(ShipDriveLever::DefaultCruiseSweep),
         TEXT("How fast a held lever key sweeps the cruise lever, fraction of its travel a second (the lever reads on a log scale, 1 m/s to cruise's top)."),
+        ECVF_Default);
+
+    // Landing (spec 2026-09-27). Each default is the pure layer's constant.
+
+    TAutoConsoleVariable<float> CVarGearClearance(
+        TEXT("ds.Land.GearClearance"), static_cast<float>(ShipLanding::DefaultGearClearanceCm),
+        TEXT("The ship's origin over flat ground at rest, cm: 10 cm of slab and the gear's feet under it."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarTouchdownSpeed(
+        TEXT("ds.Land.TouchdownSpeed"), static_cast<float>(ShipFlight::DefaultTouchdownSpeed / 100.0),
+        TEXT("Contact speed, m/s: the ground approach's floor."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarApproachSeconds(
+        TEXT("ds.Land.ApproachSeconds"), static_cast<float>(ShipFlight::DefaultApproachSeconds),
+        TEXT("The ground approach's ease, seconds: the last hundreds of metres fall by e every this many. Clamped to at least 0.5."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarSkimSeconds(
+        TEXT("ds.Land.SkimSeconds"), static_cast<float>(ShipFlight::DefaultSkimSeconds),
+        TEXT("The skim cap: near a world, horizontal speed is at most the height above the ground over this many seconds."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarSkimFloor(
+        TEXT("ds.Land.SkimFloor"), static_cast<float>(ShipFlight::DefaultSkimFloor / 100.0),
+        TEXT("The skim cap's floor, m/s: it never holds the ship slower than this."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarRegime(
+        TEXT("ds.Land.Regime"), static_cast<float>(ShipFlight::DefaultRegimeCm / UniverseUnits::CmPerKm),
+        TEXT("Within this many km of a world's cruise floor the vertical lever is live (leaving over 1.1 x it)."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarDriveHandback(
+        TEXT("ds.Land.DriveHandback"), static_cast<float>(ShipFlight::DefaultDriveHandbackCm / 100.0),
+        TEXT("How far over a solid world's drive floor, m, the drive takes the ship back from cruise."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarVerticalTop(
+        TEXT("ds.Vertical.Top"), static_cast<float>(ShipVerticalLever::DefaultTopCmPerSecond / 100.0),
+        TEXT("The vertical lever's top, m/s, either way."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarVerticalSweep(
+        TEXT("ds.Vertical.Sweep"), static_cast<float>(ShipVerticalLever::DefaultSweep),
+        TEXT("How fast Space and C held sweep the vertical lever, fraction of its travel a second."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarHeavyFloor(
+        TEXT("ds.Vertical.HeavyFloor"), static_cast<float>(ShipVerticalLever::DefaultHeavyFloor),
+        TEXT("On heavy worlds the climb top is Top x max(this, g_E / g): never below this fraction of it."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarHoldWatts(
+        TEXT("ds.Boosters.HoldWatts"), ShipPower::DefaultHoldWattsPerG,
+        TEXT("Watts per g the boosters want to hold the ship, only under a solid world's drive floor, airborne (capped at 3 g)."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<float> CVarStarvedSink(
+        TEXT("ds.Boosters.StarvedSink"), 2.0f,
+        TEXT("m/s the ship sinks at when the hold gets nothing, only under a solid world's drive floor, never while climbing."),
         ECVF_Default);
 
     /** The name the fold's draw goes on the reactor under. Not a module: a
@@ -631,21 +697,31 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     }
     SetFoldDraw(bWinding ? FMath::Max(0.0f, CVarFoldDraw.GetValueOnGameThread()) : 0.0f);
 
+    // The hold (landing decision 5): only under a solid world's drive floor,
+    // airborne -- landed is slice (c)'s, always airborne here. Recomputed only
+    // when it moves by more than a watt, so the split is not re-solved every
+    // frame for nothing.
+    const float WantNow = ShipPower::HoldWant(FlightState.GetLocalGravity().Size(), FlightState.GetDepthUnderDriveFloor(),
+                                              FMath::Max(0.0f, CVarHoldWatts.GetValueOnGameThread()), true);
+    if (FMath::Abs(WantNow - HoldWant) > 1.0f || (WantNow == 0.0f && HoldWant != 0.0f))
+    {
+        HoldWant = WantNow;
+    }
+
     // The boosters' want has one writer, here (wear sign-off 29): the fitted
-    // part's rating. A fit changes the ratings and this pass writes the want
-    // from them, so a fit and anything else that adds to the want -- landing's
-    // hold -- never write it from two places in one frame.
-    const float BoostersWantNow = static_cast<float>(Ratings.BoostersWant);
+    // part's rating plus the hold. A fit changes the rating and this pass
+    // writes the sum, so a fit and the hold never write it from two places.
+    const float ManoeuvreWant = static_cast<float>(Ratings.BoostersWant);
+    const float BoostersWantNow = ManoeuvreWant + HoldWant;
     if (PowerState.GetWant(ShipPower::Boosters) != BoostersWantNow)
     {
         PowerState.SetWant(ShipPower::Boosters, BoostersWantNow);
     }
 
-    // Asked for fresh every frame and never stored. A cached satisfaction is
-    // how two things that read the same allocation start disagreeing.
-    const float BoosterFeed = PowerState.GetSatisfaction(ShipPower::Boosters);
+    // Asked for fresh every frame and never stored beyond it.
+    LastSplit = ShipPower::SplitBoosters(PowerState.GetShare(ShipPower::Boosters), HoldWant, ManoeuvreWant);
     const float EngineFeed = PowerState.GetSatisfaction(ShipPower::Engine);
-    const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * BoosterFeed;
+    const float Thrust = StarvedBoosterThrust + (1.0f - StarvedBoosterThrust) * LastSplit.ManoeuvreFeed;
 
     FShipFlightLimits Limits = FlightState.GetLimits();
     Limits.LinearAcceleration = Ratings.LinearAcceleration * Thrust;
@@ -666,6 +742,22 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
     const double TopLight = FMath::Clamp(static_cast<double>(CVarDriveTop.GetValueOnGameThread()),
         ShipDriveLever::NotchSpeed(1) / ShipDriveLever::LightCmPerSecond, ShipDriveLever::DefaultTopLight);
     Limits.DriveTop = TopLight * ShipDriveLever::LightCmPerSecond;
+
+    // Landing's tunables, read at use and converted from the units they are
+    // tuned in.
+    Limits.GearClearanceCm = GearClearance();
+    Limits.TouchdownSpeed = FMath::Max(0.0f, CVarTouchdownSpeed.GetValueOnGameThread()) * 100.0;
+    Limits.ApproachSeconds = FMath::Max(static_cast<double>(CVarApproachSeconds.GetValueOnGameThread()), ShipFlight::MinApproachSeconds);
+    Limits.SkimSeconds = FMath::Max(0.01f, CVarSkimSeconds.GetValueOnGameThread());
+    Limits.SkimFloor = FMath::Max(0.0f, CVarSkimFloor.GetValueOnGameThread()) * 100.0;
+    Limits.RegimeCm = FMath::Max(0.0f, CVarRegime.GetValueOnGameThread()) * UniverseUnits::CmPerKm;
+    Limits.DriveHandbackCm = FMath::Max(0.0f, CVarDriveHandback.GetValueOnGameThread()) * 100.0;
+    Limits.VerticalTop = FMath::Max(0.0f, CVarVerticalTop.GetValueOnGameThread()) * 100.0;
+    Limits.VerticalHeavyFloor = FMath::Clamp(CVarHeavyFloor.GetValueOnGameThread(), 0.0f, 1.0f);
+
+    // The starved sink: a bias the flight applies only under the floor, and
+    // only to HOVER or a sink -- a starved ship always lifts.
+    Limits.SinkBias = FMath::Max(0.0f, CVarStarvedSink.GetValueOnGameThread()) * 100.0 * (1.0 - LastSplit.HoldFed);
     FlightState.SetLimits(Limits);
 
     // The charge winds only while engaged, and otherwise holds exactly where
@@ -684,6 +776,21 @@ void UShipSubsystem::ApplyAllocation(float DeltaSeconds)
         ChargeRequestedFor.Reset();
         FlightState.ChargeJumpDrive(FMath::Max(ChargeSeconds, 1.0), 1.0, ChargeSeconds);
     }
+}
+
+float UShipSubsystem::GetHoldWant() const
+{
+    return HoldWant;
+}
+
+float UShipSubsystem::GetHoldWatts() const
+{
+    return LastSplit.HoldWatts;
+}
+
+float UShipSubsystem::GetHoldWattsPerG()
+{
+    return FMath::Max(0.0f, CVarHoldWatts.GetValueOnGameThread());
 }
 
 void UShipSubsystem::SetFoldDraw(float Watts)
@@ -710,9 +817,9 @@ double UShipSubsystem::FloorFor(const FSkyBody& Body)
         return FMath::Max(0.0f, CVarStarFloorRadii.GetValueOnGameThread()) * Body.Radius;
     }
     // The sky's floor is the one the picture is true to, so the flight's is
-    // never under it: the drive takes the ship exactly as low as the world
-    // keeps getting nearer, and no lower.
-    return FMath::Max(EdgeFloor(), SkyProjection::RenderedFloor(Body.Radius, FSkyViewParams()));
+    // never under it; over solid ground it is taken above the highest peak.
+    const double Above = FMath::Max(EdgeFloor(), SkyProjection::RenderedFloor(Body.Radius, FSkyViewParams()));
+    return Body.Ground == EGround::Solid ? Above + FWorldRelief(Body.Relief).MaxHeightCm() : Above;
 }
 
 double UShipSubsystem::EdgeFloor()
@@ -720,12 +827,42 @@ double UShipSubsystem::EdgeFloor()
     return FMath::Max(0.0f, CVarFlightFloorKm.GetValueOnGameThread()) * UniverseUnits::CmPerKm;
 }
 
+double UShipSubsystem::GearClearance()
+{
+    return FMath::Max(0.0f, CVarGearClearance.GetValueOnGameThread());
+}
+
+namespace
+{
+    bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
+    {
+        return A.SeedOffset == B.SeedOffset && A.RadiusCm == B.RadiusCm && A.PeakCm == B.PeakCm
+            && A.Cratering == B.Cratering && A.Ground == B.Ground;
+    }
+}
+
+FGroundFieldRef UShipSubsystem::GroundFor(const FSkyBody& Body)
+{
+    if (GroundCache.Num() > 64)
+    {
+        GroundCache.Reset();   // a few jumps' worth; the next frame refills what is near
+    }
+    FGroundCacheEntry* Entry = GroundCache.Find(Body.Id);
+    if (!Entry || !SameRelief(Entry->Params, Body.Relief))
+    {
+        Entry = &GroundCache.Add(Body.Id, FGroundCacheEntry{ Body.Relief, ShipGround::FromRelief(Body.Relief) });
+    }
+    return Entry->Ground;
+}
+
 void UShipSubsystem::UpdateSurfaces()
 {
-    // Between stars there is nothing to be near (plan conflict 10).
+    // Between stars there is nothing to be near (plan conflict 10), and
+    // nothing pulls.
     if (NavState.IsInTransit())
     {
         FlightState.SetSurfaces({});
+        FlightState.SetWells({});
         return;
     }
 
@@ -733,14 +870,23 @@ void UShipSubsystem::UpdateSurfaces()
     // thirty neighbours Current would generate and throw away.
     const FSkySystem Here = LocalSystem::Here(GetWorld());
     TArray<FFlightSurface> Surfaces;
+    TArray<FGravityWell> Wells;
     Surfaces.Reserve(Here.Bodies.Num() + 1);
+    Wells.Reserve(Here.Bodies.Num());
     for (const FSkyBody& Body : Here.Bodies)
     {
         FFlightSurface Surface;
         Surface.Centre = Body.Position;
         Surface.Radius = Body.Radius;
         Surface.Floor = FloorFor(Body);
+        Surface.bWorld = Body.Kind != ESkyBodyKind::Star;
+        if (Body.Ground == EGround::Solid)
+        {
+            Surface.Ground = GroundFor(Body);
+        }
         Surfaces.Add(Surface);
+        // Every body pulls, the star included (landing ruling 4).
+        Wells.Add(FGravityWell{ Body.Position, Body.GravParam, Body.Radius });
     }
 
     // The edge is a surface on exactly the same rule, inside out about the
@@ -758,6 +904,7 @@ void UShipSubsystem::UpdateSurfaces()
         Surfaces.Add(Edge);
     }
     FlightState.SetSurfaces(MoveTemp(Surfaces));
+    FlightState.SetWells(MoveTemp(Wells));
 }
 
 void UShipSubsystem::ApplyHelm(float DeltaSeconds)
@@ -775,6 +922,12 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const int32 DownPresses = Helm.DownPresses;
     Helm.UpPresses = 0;
     Helm.DownPresses = 0;
+    const int32 VerticalUps = Helm.VerticalUpPresses;
+    const int32 VerticalDowns = Helm.VerticalDownPresses;
+    Helm.VerticalUpPresses = 0;
+    Helm.VerticalDownPresses = 0;
+    bVerticalUpHoldSpent &= Helm.bVerticalUpHeld;
+    bVerticalDownHoldSpent &= Helm.bVerticalDownHeld;
 
     // A key held through an all stop moves nothing until it is let go.
     bUpHoldSpent &= Helm.bUpHeld;
@@ -783,7 +936,10 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
     const bool bDownHeld = Helm.bDownHeld && !bDownHoldSpent;
 
     FShipFlightCommand Command = FlightState.GetCommand();
-    if (Command.bDrive)
+    // The drive's notches only while the drive takes the ship: under a solid
+    // world's floor (DriveBelowFloor) the ship flies cruise, and Shift and
+    // Ctrl move cruise's lever.
+    if (FlightState.GetMode() == EFlightMode::Drive)
     {
         // A press is one notch from what the ship is doing, not from where
         // the lever was (decision 3): Ctrl always slows the ship and Shift
@@ -813,6 +969,17 @@ void UShipSubsystem::ApplyHelm(float DeltaSeconds)
         Command.Throttle = ShipDriveLever::SweepCruise(Command.Throttle, bUpHeld, bDownHeld, UpPresses, DownPresses,
             DeltaSeconds, FMath::Max(0.0f, CVarCruiseSweep.GetValueOnGameThread()), FlightState.CruiseAsternLimit());
     }
+
+    // The vertical lever (landing decision 8), whichever lever F has live: a
+    // press the way the ship is already moving catches it there when the
+    // lever is at HOVER (after X, the 2026-09-26 ruling), then the sweep,
+    // which stops at HOVER and leaves it only on a fresh press.
+    const bool bVerticalUp = Helm.bVerticalUpHeld && !bVerticalUpHoldSpent;
+    const bool bVerticalDown = Helm.bVerticalDownHeld && !bVerticalDownHoldSpent;
+    const double Top = FlightState.GetLimits().VerticalTop;
+    Command.Vertical = ShipVerticalLever::Catch(Command.Vertical, VerticalUps, VerticalDowns, FlightState.GetVerticalSpeed(), Top);
+    Command.Vertical = ShipVerticalLever::Sweep(Command.Vertical, bVerticalUp, bVerticalDown, VerticalUps, VerticalDowns,
+                                                DeltaSeconds, FMath::Max(0.0f, CVarVerticalSweep.GetValueOnGameThread()));
     FlightState.SetCommand(Command);
 }
 
@@ -851,6 +1018,7 @@ void UShipSubsystem::StepNavigation(float DeltaSeconds)
         FShipFlightCommand Stopped = FlightState.GetCommand();
         Stopped.Throttle = 0.0;
         Stopped.DriveNotch = 0;
+        Stopped.Vertical = 0.0;   // HOVER: all stop means the ship holds where it is (sign-off 17)
         FlightState.SetCommand(Stopped);
         Helm = FHelmInput();
 
@@ -921,6 +1089,8 @@ TOptional<UShipSubsystem::FWorldFix> UShipSubsystem::FixWorld(const FStarSystem&
     Fix.Centre = Sky.Bodies[Index].Position;
     Fix.Radius = Sky.Bodies[Index].Radius;
     Fix.Floor = FloorFor(Sky.Bodies[Index]);
+    Fix.Ground = Sky.Bodies[Index].Ground;
+    Fix.Relief = Sky.Bodies[Index].Relief;
     for (int32 Other = 0; Other < Sky.Bodies.Num(); ++Other)
     {
         if (Other != Index)
@@ -929,6 +1099,9 @@ TOptional<UShipSubsystem::FWorldFix> UShipSubsystem::FixWorld(const FStarSystem&
             Surface.Centre = Sky.Bodies[Other].Position;
             Surface.Radius = Sky.Bodies[Other].Radius;
             Surface.Floor = FloorFor(Sky.Bodies[Other]);
+            // The in-system jump's guard is the drive's sphere: Others carry
+            // no ground, as the drive reads none.
+            Surface.bWorld = Sky.Bodies[Other].Kind != ESkyBodyKind::Star;
             Fix.Others.Add(Surface);
         }
     }
@@ -1422,12 +1595,18 @@ bool UShipSubsystem::SetHelmInput(APawn* Commander, const FHelmInput& Input)
         bAwaitingFirstHands = false;
         bUpHoldSpent = Input.bUpHeld;
         bDownHoldSpent = Input.bDownHeld;
+        bVerticalUpHoldSpent = Input.bVerticalUpHeld;
+        bVerticalDownHoldSpent = Input.bVerticalDownHeld;
     }
     Helm.Attitude = Input.Attitude;
     Helm.bUpHeld = Input.bUpHeld;
     Helm.bDownHeld = Input.bDownHeld;
     Helm.UpPresses += FMath::Max(0, Input.UpPresses);
     Helm.DownPresses += FMath::Max(0, Input.DownPresses);
+    Helm.bVerticalUpHeld = Input.bVerticalUpHeld;
+    Helm.bVerticalDownHeld = Input.bVerticalDownHeld;
+    Helm.VerticalUpPresses += FMath::Max(0, Input.VerticalUpPresses);
+    Helm.VerticalDownPresses += FMath::Max(0, Input.VerticalDownPresses);
     return true;
 }
 
@@ -1440,6 +1619,7 @@ bool UShipSubsystem::AllStop(APawn* Commander)
     FShipFlightCommand Command = FlightState.GetCommand();
     Command.Throttle = 0.0;
     Command.DriveNotch = 0;
+    Command.Vertical = 0.0;
     FlightState.SetCommand(Command);
 
     // Nothing pressed before the stop survives it, and nothing held through
@@ -1448,6 +1628,10 @@ bool UShipSubsystem::AllStop(APawn* Commander)
     Helm.DownPresses = 0;
     bUpHoldSpent = Helm.bUpHeld;
     bDownHoldSpent = Helm.bDownHeld;
+    Helm.VerticalUpPresses = 0;
+    Helm.VerticalDownPresses = 0;
+    bVerticalUpHoldSpent = Helm.bVerticalUpHeld;
+    bVerticalDownHoldSpent = Helm.bVerticalDownHeld;
     return true;
 }
 
@@ -1459,6 +1643,18 @@ bool UShipSubsystem::SetDriveLever(APawn* Commander, int32 Notch)
     }
     FShipFlightCommand Command = FlightState.GetCommand();
     Command.DriveNotch = Notch;
+    FlightState.SetCommand(Command);
+    return true;
+}
+
+bool UShipSubsystem::SetVerticalLever(APawn* Commander, double Lever)
+{
+    if (!MayCommand(Commander))
+    {
+        return false;
+    }
+    FShipFlightCommand Command = FlightState.GetCommand();
+    Command.Vertical = Lever;
     FlightState.SetCommand(Command);
     return true;
 }

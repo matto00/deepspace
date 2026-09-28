@@ -153,6 +153,11 @@ been abandoned. Say so.
   height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
   compiles too (the engine maps `/Project` to `Shaders/` by itself);
   `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
+  Landing slice b adds `IGroundField` (`GroundField.*`, WorldRelief behind
+  the flight's interface), the pure quadtree and tile builder
+  (`TerrainQuadtree.*`, `TerrainTile.*`), and `AWorldGround`, which streams
+  the nearest solid world's tiles off the game thread into pooled meshes on
+  the counter-frame (*The ground*).
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -228,7 +233,15 @@ proportion to a weight the player sets, capped at each one's want with the
 surplus redistributed. Consumers degrade and never fail: lights dim and brown
 out, boosters push down to a quarter thrust, the jump drive charges slower.
 **There is deliberately no cutoff, no alarm, no timer and no failure state**,
-and nothing in the model changes on its own with time. If a change here
+and nothing in the model changes on its own with time -- with one sanctioned,
+bounded exception, the **starved sink** (landing decision 5): under a solid
+world's drive floor, airborne, the boosters want to hold the ship against
+gravity (`ds.Boosters.HoldWatts`, 150 W a g to 3 g, paid first inside their
+share, `ShipPower::SplitBoosters`), and a hold short of watts becomes a sink
+of at most `ds.Boosters.StarvedSink` (2 m/s), never while the vertical lever
+asks a climb, ending always at rest on the ground at no cost. That want
+exists only there, so **staying put is never taxed** anywhere a ship can be
+parked: at any floor, between worlds, or (slice c) landed. If a change here
 introduces a rate the player must keep up with, it has broken the anti-chore
 principle -- say so rather than tuning it.
 
@@ -617,11 +630,19 @@ arithmetic. The counter-frame's points stay on the engine Sphere.
 simplex noise with its gradient: the value brightens the face (behind the
 `surface_max_swing` clamp, the half-float guard) and the gradient tilts a
 per-pixel normal -- the sphere's own, from object space, so no mesh facet
-shows in the shading. Each band's height goes with its wavelength, so every
-scale the screen holds has the same slope. Rocky worlds add Voronoi craters
-in bands stepping by four (the count wider than D goes as D^-2), fewer in the
-basins, scaled by the look's `Cratering` (bare rock 1, ice 0.5, terrestrial
-0.15, ocean and giants 0). A giant's belts come from its day
+shows in the shading. Each band's height goes with its wavelength, so every scale the screen holds
+has the same slope, and **the amplitude is the ground's** (landing decision
+3): `ReliefScale` is `FWorldRelief::SlopeScale`, the world's drawn peak over
+its radius and the sum's bound, so the orbit shades exactly the heights a ship
+lands on -- Earth-like, 1/g, capped at 10 km -- and relief is data (the
+priors), not a knob: `ds.Sky.Relief` and `ds.Sky.Craters` are retired, because
+a knob that moved the height would move the ground under a landed ship.
+Craters are summed compact kernels (`WR_CraterSum`), one per kept site, in
+bands stepping by four (the count wider than D goes as D^-2); their albedo is
+fewer in the basins, their height the same everywhere, scaled by the world's
+`Cratering` (bare rock 1, ice 0.5, terrestrial 0.15, ocean and giants 0).
+Giants keep a fixed cloud billow (`ShipSky::GiantReliefScale`); oceans are
+flat. A giant's belts come from its day
 (`FPlanet::DayHours`, log-normal about 12 h, drawn by the generator), by the
 Rhines scale (`SkyLook::BeltPairs`). Relief shows where the light is low, as
 real relief does: a world under a high sun still looks smooth.
@@ -693,9 +714,12 @@ so nothing can be tunnelled through.
 **The floor is where the sky stops being honest** (decision 6):
 `UShipSubsystem::FloorFor`, the one function that answers it -- over a world
 the larger of `ds.Flight.Floor` (10 km) and `SkyProjection::RenderedFloor`,
-10.2 km over an Earth and 112 km over a Jupiter; over a star
-`ds.Flight.StarFloorRadii` of its radius. Landing, when it comes, takes over
-there. **The system's edge is a surface** too (conflict 10): an inside-out
+10.2 km over an Earth and 112 km over a Jupiter; over a **solid** world that
+is taken **above its highest peak** (`WorldRelief::MaxHeightCm`, landing
+decision 10), so the drive never meets a summit; over a star
+`ds.Flight.StarFloorRadii` of its radius. It is **the drive's** floor. Over
+a solid world cruise and the vertical lever read the ground instead (*Landing*).
+**The system's edge is a surface** too (conflict 10): an inside-out
 floor sphere `ds.Flight.Floor` inside `InSystemRadiusLy`, so the drive
 settles into it and never flies the ship out of its system, where
 `GetSystemAt` would go empty under a sky still drawing the old one. You
@@ -768,7 +792,11 @@ ds.Nav.WindingWant, 0, 1)`**: watts delivered, never satisfaction (conflict
 hum on satisfaction would sit at full whenever the ship is idle. On watts, it
 idles low, rises and brightens as the jump winds, and settles when charged,
 which makes it the jump's wind-up cue. The hiss follows the boosters
-(`ds.Hum.CruiseHiss`). `ds.Hum.Volume` is the first knob if it wears. Each air
+(`ds.Hum.CruiseHiss`). Under a solid world's drive floor the hiss also
+follows the boosters' **hold**, in watts delivered (`ds.Hum.HoldHiss` x
+watts / (3 x `ds.Boosters.HoldWatts`), never above cruise's hiss), so it is
+silent wherever a ship can be parked. `ds.Hum.Volume` is the first knob if
+it wears. Each air
 source seeds its noise from where it stands: two at one point would hiss the
 same noise and comb into a whistle, and `test_placement.py` forbids it.
 Headless, the mixer is real, so `DeepSpace.Ship.HumComponent` proves samples
@@ -1184,6 +1212,15 @@ tests that assert it.
 | `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
 | `ds.Flight.Floor` | 10 km (never under the sky's rendered floor) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultFloorCm` |
 | `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp`, from `ShipFlight::DefaultStarFloorRadii` |
+| `ds.Land.GearClearance` | 150 cm | `ShipSubsystem.cpp`, from `ShipLanding::DefaultGearClearanceCm` (`ShipLanding.h`) |
+| `ds.Land.TouchdownSpeed` | 0.5 m/s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultTouchdownSpeed` |
+| `ds.Land.ApproachSeconds` | 4 s, clamped to at least 0.5 s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultApproachSeconds` |
+| `ds.Land.SkimSeconds`, `.SkimFloor` | 2.5 s, 20 m/s | `ShipSubsystem.cpp`, from `ShipFlight` |
+| `ds.Land.Regime` | 50 km (leaves over 55 km) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultRegimeCm` |
+| `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
+| `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
+| `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`, from `TerrainQuadtree` |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |
@@ -1192,8 +1229,8 @@ tests that assert it.
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
-| `ds.Sky.SurfaceDetail`, `.Relief`, `.Craters` | 0.3, 0.2, 1 | `ShipSky.cpp` |
-| `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
+| `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
+| `ds.Hum.Volume`, `ds.Hum.CruiseHiss`, `ds.Hum.HoldHiss` | 1.0, 0.35, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
 | `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |

@@ -632,11 +632,14 @@ WR_CraterTerm WR_CraterSum(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL OX, WR_RE
 }
 
 // -- The entry point --------------------------------------------------------
-// Every raw term of M_SkyBody's face at D, for footprint Footprint (D units a
+// Every raw term of a world's face at D, for footprint Footprint (D units a
 // pixel, times filter_pixels), seed offset O, and Stretch (1 for ground,
-// belt_stretch for a giant's detail).
+// belt_stretch for a giant's detail). The slopes keep only what a tile's
+// vertices at VertexBandLimit (radius units) do not carry: 1.0 is the orbit,
+// with no vertices, and every slope whole (landing decision 9). The craters
+// are the summed kernels (decision 3).
 WR_Terms WR_SurfaceTerms(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint,
-                         WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Stretch)
+                         WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Stretch, WR_REAL VertexBandLimit)
 {
     const WR_REAL PX = DX;
     const WR_REAL PY = DY;
@@ -654,26 +657,23 @@ WR_Terms WR_SurfaceTerms(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint,
     for (int Band = 0; Band < WR_DETAIL_BANDS; ++Band)
     {
         const int Index = WR_DETAIL_INDEX[Band];
-        const WR_Noise4 N = WR_DetailBand(PX, PY, PZ, WR_DETAIL_FREQUENCY[Band],
+        const WR_REAL F = WR_DETAIL_FREQUENCY[Band];
+        const WR_Noise4 N = WR_DetailBand(PX, PY, PZ, F,
             WR_SplitOffset(OX, OY, OZ, Index), Width, WR_DETAIL_WEIGHT[Band]);
-        T.DetailSlopeX += N.GX;
-        T.DetailSlopeY += N.GY;
-        T.DetailSlopeZ += N.GZ;
+        // N is already faded by Fade; its slope keeps max(0, Fade - carried) of the whole.
+        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - Width * F);
+        const WR_REAL Share = Fade > WR_REAL(0.0)
+            ? WR_max(WR_REAL(0.0), Fade - WR_VertexCarries(VertexBandLimit, F)) / Fade
+            : WR_REAL(0.0);
+        T.DetailSlopeX += N.GX * Share;
+        T.DetailSlopeY += N.GY * Share;
+        T.DetailSlopeZ += N.GZ * Share;
         T.Detail += N.Value;
     }
-    T.CraterAlbedo = WR_REAL(0.0);
-    T.CraterSlopeX = WR_REAL(0.0);
-    T.CraterSlopeY = WR_REAL(0.0);
-    T.CraterSlopeZ = WR_REAL(0.0);
-    for (int Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
-    {
-        const int Index = WR_CRATER_INDEX[Crater];
-        const WR_Crater C = WR_CraterBand(DX, DY, DZ, WR_CRATER_FREQUENCY[Crater],
-            WR_SplitOffset(OX, OY, OZ, Index), Footprint);
-        T.CraterAlbedo += C.Albedo;
-        T.CraterSlopeX += C.SX;
-        T.CraterSlopeY += C.SY;
-        T.CraterSlopeZ += C.SZ;
-    }
+    const WR_CraterTerm Craters = WR_CraterSum(DX, DY, DZ, OX, OY, OZ, Footprint, VertexBandLimit);
+    T.CraterAlbedo = Craters.Albedo;
+    T.CraterSlopeX = Craters.GX;
+    T.CraterSlopeY = Craters.GY;
+    T.CraterSlopeZ = Craters.GZ;
     return T;
 }

@@ -48,7 +48,7 @@ Terms = collections.namedtuple("Terms", "coarse fine crater_face crater_slope")
 # The Custom node's body: one call into the shared file, its outputs pinned.
 # HLSL only -- the file itself is the shared part.
 SHARED_CODE = (
-    "WR_Terms T = %s(Direction.x, Direction.y, Direction.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, Stretch);\n"
+    "WR_Terms T = %s(Direction.x, Direction.y, Direction.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, Stretch, VertexBandLimit);\n"
     "Continent = T.Continent;\n"
     "CraterAlbedo = T.CraterAlbedo;\n"
     "CraterSlope = float3(T.CraterSlopeX, T.CraterSlopeY, T.CraterSlopeZ);\n"
@@ -283,10 +283,12 @@ def body_direction(g, axes):
     return direction, footprint
 
 
-def shared_terms(g, direction, footprint, seed, stretch):
+def shared_terms(g, direction, footprint, seed, stretch, vertex_band_limit=None):
     """The same raw terms from Shaders/Private/WorldRelief.ush -- the file the
     C++ compiles too (landing decision 1) -- through one Custom node that
-    includes it and calls its entry point. Every band the file carries."""
+    includes it and calls its entry point. Every band the file carries.
+    vertex_band_limit is what a tile's vertices carry (radius units); the
+    slopes keep only the rest. None is the orbit: no vertices, 1.0."""
     custom = g.node(unreal.MaterialExpressionCustom)
     custom.set_editor_property("description", "WorldRelief")
     custom.set_editor_property("code", SHARED_CODE)
@@ -305,7 +307,8 @@ def shared_terms(g, direction, footprint, seed, stretch):
         pin.set_editor_property("output_type", getattr(unreal.CustomMaterialOutputType, kind))
         outputs.append(pin)
     custom.set_editor_property("additional_outputs", outputs)
-    for input_name, source in zip(SHARED["inputs"], (direction, footprint, seed_offset(g, seed), stretch)):
+    limit = vertex_band_limit if vertex_band_limit is not None else g.constant(1.0)
+    for input_name, source in zip(SHARED["inputs"], (direction, footprint, seed_offset(g, seed), stretch, limit)):
         g.link(source, custom, input_name)
     return Terms(mask(g, custom, "r", output_name="Continent"), custom,
                  mask(g, custom, "r", output_name="CraterAlbedo"),
@@ -324,15 +327,17 @@ def surface(g, knobs, seed, direction, footprint, terms):
         craters   = Cratering * lerp(maria_cratering, 1, highland) * crater terms
         face      = lerp(rocky, belts, Banding) * Mottle + fine.a * Detail + craters.albedo
         factor    = 1 + clamp(face, -max_swing, max_swing)
-        slope     = Relief * lerp(1, relief_giant, Banding) * fine.rgb * (1, 1, stretch)
-                  + craters.slope
+        slope     = ReliefScale * (fine.rgb * (1, 1, stretch) + Cratering * craters.slope)
 
     terms is shared_terms: the shared file.
-    Rock gets basins and highlands with craters, fewer in the basins; a giant
-    gets belts wandered by the same coarse noise and a third of rock's relief.
+    Rock gets basins and highlands with craters, their albedo fewer in the
+    basins, their height the same everywhere; a giant gets belts wandered by
+    the same coarse noise. ReliefScale is the ground's own slope scale
+    (FWorldRelief::SlopeScale, landing decision 3), a giant's fixed billow,
+    or 0 for an ocean: ShipSky::ReliefScaleOf writes it.
     The face is centred on zero, so the disc keeps its flux on average, and
     the clamp is the half-float guard."""
-    mottle, detail, banding, relief, cratering = knobs
+    mottle, detail, banding, relief_scale, cratering = knobs
     stretch = stretch_of(g, banding)
     t = terms(g, direction, footprint, seed, stretch)
 
@@ -371,10 +376,11 @@ def surface(g, knobs, seed, direction, footprint, terms):
     g.link(face, bounded, "")
     factor = g.add(bounded, g.constant(1.0))
 
-    cloud = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["relief_giant"]))
-    g.link(banding, cloud, "Alpha")
-    slope = g.add(g.mul(g.mul(mask(g, t.fine, "rgb"), stretch_axes(g, stretch)), g.mul(relief, cloud)),
-                  g.mul(t.crater_slope, crater_gain))
+    # The ground's own slope (landing decision 3): ReliefScale x the detail
+    # bands' gradient and x Cratering the craters', everywhere -- the maria
+    # still thin the craters' albedo, never their height.
+    slope = g.add(g.mul(g.mul(mask(g, t.fine, "rgb"), stretch_axes(g, stretch)), relief_scale),
+                  g.mul(t.crater_slope, g.mul(cratering, relief_scale)))
     return factor, slope
 
 
@@ -483,7 +489,7 @@ def sky_body():
     brightness = g.scalar("brightness", 1.0)
     point_blend = g.scalar("point_blend", 1.0)
     knobs = (g.scalar("mottle", 0.35), g.scalar("detail", 0.3), g.scalar("banding", 0.0),
-             g.scalar("relief", 0.2), g.scalar("cratering", 0.0))
+             g.scalar("relief_scale", 0.0), g.scalar("cratering", 0.0))
 
     axes = body_axes(g)
     direction, footprint = body_direction(g, axes)

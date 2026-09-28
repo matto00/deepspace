@@ -37,6 +37,22 @@ float ShipHum::Push(float AccelerationCmS2, float RatedAccelerationCmS2,
     return FMath::Clamp(FMath::Max(Changing, Holding), 0.0f, 1.0f);
 }
 
+float ShipHum::Push(float AccelerationCmS2, float RatedAccelerationCmS2,
+                    float Throttle, float ThrustFraction, float CruiseHiss, float Holding)
+{
+    return FMath::Clamp(FMath::Max(Push(AccelerationCmS2, RatedAccelerationCmS2, Throttle, ThrustFraction, CruiseHiss), Holding), 0.0f, 1.0f);
+}
+
+float ShipHum::HoldTerm(float HoldWattsDelivered, float WattsPerG, float HoldHiss, float CruiseHiss)
+{
+    if (!(WattsPerG > 0.0f) || !(HoldWattsDelivered > 0.0f))
+    {
+        return 0.0f;
+    }
+    const float Term = FMath::Max(0.0f, HoldHiss) * HoldWattsDelivered / (3.0f * WattsPerG);
+    return FMath::Min(Term, FMath::Max(0.0f, CruiseHiss));
+}
+
 FShipHumVoice::FSettings FShipHumVoice::Reactor()
 {
     return FSettings();

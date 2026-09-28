@@ -48,13 +48,20 @@ namespace WorldReliefOffsetSplitLocal
      *  1/12288: continent 8.3e-5 to 9.2e-5, crater albedo 3.9e-4 to 7.4e-4,
      *  crater slope 2.4e-3 to 3.9e-3, detail 1.5e-4 to 1.5e-3, detail slope
      *  6.5e-4 to 8.7e-3. The finest detail bands gain least: their error is
-     *  D x frequency's own rounding, which no offset split reaches. */
+     *  D x frequency's own rounding, which no offset split reaches.
+     *
+     *  The crater columns were measured again when Task T2 made the face's
+     *  craters the summed kernels (WR_CraterSum, up to 27 sites a band where
+     *  Voronoi read one), by the same rule, same run: crater albedo 1.95e-6,
+     *  1.08e-5, 4.08e-5 and 1.88e-4, crater slope 7.78e-6, 4.07e-5, 2.04e-4
+     *  and 7.64e-4 at 1/96 to 1/12288 -- still two orders under the unsplit
+     *  Voronoi's. */
     const FHeld Held[] = {
         { 1.0 / 12.0,    2.2e-6, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
-        { 1.0 / 96.0,    3.8e-6, 1.2e-5, 1.3e-6, 6.0e-5, 7.8e-6 },
-        { 1.0 / 768.0,   5.5e-6, 1.1e-4, 7.4e-6, 7.1e-4, 4.3e-5 },
-        { 1.0 / 3072.0,  5.7e-6, 4.0e-4, 2.9e-5, 2.2e-3, 1.7e-4 },
-        { 1.0 / 12288.0, 5.8e-6, 1.5e-3, 1.2e-4, 8.9e-3, 6.6e-4 },
+        { 1.0 / 96.0,    3.8e-6, 1.2e-5, 2.5e-6, 6.0e-5, 9.8e-6 },
+        { 1.0 / 768.0,   5.5e-6, 1.1e-4, 1.4e-5, 7.1e-4, 5.1e-5 },
+        { 1.0 / 3072.0,  5.7e-6, 4.0e-4, 5.1e-5, 2.2e-3, 2.6e-4 },
+        { 1.0 / 12288.0, 5.8e-6, 1.5e-3, 2.4e-4, 8.9e-3, 9.6e-4 },
     };
 
     struct FWorld

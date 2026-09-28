@@ -52,6 +52,12 @@ bool FShipFlightAuthorityTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("ticking the subsystem flies the ship"), Ship->GetShipSpeed() > 0.0f);
         TestTrue(TEXT("and gives it a velocity"), Ship->GetShipVelocity().Size() > 0.0);
 
+        // The vertical lever is a write path too, pilot-gated like the rest.
+        TestFalse(TEXT("a passenger may not set the vertical lever"), Ship->SetVerticalLever(Passenger, 0.5));
+        TestTrue(TEXT("the pilot may"), Ship->SetVerticalLever(Pilot, 0.5));
+        TestEqual(TEXT("and it lands"), Ship->GetFlightState().GetCommand().Vertical, 0.5);
+        Ship->SetVerticalLever(Pilot, 0.0);
+
         // Standing up stops the turn and keeps the cruise.
         Ship->SetFlightCommand(Pilot, 0.5f, FVector(0.0, 1.0, 0.0));
         Ship->ClearPilot();
