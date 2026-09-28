@@ -131,6 +131,11 @@ AT_REAL AT_LogChapman(AT_REAL X, AT_REAL CosZenith)
 // by the star's own light in that bin (Fold), so the shader never sees a
 // temperature and three channels never have to stand for a spectrum.
 static const int AT_BINS = 8;
+// The multiple-scattering table's side, in texels: FAtmosphereTable::Size in
+// C++. The HLSL hook reads its geometry from this and nothing else, and
+// unpacks AT_BINS as two float4 halves, so it holds only for AT_BINS == 8;
+// Atmosphere.cpp static_asserts both, since no headless test runs the HLSL.
+static const int AT_TABLE_SIZE = 32;
 
 // One world's air as the law takes it. Per bin, per radius at the surface,
 // for unit light in the bin: the gas's and the aerosol's scattering and
@@ -246,8 +251,9 @@ inline AT_Bins AT_MultiScatter(AT_Air A, AT_REAL Altitude01, AT_REAL CosSunZenit
 #else
 // -- HLSL: the table, and exact products ----------------------------------------
 // The Custom node hands its texture and sampler down as the trailing
-// arguments: a 64 x 32 RGBA16F texture, bins 0-3 in its left half and 4-7
-// in its right, each half read as the C++ reads the table -- 32 texels
+// arguments: a 2*AT_TABLE_SIZE x AT_TABLE_SIZE RGBA16F texture, bins 0-3 in
+// its left half and 4-7 in its right, each half read as the C++ reads the
+// table -- AT_TABLE_SIZE texels
 // across, 0 and 1 at the first and last centre, the sun's columns crowded
 // toward the horizon as FAtmosphereTable::ColumnOf crowds them.
 // Load, never SampleLevel: the GPU's bilinear weights are 8-bit fixed
@@ -263,16 +269,17 @@ AT_Bins AT_MultiScatter(AT_Air A, float Altitude01, float CosSunZenith AT_TABLE_
 {
     float Cos = clamp(CosSunZenith, -1.0, 1.0);
     float T = Cos < 0.0 ? -sqrt(-Cos) : sqrt(Cos);
-    float FX = saturate((T + 1.0) * 0.5) * 31.0;
-    float FY = saturate(Altitude01) * 31.0;
-    int X0 = min(int(floor(FX)), 30);
-    int Y0 = min(int(floor(FY)), 30);
+    float FX = saturate((T + 1.0) * 0.5) * float(AT_TABLE_SIZE - 1);
+    float FY = saturate(Altitude01) * float(AT_TABLE_SIZE - 1);
+    int X0 = min(int(floor(FX)), AT_TABLE_SIZE - 2);
+    int Y0 = min(int(floor(FY)), AT_TABLE_SIZE - 2);
+    int X1 = X0 + AT_TABLE_SIZE;
     float TX = FX - float(X0);
     float TY = FY - float(Y0);
     float4 Low = lerp(lerp(AT_Table.Load(int3(X0, Y0, 0)), AT_Table.Load(int3(X0 + 1, Y0, 0)), TX),
                       lerp(AT_Table.Load(int3(X0, Y0 + 1, 0)), AT_Table.Load(int3(X0 + 1, Y0 + 1, 0)), TX), TY);
-    float4 High = lerp(lerp(AT_Table.Load(int3(X0 + 32, Y0, 0)), AT_Table.Load(int3(X0 + 33, Y0, 0)), TX),
-                       lerp(AT_Table.Load(int3(X0 + 32, Y0 + 1, 0)), AT_Table.Load(int3(X0 + 33, Y0 + 1, 0)), TX), TY);
+    float4 High = lerp(lerp(AT_Table.Load(int3(X1, Y0, 0)), AT_Table.Load(int3(X1 + 1, Y0, 0)), TX),
+                       lerp(AT_Table.Load(int3(X1, Y0 + 1, 0)), AT_Table.Load(int3(X1 + 1, Y0 + 1, 0)), TX), TY);
     AT_Bins Out;
     Out.V[0] = Low.r;
     Out.V[1] = Low.g;

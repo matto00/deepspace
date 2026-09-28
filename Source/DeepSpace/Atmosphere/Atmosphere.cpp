@@ -25,6 +25,12 @@ namespace AtmosphereF32
 
 static_assert(AtmosphereF64::AT_BINS == AtmosphereBins::Count && AtmosphereF32::AT_BINS == AtmosphereBins::Count,
     "Atmosphere.ush's AT_BINS is AtmosphereBins::Count");
+// The HLSL half of AT_MultiScatter is compiled by nothing headless: these tie
+// its geometry to the C++ table's, so a change to either fails ./build.sh.
+static_assert(AtmosphereF64::AT_TABLE_SIZE == FAtmosphereTable::Size && AtmosphereF32::AT_TABLE_SIZE == FAtmosphereTable::Size,
+    "Atmosphere.ush's AT_TABLE_SIZE is FAtmosphereTable::Size");
+static_assert(AtmosphereBins::Count == 8,
+    "Atmosphere.ush's HLSL AT_MultiScatter unpacks the bins as two float4 halves; rewrite it before changing the count");
 
 namespace AtmosphereLocal
 {
