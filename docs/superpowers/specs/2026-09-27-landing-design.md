@@ -89,6 +89,7 @@ below goes past them, it says so and is on the sign-off list.
 - **Near the ground, the footprint cap slows motion across a slope rather than lifting the ship over it.** This amends decision 10's along-the-ground cap.
 - **The terrain stays on the dynamic draw path** (4.96 ms of the 6 ms budget). The static path is shelved: in UE 5.8 it cached the tiles and drew nothing.
 - **The target's ETA while cruising above the near regime's 50 km top** is carried to the playtest.
+- **The frame at the ground** measured 19.4 ms (732 tiles drawn, 951 resident) against the 16.6 ms budget; 10.4 ms at 50 km. The ruling: **profile first, with the cast shadows in, and fix the real cost** (distant tiles' vertex counts, culling, batching draws). The split factor is the last resort, since it coarsens the ground and grows the pops.
 
 
 
