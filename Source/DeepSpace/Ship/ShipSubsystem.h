@@ -293,14 +293,23 @@ public:
      * a Jupiter; over a star ds.Flight.StarFloorRadii of its radius, where
      * its disc fills 60 degrees and the rest of the sky is still there.
      *
-     * The one function that answers it. Landing, when it comes, replaces or
-     * lowers this as it takes over drawing the ground; the in-system jump
-     * asks it for its guard. Read at use, like every tunable here.
+     * The one function that answers it; the in-system jump asks it for its
+     * guard. Read at use, like every tunable here.
+     *
+     * Over a solid world (landing decision 10) that floor is taken above the
+     * world's highest peak, WorldRelief's MaxHeightCm: 10.2 km over a flat
+     * Earth, up to about 20 km over one at the 10 km cap, so no summit is
+     * ever within 10 km of the drive. It is the drive's floor only: cruise
+     * and the vertical lever read the ground below it (FFlightSurface::Ground).
      */
     static double FloorFor(const FSkyBody& Body);
 
     /** How far inside the system's edge the ship stops, cm: ds.Flight.Floor. */
     static double EdgeFloor();
+
+    /** The ship's origin over flat ground at rest, cm: ds.Land.GearClearance,
+     *  read at use. Cruise's floor over a solid world is the ground plus this. */
+    static double GearClearance();
 
     UFUNCTION(BlueprintPure, Category = "Flight")
     FVector GetShipVelocity() const;
@@ -591,8 +600,21 @@ private:
         FUniversePosition Centre;
         double Radius = 0.0;
         double Floor = 0.0;
+        EGround Ground = EGround::None;
+        FWorldReliefParams Relief;
         TArray<FFlightSurface> Others;
     };
+
+    /** A solid body's ground for the flight, shared and kept while its relief
+     *  is unchanged, so a frame does not allocate one per body. */
+    FGroundFieldRef GroundFor(const FSkyBody& Body);
+
+    struct FGroundCacheEntry
+    {
+        FWorldReliefParams Params;
+        FGroundFieldRef Ground;
+    };
+    TMap<FName, FGroundCacheEntry> GroundCache;
 
     /** World, resolved in Here; empty for an id that names nothing there. */
     static TOptional<FWorldFix> FixWorld(const FStarSystem& Here, const FBodyId& World);

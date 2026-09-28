@@ -256,17 +256,20 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
         const FUniversePosition Centre = Home->PlanetPosition(1);
         const double Radius = Home->Planets[1].RadiusEarth * UniverseUnits::CmPerEarthRadius;
         const FVector Out = (Where() - Centre).GetSafeNormal();
+        // The drive stops at its floor; GetRoom is cruise's, over the ground.
+        const double DriveFloor = UShipSubsystem::FloorFor(LocalSystem::Here(Home).Bodies[2]);
+        const auto FloorRoom = [&]() { return Where().DistanceTo(Centre) - Radius - DriveFloor; };
         Ship->PlaceShip(Centre + Out * (Radius + 60.0 * UniverseUnits::CmPerKm), FRotationMatrix::MakeFromX(-Out).ToQuat());
         Ship->SetDriveEngaged(Pilot, true);
         Ship->SetDriveLever(Pilot, 1);
         double Seconds = 0.0;
-        for (; Seconds < 300.0 && Ship->GetFlightState().GetRoom() > 2.0 * FShipFlightState::AtFloorCm; Seconds += 0.1)
+        for (; Seconds < 300.0 && FloorRoom() > 2.0 * FShipFlightState::AtFloorCm; Seconds += 0.1)
         {
             Ship->Tick(0.1f);
         }
         TestTrue(FString::Printf(TEXT("the drive brings the ship to the world's floor (%.1f m of room after %.0f s)"),
-                                 Ship->GetFlightState().GetRoom() / 100.0, Seconds),
-                 Ship->GetFlightState().GetRoom() <= 2.0 * FShipFlightState::AtFloorCm);
+                                 FloorRoom() / 100.0, Seconds),
+                 FloorRoom() <= 2.0 * FShipFlightState::AtFloorCm);
         for (int32 Tick = 0; Tick < 50; ++Tick)
         {
             Ship->Tick(0.1f);
@@ -386,6 +389,13 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
 
                 TArray<TPair<double, double>> Predicted;   // (when, when it says it will arrive)
                 TOptional<double> Arrived;
+                // The last sample still short of the floor: the cap can land
+                // the ship on it inside one tick from just over AtFloorCm,
+                // and then there is no speed at the floor to time the last
+                // metre from, so it is timed from here instead.
+                double BeforeClock = Clock;
+                double BeforeRoom = Room();
+                double BeforeSpeed = Ship->GetShipSpeed();
                 while (Clock < 600.0 && !Arrived)
                 {
                     const TOptional<FTargetView> Now = Ship->GetTargetView(*Home);
@@ -401,9 +411,15 @@ bool FShipTargetTest::RunTest(const FString& Parameters)
                         // out, and it is added back, from the flight's own
                         // limits, not the view's.
                         const FShipFlightLimits& Flown = Ship->GetFlightState().GetLimits();
-                        Arrived = Clock + ShipFlight::SecondsToFloor(FMath::Max(0.0, Room()), Ship->GetShipSpeed(),
-                                                                     Flown.LinearAcceleration, Flown.HoldSeconds);
+                        Arrived = Ship->GetShipSpeed() > 0.0
+                            ? Clock + ShipFlight::SecondsToFloor(FMath::Max(0.0, Room()), Ship->GetShipSpeed(),
+                                                                 Flown.LinearAcceleration, Flown.HoldSeconds)
+                            : BeforeClock + ShipFlight::SecondsToFloor(BeforeRoom, BeforeSpeed,
+                                                                       Flown.LinearAcceleration, Flown.HoldSeconds);
                     }
+                    BeforeClock = Clock;
+                    BeforeRoom = Room();
+                    BeforeSpeed = Ship->GetShipSpeed();
                     Ship->Tick(Step);
                     Clock += Step;
                 }

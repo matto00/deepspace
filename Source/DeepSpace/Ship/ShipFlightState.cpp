@@ -801,7 +801,12 @@ void FShipFlightState::UpdateDriveBelowFloor()
             continue;
         }
         const double Clear = ShipFlight::FloorClearance(Surface, Position);
-        bUnder |= Clear < 0.0;
+        // The drive's own cap lands it on its floor to the rounding of a
+        // distance a planet's radius long, a hair either side. That is AT
+        // THE FLOOR, where every drive approach ends, never under it; only
+        // a centimetre down is the ship really under.
+        constexpr double UnderFloorToleranceCm = 1.0;
+        bUnder |= Clear < -UnderFloorToleranceCm;
         if (Clear < Limits.DriveHandbackCm)
         {
             bKeep = true;

@@ -693,9 +693,12 @@ so nothing can be tunnelled through.
 **The floor is where the sky stops being honest** (decision 6):
 `UShipSubsystem::FloorFor`, the one function that answers it -- over a world
 the larger of `ds.Flight.Floor` (10 km) and `SkyProjection::RenderedFloor`,
-10.2 km over an Earth and 112 km over a Jupiter; over a star
-`ds.Flight.StarFloorRadii` of its radius. Landing, when it comes, takes over
-there. **The system's edge is a surface** too (conflict 10): an inside-out
+10.2 km over an Earth and 112 km over a Jupiter; over a **solid** world that
+is taken **above its highest peak** (`WorldRelief::MaxHeightCm`, landing
+decision 10), so the drive never meets a summit; over a star
+`ds.Flight.StarFloorRadii` of its radius. It is **the drive's** floor. Over
+a solid world cruise and the vertical lever read the ground instead (*Landing*).
+**The system's edge is a surface** too (conflict 10): an inside-out
 floor sphere `ds.Flight.Floor` inside `InSystemRadiusLy`, so the drive
 settles into it and never flies the ship out of its system, where
 `GetSystemAt` would go empty under a sky still drawing the old one. You
@@ -1184,6 +1187,14 @@ tests that assert it.
 | `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
 | `ds.Flight.Floor` | 10 km (never under the sky's rendered floor) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultFloorCm` |
 | `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp`, from `ShipFlight::DefaultStarFloorRadii` |
+| `ds.Land.GearClearance` | 150 cm | `ShipSubsystem.cpp`, from `ShipLanding::DefaultGearClearanceCm` (`ShipLanding.h`) |
+| `ds.Land.TouchdownSpeed` | 0.5 m/s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultTouchdownSpeed` |
+| `ds.Land.ApproachSeconds` | 4 s, clamped to at least 0.5 s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultApproachSeconds` |
+| `ds.Land.SkimSeconds`, `.SkimFloor` | 2.5 s, 20 m/s | `ShipSubsystem.cpp`, from `ShipFlight` |
+| `ds.Land.Regime` | 50 km (leaves over 55 km) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultRegimeCm` |
+| `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
+| `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
+| `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |

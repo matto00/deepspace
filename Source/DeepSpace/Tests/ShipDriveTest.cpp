@@ -9,6 +9,7 @@
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
+#include "Surface/WorldRelief.h"
 #include "Universe/StarSystem.h"
 #include "Universe/UniverseSubsystem.h"
 #include "Universe/UniverseUnits.h"
@@ -194,10 +195,15 @@ bool FShipDriveTest::RunTest(const FString& Parameters)
             const FUniversePosition Where = Flight.GetUniversePosition();
             for (const FSkyBody& Body : Here.Bodies)
             {
-                Least = FMath::Min(Least, Where.DistanceTo(Body.Position) - Body.Radius - UShipSubsystem::FloorFor(Body));
+                // Over a solid world the room is cruise's: the height over its
+                // ground less the gear (landing decision 10), not the drive's floor.
+                const double Below = Body.Ground == EGround::Solid
+                    ? FWorldRelief(Body.Relief).Height(FVector3d((Where - Body.Position).GetSafeNormal())) + UShipSubsystem::GearClearance()
+                    : UShipSubsystem::FloorFor(Body);
+                Least = FMath::Min(Least, Where.DistanceTo(Body.Position) - Body.Radius - Below);
             }
             Least = FMath::Min(Least, Here.EdgeRadius - UShipSubsystem::EdgeFloor() - Where.DistanceTo(Here.Bodies[0].Position));
-            TestTrue(FString::Printf(TEXT("the room is the least distance over every surface less its own floor: %.0f km against %.0f"),
+            TestTrue(FString::Printf(TEXT("the room is the least distance over every surface less its own floor, or over a solid world its ground and the gear: %.0f km against %.0f"),
                                      Flight.GetRoom() / Km, Least / Km),
                      FMath::IsNearlyEqual(Flight.GetRoom(), Least, 1.0));
 
