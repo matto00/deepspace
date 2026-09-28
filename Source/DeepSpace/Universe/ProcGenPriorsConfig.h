@@ -102,6 +102,13 @@ public:
     UPROPERTY(Config) double ReliefTerrestrialBetaA;
     UPROPERTY(Config) double ReliefTerrestrialBetaB;
 
+    UPROPERTY(Config) double AirPressureMedianTerrestrialBar;
+    UPROPERTY(Config) double AirPressureMedianOceanBar;
+    UPROPERTY(Config) double AirPressureSigma;
+    UPROPERTY(Config) double AirMixWeightNitrogenOxygen;
+    UPROPERTY(Config) double AirMixWeightCarbonDioxide;
+    UPROPERTY(Config) double AirMixWeightHydrogenHelium;
+
     UPROPERTY(Config) double SystemsPerSector;
 
 private:

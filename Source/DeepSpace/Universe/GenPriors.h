@@ -106,6 +106,28 @@ struct FGenPriors
     double ReliefTerrestrialBetaA = 3.0;
     double ReliefTerrestrialBetaB = 2.0;
 
+    // -- the air (atmospheres decision 2) ----------------------------------------
+
+    /** A temperate world's surface pressure, bar: log-normal, because a
+     *  pressure is a product of many factors -- outgassing, loss,
+     *  sequestration. Bounded above in code, not here: by the world's
+     *  retention of its gas and the nadir-haze guarantee
+     *  (AirFacts::PressureCeilingBar), bent under that ceiling rather than
+     *  clipped, so no pile of worlds stacks at the cap. */
+    double AirPressureMedianTerrestrialBar = 0.8;
+    double AirPressureMedianOceanBar = 1.0;
+    double AirPressureSigma = 0.9;
+
+    /** Which gas a temperate world holds, before retention: relative
+     *  weights, each multiplied by how well the world holds that gas, so a
+     *  world that cannot keep hydrogen never draws it and no draw is thrown
+     *  away (ADR 0008). They set the colour of much of the universe
+     *  (sign-off item 19): the corpus's sky_zenith_rgb is what they are
+     *  judged by. */
+    double AirMixWeightNitrogenOxygen = 0.55;
+    double AirMixWeightCarbonDioxide = 0.40;
+    double AirMixWeightHydrogenHelium = 0.05;
+
     // -- the galaxy -------------------------------------------------------------
 
     /** Poisson mean of systems per 2^62 cm sector: the solar neighbourhood,
@@ -133,6 +155,8 @@ struct FGenPriors
     X(PopulationMedian) X(PopulationSigma) X(PopulationMin) X(PopulationMax) \
     X(ReliefStrengthRockKm) X(ReliefStrengthIceKm) X(ReliefTerrestrialFactor) \
     X(ReliefBetaA) X(ReliefBetaB) X(ReliefTerrestrialBetaA) X(ReliefTerrestrialBetaB) \
+    X(AirPressureMedianTerrestrialBar) X(AirPressureMedianOceanBar) X(AirPressureSigma) \
+    X(AirMixWeightNitrogenOxygen) X(AirMixWeightCarbonDioxide) X(AirMixWeightHydrogenHelium) \
     X(SystemsPerSector)
 
 #define DS_GEN_PRIORS_COUNT_ONE(Name) + 1
@@ -194,6 +218,25 @@ namespace GenGuarantees
      *  this is what that floor's height rests on. */
     inline constexpr double MaxReliefKm = 10.0;
     inline constexpr double MaxReliefRadiusFraction = 0.005;
+
+    /** The top of an air is far hotter than its surface -- Earth's
+     *  thermosphere runs near 1,000 K over a 255 K equilibrium -- and it is
+     *  the top that loses gas: the exobase is taken at this many times
+     *  EquilibriumK (atmospheres decision 2). It decides which worlds may
+     *  hold hydrogen. */
+    inline constexpr double ExobaseFactor = 4.0;
+
+    /** Escape speed over the molecules' root-mean-square speed at the
+     *  exobase: at or above RetainedAbove a gas is held over a star's age;
+     *  at or below LostBelow it is gone; a smoothstep between. */
+    inline constexpr double RetainedAbove = 6.0;
+    inline constexpr double LostBelow = 4.0;
+
+    /** No air's total extinction straight down at 450 nm (Rayleigh plus
+     *  aerosol, not absorption) exceeds this (atmospheres ruling 8, decision
+     *  4): every airy world's surface stays legible from orbit. Bounds the
+     *  fact, as a per-world pressure ceiling, never the rendering. */
+    inline constexpr double MaxNadirTau450 = 0.5;
 }
 
 /**
@@ -219,6 +262,10 @@ namespace GenPriorDomain
      *  Neptune. The ceiling is not taste: it is what keeps eleven Hill-spaced
      *  orbits beyond it finite numbers. */
     inline constexpr double MaxInnermostMedianFactor = 100.0;
+
+    /** Past this a world's pressure spans a factor of twelve either way at
+     *  one sigma, and the ceiling is doing all the work the prior should. */
+    inline constexpr double MaxAirPressureSigma = 2.5;
 
     /** Every way these priors fall outside the domain, one line each, naming
      *  the ini line, its value and what it must be. Empty when the generator

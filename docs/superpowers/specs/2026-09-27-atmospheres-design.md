@@ -1096,6 +1096,19 @@ next.
 | **J**: a giant's air | the nearest gas giant to home, named with its mass and disc pressure | -- | H2/He haze, the fixed rim's replacement |
 | **E**: entry | R, from its drive floor's approach, at 15 km/s | -- | a drive approach into air |
 
+**The fixtures as drawn** (universe seed 20260925, priors as committed at this
+table's commit; found by `DeepSpace.Atmosphere.FixtureWorlds`, whose log
+reprints this table -- a change that moves a world shows there first):
+
+| Role | World | Sector, slot, orbit index | Mix | Pressure (bar) | Gravity (g) | tau450 | Mass (M_E) | Star (K) | Distance (ly) |
+|---|---|---|---|---|---|---|---|---|---|
+| R | Gelaes III | (-2, -1, 0), slot 0, orbit index 2 | nitrogen-oxygen | 1.393 | 0.984 | 0.393 | 0.96 | 3673 | 6.97 |
+| G | Sova V | (0, -2, 1), slot 0, orbit index 4 | nitrogen-oxygen | 0.5235 | 0.813 | 0.179 | 0.62 | 5306 | 5.31 |
+| C | Baemsekai V | (-1, -1, 0), slot 0, orbit index 4 | carbon-dioxide | 0.6639 | 0.766 | 0.370 | 0.55 | 2566 | 0.00 |
+| N | Baemsekai I | (-1, -1, 0), slot 0, orbit index 0 | none | 0 | 0.548 | 0.000 | 0.26 | 2566 | 0.00 |
+| J | Krothmertas VII | (-2, -5, 1), slot 0, orbit index 6 | hydrogen-helium | 0.6273 | 0.699 | 0.500 | 84.63 | 4765 | 19.83 |
+| E | as R | | | | | | | | |
+
 To look (for R at orbit index n): `ds.Sky.Goto n 40000` (the opening
 framing), `ds.Sky.Goto n 1000 dusk` (the terminator), and a new side,
 `ds.Sky.Goto n 40000 backlit` (the world between the ship and its star:

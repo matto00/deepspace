@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Universe/GenPriors.h"
 
 /**
  * What a world's air is, as procgen's facts (atmospheres decision 2): the
@@ -16,31 +17,9 @@
  *  aerosol and absorber follow it (decision 5). */
 enum class EAirMix : uint8 { None, NitrogenOxygen, CarbonDioxide, HydrogenHelium };
 
-/**
- * The air's guarantees (decisions 2 and 4): numbers no ini line may move,
- * because an invariant rests on each. This reopens GenPriors.h's namespace
- * of the same name.
- */
-namespace GenGuarantees
-{
-    /** The top of an air is far hotter than its surface -- Earth's
-     *  thermosphere runs near 1,000 K over a 255 K equilibrium -- and it is
-     *  the top that loses gas: the exobase is taken at this many times
-     *  EquilibriumK. It decides which worlds may hold hydrogen. */
-    inline constexpr double ExobaseFactor = 4.0;
-
-    /** Escape speed over the molecules' root-mean-square speed at the
-     *  exobase: at or above RetainedAbove a gas is held over a star's age;
-     *  at or below LostBelow it is gone; a smoothstep between. */
-    inline constexpr double RetainedAbove = 6.0;
-    inline constexpr double LostBelow = 4.0;
-
-    /** No air's total extinction straight down at 450 nm (Rayleigh plus
-     *  aerosol, not absorption) exceeds this (ruling 8): every airy world's
-     *  surface stays legible from orbit. Bounds the fact, as a per-world
-     *  pressure ceiling, never the rendering. */
-    inline constexpr double MaxNadirTau450 = 0.5;
-}
+/* The air's guarantees -- GenGuarantees::ExobaseFactor, RetainedAbove,
+ * LostBelow and MaxNadirTau450 -- are GenPriors.h's, beside every other
+ * number no ini line may move. */
 
 /** One mix's constants: what it is made of, and the aerosol and absorber
  *  that come with it (decision 5). Every aerosol number is a first estimate

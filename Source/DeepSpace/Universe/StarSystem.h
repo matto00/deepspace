@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Universe/GenSeed.h"
+#include "Universe/AirFacts.h"
 #include "Universe/UniversePosition.h"
 #include "Universe/UniverseUnits.h"
 
@@ -116,6 +117,18 @@ struct FPlanet
     {
         return RadiusEarth > 0.0 ? MassEarth / (RadiusEarth * RadiusEarth) : 0.0;
     }
+
+    /** Which air this world holds (atmospheres decision 2): none for barren
+     *  and ice worlds; drawn for terrestrial and ocean worlds, from weights
+     *  shaped by what the world can hold (AirFacts::Retention); hydrogen and
+     *  helium for every giant. */
+    EAirMix AirMix = EAirMix::None;
+
+    /** Bar at the surface: log-normal by kind, bent under the world's
+     *  ceiling (AirFacts::PressureCeilingBar). A giant's is the level where
+     *  the air above reaches GenGuarantees::MaxNadirTau450, its disc. 0
+     *  without air. */
+    double SurfacePressureBar = 0.0;
 };
 
 /** What a star chart and a sky need, and nothing more: a dozen draws. The
