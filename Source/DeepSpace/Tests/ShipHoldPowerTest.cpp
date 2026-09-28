@@ -127,6 +127,19 @@ bool FShipParkedIsWholeTest::RunTest(const FString& Parameters)
                 Ship->PlaceShip(Ocean->Position + Up * (Ocean->Radius + UShipSubsystem::FloorFor(*Ocean) + 1.0e3), FQuat::Identity);
                 Settle();
                 Whole(*FString::Printf(TEXT("at %s's floor, which it can never land under"), *Ocean->Id.ToString()));
+
+                // Under that floor, where only a solid world's would tax: 3 km
+                // under the ocean's sphere the depth that scopes the hold is
+                // still 0, and the tick that reads it there wants nothing.
+                Ship->PlaceShip(Ocean->Position + Up * (Ocean->Radius + UShipSubsystem::FloorFor(*Ocean) - 3.0e5), FQuat::Identity);
+                const FShipFlightState& Flight = Ship->GetFlightState();
+                const double Clear = Flight.GetUniversePosition().DistanceTo(Ocean->Position) - Ocean->Radius - UShipSubsystem::FloorFor(*Ocean);
+                TestTrue(FString::Printf(TEXT("placed 3 km under %s's floor (%.0f m)"), *Ocean->Id.ToString(), Clear / 100.0),
+                         FMath::IsNearlyEqual(Clear, -3.0e5, 1.0e3));
+                TestEqual(FString::Printf(TEXT("under %s's floor the hold's depth is 0: an ocean has no ground to be under"), *Ocean->Id.ToString()),
+                          Flight.GetDepthUnderDriveFloor(), 0.0);
+                Test.Step(1.0f / 60.0f);
+                TestEqual(FString::Printf(TEXT("and under %s's floor no hold is wanted"), *Ocean->Id.ToString()), Ship->GetHoldWant(), 0.0f);
             }
         }
         // Home again, for the hold's own checks.
