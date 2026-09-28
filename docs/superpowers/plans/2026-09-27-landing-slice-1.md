@@ -268,6 +268,9 @@ namespace WorldReliefNoise { SimplexValueBound; SimplexGradientBound; Hash16; Si
 
 ## Planning notes the executor must know
 
+**RULINGS AFTER PLANNING (2026-09-27; binding over anything below, including Global Constraints' "1e-3, never loosened"):** parity per footprint and per term at the measured float floor (spec rulings, *Ruled at R2*); the DeepSpaceShaders module removed, with a test that the engine's own `/Project` mapping finds `WorldRelief.ush`; and **slice (b) gains a task, owned by track T before T2**: the shared file's integer/fraction split of each band's lattice offset, with the parity tolerances tightened to what it then measures, the orbital look unchanged (a before/after render diff).
+
+
 These were raised while planning. None changes a ruling.
 
 1. **Tolerance at float's floor.** The noise coordinates reach offsets of about 1,250 (detail) and about 9,000 (craters), where a float's step is 1e-4 to 1e-3 of a cell. The 1e-3 parity tolerance may therefore sit at float's floor.
