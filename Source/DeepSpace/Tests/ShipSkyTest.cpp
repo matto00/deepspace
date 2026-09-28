@@ -21,6 +21,7 @@
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/WorldRelief.h"
 #include "Tests/SkyTestFixtures.h"
 #include "Tests/SkyTestWorld.h"
 #include "Universe/UniverseSubsystem.h"
@@ -387,9 +388,10 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     // that is never written cannot match them by agreeing with the asset.
     const FScopedCVar FaceMottle(TEXT("ds.Sky.Mottle"), 0.123f);
     const FScopedCVar FaceDetail(TEXT("ds.Sky.SurfaceDetail"), 0.456f);
-    const FScopedCVar FaceRelief(TEXT("ds.Sky.Relief"), 0.321f);
-    const FScopedCVar FaceCraters(TEXT("ds.Sky.Craters"), 0.5f);
-    Fixture.Bodies[SkyTestFixtures::HomeIndex].Cratering = 0.25;
+    FSkyBody& HomeBody = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+    HomeBody.Cratering = 0.25;
+    HomeBody.Ground = EGround::Solid;
+    HomeBody.Relief = FWorldReliefParams{ FVector3d(3.0, 5.0, 7.0), HomeBody.Radius, 5.0e5, 0.25, EGround::Solid };
     Sky->DrawFrom(Fixture);
 
     {
@@ -430,9 +432,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its colour"), Instance->K2_GetVectorParameterValue(SkyMaterial::Colour).Equals(True.Colour));
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
                 TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
-                TestEqual(TEXT("its relief, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Relief), 0.321f);
-                TestEqual(TEXT("its craters: what the world has kept, times the knob"),
-                    Instance->K2_GetScalarParameterValue(SkyMaterial::Cratering), 0.125f);
+                TestTrue(TEXT("its relief is its ground's own slope scale, from its peak (decision 3)"),
+                         FMath::IsNearlyEqual(Instance->K2_GetScalarParameterValue(SkyMaterial::ReliefScale),
+                                              static_cast<float>(FWorldRelief(HomeBody.Relief).SlopeScale()), 1e-7f));
+                TestEqual(TEXT("and its craters its own Cratering, with no knob over it"),
+                          Instance->K2_GetScalarParameterValue(SkyMaterial::Cratering), 0.25f);
+                TestNull(TEXT("ds.Sky.Relief is retired: a knob that moves the ground under a landed ship"),
+                         IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Relief")));
+                TestNull(TEXT("and ds.Sky.Craters"), IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Craters")));
                 TestTrue(TEXT("its own face, exactly"),
                     Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed, True.BeltPairs));
                 TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);

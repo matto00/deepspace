@@ -227,6 +227,16 @@ private:
  *  world. */
 namespace ShipSky
 {
+    /** A giant's cloud tops, which have no ground: the fixed billow the orbit
+     *  had before landing (ds.Sky.Relief's 0.2 x relief_giant's 0.33), kept
+     *  as a look, not a height. Oceans draw none: water is flat. */
+    inline constexpr double GiantReliefScale = 0.066;
+
+    /** The relief a body's face is shaded with: its ground's own slope scale
+     *  (FWorldRelief::SlopeScale) over a solid world, the giant billow over a
+     *  banded one, none otherwise. */
+    DEEPSPACE_API double ReliefScaleOf(const FSkyBody& Body);
+
     /** The flux of the faintest background star, in solar luminosities at a
      *  light year squared: a Sun at 70.4 ly. The Sun is absolute magnitude
      *  4.83, and at 21.6 pc it is magnitude 6.5 -- the faint end of the

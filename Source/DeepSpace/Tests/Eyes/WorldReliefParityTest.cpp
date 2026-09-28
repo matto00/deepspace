@@ -108,6 +108,8 @@
  * Task 31b, the lattice offsets split (landing slice (b)): PASS, both worlds, held to the split's own measure -- C++ vs GPU at 1/96 crater slope 5.67e-06 (was 2.16e-03), crater albedo 1.18e-06 (3.87e-04), continent 1.15e-06 (5.18e-05); at 1/12288 crater slope 5.26e-04 (4.30e-03), crater albedo 1.13e-04 (8.37e-04), detail 1.06e-03 (1.28e-03), detail slope 5.71e-03 (7.42e-03); the giant alike; SUMMARY C++-vs-GPU 6.10e-03 (7.42e-03), float-C++-vs-GPU 5.95e-03, left out at most 0.462% in one crater band. The orbital look unchanged: Baemsekai III, IV and V at 30 km and 12 km, dusk included, rendered before and after and diffed pixel for pixel (Task 31b's note in the plan).
  *
  * R5 after review, the giant restored (stretch 6, held to the file in double at its recorded floor) and every pixel held finite: PASS, both worlds -- the giant's every gap identical to R4's (1/3072 detail 3.69e-04, 1/12288 detail slope 7.21e-03 held to 8.8e-03); 0 pixels not finite; SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.462% in one crater band
+ *
+ * Task T2, the craters summed (WR_CraterSum) and the relief the ground's own slope: PASS, both worlds, the crater columns held to the summed kernels' own measure (1.25x, re-measured: 1/12288 crater albedo 1.79e-04, slope 6.76e-04 on Baemsekai IV; 2.11e-04 and 7.17e-04 on the giant) and every other term to Task 31b's; SUMMARY C++-vs-GPU 6.10e-03, float-C++-vs-GPU 5.95e-03, left out at most 2.142% in all (0.462% in one crater band)
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -170,20 +172,25 @@ namespace WorldReliefParityLocal
      *  measured, per footprint and per term, rounded up and never under 1e-7
      *  (a term every band of which has faded is exactly 0 on both sides).
      *  Baemsekai IV through FWorldRelief, then the giant against the file in
-     *  double. */
+     *  double. The crater columns were measured again, by the same rule,
+     *  when Task T2 made the craters the summed kernels (WR_CraterSum): at
+     *  1/96 to 1/12288, Baemsekai IV's crater albedo 1.82e-6, 1.01e-5,
+     *  4.78e-5, 1.79e-4 and slope 6.00e-6, 4.65e-5, 1.77e-4, 6.76e-4; the
+     *  giant's albedo 1.83e-6, 1.08e-5, 4.90e-5, 2.11e-4 and slope 6.89e-6,
+     *  4.08e-5, 1.86e-4, 7.17e-4. */
     const FTolerance SplitHeld[] = {
         { 1.0 / 12.0,    1.2e-6, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
-        { 1.0 / 96.0,    1.5e-6, 1.1e-5, 1.5e-6, 5.8e-5, 7.1e-6 },
-        { 1.0 / 768.0,   1.5e-6, 8.9e-5, 7.6e-6, 5.7e-4, 4.0e-5 },
-        { 1.0 / 3072.0,  1.5e-6, 3.4e-4, 3.2e-5, 2.5e-3, 1.7e-4 },
-        { 1.0 / 12288.0, 1.5e-6, 1.4e-3, 1.5e-4, 7.2e-3, 6.6e-4 },
+        { 1.0 / 96.0,    1.5e-6, 1.1e-5, 2.3e-6, 5.8e-5, 7.5e-6 },
+        { 1.0 / 768.0,   1.5e-6, 8.9e-5, 1.3e-5, 5.7e-4, 5.9e-5 },
+        { 1.0 / 3072.0,  1.5e-6, 3.4e-4, 6.0e-5, 2.5e-3, 2.3e-4 },
+        { 1.0 / 12288.0, 1.5e-6, 1.4e-3, 2.3e-4, 7.2e-3, 8.5e-4 },
     };
     const FTolerance GiantSplitHeld[] = {
         { 1.0 / 12.0,    2.7e-7, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
-        { 1.0 / 96.0,    1.9e-6, 1.0e-7, 1.4e-6, 1.0e-7, 7.1e-6 },
-        { 1.0 / 768.0,   3.4e-6, 5.8e-5, 7.2e-6, 3.8e-4, 4.1e-5 },
-        { 1.0 / 3072.0,  3.6e-6, 2.9e-4, 3.0e-5, 1.7e-3, 1.7e-4 },
-        { 1.0 / 12288.0, 3.7e-6, 1.3e-3, 1.3e-4, 7.7e-3, 6.4e-4 },
+        { 1.0 / 96.0,    1.9e-6, 1.0e-7, 2.3e-6, 1.0e-7, 8.7e-6 },
+        { 1.0 / 768.0,   3.4e-6, 5.8e-5, 1.4e-5, 3.8e-4, 5.1e-5 },
+        { 1.0 / 3072.0,  3.6e-6, 2.9e-4, 6.2e-5, 1.7e-3, 2.4e-4 },
+        { 1.0 / 12288.0, 3.7e-6, 1.3e-3, 2.7e-4, 7.7e-3, 9.0e-4 },
     };
     static_assert(UE_ARRAY_COUNT(SplitHeld) == UE_ARRAY_COUNT(Footprints), "a split tolerance per footprint");
     static_assert(UE_ARRAY_COUNT(GiantSplitHeld) == UE_ARRAY_COUNT(Footprints), "a giant split tolerance per footprint");

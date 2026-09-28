@@ -42,12 +42,12 @@ namespace SkyMaterial
     // it calls, and its pins, in order.
     inline const TCHAR* const WorldReliefInclude = TEXT("/Project/Private/WorldRelief.ush");
     inline const TCHAR* const WorldReliefEntry = TEXT("WR_SurfaceTerms");
-    inline TArray<FName> WorldReliefInputs() { return { TEXT("Direction"), TEXT("Footprint"), TEXT("SeedOffset"), TEXT("Stretch") }; }
+    inline TArray<FName> WorldReliefInputs() { return { TEXT("Direction"), TEXT("Footprint"), TEXT("SeedOffset"), TEXT("Stretch"), TEXT("VertexBandLimit") }; }
     inline TArray<FName> WorldReliefOutputs() { return { TEXT("Continent"), TEXT("CraterAlbedo"), TEXT("CraterSlope") }; }
 
     // M_SkyBody: planets and moons.
     //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY;
-    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, Relief, Cratering.
+    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering.
     inline const FName Colour = TEXT("Colour");                 // vector: albedo colour, or the star's
     inline const FName LightDirection = TEXT("LightDirection"); // vector: world space, body toward its star
     inline const FName Rim = TEXT("Rim");                       // vector: atmosphere rim, black for none
@@ -56,7 +56,7 @@ namespace SkyMaterial
     inline const FName Mottle = TEXT("Mottle");                 // scalar: the coarse face's amplitude
     inline const FName Detail = TEXT("Detail");                 // scalar: the fine bands' amplitude
     inline const FName Banding = TEXT("Banding");               // scalar: 0 rocky ground, 1 a giant's belts
-    inline const FName Relief = TEXT("Relief");                 // scalar: the detail bands' slope, the normal's tilt
+    inline const FName ReliefScale = TEXT("ReliefScale");       // scalar: the ground's own slope scale, FWorldRelief::SlopeScale
     inline const FName Cratering = TEXT("Cratering");           // scalar: how much of its craters a world has kept
     inline const FName SurfaceSeed = TEXT("SurfaceSeed");       // vector: xyz noise offset, w belt pairs; ShipSky::SurfaceSeed
     // The universe's X and Y axes in world space, the rows that turn a world
@@ -86,7 +86,7 @@ namespace SkyMaterial
     // Each asset's parameters, exactly: the test checks the JSON against
     // these and every loaded asset against the JSON, so a parameter added on
     // one side and not the other is a red test, not a silent no-op.
-    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, Relief, Cratering }; }
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering }; }
     inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY }; }
     inline TArray<FName> StarScalars() { return { Brightness }; }
     inline TArray<FName> StarVectors() { return { Colour }; }
