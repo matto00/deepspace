@@ -91,6 +91,10 @@ below goes past them, it says so and is on the sign-off list.
 - **The target's ETA while cruising above the near regime's 50 km top** is carried to the playtest.
 - **The frame at the ground** measured 19.4 ms (732 tiles drawn, 951 resident) against the 16.6 ms budget; 10.4 ms at 50 km. The ruling: **profile first, with the cast shadows in, and fix the real cost** (distant tiles' vertex counts, culling, batching draws). The split factor is the last resort, since it coarsens the ground and grows the pops.
 - **Cast shadows are baked, not marched** (2026-09-28). A per-pixel march cost +4 to +27 ms at low sun against a 1 ms budget (the spike, NO-GO at N 12, 8 and 6). Because worlds do not spin and nothing orbits in this slice, the sun is fixed over every surface. So each ground tile computes its vertices' shadow while it is built, off the game thread, from the height function, and the orbital proxy reads a per-world shadow texture baked in C++ when the system loads. It costs nothing per frame. If worlds ever spin, the bake is redone as the sun moves.
+- **The cast-shadow plan's Task 0 and Task 7b, ruled (2026-09-28):**
+  - Tile builds get **three background workers** (`ds.Terrain.BuildTasks` 3, from 2). Shadowed tiles at dusk cost up to 9.5x to build, and `GroundKeepsUpAtDusk`'s gap was 15.03 cm against 15 cm with two workers.
+  - A world's orbital shadow map is **uploaded in pieces on the render thread over several frames**, so its landing never hitches a frame (it was about 9.5 ms in one frame, against the 4 ms budget).
+  - The defaults stand: 4,096 columns, every tile vertex, 12 samples. But the orbital maps get a **per-system GPU memory cap of 128 MB**: a system with many worlds lowers its maps' resolution to fit (a 16-world system would otherwise reach about 205 MB).
 - **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
 
