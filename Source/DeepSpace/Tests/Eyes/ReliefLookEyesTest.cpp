@@ -31,7 +31,9 @@
  * `switch absent`, and both are the same scene.
  *
  * Planning measured (the cast-shadow plan) that physical relief casts on
- * under 3% of the ground at ten degrees and on 40-60% at three: the ruled
+ * under 3% of the ground at ten degrees and on 40-60% at three at a pixel's
+ * footprint; the bake's are the tiles' vertices on the ground and the map's
+ * 8.8 km texels from orbit, where it measured 15-19% on IV and V at three: the ruled
  * frames are the ten-degree ones, the three-degree ones are where the term
  * is seen -- at the read exposure, since at the game's they are black.
  *
@@ -163,7 +165,7 @@ bool FReliefLookEyesTest::RunTest(const FString& Parameters)
         AddWarning(TEXT("ds.Sky.Shadows does not exist: every pair is one scene twice (switch absent). Right before the term is built; after it, the name is wrong."));
     }
 
-    FSkyWorld Test(TEXT("ReliefLookWorld"));
+    FSkyWorld Test(TEXT("ReliefLookWorld"), 8, EShadows::On);
     AActor* Camera = Test.World->SpawnActor<AActor>();
     if (!TestNotNull(TEXT("a camera"), Camera))
     {
@@ -187,6 +189,9 @@ bool FReliefLookEyesTest::RunTest(const FString& Parameters)
     Capture->FOVAngle = 60.0f;
     Capture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
     Test.BeginPlay();
+    // The cast shadow is baked: every world's map before any frame.
+    Test.Step(1.0f / 60.0f);
+    Test.Sky->FlushShadowBakesForTest();
 
     // Eight frames stepped and captured, then the target read back.
     const auto Shoot = [&](UTextureRenderTarget2D* Into, TArray<FColor>& Pixels)

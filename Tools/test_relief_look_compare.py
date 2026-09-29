@@ -23,7 +23,7 @@ def frame(value):
 
 
 def run(directory, off=None, again=None, lit="0.800", crc="1a2b3c4d", alias=("0.100", "0.100", "0.120"),
-        skip=(), stops="3"):
+        skip=(), stops="3", on=None):
     """A run: its report, and every frame's two read captures without the term."""
     os.makedirs(directory, exist_ok=True)
     off = frame(40) if off is None else off
@@ -35,6 +35,8 @@ def run(directory, off=None, again=None, lit="0.800", crc="1a2b3c4d", alias=("0.
             f.write((LINE % ((name, lit, crc) + alias)).replace("read_stops 3", "read_stops " + stops))
             Image.fromarray(off).save(os.path.join(directory, name + "_read_shadows0.png"))
             Image.fromarray(again).save(os.path.join(directory, name + "_read_shadows0b.png"))
+            if on is not None:
+                Image.fromarray(on).save(os.path.join(directory, name + "_read_shadows1.png"))
 
 
 class CompareTest(unittest.TestCase):
@@ -112,6 +114,28 @@ class CompareTest(unittest.TestCase):
         self.assertFalse(compare.aliasing({"alias_off": "0.014", "alias_off2": "0.020", "alias_on": "0.084"}))
         # Past the floor, but the two captures without the term already differ by 0.2.
         self.assertFalse(compare.aliasing({"alias_off": "0.200", "alias_off2": "0.400", "alias_on": "0.500"}))
+
+
+    def test_held_means_are_read_on_the_pixels_both_runs_held(self):
+        # The term darkens rows 0-3 to 10; one pixel of row 0 flickered in the
+        # run after, so 63 pixels are held in both runs.
+        with tempfile.TemporaryDirectory() as root:
+            on = frame(40)
+            on[:4] = 10
+            again = frame(40)
+            again[0, 0] = 90
+            run(os.path.join(root, "a"))
+            run(os.path.join(root, "b"), again=again, on=on)
+            before, off, lit = compare.held_means(os.path.join(root, "a"), os.path.join(root, "b"), "world_4_orbit")
+            self.assertAlmostEqual(before, 40.0, places=6)
+            self.assertAlmostEqual(off, 40.0, places=6)
+            self.assertAlmostEqual(lit, (31 * 10 + 32 * 40) / 63.0, places=6)
+
+    def test_held_means_without_the_frame_with_the_term(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "a"))
+            run(os.path.join(root, "b"))
+            self.assertIsNone(compare.held_means(os.path.join(root, "a"), os.path.join(root, "b"), "world_4_orbit")[2])
 
 
 if __name__ == "__main__":

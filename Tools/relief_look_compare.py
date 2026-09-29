@@ -1,5 +1,7 @@
 """Eyes.ReliefLook's two runs side by side: each frame's mean brightness
-before the cast shadow existed, without it now, and with it; how much of the
+before the cast shadow existed, without it now, and with it -- over the
+whole ruled frame, and (held before, held off, held on) over the read frame's
+pixels both runs held still; how much of the
 frame the measures could read (lit, held); the share of the ground the term
 shades, beside the flicker that is the noise; and its aliasing without and
 with it, beside the aliasing's own noise.
@@ -95,6 +97,23 @@ def same(before_dir, after_dir, name):
     return share >= MIN_HELD and moved_share <= MAX_MOVED and mean < MAX_MEAN_LUMA, share, moved_share, mean
 
 
+def held_means(before_dir, after_dir, name):
+    """(before, after without the term, after with it): each read frame's mean
+    luma over the pixels both runs held still between their own two captures
+    without the term -- the done-when's brightness on still pixels. The last
+    is None if the run after has no frame with the term."""
+    frames = [png(d, name, s) for d in (before_dir, after_dir) for s in ("0", "0b")]
+    if any(f is None for f in frames) or len({f.shape for f in frames}) != 1:
+        return None, None, None
+    was, was_again, now, now_again = frames
+    mask = held(was, was_again) & held(now, now_again)
+    if not mask.any():
+        return None, None, None
+    luma = lambda f: float((f[mask] * WEIGHTS).sum(axis=1).mean())
+    on = png(after_dir, name, "1")
+    return luma(was), luma(now), (luma(on) if on is not None and on.shape == was.shape else None)
+
+
 def aliasing(frame):
     off, again, on = (float(frame.get(k, "nan")) for k in ("alias_off", "alias_off2", "alias_on"))
     noise = abs(again - off)
@@ -104,8 +123,9 @@ def aliasing(frame):
 def main(before_dir, after_dir):
     before, after = read(before_dir), read(after_dir)
     failed = False
-    print("%-20s %4s %8s %8s %8s %6s %6s %9s %8s %17s %11s" % (
-        "frame", "sun", "before", "off", "on", "lit", "held", "coverage", "flicker", "alias off/2/on", "moved/gap"))
+    print("%-20s %4s %8s %8s %8s %6s %6s %9s %11s %9s %8s %8s %17s %11s" % (
+        "frame", "sun", "before", "off", "on", "lit", "held", "coverage", "held before", "held off", "held on",
+        "flicker", "alias off/2/on", "moved/gap"))
     for name in FRAMES:
         was, now = before.get(name), after.get(name)
         if was is None or now is None:
@@ -125,9 +145,12 @@ def main(before_dir, after_dir):
         failed = failed or any(n != "ALIASING?" for n in notes)
         if was.get("off_crc") != now.get("off_crc"):
             notes.append("(crc differs)")
-        print("%-20s %4s %8s %8s %8s %6.3f %6.3f %8.1f%% %7.1f%% %5s/%5s/%5s %11s  %s" % (
+        before_mean, off_mean, on_mean = held_means(before_dir, after_dir, name)
+        fmt = lambda v: "-" if v is None else "%.2f" % v
+        print("%-20s %4s %8s %8s %8s %6.3f %6.3f %8.1f%% %11s %9s %8s %7.1f%% %5s/%5s/%5s %11s  %s" % (
             name, now["sun"], was["off_mean"], now["off_mean"], now["on_mean"], float(now.get("lit", 0.0)),
-            share if share is not None else 0.0, 100.0 * float(now["coverage"]), 100.0 * float(now.get("flicker", 0.0)),
+            share if share is not None else 0.0, 100.0 * float(now["coverage"]),
+            fmt(before_mean), fmt(off_mean), fmt(on_mean), 100.0 * float(now.get("flicker", 0.0)),
             now.get("alias_off", "-"), now.get("alias_off2", "-"), now.get("alias_on", "-"),
             "-" if worst is None else "%.3f/%.3f" % (worst, mean), "  ".join(notes)))
     return 1 if failed else 0
