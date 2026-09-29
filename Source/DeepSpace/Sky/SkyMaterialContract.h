@@ -86,8 +86,10 @@ namespace SkyMaterial
     // The cast shadow (the developer's ruling on slice (b)'s build: baked,
     // not marched). M_SkyBody reads the world's map, M_SkyGround the same map
     // blended into its vertices' shadow by Morph, both through one Custom node
-    // over the shared file's WR_ShadowMapCoord (SunShadowMap::Sample is its
-    // C++ mirror). The strength is ds.Sky.Shadows, lerp(1, shadow, Shadows).
+    // over the shared file's WR_ShadowMapCoord (SunShadowMap::Sample is meant
+    // as its C++ mirror; nothing holds the HLSL to it on the GPU until the
+    // cast-shadow plan's Task 8 adds Eyes.WorldReliefParity's shadow-map
+    // case). The strength is ds.Sky.Shadows, lerp(1, shadow, Shadows).
     // ShadowMapFade fades the map alone in as it lands, and never the
     // ground's vertices: shadow = lerp(lerp(1, Vertex, Morph), node,
     // ShadowMapFade), which is lerp(lerp(1, map, fade), Vertex, Morph).

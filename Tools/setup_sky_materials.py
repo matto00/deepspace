@@ -695,8 +695,10 @@ def sky_ground(default_texture):
 
 
 def shadow_probe(default_texture):
-    """Eyes.WorldReliefParity's cast-shadow case: the map's lookup over the
-    probe patch (probe_direction) at ProbeFootprint, untonemapped.
+    """The probe for Eyes.WorldReliefParity's cast-shadow case, which the
+    cast-shadow plan's Task 8 adds (until then nothing draws it): the map's
+    lookup over the probe patch (probe_direction) at ProbeFootprint,
+    untonemapped.
 
         pixel = ProbeBias.rgb + (the map at D, 0, 0)"""
     asset = "M_SkyShadowProbe"
