@@ -70,6 +70,19 @@ class GateTest(unittest.TestCase):
             run(os.path.join(root, "after"), 10.0, moving=True, moving_on=16.0)
             self.assertEqual(gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0), 1)
 
+    def test_a_run_missing_moving_cases_its_baseline_has_is_undecided(self):
+        # A subset, or a run that stopped writing them: never GO.
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0, moving=True)
+            run(os.path.join(root, "after"), 10.0, moving=True, skip=("50km_drive_dusk10", "1.5m_skim"))
+            self.assertEqual(gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0), 2)
+
+    def test_a_run_with_only_the_still_cases_against_a_full_baseline_is_undecided(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0, moving=True)
+            run(os.path.join(root, "after"), 10.0)
+            self.assertEqual(gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0), 2)
+
     def test_too_close_to_call(self):
         self.assertEqual(self.verdict(on=10.95, off=10.0), 2)
 

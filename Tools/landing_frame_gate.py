@@ -37,9 +37,11 @@ import statistics
 import sys
 
 CASES = ("50km", "1.5m", "50km_dusk10", "1.5m_dusk3", "200km_dusk10", "1.5m_dusk10")
-# The cases in motion (slice (b)'s last open items, 2026-09-29): read when
-# both runs have them, and left out, never UNDECIDED, when a run predates
-# them -- every baseline before 2026-09-29 does.
+# The cases in motion (slice (b)'s last open items, 2026-09-29): left out,
+# never UNDECIDED, only when the BASELINE predates them -- every baseline
+# before 2026-09-29 does. A run under test is never older than its baseline,
+# so one missing a moving case its baseline has lost it (an EYES_CASES
+# subset, a run that stopped writing it): UNDECIDED, as a still case is.
 MOVING = ("1.5m_skim", "500m_skim", "50km_drive", "1.5m_skim_dusk10", "500m_skim_dusk10", "50km_drive_dusk10")
 # Measured: baseline against baseline-2 (2026-09-28, no term in either), the
 # largest |on - on| of the six cases was 0.175 ms.
@@ -80,7 +82,7 @@ def main(baseline_dir, after_dir, budget=1.0, not_rise=False):
     undecided = []
     notes = []
     print("%-18s %7s %9s %9s %9s %9s %8s %8s" % ("case", "sun", "baseline", "on", "cost", "on-off", "band", "spread"))
-    skipped = [name for name in MOVING if name not in base or name not in after]
+    skipped = [name for name in MOVING if name not in base]
     for name in CASES + tuple(n for n in MOVING if n not in skipped):
         if name not in base or name not in after:
             print("%-18s missing from the %s" % (name, "baseline" if name not in base else "run"))
@@ -104,7 +106,7 @@ def main(baseline_dir, after_dir, budget=1.0, not_rise=False):
             "  TOO CLOSE TO CALL" if close else ("  OVER" if over else "")))
         states.add("over" if over else ("close" if close else "fits"))
     if skipped:
-        print("in motion, not in both runs, left out: %s" % ", ".join(skipped))
+        print("in motion, not in the baseline, left out: %s" % ", ".join(skipped))
     if notes:
         print("switch absent (no ds.Sky.Shadows) in %s: on-off compares a frame with itself" % ", ".join(notes))
     for reason in undecided:
