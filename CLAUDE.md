@@ -157,7 +157,9 @@ been abandoned. Say so.
   the flight's interface), the pure quadtree and tile builder
   (`TerrainQuadtree.*`, `TerrainTile.*`), and `AWorldGround`, which streams
   the nearest solid world's tiles off the game thread into pooled meshes on
-  the counter-frame (*The ground*).
+  the counter-frame (*The ground*). `SunShadow.*` (the cast shadow's pure
+  horizon march) and `SunShadowMap.*` (each world's baked map for the
+  orbit) are the shadow, baked, never marched per pixel.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -835,7 +837,7 @@ the invariant. LANDED is slice (c).
 **The ground** (`AWorldGround`, `hauler_ground`): the nearest solid world's
 cube-sphere quadtree, CDLOD from the ship, 2:1, tiles 33 x 33 with skirts,
 built on two workers, uploaded four a frame, on the counter-frame, shaded by
-`M_SkyGround` exactly as the orbit shades (the vertex normal carries what the
+`M_SkyGround` exactly as the orbit shades (each tile's vertices carrying the cast shadow, which draws whether or not the orbit's map has landed) (the vertex normal carries what the
 tile resolves, the pixel the rest). The tiles are `UTerrainTileComponent`,
 not `ProceduralMeshComponent`: PMC failed the first-day gate
 (`Eyes.TerrainBudget`, the verdict in landing decision 6). It takes the body
@@ -1306,6 +1308,9 @@ tests that assert it.
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
+| `ds.Sky.Shadows` | 1 (0 draws the unshadowed look) | `ShipSky.cpp` |
+| `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2 at low priority; a change to the width re-bakes every map; 0 maps leaves the tiles' own shadow drawn | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
+| `ds.Terrain.Shadows`, `.ShadowSamples` | 1, 12 (2-64); changing either rebuilds the ground | `WorldGround.cpp`, the samples from `SunShadow::DefaultSamples` (`SunShadow.h`) |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss`, `ds.Hum.HoldHiss` | 1.0, 0.35, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
@@ -1330,7 +1335,11 @@ braking margin
 px) and its 600 x 424 draw size; the chart's layout and 816 x 576
 (`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`); `TargetMarker::AheadFloor`, `NightSideLit`
 and `MinSpeed`; `NavStart::WorldReachFactor` (2); the turn rates
-(`FShipFlightLimits`, a header change).
+(`FShipFlightLimits`, a header change); the cast shadow's
+`SunShadow::SteepestMargin` (1.5) and sampled gradients
+(`DetailGradientSampled`, `CraterGradientSampled`, re-measured by
+`DeepSpace.Surface.SunShadow.SteepestSlope`), and its maps' fade-in,
+`ShipSky::ShadowFadeSeconds` (1 s).
 
 ## The player's body
 
