@@ -1,3 +1,4 @@
+#include "Algo/AnyOf.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "DynamicRHI.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -107,6 +108,15 @@ namespace
         { TEXT("200km_dusk10"), 2.0e7, 10.0, 3.0 },
         { TEXT("1.5m_dusk10"), 150.0, 10.0, 4.0 },
     };
+
+    /** The case the switch's proof reads (1.5m_dusk3): the only one under a
+     *  sun low enough, from near enough, for the term to shade held ground.
+     *  Its two assertions are the test's only ones past the setup, so a run
+     *  that leaves it out says so (RunTest). */
+    bool ProvesTheSwitch(const FLandingCase& Case)
+    {
+        return Case.DuskDegrees > 0.0 && Case.DuskDegrees < 5.0 && Case.AglCm < 1.0e5;
+    }
 
     double MedianOf(TArray<double> Values)
     {
@@ -378,7 +388,7 @@ namespace
             {
                 Automation->AddInfo(FString::Printf(TEXT("%s is over the 16.6 ms frame (%.2f): reported for the frame ruling's profiling, not asserted here"), Case->Slug, On));
             }
-            if (Shadows && Case->DuskDegrees > 0.0 && Case->DuskDegrees < 5.0 && Case->AglCm < 1.0e5)
+            if (Shadows && ProvesTheSwitch(*Case))
             {
                 Automation->TestTrue(FString::Printf(TEXT("the switch's proof can see: at %s at least 1%% of the frame is lit and held still (%.2f%%)"),
                     Case->Slug, 100.0 * Shade.LitShare), Shade.LitShare >= 0.01);
@@ -585,15 +595,35 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
     }
 
     // EYES_CASES=1.5m_dusk10,... runs only those cases: for looking into one,
-    // never for the gate, which reads all six.
+    // never for the gate, which reads all six. A name that is no case is an
+    // error, not a filter that quietly matches nothing; and a run without the
+    // switch's proof case warns, since it then asserts nothing about the
+    // frames at all.
     TArray<FString> Only;
     FPlatformMisc::GetEnvironmentVariable(TEXT("EYES_CASES")).ParseIntoArray(Only, TEXT(","));
+    bool bNamesKnown = true;
+    for (const FString& Name : Only)
+    {
+        const bool bKnown = Algo::AnyOf(LandingCases, [&Name](const FLandingCase& Case) { return Name == Case.Slug; });
+        bNamesKnown &= TestTrue(FString::Printf(TEXT("EYES_CASES names a case (%s)"), *Name), bKnown);
+    }
+    if (!bNamesKnown)
+    {
+        Run->Test.Reset();
+        return false;
+    }
+    bool bProofQueued = false;
     for (const FLandingCase& Case : LandingCases)
     {
         if (Only.IsEmpty() || Only.Contains(Case.Slug))
         {
             Run->QueueCase(Case);
+            bProofQueued |= ProvesTheSwitch(Case);
         }
+    }
+    if (!bProofQueued)
+    {
+        AddWarning(TEXT("EYES_CASES leaves out 1.5m_dusk3, the switch's proof: this run times frames and asserts nothing about them."));
     }
     ADD_LATENT_AUTOMATION_COMMAND(FLandingFrameSteps(Run));
     return true;
