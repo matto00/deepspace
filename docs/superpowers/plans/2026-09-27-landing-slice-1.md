@@ -272,7 +272,7 @@ namespace WorldReliefNoise { SimplexValueBound; SimplexGradientBound; Hash16; Si
 
 ## Planning notes the executor must know
 
-**RULINGS AFTER PLANNING (2026-09-27; binding over anything below, including Global Constraints' "1e-3, never loosened"):** parity per footprint and per term at the measured float floor (spec rulings, *Ruled at R2*); the DeepSpaceShaders module removed, with a test that the engine's own `/Project` mapping finds `WorldRelief.ush`; and **slice (b) gains a task, owned by track T before T2**: the shared file's integer/fraction split of each band's lattice offset, with the parity tolerances tightened to what it then measures, the orbital look unchanged (a before/after render diff).
+**RULINGS AFTER PLANNING (2026-09-27; binding over anything below, including Global Constraints' "1e-3, never loosened"):** parity per footprint and per term at the measured float floor (spec rulings, *Ruled at R2*); the DeepSpaceShaders module removed, with a test that the engine's own `/Project` mapping finds `WorldRelief.ush`; and **slice (b) gains a task, owned by track T before T2**: the shared file's integer/fraction split of each band's lattice offset, with the parity tolerances tightened to what it then measures, the orbital look unchanged (a before/after render diff). **Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T.
 
 
 These were raised while planning. None changes a ruling.

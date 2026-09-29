@@ -836,13 +836,19 @@ the invariant. LANDED is slice (c).
 
 **The ground** (`AWorldGround`, `hauler_ground`): the nearest solid world's
 cube-sphere quadtree, CDLOD from the ship, 2:1, tiles 33 x 33 with skirts,
-built on two workers, uploaded four a frame, on the counter-frame, shaded by
+built on three workers (ruled 2026-09-28), uploaded four a frame, on the counter-frame, shaded by
 `M_SkyGround` exactly as the orbit shades (each tile's vertices carrying the cast shadow, which draws whether or not the orbit's map has landed) (the vertex normal carries what the
 tile resolves, the pixel the rest). The tiles are `UTerrainTileComponent`,
 not `ProceduralMeshComponent`: PMC failed the first-day gate
 (`Eyes.TerrainBudget`, the verdict in landing decision 6). It takes the body
 from the sky under 50 km and grows the relief in to the drive floor.
 Residency never gates motion. `ds.Terrain.Describe` prints the cut.
+**Every key the cut needs is built, the leaves' ancestors too**, and a
+child's bounds, read from its resident parent, are remembered for the
+ground's life: `Balance` turns a leaf the ship has just reached into an
+ancestor the frame it enters the cut, and an ancestor never built sent
+`Resolve` back to draw a level-2 tile over the ship, 792 m off the ground
+(`GroundKeepsUp`, found on three workers).
 
 **Cast shadows are baked, never marched** (the developer's ruling on slice
 (b)'s build, 2026-09-28). Under a low sun the unlit law read flat, and a
@@ -857,6 +863,13 @@ texture in the star's own frame (the night side not stored), baked by
 `AShipSky` when the system loads, nearest world first, at most
 `ds.Sky.ShadowBakeTasks` at once, re-baked only when the relief, the light
 or `ds.Sky.ShadowMapWidth` changes, and faded in over 1 s as it lands.
+A landed map goes to the GPU **in pieces over several frames** (ruled
+2026-09-28): its texture is a `UTexture2DDynamic` made empty, each frame
+hands the render thread `ds.Sky.ShadowUploadKB` of its rows, and no world
+reads it before its last piece. A system's maps together stay under
+**128 MB of GPU memory** (ruled): the map whose texel is finest is halved
+until they fit (`ShipSky::CappedShadowWidths`, sized by the RHI's own
+`RHICalcTexturePlatformSize` -- a texture takes 10-15% over its levels).
 `M_SkyBody` and `M_SkyGround` read both through one Custom node over the
 shared file's `WR_ShadowMapCoord`, blended by `Morph`, so the handover
 carries the shadow with the relief; `ds.Sky.Shadows 0` draws the
@@ -1351,6 +1364,7 @@ tests that assert it.
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
 | `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
 | `ds.Sky.Shadows` | 1 (0 draws the unshadowed look) | `ShipSky.cpp` |
+| `ds.Sky.ShadowUploadKB` | 512 KB of a landed map's rows to the render thread a frame, every map together | `ShipSky.cpp` |
 | `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2 at low priority; a change to the width re-bakes every map; 0 maps leaves the tiles' own shadow drawn | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
 | `ds.Terrain.Shadows`, `.ShadowSamples` | 1, 12 (2-64); changing either rebuilds the ground | `WorldGround.cpp`, the samples from `SunShadow::DefaultSamples` (`SunShadow.h`) |
 | `ds.Hum.Volume`, `ds.Hum.CruiseHiss`, `ds.Hum.HoldHiss` | 1.0, 0.35, 0.35 | `ShipHumComponent.cpp` |
