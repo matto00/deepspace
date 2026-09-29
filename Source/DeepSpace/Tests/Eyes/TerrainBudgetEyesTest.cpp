@@ -51,9 +51,22 @@
  * deferred-deletion queue on every enqueue; so 69 captures in one frame each
  * cost more than the last, and the tiles' 20, taken after the empty scene's
  * 23, read +4.95 to +6.79 ms against 6 ms, intermittently. That is the
- * harness flaw Eyes.LandingFrame had (19342c9), fixed the same way. What is
- * measured is unchanged: the same captures, warm-ups, move and checks, in
- * the same order.
+ * harness flaw Eyes.LandingFrame had (19342c9), fixed the same way.
+ *
+ * Each capture's clock starts with the render thread and the GPU idle (a
+ * flush and a one-pixel read-back first), so the engine frame still in
+ * flight when a step runs is nobody's cost; and the moved captures each move
+ * every tile first and send the transforms (the frame's game thread, timed
+ * with the move), as play does every frame, so the move's GPU Scene update
+ * is in every one of them, never absorbed by the warm-ups. Before both, the
+ * empty scene read 7.5-7.8 ms and the tiles +2.8 ms over it, and the move
+ * +0.03..0.34 ms: the in-flight frame's wait, charged to the empty scene
+ * and overlapped by the tiles', did not cancel. Measured so (2026-09-29, two
+ * runs): empty 3.62-3.64 ms, the one-frame figure again; the tiles +6.13
+ * and +5.97 ms against 6; every tile moved before each capture +7.81 and
+ * +7.72 ms against 2; the move 2.15 and 2.12 ms of game thread against 2
+ * (1.4 moving, 0.8 sending). Red, for the developer (the landing
+ * cast-shadow plan's review record).
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainBudgetEyesTest, "Eyes.TerrainBudget",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -77,10 +90,16 @@ namespace TerrainBudgetLocal
 
     /** Render thread and GPU together: capture, flush, then read one pixel
      *  back, which cannot return before the GPU has drawn the frame. One
-     *  capture, in ms. */
+     *  capture, in ms. The clock starts with the render thread and the GPU
+     *  idle -- a flush and a read-back first -- so no capture is charged for
+     *  the engine frame still in flight when its step runs: without that the
+     *  empty scene read 7.5-7.8 ms here against 3.5 ms in one frame, and only
+     *  the difference was trusted. */
     double CaptureMs(USceneCaptureComponent2D* Capture, UTextureRenderTarget2D* Target)
     {
         TArray<FColor> Pixel;
+        FlushRenderingCommands();
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(0, 0, 1, 1));
         const double Start = FPlatformTime::Seconds();
         Capture->CaptureScene();
         FlushRenderingCommands();
@@ -107,6 +126,8 @@ namespace TerrainBudgetLocal
         double TilesMs = 0.0;
         double MovedMs = 0.0;
         double MoveMs = 0.0;
+        double SendMs = 0.0;
+        TArray<double> Spread[3];   // each timed capture: empty, tiles, moved
         int32 EmptyGrey = -1;
         int32 TileGrey = -1;
 
@@ -118,17 +139,55 @@ namespace TerrainBudgetLocal
             }
         }
 
+        /** Moves every tile a centimetre, as the ship-is-the-origin frame
+         *  does every frame; the game thread's time into MoveMs. */
+        void MoveTiles()
+        {
+            const double MoveStart = FPlatformTime::Seconds();
+            for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Pool)
+            {
+                Mesh->SetRelativeLocation(Mesh->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
+            }
+            const double Moved = FPlatformTime::Seconds();
+            // The end of the frame's game thread: the new transforms sent to
+            // the render thread. CaptureScene would send them itself, inside
+            // the draw's clock; the frame pays them on the game thread.
+            World->SendAllEndOfFrameUpdates();
+            const double Sent = FPlatformTime::Seconds();
+            MoveMs += (Moved - MoveStart) * 1000.0 / (Warmups + Captures);
+            SendMs += (Sent - Moved) * 1000.0 / (Warmups + Captures);
+        }
+
         /** Warmups untimed captures, then Captures timed ones, each its own
-         *  step; Into gets their mean. */
-        void QueueCaptures(double* Into)
+         *  step; Into gets their mean. With bMove every step moves every
+         *  tile first, as play does before each frame's draw, so each timed
+         *  capture pays that move's GPU Scene update -- a warm-up can no
+         *  longer absorb it, as the single move before the captures let it. */
+        void QueueCaptures(double* Into, int32 Which, bool bMove = false)
         {
             for (int32 Warm = 0; Warm < Warmups; ++Warm)
             {
-                Steps.Add([this]() { CaptureMs(Capture.Get(), Target.Get()); });
+                Steps.Add([this, bMove]()
+                {
+                    if (bMove)
+                    {
+                        MoveTiles();
+                    }
+                    CaptureMs(Capture.Get(), Target.Get());
+                });
             }
             for (int32 Shot = 0; Shot < Captures; ++Shot)
             {
-                Steps.Add([this, Into]() { *Into += CaptureMs(Capture.Get(), Target.Get()) / Captures; });
+                Steps.Add([this, Into, Which, bMove]()
+                {
+                    if (bMove)
+                    {
+                        MoveTiles();
+                    }
+                    const double Ms = CaptureMs(Capture.Get(), Target.Get());
+                    Spread[Which].Add(Ms);
+                    *Into += Ms / Captures;
+                });
             }
         }
 
@@ -157,10 +216,13 @@ namespace TerrainBudgetLocal
                 TEXT("tiles %d, %d triangles each\n")
                 TEXT("create %.3f ms/tile, SetTile %.3f ms/tile\n")
                 TEXT("tile CPU copies %.1f MB at %d tiles (%.1f MB counted at %d); process grew %.1f MB\n")
-                TEXT("4K capture: empty %.2f ms, tiles %.2f ms (+%.2f), after moving every tile %.2f ms (+%.2f)\n")
-                TEXT("moving every tile: %.2f ms of game thread\n"),
+                TEXT("4K capture: empty %.2f ms, tiles %.2f ms (+%.2f), every tile moved before each %.2f ms (+%.2f)\n")
+                TEXT("  each capture, min..max: empty %.2f..%.2f, tiles %.2f..%.2f, moved %.2f..%.2f ms\n")
+                TEXT("moving every tile: %.2f ms of game thread, %.2f ms moving and %.2f ms sending the transforms\n"),
                 Tiles, TerrainTile::TriangleCount, CreateMsEach, UpdateMsEach, CopyMBAtMax, MaxTiles,
-                CopyBytes / 1048576.0, Tiles, ProcessMB, EmptyMs, TilesMs, DrawMs, MovedMs, MovedDrawMs, MoveMs);
+                CopyBytes / 1048576.0, Tiles, ProcessMB, EmptyMs, TilesMs, DrawMs, MovedMs, MovedDrawMs,
+                FMath::Min(Spread[0]), FMath::Max(Spread[0]), FMath::Min(Spread[1]), FMath::Max(Spread[1]),
+                FMath::Min(Spread[2]), FMath::Max(Spread[2]), MoveMs + SendMs, MoveMs, SendMs);
             const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/TerrainBudget");
             IFileManager::Get().MakeDirectory(*Dir, true);
             FFileHelper::SaveStringToFile(Report, *(Dir / TEXT("report.txt")));
@@ -170,8 +232,8 @@ namespace TerrainBudgetLocal
                        CopyMBAtMax <= CopyBudgetMB);
             T.TestTrue(FString::Printf(TEXT("2,200 tiles cost at most %.0f ms of a 4K frame (%.2f)"), DrawBudgetMs, DrawMs),
                        DrawMs <= DrawBudgetMs);
-            T.TestTrue(FString::Printf(TEXT("moving every tile costs at most %.0f ms of game thread (%.2f)"), MoveBudgetMs, MoveMs),
-                       MoveMs <= MoveBudgetMs);
+            T.TestTrue(FString::Printf(TEXT("moving every tile costs at most %.0f ms of game thread (%.2f)"), MoveBudgetMs, MoveMs + SendMs),
+                       MoveMs + SendMs <= MoveBudgetMs);
             T.TestTrue(FString::Printf(TEXT("and at most %.0f ms more to draw after (%.2f)"), MovedDrawBudgetMs, MovedDrawMs),
                        MovedDrawMs <= MovedDrawBudgetMs);
 
@@ -297,19 +359,10 @@ bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
     // The same captures in the same order as ever, each now its own step.
     FBudgetRun& R = *Run;
     R.Steps.Add([&R]() { R.ShowTiles(false); });
-    R.QueueCaptures(&R.EmptyMs);
+    R.QueueCaptures(&R.EmptyMs, 0);
     R.Steps.Add([&R]() { R.ShowTiles(true); });
-    R.QueueCaptures(&R.TilesMs);
-    R.Steps.Add([&R]()
-    {
-        const double MoveStart = FPlatformTime::Seconds();
-        for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : R.Pool)
-        {
-            Mesh->SetRelativeLocation(Mesh->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
-        }
-        R.MoveMs = (FPlatformTime::Seconds() - MoveStart) * 1000.0;
-    });
-    R.QueueCaptures(&R.MovedMs);
+    R.QueueCaptures(&R.TilesMs, 1);
+    R.QueueCaptures(&R.MovedMs, 2, true);
     // The world has no light, so the lit colour is black either way; the
     // base colour pass shows the default material's grey where a tile is,
     // and nothing where none is.
