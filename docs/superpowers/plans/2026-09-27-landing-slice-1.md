@@ -17226,8 +17226,35 @@ shadows in; the split factor last).** `feat/landing-b-t`, RTX 4070 Ti Super, 4K 
 - **The suite after it:** 244 passed, one red, `DeepSpace.Surface.GroundKeepsUpAtDusk` at 15.03 cm
   against 15.00 -- the cast-shadow plan's Task 7b, awaiting the developer's ruling, which recorded
   25.22 cm there with the shadow at 2 build tasks. With the crater kernel's cheaper heights it
-  reads 15.03, the figure 7b measured with no shadow at all: the build lag the shadow added is
-  gone, and the flight's own 0.03 cm margin remains. So `feat/landing-b-t` still does not merge.
+  reads 15.03, the figure 7b measured with no shadow at all. That was one run, and it read too
+  much into it; repeated (after review, 2026-09-28, a quiet machine, nothing else building):
+
+  | build tasks | shadow | runs | worst gap, cm |
+  |---|---|---|---|
+  | 2 (the default) | on | 5 | 15.03 every run |
+  | 2 | off | 3 | 15.03 every run |
+  | 3 | on | 2 | 7.19, 7.19 |
+  | 4 | on | 2 | 7.19, 7.19 |
+
+  `Eyes.ShadowBakeCost`'s flight, re-run once, reads the same 15.03 (`flight_worst_cm` OVER by
+  0.03). What this shows, and no more: on a quiet machine the flight with the shadow lands on the
+  same worst gap as the flight without, every run, and one more build task now reaches 7.19 (it
+  was 15.03 at 3 before the kernel). The metric is not a continuous lag: every value it has ever
+  read is one of 7.19, 9.52, 14.40, 15.03 and 25.22, steps of which tile is late where, so 15.03
+  against 15.00 is a step that happens to sit over the line, not a 0.03 cm margin to shave. And
+  the flight is paced to the wall clock (`GroundKeepsUpScenario.h`), so its builds race it on real
+  workers: a loaded machine can land a step higher, which no run here measured. It does not show
+  that the shadow's build cost is zero, only that at 2 tasks it no longer moves the gap a step.
+  `feat/landing-b-t` still does not merge while the test is red; the cast-shadow plan's Task 7b
+  carries these numbers to the ruling.
+- **Held since review:** `CraterKernelCorners` also counts the corners each band visits
+  (`WR_CRATER_CORNER_VISITED()`, a hook in `WorldRelief.ush` that is empty everywhere but that
+  test) and holds it at 8. The sums could not: a corner too far to reach adds nothing, so a
+  restored 3 x 3 x 3 matched bit for bit while the frame went back over 16.6 ms. Its mutant (the
+  I loop from -1, 12 corners, every sum identical) is KILLED by the count alone. The frame itself
+  is still reported, not asserted; and note that `landing_frame_gate.py --not-rise` against
+  `Saved/Eyes/LandingFrame/baseline` cannot see such a revert either, because that baseline was
+  taken before fc829a7, with the 27 corners.
 - **What `Eyes.LandingFrame` does not show:** the game's own `stat unit` at 4K with the project's
   AA and upscaler (Step 3, item 5): the capture has no TSR and no view state, and play overlaps
   the game step with the GPU. That stays the developer's reading.

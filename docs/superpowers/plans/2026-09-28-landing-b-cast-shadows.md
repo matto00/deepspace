@@ -4857,7 +4857,32 @@ Reached from Task 7. Stop, and put the report's lines to the developer with the 
 - `FWorldRelief::DetailSum` now skips a band its footprint has faded whole (this section's "First, profile" item). It changes no value (`WorldRelief.KnownValues` exact; its mutant killed) and is committed; with 4 tasks it took the gap from 15.03 to 9.52, and at 2 it moves nothing.
 - The day exit by footprint (2(e)) is not built: at a 10-degree sun only tiles whose footprint has faded all but about two of the twenty bands could exit, which are the handful of coarsest levels, not the fine tiles the gap waits on. It stays on offer.
 
-The options to put to the developer, with these numbers: `ds.Terrain.BuildTasks` 3 alone does not reach 15.00 (15.03), 4 does (9.52) but is the machine's whole cap with the maps' 2 bake tasks; every other vertex, interpolated (a coarsening, ruled); 8 samples (a quality NO-GO unless relaxed); a larger tolerance than GearClearance / 10 at dusk (it was already 15.03 with no shadow); or prioritising the chain of tiles under the ship over the prefetch. For `map_land_ms`: the RHI upload on the render thread, or accept a ~9.5 ms hitch once a world. `GroundKeepsUpAtDusk` stays red until the ruling; `feat/landing-b-t` does not merge into `feat/landing-b` while it is.
+- **Re-measured after fc829a7 (2026-09-28), which supersedes the table and the options' numbers
+  above.** The landing plan's Task 39 made the crater kernel visit the 8 lattice corners that can
+  reach instead of 27 (every value unchanged), and the C++ tile heights go through the same kernel,
+  so every build is cheaper. On a quiet machine, `GroundKeepsUpAtDusk`'s worst drawn gap, cm,
+  against 15.00:
+
+  | build tasks | no shadow | shadow |
+  |---|---|---|
+  | 2 (the default) | 15.03 (3 runs) | 15.03 (5 runs) |
+  | 3 | -- | 7.19 (2 runs) |
+  | 4 | -- | 7.19 (2 runs) |
+
+  `Eyes.ShadowBakeCost`, run once: `flight_worst_cm` 15.03 OVER (was 25.99 and 25.22), and
+  `map_land_ms` 10.05 OVER (was 9.71 and 9.35: the kernel does not touch the upload); every other
+  line within -- `cold_cut_s` 4.40 (was 13.26), `tile_ratio` x7.75 (was x9.44-9.50), `coarse_s`
+  5.12 (was 9.61-9.65), `world_bake_s` 4.17 (was 10.08), `system_gpu_mb` 63.92.
+  How far to read this: the gap moves in steps (7.19, 9.52, 14.40, 15.03, 25.22 are every value
+  it has read), and the flight is paced to the wall clock, so a loaded machine can read a step
+  higher; nothing here measured that. At 2 tasks the shadow no longer moves the gap a step, which
+  is not the same as costing nothing. The gap left at 2 tasks is the one the flight had with no
+  shadow before the shadow existed.
+
+The options to put to the developer, with the re-measured numbers (the figures in the next
+sentence are from before fc829a7): `ds.Terrain.BuildTasks` 3 now reaches 7.19 with the shadow,
+where it read 15.03 before, with the maps' 2 bake tasks beside it as now. As first put:
+`ds.Terrain.BuildTasks` 3 alone does not reach 15.00 (15.03), 4 does (9.52) but is the machine's whole cap with the maps' 2 bake tasks; every other vertex, interpolated (a coarsening, ruled); 8 samples (a quality NO-GO unless relaxed); a larger tolerance than GearClearance / 10 at dusk (it was already 15.03 with no shadow); or prioritising the chain of tiles under the ship over the prefetch. For `map_land_ms`: the RHI upload on the render thread, or accept a ~9.5 ms hitch once a world. `GroundKeepsUpAtDusk` stays red until the ruling; `feat/landing-b-t` does not merge into `feat/landing-b` while it is.
 
 - **`cold_cut_s`, `tile_ratio`, `coarse_s` or a `flight_*` budget over:** Task 0's second question, with measured numbers now. The first remedy to propose is the day exit by footprint (Task 0, 2(e)).
   - It is `SunShadow::SteepestSlope(Params, FootprintCm)`: the sampled steepest slope of only the bands not yet faded at the tile's spacing, each band's sampled gradient measured as `.SteepestSlope` measures the sum.
