@@ -56,7 +56,7 @@
 - **One height function.** The march reads `IGroundField::Height`: `FReliefGround` over `FWorldRelief`, whose `Height` carries every band, the C++-only finer octaves and the craters (`Cratering` times `WR_CraterSum`). So **craters cast**, which answers the first plan's Task 0 question 2 by construction. Heights are physical and are never exaggerated.
 - **One light.** The sun direction is the sky's own, `FSkyBodyView::LightDirection`: the unit vector from the body's centre to its star, universe axes. After Task 3 it comes from one function, `SkyProjection::LightDirection`, which `Project`, the tiles and the maps all call. The star's angular radius is `asin(R_star / d)`, clamped to `SunShadow::SunRadiusMax` (0.5 rad). No fill light is added: a shadow is as dark as the night side.
 - **Where it applies.** Solid worlds only. Giants and oceans have no ground field, so they get no tile and no map. Their materials keep the default white map and cast nothing.
-- **The handover.** At 50 km (Morph 0) M_SkyGround's shadow is the map, read through the same lookup code as M_SkyBody. `Eyes.HandoverParity` holds the ground to the orbit to 1e-3 of the mean with the shadow on, at a 3-degree dusk.
+- **The handover.** At 50 km (Morph 0) M_SkyGround's shadow is the map, read through the same lookup code as M_SkyBody. `Eyes.HandoverParity` holds the ground to the orbit to 1e-3 of the mean with the shadow on, at a 3-degree dusk. **Not met at head** (the *Review record*, 2026-09-29): the shadow's share holds (0.8135 against 0.8137), but the frames are 3.0e-3 apart without the shadow -- 2.2e-2 before the review made the ground's normal split grow in with the relief -- on the face's Detail term. Open for the developer.
 - **Parity follows the measured floor as a rule**, per footprint: the tolerance is 1e-3, or 1.25 x the float mirror's distance from double at that footprint, whichever is larger. A term over its allowance is a port bug. A FLOAT FLOOR verdict escalates, and the tolerance is never loosened.
 - **The shared file** gains only the map's lookup (`WR_ShadowMapCoord`, `WR_ShadowTapsAt`, `WR_Bilinear`) and three shims. It stays in the scalar, no-swizzle subset, with every symbol `WR_`-prefixed and every literal `WR_REAL(...)`. A syntax either compiler refuses fails that compiler: `./build.sh` for C++, `Eyes.WorldReliefParity` for the GPU.
 - **The frame must not rise.** `Eyes.LandingFrame`'s every case with the baked shadow on is held against Task 1's baseline (taken before any shadow existed) by `Tools/landing_frame_gate.py --not-rise`. That gate is GO only if no case's cost exceeds the medians' own error band (floored at 0.2 ms, the most two quiet baselines have differed by). The whole frame is still reported, not asserted: the spec's profiling owns the 16.6 ms.
@@ -69,7 +69,7 @@
 - **All logic is C++ or the shared file.** The material graph only wires (ADR 0002). The material contract has three sides: `SkyMaterialContract.h`, `Tools/sky_material_contract.json` and the assets.
 - **Tools and limits.**
   - Build only with `./build.sh`, test only with `./test.sh`, render and time only with `Tools/eyes.sh`, and mutate only with `Tools/mutate.sh`, all behind `Tools/ue_lock.sh`. The editor is closed.
-  - Any local sweep uses at most 3-4 workers, under `nice -n 19`. The bake's own tasks default to 2, the terrain's cap.
+  - Any local sweep uses at most 3-4 workers, under `nice -n 19`. The bake's own tasks default to 2 (`ds.Sky.ShadowBakeTasks`); the terrain's builds are 3 (ruled 2026-09-28, from 2).
   - Every test path is a sibling with no children. Every new test is proven able to fail.
 - **The default suite.** This plan's additions to `./test.sh DeepSpace` total at most 8 s, with no test over the 5 s cap. Heavy measures live in `Eyes.ShadowBakeCost`, outside the suite. Test worlds (`SkyTestWorld::FSkyWorld`) build **without** tile shadows and map bakes unless asked, and the two are asked for separately: `EShadows::Tiles`, `EShadows::Maps`, or `EShadows::On` for both. So the suite's existing grounds cost what they did, and a test of the tiles never bakes 4096-column maps in the background.
 - **Header changes** (`ShipSky.h`, `WorldGround.h`, `TerrainTile.h`, `WorldRelief.h`, `WorldReliefParams.h`) need `./rebuild.sh --force` before an editor session; `./build.sh` suffices for the tests. No `UPROPERTY`, component or `BlueprintImplementableEvent` is removed, so `check_blueprints.py` is not owed.
@@ -310,7 +310,7 @@ namespace SunShadow
 }
 ```
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowTest.cpp`:
+- [x] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowTest.cpp`:
 
 ```cpp
 #include "Math/RandomStream.h"
@@ -772,13 +772,13 @@ bool FSunShadowSteepestSlopeTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 2: Run them to see them fail.**
+- [x] **Step 2: Run them to see them fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `Surface/SunShadow.h` does not exist.
 
-- [ ] **Step 3: The header.** Create `Source/DeepSpace/Surface/SunShadow.h`:
+- [x] **Step 3: The header.** Create `Source/DeepSpace/Surface/SunShadow.h`:
 
 ```cpp
 #pragma once
@@ -919,7 +919,7 @@ namespace SunShadow
 }
 ```
 
-- [ ] **Step 4: The march.** Create `Source/DeepSpace/Surface/SunShadow.cpp`:
+- [x] **Step 4: The march.** Create `Source/DeepSpace/Surface/SunShadow.cpp`:
 
 ```cpp
 #include "Surface/SunShadow.h"
@@ -1072,7 +1072,7 @@ double SunShadow::SteepestSlope(const FWorldReliefParams& Params)
 }
 ```
 
-- [ ] **Step 5: Run them to see them pass.**
+- [x] **Step 5: Run them to see them pass.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.SunShadow`
 
@@ -1082,7 +1082,7 @@ Expected: all five PASS. Copy these into the task report:
 
 A ratio under 0.6, or a 5-degree mean |dv| over 0.10 at 12 samples, means the march is not what planning measured. Stop and report the numbers, and do not loosen the bound. A measured detail slope outside 13.9-19.3 (and so a margin outside 1.3-1.8) means the constant's claim is off: stop and report it, and do not re-tune it without the rule.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Surface/SunShadow.h Source/DeepSpace/Surface/SunShadow.cpp Source/DeepSpace/Tests/SunShadowTest.cpp && \
@@ -1098,7 +1098,7 @@ orbit's map (AlongProfile). DeepSpace.Surface.SunShadow.KnownValues, .Exits,
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 7: Prove them.** Run each mutation after the commit, then `./build.sh`:
+- [x] **Step 7: Prove them.** Run each mutation after the commit, then `./build.sh`:
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -1145,7 +1145,7 @@ The two tests' own per-sample checks are proven by these mutants too, since each
 - Consumes: `FSkySystem`, `FSkyBody`, `SkyProjection::Project`, `SkyTestFixtures::System`, `SkyTestFixtures::Opening`.
 - Produces: `FVector SkyProjection::LightDirection(const FSkyBody& Body, const FSkyBody& Star)`, `double SkyProjection::StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star)`, `SunShadow::FSunLight SkyProjection::SunLightOf(const FSkySystem& System, int32 Body)`. `Project` writes `FSkyBodyView::LightDirection` through `LightDirection`, so the shadow's light and the shading's are one function.
 
-- [ ] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/SunLightTest.cpp`:
+- [x] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/SunLightTest.cpp`:
 
 ```cpp
 #include "Misc/AutomationTest.h"
@@ -1198,13 +1198,13 @@ bool FSunLightIsTheSkysTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 2: Run it to see it fail.**
+- [x] **Step 2: Run it to see it fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `SkyProjection::SunLightOf` is undeclared.
 
-- [ ] **Step 3: The functions.** In `Source/DeepSpace/Sky/SkyProjection.h`, add `#include "Surface/SunShadow.h"` after the existing includes. In `namespace SkyProjection`, after `Project`, add:
+- [x] **Step 3: The functions.** In `Source/DeepSpace/Sky/SkyProjection.h`, add `#include "Surface/SunShadow.h"` after the existing includes. In `namespace SkyProjection`, after `Project`, add:
 
 ```cpp
     /** The one light a world is lit and shadowed by: the unit direction from
@@ -1269,13 +1269,13 @@ SunShadow::FSunLight SkyProjection::SunLightOf(const FSkySystem& System, int32 B
 
 (`FindStar` is the file's own, in its anonymous namespace, above `Project`.)
 
-- [ ] **Step 4: Run it to see it pass, and the sky's tests beside it.**
+- [x] **Step 4: Run it to see it pass, and the sky's tests beside it.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Sky.SunLightIsTheSkys && ./test.sh DeepSpace.Sky`
 
 Expected: PASS, and every `DeepSpace.Sky.*` test still passes. `Project` computes the same light through the one function.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Sky/SkyProjection.h Source/DeepSpace/Sky/SkyProjection.cpp Source/DeepSpace/Tests/SunLightTest.cpp && \
@@ -1287,7 +1287,7 @@ tiles and the maps bake under. DeepSpace.Sky.SunLightIsTheSkys.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: Prove it.**
+- [x] **Step 6: Prove it.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -1339,7 +1339,7 @@ SkyTestWorld::FSkyWorld::FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8
 
 The CVars are read by name in tests as `ds.Terrain.Shadows` and `ds.Terrain.ShadowSamples`. `ds.Sky.ShadowMaps` and `ds.Sky.ShadowMapWidth` are Task 6's CVars. `FSkyWorld` sets `ds.Sky.ShadowMaps` only if it exists, so this task does not wait on Task 6. `EShadows::Tiles` sets `ds.Terrain.Shadows` 1 and `ds.Sky.ShadowMaps` 0, and `Maps` does the reverse. `On` sets both, and `Off` neither.
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/TileSunShadowTest.cpp`:
+- [x] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/TileSunShadowTest.cpp`:
 
 ```cpp
 #include "HAL/IConsoleManager.h"
@@ -1611,13 +1611,13 @@ bool FGroundShadowLightTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 2: Run them to see them fail.**
+- [x] **Step 2: Run them to see them fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `TerrainTile::FTileShadow`, `FTileBuild::SunVisible`, `UV0Of`, `AWorldGround::GetTileShadow` and `SkyTestWorld::EShadows` are undeclared.
 
-- [ ] **Step 3: The tile.** In `Source/DeepSpace/Surface/TerrainTile.h`, add `#include <atomic>` before `#include "CoreMinimal.h"`, and `#include "Surface/SunShadow.h"` after `#include "Surface/TerrainQuadtree.h"`. In `struct FTileBuild`, after `double SkirtDepthCm = 0.0;`, add:
+- [x] **Step 3: The tile.** In `Source/DeepSpace/Surface/TerrainTile.h`, add `#include <atomic>` before `#include "CoreMinimal.h"`, and `#include "Surface/SunShadow.h"` after `#include "Surface/TerrainQuadtree.h"`. In `struct FTileBuild`, after `double SkirtDepthCm = 0.0;`, add:
 
 ```cpp
     /** Each grid vertex's share of its star's disc seen past the ground --
@@ -1703,7 +1703,7 @@ FVector2f TerrainTile::UV0Of(const FTileBuild& Tile, int32 Vertex)
 }
 ```
 
-- [ ] **Step 4: The mesh.** In `Source/DeepSpace/Surface/TerrainTileComponent.cpp`, replace
+- [x] **Step 4: The mesh.** In `Source/DeepSpace/Surface/TerrainTileComponent.cpp`, replace
 
 ```cpp
                 Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, FVector2f::ZeroVector);
@@ -1716,7 +1716,7 @@ with
                 Buffers.StaticMeshVertexBuffer.SetVertexUV(V, 0, TerrainTile::UV0Of(Tile, V));
 ```
 
-- [ ] **Step 5: The ground's light.** In `Source/DeepSpace/Surface/WorldGround.h`, in the public section after `GetGroundMaterialInstance`, add:
+- [x] **Step 5: The ground's light.** In `Source/DeepSpace/Surface/WorldGround.h`, in the public section after `GetGroundMaterialInstance`, add:
 
 ```cpp
     /** The light, steepest slope and samples every tile of this ground is
@@ -1939,7 +1939,7 @@ In `Describe`, after the first `FString Out = FString::Printf(...)` line (the wo
         FMath::RadiansToDegrees(FMath::Atan(TileShadow.SteepestSlope)));
 ```
 
-- [ ] **Step 6: Test worlds build without the shadow unless asked.** In `Source/DeepSpace/Tests/SkyTestWorld.h`, before `struct FSkyWorld`, add:
+- [x] **Step 6: Test worlds build without the shadow unless asked.** In `Source/DeepSpace/Tests/SkyTestWorld.h`, before `struct FSkyWorld`, add:
 
 ```cpp
     /** Whether a test world casts shadows: Tiles marches every tile's
@@ -1990,7 +1990,7 @@ At the end of `~FSkyWorld()`, after `World->DestroyWorld(false);`, add:
             }
 ```
 
-- [ ] **Step 7: Run them to see them pass, and the ground's tests beside them.**
+- [x] **Step 7: Run them to see them pass, and the ground's tests beside them.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.TileSunShadow && ./test.sh DeepSpace.Surface.GroundShadowLight && ./test.sh DeepSpace.Surface`
 
@@ -2001,7 +2001,7 @@ Expected: both PASS, and every `DeepSpace.Surface.*` test still passes.
 - If that tile turns out uniform, move it to another fixture direction and record which. Do not drop the check.
 - If the same-level edge is not equal to the bit, two tiles compute one direction differently (`GridDirection`, or a height read at another footprint). That is a bug, not a tolerance to widen.
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Surface/TerrainTile.h Source/DeepSpace/Surface/TerrainTile.cpp \
@@ -2023,7 +2023,7 @@ same-level edge held to the bit and a 2:1 edge's step measured),
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 9: Prove them.**
+- [x] **Step 9: Prove them.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -2085,7 +2085,7 @@ namespace SunShadowMap
 
 In the shared file: `WR_ShadowCoord WR_ShadowMapCoord(DX, DY, DZ, XX, XY, XZ, ZX, ZY, ZZ, PsiLo, Step, Footprint, Levels)`, `WR_ShadowTaps WR_ShadowTapsAt(U, V, Width, Rows, Level)`, `WR_REAL WR_Bilinear(A, B, C, D, FX, FY)`, `WR_PI`.
 
-- [ ] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowMapTest.cpp`:
+- [x] **Step 1: Write the failing tests.** Create `Source/DeepSpace/Tests/SunShadowMapTest.cpp`:
 
 ```cpp
 #include "Math/RandomStream.h"
@@ -2348,13 +2348,13 @@ bool FSunShadowMapMipsTest::RunTest(const FString& Parameters)
 
 The known means: level 1 (0, 0) is `(0 + 6 + 100 + 104 + 2) / 4 = 53` and (1, 0) is `(8 + 12 + 108 + 112 + 2) / 4 = 60`. Level 2 is `(53 + 60 + 53 + 60 + 2) / 4 = 57`. The first sum, 210, is chosen so that rounding matters: unrounded it is 52.
 
-- [ ] **Step 2: Run them to see them fail.**
+- [x] **Step 2: Run them to see them fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `Surface/SunShadowMap.h` does not exist.
 
-- [ ] **Step 3: The shims and the lookup, in the shared file.** In `Shaders/Private/WorldRelief.ush`'s C++ half, after `WR_step`'s line, add:
+- [x] **Step 3: The shims and the lookup, in the shared file.** In `Shaders/Private/WorldRelief.ush`'s C++ half, after `WR_step`'s line, add:
 
 ```cpp
 inline WR_REAL WR_asin(WR_REAL X) { return std::asin(X); }
@@ -2466,7 +2466,7 @@ WR_REAL WR_Bilinear(WR_REAL A, WR_REAL B, WR_REAL C, WR_REAL D, WR_REAL FX, WR_R
 }
 ```
 
-- [ ] **Step 4: The C++ reach into it.** In `Source/DeepSpace/Surface/WorldRelief.h`, in `namespace WorldReliefNoise` before `struct FBands`, add:
+- [x] **Step 4: The C++ reach into it.** In `Source/DeepSpace/Surface/WorldRelief.h`, in `namespace WorldReliefNoise` before `struct FBands`, add:
 
 ```cpp
     /** The cast shadow's map lookup, from the shared file (WR_ShadowMapCoord,
@@ -2581,7 +2581,7 @@ float WorldReliefNoise::LerpF32(float A, float B, float T)
 }
 ```
 
-- [ ] **Step 5: The map.** Create `Source/DeepSpace/Surface/SunShadowMap.h`:
+- [x] **Step 5: The map.** Create `Source/DeepSpace/Surface/SunShadowMap.h`:
 
 ```cpp
 #pragma once
@@ -2865,13 +2865,13 @@ float SunShadowMap::SampleF32(const FSunShadowMap& Map, const FVector3f& D, floa
 
 `FShadowCoord` and `FShadowTaps` hold the float build's values as doubles, which represent them exactly, so casting them back to float is lossless.
 
-- [ ] **Step 6: Run them to see them pass, and the shared file's own tests beside them.**
+- [x] **Step 6: Run them to see them pass, and the shared file's own tests beside them.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.SunShadowMap && ./test.sh DeepSpace.Surface.WorldRelief && ./test.sh DeepSpace.Surface.ShaderMapping`
 
 Expected: all five `.SunShadowMap.*` PASS, and every `DeepSpace.Surface.WorldRelief.*` still passes, because the file's old functions are untouched. Copy `.TexelsAreTheProfile`'s info line into the task report. `./build.sh` proves only the file's C++ half; the HLSL half is proven by Task 8's `Eyes.WorldReliefParity`, once a material includes it.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Shaders/Private/WorldRelief.ush Source/DeepSpace/Surface/WorldRelief.h Source/DeepSpace/Surface/WorldRelief.cpp \
@@ -2890,7 +2890,7 @@ DeepSpace.Surface.SunShadowMap.Shape, .TexelsAreTheProfile,
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 8: Prove them.**
+- [x] **Step 8: Prove them.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -2976,7 +2976,7 @@ namespace ShipSky
 }
 ```
 
-- [ ] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp`:
+- [x] **Step 1: Write the failing test.** Create `Source/DeepSpace/Tests/ShipSkyShadowTest.cpp`:
 
 ```cpp
 #include "Components/StaticMeshComponent.h"
@@ -3188,13 +3188,13 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
 #endif
 ```
 
-- [ ] **Step 2: Run it to see it fail.**
+- [x] **Step 2: Run it to see it fail.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh`
 
 Expected: the build fails, because `SkyMaterial::ShadowMap`, `AShipSky::FlushShadowBakesForTest`, `ShipSky::ShadowStrength` and the rest are undeclared.
 
-- [ ] **Step 3: The contract's header.** In `Source/DeepSpace/Sky/SkyMaterialContract.h`, after `inline const FName BodyAxisY = ...;`, add:
+- [x] **Step 3: The contract's header.** In `Source/DeepSpace/Sky/SkyMaterialContract.h`, after `inline const FName BodyAxisY = ...;`, add:
 
 ```cpp
     // The cast shadow (the developer's ruling on slice (b)'s build: baked,
@@ -3238,7 +3238,7 @@ Replace the parameter lists with:
 
 Also amend the header comment's M_SkyBody line to list `Shadows`, `ShadowFrameX` and `ShadowFrameZ`, and the texture `ShadowMap`.
 
-- [ ] **Step 4: The contract's JSON.** In `Tools/sky_material_contract.json`, add to `"parameters"`:
+- [x] **Step 4: The contract's JSON.** In `Tools/sky_material_contract.json`, add to `"parameters"`:
 
 ```json
     "shadows":           { "name": "Shadows",         "type": "scalar" },
@@ -3264,7 +3264,7 @@ After `"shared_relief"`, add:
   },
 ```
 
-- [ ] **Step 5: The contract's test.** In `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`:
+- [x] **Step 5: The contract's test.** In `Source/DeepSpace/Tests/SkyMaterialContractTest.cpp`:
 
 (a) In `Roles()`, append:
 
@@ -3487,7 +3487,7 @@ with
 
 Add `#include "Materials/MaterialExpressionTextureObjectParameter.h"`, `#include "Materials/MaterialExpressionMultiply.h"` and `#include "Materials/MaterialExpressionConstant.h"` with the other material includes (skip any already there).
 
-- [ ] **Step 6: The authoring.** In `Tools/setup_sky_materials.py`:
+- [x] **Step 6: The authoring.** In `Tools/setup_sky_materials.py`:
 
 (a) After `SHARED = CONTRACT["shared_relief"]`, add `SHADOW = CONTRACT["shadow"]`. After `SHARED_CODE`, add:
 
@@ -3678,7 +3678,7 @@ def shadow_probe(default_texture):
 
 (g) In `main()`, before `sky_body()`, add `white = shadow_default_texture()`. Then replace the calls `sky_body()` with `sky_body(white)` and `sky_ground()` with `sky_ground(white)`, and after `sky_ground_probe()` add `shadow_probe(white)`. The probe passes `ProbeFootprint` to the node as it is: it is already a pixel's footprint, and the parity test hands `SunShadowMap::Sample` the same number.
 
-- [ ] **Step 7: The sky's bakes.** The maps are **not** tied to `RebuildFor`. `RebuildFor` runs on every new jump serial, and `ShipNavState.cpp` bumps that serial on an in-system arrival too. Tied to it, every in-system jump would throw away every world's map and re-bake the system: about 15-30 s of two workers for the corpus's 3.75 solid worlds, with every world unshadowed meanwhile, though neither input to a map had moved. And `ds.Universe.ReloadPriors` changes a relief without changing the serial, so a map tied to the serial would go stale under a ground that had rebuilt. So each map is keyed by what it is made from, and the key is checked every frame.
+- [x] **Step 7: The sky's bakes.** The maps are **not** tied to `RebuildFor`. `RebuildFor` runs on every new jump serial, and `ShipNavState.cpp` bumps that serial on an in-system arrival too. Tied to it, every in-system jump would throw away every world's map and re-bake the system: about 15-30 s of two workers for the corpus's 3.75 solid worlds, with every world unshadowed meanwhile, though neither input to a map had moved. And `ds.Universe.ReloadPriors` changes a relief without changing the serial, so a map tied to the serial would go stale under a ground that had rebuilt. So each map is keyed by what it is made from, and the key is checked every frame.
 
 In `Source/DeepSpace/Sky/ShipSky.h`:
 
@@ -4219,7 +4219,7 @@ void ShipSky::DiscardShadowTextureCpu(UTexture2D& Texture)
 
 `SameRelief` is `WorldReliefParams.h`'s (Task 4). If `RemoveBulkData` is refused on a transient mip (an assert, or the size unchanged), say so in the task report and keep the copy. Task 7 then measures the doubled memory, and a budget over goes to Task 7b. Never keep the copy silently.
 
-- [ ] **Step 8: Build and author.**
+- [x] **Step 8: Build and author.**
 
 The header changes here (`ShipSky.h`) and Task 4's (`WorldReliefParams.h`, `WorldGround.h`, `TerrainTile.h`) need `./rebuild.sh --force` before an editor session.
 
@@ -4237,7 +4237,7 @@ Expected:
 - A contract mismatch raises and names it.
 - If the import names a sampler-type mismatch for `T_SkyShadowWhite` (a grayscale sampler over a texture that is not TC_Grayscale), the import did not take the settings. Check the asset's compression, and never switch the sampler type to hide it.
 
-- [ ] **Step 9: Run the tests.**
+- [x] **Step 9: Run the tests.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./test.sh DeepSpace.Sky.ShadowParameters && ./test.sh DeepSpace.Sky.MaterialContract && ./test.sh DeepSpace.Sky && ./test.sh DeepSpace.Surface`
 
@@ -4247,7 +4247,7 @@ Expected: all PASS.
 - If it fails on "no copy left on the CPU" under `-nullrhi`, check that the fence completed (`FlushShadowBakesForTest` waits on it) before doubting `RemoveBulkData`. Never drop the check.
 - If the fade leg's landing frame reads a strength over 0, the landing and `DrawBodies` ran in different frames: `PumpShadowBakes` must run at the top of `SyncTo`, before `DrawBodies`.
 
-- [ ] **Step 10: Commit.**
+- [x] **Step 10: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Tools/sky_material_contract.json Tools/setup_sky_materials.py Source/DeepSpace/Sky/SkyMaterialContract.h \
@@ -4271,7 +4271,7 @@ DeepSpace.Sky.ShadowParameters; the contract's textures.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 11: Prove it.**
+- [x] **Step 11: Prove it.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -4344,7 +4344,7 @@ The material side is proven on the GPU by Tasks 8 and 9, after Task 7 has measur
 
 The frame is `Eyes.LandingFrame`'s, in Task 9: it must not rise.
 
-- [ ] **Step 1: The flight, shared.** Create `Source/DeepSpace/Tests/GroundKeepsUpScenario.h`:
+- [x] **Step 1: The flight, shared.** Create `Source/DeepSpace/Tests/GroundKeepsUpScenario.h`:
 
 ```cpp
 #pragma once
@@ -4425,7 +4425,7 @@ bool FGroundKeepsUpTest::RunTest(const FString& Parameters)
 
 The test's messages are its old ones, word for word. Run `./test.sh DeepSpace.Surface.GroundKeepsUp`: it passes as before, in about the same two minutes. Its old mutation proofs still apply through the header.
 
-- [ ] **Step 2: The measurement.** Create `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp`:
+- [x] **Step 2: The measurement.** Create `Source/DeepSpace/Tests/Eyes/ShadowBakeCostEyesTest.cpp`:
 
 ```cpp
 #include "Engine/Texture2D.h"
@@ -4808,7 +4808,7 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
 
 `GroundKeepsUpScenario::Fly` places the ship at IV's drive floor itself, over "the ship's own side of the world", as `GroundKeepsUp` always did. The placement 5,000 km out before it only makes the ground let go of the dusk cut first, so the flight starts from what play would have.
 
-- [ ] **Step 3: Run it**, on a quiet machine: no other build, test or render running.
+- [x] **Step 3: Run it**, on a quiet machine: no other build, test or render running.
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.GroundKeepsUp && Tools/eyes.sh Eyes.ShadowBakeCost; cat Saved/Eyes/ShadowBakeCost/report.txt`
 
@@ -4823,11 +4823,11 @@ Expected: `GroundKeepsUp` passes as before. `Eyes.ShadowBakeCost` reports `passe
 
 A number far from its prediction is a finding to report, not a failure. If the process's physical memory rose by about the GPU figure again, the CPU copy is still held somewhere (`ShadowTextureCpuBytes` says 0): report it with Task 7b's memory options.
 
-- [ ] **Step 4: The verdict.**
+- [x] **Step 4: The verdict.**
   - **Every budget line reads `within`:** write the report's budget lines and the `system`, `cut`, `tile sun 10`, `map`, `flight` and `coarse` lines into this file's header comment, as one line each after `Nothing is asserted...`, headed `Measured (2026-09-28, RTX 4070 Ti SUPER, Ryzen 5 7600X):`. Commit (Step 5), and go on to Task 8.
   - **Any line reads `OVER`:** commit the measurement (Step 5) and go to Task 7b. Do not start Task 8.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/GroundKeepsUpScenario.h Source/DeepSpace/Tests/GroundKeepsUpTest.cpp \
@@ -4925,6 +4925,9 @@ When the ruling comes back, write it into the spec under the ruling's bullet, am
   - `tile sun 10` ratio median x7.70; `map` slowest 4.16 s (Baemsekai I), largest 12.57 MB; `flight` 12.84 cm; `coarse` 2.89 s.
   - Budget lines: `system_gpu_mb` 63.919 / 128 within; `system_cpu_mb` 0 / 0 within; `map_land_ms` 0.159 / 4 within; `map_upload_rt_ms` 0.072 / 4 within; `jump_rebakes` 0 / 0 within; `cold_cut_s` 5.266 / 30 within; **`tile_shadow_mb` 12.247 / 12 OVER**; `release_ms` -0.017 / 2 within; `tile_ratio` 7.699 / 10 within; `world_bake_s` 4.160 / 15 within; `world_map_mb` 12.568 / 16 within; `flight_missing` 0 / 0 within; `flight_worst_cm` 12.837 / 15 within; `flight_not_drawing` 0 / 0 within; `coarse_s` 2.894 / 10 within; `system_gpu_mb_worst` 123.988 / 128 within; `system_gpu_mb_worst16` 120.328 / 128 within; `map_land_ms_all` 0.159 / 4 within; **`map_upload_rt_ms_all` 4.336 / 4 OVER**.
   - **Two OVER, for the developer.** `tile_shadow_mb` 12.25 MB: the cut now keeps its ancestors resident (1474 tiles, not 951), both copies of each tile's shadow counted; the options are the budget, or 16-bit `SunVisible` (half), or dropping the component's kept copy. `map_upload_rt_ms_all` 4.34 ms: one render command, once, while the sixteen-world test system's maps landed back to back in a flush (1024 KB pieces read 4.59 ms there; the start system's, in the same flush path, 0.07 ms); not diagnosed. This render-thread line is this work's own addition beside the ruled game-thread `map_land_ms`, which is within everywhere.
+  - **Task 8 was started with both lines OVER and neither ruled on**, against Task 7 Step 4 ("Any line reads `OVER`: ... Do not start Task 8") and this task ("Do not tune past a budget without the ruling"): f996674 (Task 8) is a minute older than this record (773d8bf), Tasks 9 and 10 followed, and `feat/landing-b` was fast-forwarded to 177d450. The review (2026-09-29) records the breach, and did only what needs no ruling:
+    - `tile_shadow_mb` was a fault, not a tune: every resident tile was held twice, once in `AWorldGround`'s resident map and once as its component's kept copy, and a pooled component kept the last tile it drew. They now share one `TSharedRef<const FTileBuild>`, and a pooled component holds none (9f9f3c2): **6.12 MB, within**, and asserted (d3d9c47).
+    - `map_upload_rt_ms_all` is **still OVER** (4.74 and 4.90 ms in two runs) and is diagnosed further, not fixed: 3 or 4 of about 480 pieces take 4.3-4.9 ms of the render thread and every other under 0.5 ms; a 225 KB piece is as slow as a 512 KB one; a frame end after every pump of the test's flush (the RHI's commands submitted, the render thread waited on) changed nothing; and it happens only in Trabo's loads, never the start system's. **Awaiting the developer's ruling:** this line's budget, or a fix whose shape needs one (the RHI's staging, a persistent upload buffer).
 
 ---
 
@@ -4944,7 +4947,7 @@ When the ruling comes back, write it into the spec under the ruling's bullet, am
 
 **The handover, decided now:** at 49.9 km over IV under a 3-degree dusk, turned about the light until the map shades the view's central quarter (its mean at most 0.9, read from the kept map before any frame is shot), the ground's frame must be the orbit's to 1e-3 of its mean with the shadow on. The shadow must reach both frames: each is darker with it than without, by the same share to 1e-3. And the seam's per-pixel p99 gap may grow at most 3x with the shadow on. At 49.9 km the morph is about 3e-5, so the ground's shadow is the map to that.
 
-- [ ] **Step 1: The map's leg.** In `WorldReliefParityTest.cpp`, add the includes `#include "Engine/Texture2D.h"`, `#include "Sky/SkyProjection.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"` and `#include "Surface/SunShadowMap.h"`. Before `Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));`, add:
+- [x] **Step 1: The map's leg.** In `WorldReliefParityTest.cpp`, add the includes `#include "Engine/Texture2D.h"`, `#include "Sky/SkyProjection.h"`, `#include "Surface/GroundField.h"`, `#include "Surface/SunShadow.h"` and `#include "Surface/SunShadowMap.h"`. Before `Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));`, add:
 
 ```cpp
     // -- The cast shadow's map (the developer's ruling on slice (b)'s build:
@@ -5055,7 +5058,7 @@ When the ruling comes back, write it into the spec under the ruling's bullet, am
     Report.Add(FString::Printf(TEXT("SUMMARY shadow map C++-vs-GPU %.2e, float-vs-double %.2e"), WorstShadow, WorstShadowFloat));
 ```
 
-- [ ] **Step 2: Run it.**
+- [x] **Step 2: Run it.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.WorldReliefParity; grep -A1 "shadow map" Saved/Eyes/WorldReliefParity/report.txt | head -30; grep -c "error X\|Shader compile failed\|Failed to compile" Saved/Logs/DeepSpace.log`
 
@@ -5064,7 +5067,7 @@ Expected: PASS, with 0 shader-compile errors and ten shadow-map blocks (two plac
   - **Over its allowance at a few pixels of the finest footprint only, the float mirror close to it:** a FLOAT FLOOR verdict (the GPU's `atan2` or `log2` beyond the C++ float build's). Stop and report the gaps; the tolerance is not loosened.
   - **Over broadly, or at the seam's place only:** a port bug. Look first at the frame's `w` channels (PsiLo and Step reaching the node), the pin order, and the taps' wrap.
 
-- [ ] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"`, `#include "Sky/ShipSky.h"` (if absent) and `#include "Surface/SunShadowMap.h"`. Make the world `FSkyWorld Test(TEXT("HandoverParityWorld"), 8, EShadows::On);`, set `Test.Sky->bKeepShadowMapsForTest = true;` before `Test.BeginPlay();`, and after `Test.BeginPlay();` add:
+- [x] **Step 3: The handover at dusk.** In `HandoverParityEyesTest.cpp`, add the includes `#include "HAL/IConsoleManager.h"`, `#include "Sky/ShipSky.h"` (if absent) and `#include "Surface/SunShadowMap.h"`. Make the world `FSkyWorld Test(TEXT("HandoverParityWorld"), 8, EShadows::On);`, set `Test.Sky->bKeepShadowMapsForTest = true;` before `Test.BeginPlay();`, and after `Test.BeginPlay();` add:
 
 ```cpp
     // Every world's cast-shadow map is baked before any frame is judged.
@@ -5222,13 +5225,13 @@ Then, before `const FString Dir = ...`, add:
 
 Then make the report carry both lines: replace `FFileHelper::SaveStringToFile(Line + TEXT("\n"), ...)` with `FFileHelper::SaveStringToFile(Line + TEXT("\n") + DuskLine + TEXT("\n"), ...)`.
 
-- [ ] **Step 4: Run it.**
+- [x] **Step 4: Run it.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && Tools/eyes.sh Eyes.HandoverParity; cat Saved/Eyes/HandoverParity/report.txt`
 
 Expected: PASS, with two lines. The existing 49.9 km line is unchanged: at the start's sun (62.6 degrees on IV) the day exit leaves the map whole there. On the dusk line both shares are well under 1, within 1e-3 of each other, and the p99 with the shadow is within 3x of without. The shares depend on how much of the central quarter the map shades at 8.8 km texels, 3 degrees up. The leg first finds a placement whose view the map shades by at least a tenth (the line prints the map's mean there). So a share of 0.99 or more now means the shadow did not reach that frame. For the ground, look at `CopyBodyLook`. For both, look at the proxy's `Shadows`, which a flush lands faded in. If no placement holds shade ("the view holds shade" fails), the map is lit along the whole 36 degrees of terminator searched: look at the bake (`.TexelsAreTheProfile`) and the light's frame before the handover.
 
-- [ ] **Step 5: The verdict line, and commit.** Add this to `WorldReliefParityTest.cpp`'s header, after the T2 verdict line, filled in from the run:
+- [x] **Step 5: The verdict line, and commit.** Add this to `WorldReliefParityTest.cpp`'s header, after the T2 verdict line, filled in from the run:
 
 `* Cast shadow's map (the developer's ruling on slice (b)'s build, baked, 2026-09-28): PASS -- Baemsekai IV's map at 1,024 columns across the terminator and across the seam, SunShadowMap::Sample vs the GPU <worst> against the float mirror's <worst float> from double, at five footprints to level 2; SUMMARY <the SUMMARY line, verbatim>`
 
@@ -5239,7 +5242,7 @@ git commit -qm "test(eyes): the cast shadow's map held to its C++ mirror on the 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: Prove them.**
+- [x] **Step 6: Prove them.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
@@ -5268,7 +5271,7 @@ Expected: two `KILLED`.
 
 **The rule, decided now:** each case's frame with the baked shadow on, minus the same case in Task 1's baseline, may be no more than its band. The band is twice the combined standard error of the two medians, floored at 0.2 ms. With the ten raw times each run takes, it is about 0.6 ms on the measured spread. A case faster than its baseline is GO. The whole frame is reported, not gated. The switch's proof stands as Task 1 built it: at `1.5m_dusk3`, at least 10% of the lit and held pixels taken under half.
 
-- [ ] **Step 1: The tool's failing tests.** Append to `Tools/test_landing_frame_gate.py`, before `if __name__ == "__main__":`:
+- [x] **Step 1: The tool's failing tests.** Append to `Tools/test_landing_frame_gate.py`, before `if __name__ == "__main__":`:
 
 ```python
 class NotRiseTest(unittest.TestCase):
@@ -5311,7 +5314,7 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python
 
 Expected: the six new tests ERROR. `main` takes no `not_rise`, and there is no `cli`.
 
-- [ ] **Step 2: The tool.** In `Tools/landing_frame_gate.py`, change `def main(baseline_dir, after_dir, budget=1.0):` to `def main(baseline_dir, after_dir, budget=1.0, not_rise=False):`. Replace
+- [x] **Step 2: The tool.** In `Tools/landing_frame_gate.py`, change `def main(baseline_dir, after_dir, budget=1.0):` to `def main(baseline_dir, after_dir, budget=1.0, not_rise=False):`. Replace
 
 ```python
         close = abs(cost - budget) < band
@@ -5359,7 +5362,7 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python
 
 Expected: all tests OK, the old eleven and the new six. The old ones still read `main(..., 1.0)` and are unchanged.
 
-- [ ] **Step 3: The test's world.** In `LandingFrameEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("LandingFrameWorld"), 3000, EShadows::On);`, and after `Test.BeginPlay();` add:
+- [x] **Step 3: The test's world.** In `LandingFrameEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("LandingFrameWorld"), 3000, EShadows::On);`, and after `Test.BeginPlay();` add:
 
 ```cpp
     // The cast shadow is baked (the ruling): every world's map before any
@@ -5393,7 +5396,7 @@ and replace its command lines with:
  *   python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
 ```
 
-- [ ] **Step 4: Run it.**
+- [x] **Step 4: Run it.**
 
 Run (on a quiet machine):
 
@@ -5412,7 +5415,7 @@ On `NO-GO`, the frame has risen, which the ruling says it must not. Look at the 
 
 Re-run once, quiet, before reading anything: a disturbed run is noise. If it rises again, stop and report the table with the case. The fallback, to be ruled, is the texture's own hardware trilinear sample in place of the eight loads. That is one fetch, but its filter's 8-bit weights would need Task 8's floor re-measured.
 
-- [ ] **Step 5: The verdict line, and commit.** Write into the test's header comment, after the commands:
+- [x] **Step 5: The verdict line, and commit.** Write into the test's header comment, after the commands:
 
 `Cast shadow, baked (2026-09-28): GO -- not rising; cost over the before-baseline, ms: 50km <a>, 1.5m <b>, 50km_dusk10 <c>, 1.5m_dusk10 <d>, 1.5m_dusk3 <e>, 200km_dusk10 <f>, each within its band (<bands>); whole frames <A>..<F> ms (not gated: the spec's profiling); the switch at 1.5m_dusk3 took <cov>% of the lit and held pixels`
 
@@ -5423,7 +5426,7 @@ git commit -qm "test(eyes): the baked cast shadow does not raise the frame -- Ey
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: Prove the switch's assertion, by pixels.**
+- [x] **Step 6: Prove the switch's assertion, by pixels.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, 1.0f);' Eyes.LandingFrame; ./build.sh`
 
@@ -5449,7 +5452,7 @@ Expected: `KILLED`. With the proxy's strength pinned at 1, and the ground copyin
 - the shadow's coverage on the pixels the run's two captures without it held still;
 - its aliasing against 2x.
 
-- [ ] **Step 1: The comparison's failing tests.** In `Tools/test_relief_look_compare.py`, give `run()` a parameter `on=None` which, when given, also saves `name + "_read_shadows1.png"` from it. Then add to `CompareTest`:
+- [x] **Step 1: The comparison's failing tests.** In `Tools/test_relief_look_compare.py`, give `run()` a parameter `on=None` which, when given, also saves `name + "_read_shadows1.png"` from it. Then add to `CompareTest`:
 
 ```python
     def test_held_means_are_read_on_the_pixels_both_runs_held(self):
@@ -5478,7 +5481,7 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python
 
 Expected: the two new tests ERROR, because `relief_look_compare` has no `held_means`.
 
-- [ ] **Step 2: The comparison.** In `Tools/relief_look_compare.py`, after `same()`, add:
+- [x] **Step 2: The comparison.** In `Tools/relief_look_compare.py`, after `same()`, add:
 
 ```python
 def held_means(before_dir, after_dir, name):
@@ -5511,7 +5514,7 @@ Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python
 
 Expected: all tests OK.
 
-- [ ] **Step 3: The frames test's world.** In `ReliefLookEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("ReliefLookWorld"), 8, EShadows::On);`, and after `Test.BeginPlay();` add:
+- [x] **Step 3: The frames test's world.** In `ReliefLookEyesTest.cpp`, make the world `FSkyWorld Test(TEXT("ReliefLookWorld"), 8, EShadows::On);`, and after `Test.BeginPlay();` add:
 
 ```cpp
     // The cast shadow is baked: every world's map before any frame.
@@ -5521,7 +5524,7 @@ Expected: all tests OK.
 
 In its header comment, replace "Planning measured (the cast-shadow plan) that physical relief casts on under 3% of the ground at ten degrees and on 40-60% at three" with "Planning measured (the cast-shadow plan) that physical relief casts on under 3% of the ground at ten degrees and on 40-60% at three at a pixel's footprint; the bake's are the tiles' vertices on the ground and the map's 8.8 km texels from orbit, where it measured 15-19% on IV and V at three".
 
-- [ ] **Step 4: The frames after.**
+- [x] **Step 4: The frames after.**
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && EYES_TAG=shadows-after Tools/eyes.sh Eyes.ReliefLook && python3 Tools/relief_look_compare.py Saved/Eyes/ReliefLook/shadows-before Saved/Eyes/ReliefLook/shadows-after`
 
@@ -5535,7 +5538,7 @@ The held means fall with the coverage: after-on is under after-off by about the 
 
 If the comparison prints `OFF FRAME DIFFERS`, the switch is not the old look beyond compiler noise, so find out why and do not go on. The likeliest cause is a material that does not multiply by exactly 1 at strength 0: check `cast()`'s lerp.
 
-- [ ] **Step 5: Look at the frames.** Open `Saved/Eyes/ReliefLook/shadows-after/world_4_ground_low_read_shadows1.png` and its `read_shadows0` twin, then the same pair for `orbit_low`, then both 10-degree pairs. Check that:
+- [x] **Step 5: Look at the frames.** Open `Saved/Eyes/ReliefLook/shadows-after/world_4_ground_low_read_shadows1.png` and its `read_shadows0` twin, then the same pair for `orbit_low`, then both 10-degree pairs. Check that:
 - the shadows fall away from the sun, and lie across the view in the ground frames;
 - no speckle, banding or tile seam shows where the unshadowed frame has none;
 - no shadow steps at an edge between two tiles of one level. Their shared vertices are the same directions at the same footprint, so the shadows are the same numbers, which `.TileSunShadow` holds to the bit;
@@ -5545,13 +5548,13 @@ If the comparison prints `OFF FRAME DIFFERS`, the switch is not the old look bey
 
 Write a one-line judgement per world into the spec line below. The developer's own look is carried to the next playtest.
 
-- [ ] **Step 6: The spec.** In `docs/superpowers/specs/2026-09-27-landing-design.md`, under the ruling "**Cast shadows are baked, not marched** (2026-09-28)", add an indented line with the runs' numbers:
+- [x] **Step 6: The spec.** In `docs/superpowers/specs/2026-09-27-landing-design.md`, under the ruling "**Cast shadows are baked, not marched** (2026-09-28)", add an indented line with the runs' numbers:
 
 ```markdown
   - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (<N> samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is <W> columns (<texel> km texels on IV), baked when the system loads. The bake: the cold cut at 1.5 m <cut> s (was <cut0>), a tile <ratio>x its heights at a 10-degree dusk, a world's map <world> s and <MB> MB (the slowest and largest of I-V and the corpus's two extremes), the sky's five <sky> s on <tasks> tasks, <gpu> MB resident on the GPU and <cpu> MB left on the CPU (the corpus's worst system about <worst> MB), the slowest landing <land> ms; an in-system jump re-bakes <rebakes>; a release with builds in flight <release> ms; in flight with tile shadows on, <missing> frames without drawn ground, worst gap <gap> cm, the coarse cut <coarse> s after arriving; a 2:1 tile edge steps the shade by <step> on average. The frame: not rising (`Eyes.LandingFrame --not-rise`, every case within its band; whole frames <A>..<F> ms, handed to the ground's profiling). Parity: the map C++ vs GPU <worst> against the float mirror's <float>; the handover at a 3-degree dusk ground <g> vs orbit <o> (<share> of the light kept). Frames at the read exposure, mean luma on held pixels before -> after (coverage): at 10 degrees, orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees, orbit ..., ground .... Judged: <one line a world>. The developer's look carried to the playtest.
 ```
 
-- [ ] **Step 7: The parent plan and CLAUDE.md.** (Reviewed 2026-09-28: the Architecture line, the *Landing* insert, the three table rows and the named constants below are already in CLAUDE.md; what is left is the *Sky* paragraph and the parent plan.) In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
+- [x] **Step 7: The parent plan and CLAUDE.md.** (**Built otherwise, 2026-09-29:** the cast-shadow paragraph went under CLAUDE.md's *Landing*, beside the ground it shades, not *The sky*, and its tunables table gained `ds.Sky.ShadowUploadKB`, which the ruling added after this template was written.) (Reviewed 2026-09-28: the Architecture line, the *Landing* insert, the three table rows and the named constants below are already in CLAUDE.md; what is left is the *Sky* paragraph and the parent plan.) In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
 
 In `CLAUDE.md`, *Architecture*'s `Source/DeepSpace/Surface/` bullet, after "`AWorldGround`, which streams ... (*The ground*).", add: "`SunShadow.*` (the cast shadow's pure horizon march) and `SunShadowMap.*` (each world's baked map for the orbit) are the shadow (*The sky*)."
 
@@ -5620,7 +5623,7 @@ In *Where each tunable lives*, after the `ds.Sky.SurfaceDetail` row, add:
 
 Add to the named-constants sentence at the table's foot: "the cast shadow's `SunShadow::SteepestMargin` (1.5) and sampled gradients (`DetailGradientSampled`, `CraterGradientSampled`, re-measured by `DeepSpace.Surface.SunShadow.SteepestSlope`), and its maps' fade-in, `ShipSky::ShadowFadeSeconds` (1 s)".
 
-- [ ] **Step 8: The whole suite, and its time.**
+- [x] **Step 8: The whole suite, and its time.**
 
 Run:
 
@@ -5656,7 +5659,7 @@ EYES_TAG=final Tools/eyes.sh Eyes.LandingFrame && python3 Tools/landing_frame_ga
 
 Expected: all green, and the gate GO.
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && git add Source/DeepSpace/Tests/Eyes/ReliefLookEyesTest.cpp Tools/relief_look_compare.py Tools/test_relief_look_compare.py \
@@ -5670,7 +5673,7 @@ spec's measured line; the tunables.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 10: Prove the comparison's new measure.** `Tools/mutate.sh` builds and runs Unreal tests, so a Python mutant is proven by hand, as Task 1's tools were:
+- [x] **Step 10: Prove the comparison's new measure.** `Tools/mutate.sh` builds and runs Unreal tests, so a Python mutant is proven by hand, as Task 1's tools were:
   - In `held_means`, change `mask = held(was, was_again) & held(now, now_again)` to `mask = held(was, was_again)`.
   - Run `cd /home/matt/Development/deepspace/.worktrees/landing-b-t/Tools && python3 test_relief_look_compare.py`, and see `test_held_means_are_read_on_the_pixels_both_runs_held` fail: 64 pixels, not 63.
   - Restore it with `git checkout -- Tools/relief_look_compare.py`, and record the check in the task report.
@@ -5689,6 +5692,69 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - The before/after frames of Baemsekai III, IV and V are in `Saved/Eyes/ReliefLook/shadows-{before,after}`: from 200 km and at the ground, at 10 degrees and at 3, at the game's exposure plus the stated read stops. Each has its mean brightness and shadow coverage on still pixels and its aliasing, recorded in the spec. Every shadows-off read frame is its before on the pixels both runs held.
 - The default suite's additions are at most 8 s.
 - The orchestrator merges `feat/landing-b-t` into `feat/landing-b`.
+
+**At head, 2026-09-29 (the *Review record*):** met, but for two, which wait on the developer. `Eyes.HandoverParity` does **not** hold the ground to the orbit at the 3-degree dusk: 3.0e-3 apart without the shadow, against 1e-3; the shadow's own share holds. `Eyes.ShadowBakeCost` has one line still **OVER** and unruled, `map_upload_rt_ms_all` (4.74-4.90 ms against 4); `tile_shadow_mb` is within since each tile is held once. `Eyes.LandingFrame`'s switch is proven by pixels only since the review added the whole-frame share (the first proof survived its mutant). The before/after frames are re-taken on this build, `shadows-before-head` (materials that never read the map) and `shadows-after-head`, and match on every off frame. The default suite's additions are 5.84 s.
+
+---
+
+## Review record (2026-09-29)
+
+Tasks 2-10 were built and committed without their outcomes written here, and their step boxes were never ticked. This is that record, made during track T's review. A box is ticked below only where a commit or a run shows the step done; a proof step is ticked only where its verdict is recorded, here or in the commit.
+
+**What each task built** (the commits on `feat/landing-b-t`):
+
+| Task | Commits | Outcome |
+|---|---|---|
+| 1 | fbf172d | the frames and the timing baseline before any shadow (`Saved/Eyes/ReliefLook/shadows-before`, `Saved/Eyes/LandingFrame/baseline`) |
+| 2 | c6bca8b | `SunShadow`, the pure march, `DeepSpace.Surface.SunShadow.*` |
+| 3 | 6a82550 | `SkyProjection::LightDirection`, `StarAngularRadius`, `SunLightOf`; `DeepSpace.Sky.SunLightIsTheSkys` |
+| 4 | 5e4f2ec, 4ae5b61, 8a95e1f | every tile's vertices carry the shadow; `DeepSpace.Surface.TileSunShadow`, `.GroundShadowLight`; the flights fly the shadows the game ships |
+| 5 | 3a0ceee, 18c63c4 | `SunShadowMap` and the shared file's lookup; `DeepSpace.Surface.SunShadowMap.*` |
+| 6 | b2ac4b2, 1d2b3c9, 3e523e8, 8033e66, 036f70e | the materials, the contract, the sky's bakes; the fade the map's alone (amended, 4a7918c) |
+| 7 | 3742b25 | `Eyes.ShadowBakeCost`; OVER, so Task 7b (4a7918c) |
+| 7b | 7f35749 (the rulings), 5e3bb7b, 933c8e5, 364915b, 773d8bf | three workers and the ground's ancestors, the map in pieces, the 128 MB cap; two lines still OVER and unruled (Task 7b's record) |
+| 8 | f996674, 894eed0 | `Eyes.WorldReliefParity`'s shadow-map leg, PASS at 2.14e-03; `Eyes.HandoverParity`'s dusk leg, RED on the frames themselves |
+| 9 | 989dd38 | `landing_frame_gate.py --not-rise`, GO against the pre-shadow baseline (which cannot price the shadow alone) |
+| 10 | 2945ff8, 177d450 | the frames after, the comparison on held pixels, the spec, CLAUDE.md; the suite 247 passed, this plan's additions 1.47 s |
+
+**The proofs.** Task 6's fade mutant was recorded killed (4a7918c); Task 10's comparison by the hand mutant (2945ff8). Task 8's two were run but their verdicts never written; 894eed0 records the first SURVIVED before the float mirror was held to its recorded distance. The review ran them again, and every other task's, through `Tools/mutate.sh`, which now runs the baseline first (a2b126e) (a red test goes red under any mutant) and takes `MUTATE_EXPECT`, the one assertion that must catch the mutant:
+
+| Task | Mutants | Verdict |
+|---|---|---|
+| 2 | Step 7's eleven | eleven KILLED. `if (false && ...)` does not compile under `-Werror` (unreachable code); it ran as `... && R < 0.0`, a false the compiler cannot see, and was killed |
+| 3 | Step 6's two | two KILLED |
+| 4 | Step 9's five | five KILLED |
+| 5 | Step 8's eight (four in the shared file, each a full rebuild) | eight KILLED |
+| 6 | Step 11's eight | eight KILLED; the `if (false)` key check ran as `... && Index < 0` |
+| 8 | Step 6's two | the mirror that never reads the coarser level KILLED on the float mirror's recorded distance (the terminator at 2.4e-02: 5.90e-01 against 1.0e-04; the seam's three footprints alike). The ground not handed the map KILLED on "by the same share" (`MUTATE_EXPECT`, since the test is red on its dusk frames); the ground then reads black, not the white default expected above: the real map's frame over the 4 x 4 default texture loads out of range |
+| 9 | Step 6's switch mutant | SURVIVED, twice: every frame shadowed leaves a few far ridge tops lit, and their flicker cleared the 10% coverage (switch_cov 0.3179 in the first run, never recorded; 0.4522 and 0.1139, lit 3.5%, flicker 8.9%, in the review's). The proof now also asks that the term darken 5% of the whole frame (7f9aedc); KILLED at 0.46% |
+
+**What the review changed** (each a commit on `feat/landing-b-t`, the suite green after):
+
+- **The ground's remembered child ranges are bounded by the cut** (ce5c894, 1ac0e84): kept while one of their three nearest ancestors is needed, at most 84 for each key; one or two levels was not enough (`GroundKeepsUp` drew 790 m off). `DeepSpace.Surface.GroundForgetsBounds`, 4.4 s, killed.
+- **Each tile is held once** (9f9f3c2): the resident cut and its components share it, a pooled component holds none. `tile_shadow_mb` 12.25 -> 6.12 MB.
+- **`Eyes.ShadowBakeCost` asserts its memory** (d3d9c47): every solid world's map landed; each system under the cap as the RHI sizes it (the levels-bytes revert of 364915b killed, Trabo 141.99 MB and 138.33 MB); the vertex shadows within 12 MB (the double copy killed, 12.25 MB).
+- **`DeepSpace.Sky.ShadowCapSynced`** (da0baf3): `SyncShadowMaps`' own widths are `CappedShadowWidths` under `ShadowTextureBytes`, fit the cap, and a seed's reload keeps them (the full-width sync killed). `ShadowParameters`' one-world re-bake is stated as holding under the cap.
+- **The dusk handover** (6b9c01c): the ground's normal split grows in with the relief, so at Morph 0 it is the orbit's. Forcing Morph showed the step: at 1, 2.7% off; at 0, 0.3%. Dusk without the shadow 2.2e-2 -> 3.0e-3; the 62.6-degree leg 2.3e-5 -> 5.4e-4. The rest is the face's Detail term (the bare sphere 2e-6, mottle 1e-6, craters 5e-5, detail 2.0e-3); sub-pixel view shifts move the mean 1e-4 to 9e-4, so it is not where a pixel falls. `ds.Sky.Shadows` is scoped (FScopedCVar), restored on the early returns.
+- **`Eyes.TerrainBudget`** (6c10162): each capture starts with the render thread and the GPU idle, and every moved capture moves the tiles and sends the transforms first. The old harness's +2.8 ms was the engine's in-flight frame, charged to the empty scene and overlapped by the tiles'.
+- **`Eyes.WorldReliefParity`**: the recorded float distances keyed by footprint (5fddee5).
+- **`Eyes.LandingFrame`'s switch proof** asks for 5% of the whole frame as well as 10% of the lit and held (7f9aedc).
+- **Docs**: the contract's three places say the shadow lookup's GPU case exists (31dc214); the spec's `.BuildTasks` is 3 and it has a *Reviewed* bullet; CLAUDE.md says what was measured (40042db).
+
+**Measured by the review:**
+
+- **The lookup's frame price.** `Eyes.LandingFrame` on this build with materials that never read the map (`nocast-head`), then with them (`shadows-head`), `--not-rise`: GO, cost -0.096..+0.122 ms, every case within its 0.2 ms band (50km +0.093, 1.5m -0.096, 50km_dusk10 +0.122, 1.5m_dusk3 +0.054, 200km_dusk10 +0.101, 1.5m_dusk10 -0.070). The ruling's "costs nothing per frame" holds.
+- **`Eyes.ReliefLook`'s off frames** against a baseline on this build with materials that never read the map (`shadows-before-head`, then `shadows-after-head`): all twelve within the rule (at most 2.5% of held pixels moved, mean gap at most 0.026); `world_4_ground` flagged ALIASING? (alias 2.546 off, 4.417 on). The 2026-09-28 baselines predate 5e3bb7b's streaming, which is why the ground frames differed from them.
+- **`Eyes.TerrainBudget`, honestly timed**, two runs: empty 3.62, 3.64 ms; 2,200 tiles +6.13, +5.97 ms against 6; every tile moved before each capture +7.81, +7.72 ms against 2; the move 2.15, 2.12 ms of game thread against 2 (1.4 moving, 0.8 sending). Red.
+
+**The suite after the review:** `./test.sh` 249 passed, the log clean, 11 min 45 s whole. The review adds `DeepSpace.Surface.GroundForgetsBounds` (4.28 s) and `DeepSpace.Sky.ShadowCapSynced` (0.09 s): this plan's additions 1.47 + 4.37 = 5.84 s, within the 8 s, and no test over 5 s.
+
+**Open, for the developer** (none is tuned past; each needs a ruling):
+
+1. `Eyes.HandoverParity` at a 3-degree dusk: 3.0e-3 apart without the shadow against 1e-3, on the Detail term. A dusk tolerance, or the Detail term's difference between the two meshes chased further.
+2. `map_upload_rt_ms_all` 4.74-4.90 ms against 4 (Task 7b's record).
+3. `Eyes.TerrainBudget`: the draw at its 6 ms edge, and moving every tile each frame +7.7 ms of render thread and GPU against 2 -- a cost every frame a ship flies low, which the old harness hid. The spec's own fallback is re-pivoting tiles in batches.
+4. Task 8 onward were built with Task 7b's two OVERs unruled (Task 7b's record).
 
 ---
 
