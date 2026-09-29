@@ -17277,6 +17277,52 @@ so no shader change here moves it, and it is not latent (the RHI deletion queue 
 exit 0), `verify_level.py` PASS (within 1.0 cm). `CraterKernelCorners`' mutant (I from -1) KILLED
 again on the merged tree, library rebuilt after.
 
+**Slice (b)'s last open items (2026-09-29, `feat/landing-b-t`; the spec note of that name).**
+
+- **Tiles move through one transform.** `Eyes.LandingFrame` first gained six cases in motion,
+  noon and a 10-degree dusk: the skim cap at 1.5 m (the ship carried along the ground each frame --
+  on the gear the flight law held it at rest against the first rise, 0.0 m/s under both suns) and
+  at 500 m (HOVER, cruise full ahead; 162 and 185 m/s against a 200 m/s cap), and the drive's first
+  notch at 50 km, nose 10 degrees down (19 km/s). Each asserts it kept half its speed, and every
+  case, still or moving, is now **asserted** within 16.6 ms. The baseline (`move-before`, a
+  component per tile), `on_ms`: still 50km 8.31, 1.5m 13.23, 50km_dusk10 8.09, 1.5m_dusk3 12.54,
+  200km_dusk10 8.09, 1.5m_dusk10 12.33; moving 1.5m_skim **23.72**, 500m_skim **20.28**,
+  50km_drive 12.70, 1.5m_skim_dusk10 **21.15**, 500m_skim_dusk10 **17.94**, 50km_drive_dusk10
+  **43.37** (its rounds 3-9 at 27-52 ms). Candidates, measured on `Eyes.TerrainBudget`'s 2,200
+  tiles: moving each tile +7.72 ms of the capture and 2.01 ms of game thread; moving only their one
+  parent +8.17 and 1.67 -- the engine still updates every child, so that candidate is out. Built:
+  `UTerrainGroundComponent`, every tile in one scene proxy, each shown tile its own mesh element
+  with its own GPU Scene primitive data (the pivot composed with the component's transform in
+  doubles on the render thread; band limit and pivot as custom primitive data, so `M_SkyGround` is
+  untouched), frustum-culled per tile; `AWorldGround` moves the component once a frame and adds,
+  removes and shows tiles by render command. The float budget is unchanged: a vertex is a float
+  offset from its own tile's pivot, the pivot's place relative to the ship subtracted in doubles.
+  After: `Eyes.TerrainBudget` green -- the move -0.60 ms of the capture and 0.03 ms of game thread
+  (against 2 and 2), the draw +5.45 ms (was +5.91) against 6. `Eyes.LandingFrame` (`move-after`),
+  `on_ms`: still 8.32, 13.15, 8.06, 12.45, 8.05, 12.24; moving 1.5m_skim 15.41, 500m_skim 13.75,
+  50km_drive 9.76, 1.5m_skim_dusk10 14.06, 500m_skim_dusk10 12.34, 50km_drive_dusk10 9.24 -- every
+  case within 16.6 ms, the worst with 1.2 ms to spare. `Eyes.HandoverParity` unchanged by it (noon
+  5.57e-4, dusk 3.1e-3), `GroundKeepsUp` green. Mutants KILLED: the frame's one move dropped
+  (`DeepSpace.Surface.GroundActor`, 957 tiles misplaced), the shown set dropped (the same test),
+  and the pivot dropped from the tile's transform on the render thread (`Eyes.HandoverParity`).
+- **The dusk handover tolerance.** `Eyes.HandoverParity` reads each leg's sun at its nadir and holds
+  a sun below 5 degrees to 5e-3, otherwise 1e-3, and asserts which it got. Before: red, the
+  3-degree dusk 3.1e-3 against 1e-3. After: green -- the opening (62.59 degrees) 5.57e-4 against
+  1e-3; the dusk (2.91 degrees at the nadir) 2.87e-3 with the shadow, 3.09e-3 without, against
+  5e-3; the shadow keeps 0.8135 and 0.8137. Mutant (every sun held to 5e-3) KILLED by the
+  opening's own guard.
+- **The upload pieces.** `map_upload_rt_ms_all` 4.54 ms against 4. Instrumented: four pieces of
+  ~400, each 4.3-4.8 ms, about every 70th (~35 MB of uploads), all in one render frame. The
+  test landed Trabo's maps inside `RunTest`, where no engine frame ends, and the Vulkan RHI
+  returns an upload's staging buffer to its free list only at a frame's end
+  (`FStagingManager::ProcessPendingFree` in `RHIEndFrame_RenderThread`), so the pool grew a page
+  at a time. **Shrinking the pieces does not reach it**: at 128 KB, the same four stalls,
+  4.37-5.19 ms (5.20). So `ds.Sky.ShadowUploadKB` stays 512 and the worst systems land over
+  engine frames, as play lands them (`FLandWorstSystems`, the sky's `PumpShadowBakesForTest`):
+  `map_upload_rt_ms_all` 0.106 ms, `map_land_ms_all` 0.092, every line of the report within
+  (Trabo's twelve over 239 frames, 123.99 MB; the sixteen over 42, 120.33 MB). The report
+  asserts no timing, so no mutant can prove this line; the instrumented runs are the evidence.
+
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping
 every task's paragraph).

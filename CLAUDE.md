@@ -159,8 +159,8 @@ been abandoned. Say so.
   Landing slice b adds `IGroundField` (`GroundField.*`, WorldRelief behind
   the flight's interface), the pure quadtree and tile builder
   (`TerrainQuadtree.*`, `TerrainTile.*`), and `AWorldGround`, which streams
-  the nearest solid world's tiles off the game thread into pooled meshes on
-  the counter-frame (*The ground*). `SunShadow.*` (the cast shadow's pure
+  the nearest solid world's tiles off the game thread into one primitive,
+  `UTerrainGroundComponent`, on the counter-frame (*The ground*). `SunShadow.*` (the cast shadow's pure
   horizon march) and `SunShadowMap.*` (each world's baked map for the
   orbit) are the shadow, baked, never marched per pixel.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
@@ -844,9 +844,26 @@ built on three workers (ruled 2026-09-28), uploaded four a frame, on the counter
 tile resolves, the pixel the rest -- a split that grows in with the relief:
 at the handover, Morph 0, every band is the pixel's and the normal is the
 orbit's, since a vertex normal interpolated across a triangle is smoother
-than the orbit's and under a grazing sun that was a 2.2% darker frame). The tiles are `UTerrainTileComponent`,
+than the orbit's and under a grazing sun that was a 2.2% darker frame). The tiles are a custom primitive,
 not `ProceduralMeshComponent`: PMC failed the first-day gate
-(`Eyes.TerrainBudget`, the verdict in landing decision 6). It takes the body
+(`Eyes.TerrainBudget`, the verdict in landing decision 6). **Every tile is
+drawn through one transform** (slice (b)'s last open items, 2026-09-29):
+the ship is the origin, so a ship under way moves every tile every frame,
+and as a component per tile that was a transform update per tile, +7.7 ms
+of a 4K capture for 2,200 tiles -- and moving their one parent instead
++8.2, since the engine still updates every child. `UTerrainGroundComponent`
+holds every tile in one scene proxy; `AWorldGround` sets its one transform
+to minus the ship's position from the world's centre, and adds, removes and
+shows tiles by render command, never rebuilding the proxy. Each shown tile
+is its own mesh element with its own GPU Scene primitive data -- its pivot
+composed with the component's transform in doubles on the render thread,
+its band limit and pivot as custom primitive data -- so `M_SkyGround` reads
+`LocalPosition` and `TilePivot` as it always did, and the float budget is
+unchanged: a vertex is a float offset from its own tile's pivot, and the
+pivot's place relative to the ship is subtracted in doubles. Each tile is
+culled against the view's frustum; the one primitive is never
+occlusion-queried. Moving every tile now costs nothing measurable (-0.60 ms
+of the capture, 0.03 ms of game thread). It takes the body
 from the sky under 50 km and grows the relief in to the drive floor.
 Residency never gates motion. `ds.Terrain.Describe` prints the cut.
 **Every key the cut needs is built, the leaves' ancestors too**, and a
@@ -854,7 +871,7 @@ child's bounds, read from its resident parent, are remembered while the cut
 is within three levels of it (`ForgetBoundsFarFrom`; less, and the cut
 changed with residency again -- `GroundKeepsUp` drew 790 m off -- and for
 the ground's life they grew with the ground flown). The resident cut and
-its tile components hold **one** copy of each tile between them. `Balance` turns a leaf the ship has just reached into an
+the tiles' component hold **one** copy of each tile between them. `Balance` turns a leaf the ship has just reached into an
 ancestor the frame it enters the cut, and an ancestor never built sent
 `Resolve` back to draw a level-2 tile over the ship, 792 m off the ground
 (`GroundKeepsUp`, found on three workers).
@@ -891,23 +908,36 @@ per system and in flight against its budgets and prints each (a timing is
 never asserted), and asserts its memory: every solid world's map landed,
 each system under the cap as the RHI sizes it, the vertex shadows under
 12 MB. A system over the cap shares its widths among its worlds, so a reload
-that moves one world's radius or peak may re-bake another. Still open for
-the developer (the cast-shadow plan's *Review record*): `Eyes.HandoverParity`
-is red at a 3-degree dusk, 3.0-3.1e-3 apart without the shadow against 1e-3, on
-the face's Detail term; a few map pieces take 4.3-5.0 ms of render thread in
-Trabo's loads against 4; and `Eyes.TerrainBudget`, measured honestly, reads
-the tiles' draw at its 6 ms edge (+5.8..+6.1) and moving them all each frame
-at +7.7 ms against 2 (re-measured at Task 39 (Z), 2026-09-29, unchanged).
-Look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
+that moves one world's radius or peak may re-bake another. **The dusk
+handover is held to 5e-3** under a sun below 5 degrees, 1e-3 otherwise
+(`Eyes.HandoverParity`; ruled 2026-09-29): at a 3-degree dusk the frames
+are 3.1e-3 apart without the shadow and 2.9e-3 with it, on the face's
+Detail term alone, 4.5e-5 of absolute brightness. **An Eyes test that
+uploads must land over engine frames**: the Vulkan RHI recycles an upload's
+staging buffer only at a frame's end, so `Eyes.ShadowBakeCost` landing
+Trabo's maps inside one `RunTest` grew the staging pool a page at a time,
+and a new page stalled one piece 4.3-5.2 ms about every 35 MB, whatever the
+pieces' size (512 KB or 128 KB). Landed a frame's pieces an engine frame
+(`PumpShadowBakesForTest`), the slowest is 0.11 ms, and
+`ds.Sky.ShadowUploadKB` stays 512. Look with `ds.Sky.Goto 4 10 dusk` (and
+200 km).
 
 **The frame is profiled, not assumed** (the frame ruling: profile first,
 with the shadows in, and fix the real cost; the split factor last).
-`Eyes.LandingFrame` times six 4K captures (50 km and 1.5 m at the start's
-sun, and 50 km, 1.5 m and 200 km at a 10-degree dusk and 1.5 m at 3), ABBA
-with `ds.Sky.Shadows` 0 and 1, and **reports** the frame rather than
-asserting it: read the `on_ms` of each line in
+`Eyes.LandingFrame` times twelve 4K captures, ABBA with `ds.Sky.Shadows` 0
+and 1: six still (50 km and 1.5 m at the start's sun, and 50 km, 1.5 m and
+200 km at a 10-degree dusk and 1.5 m at 3) and six **in motion**, noon and
+the 10-degree dusk -- at the skim cap at 1.5 m (carried along the ground
+each frame: on the gear the flight law holds the ship at rest against the
+first rise) and at 500 m (HOVER, cruise full ahead), and on the drive's
+first notch at 50 km, nose 10 degrees down. **Every case, still or moving,
+is asserted within 16.6 ms** (ruled 2026-09-29), and each moving case that
+it kept at least half its speed. Read the `on_ms` of each line in
 `Saved/Eyes/LandingFrame/<EYES_TAG>/report.txt`, and compare two runs with
-`Tools/landing_frame_gate.py`. `EYES_PROFILE=1` breaks each case down. Two
+`Tools/landing_frame_gate.py` (which reads the moving cases when both runs
+have them). Before the one transform the moving cases read 12.7-23.7 ms,
+and 43.4 at the drive's dusk; after, 9.2-15.4, the worst 1.5 m skimming at
+noon. `EYES_PROFILE=1` breaks each case down. Two
 things it found: **an Eyes test must end engine frames** (it is latent, a
 step per frame, four apart) -- inside one `RunTest` the Vulkan RHI never
 retires freed resources and a Development build rescans that queue on
