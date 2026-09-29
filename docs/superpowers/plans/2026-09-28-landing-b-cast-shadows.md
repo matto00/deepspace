@@ -4276,12 +4276,15 @@ Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Ship.DistanceTo(System.Bodies[
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    if (CVarShadowMaps.GetValueOnGameThread() != 0)' '    if (true)' 'DeepSpace.Sky.ShadowParameters$'; \
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '            if (Held && ShipSky::SameShadowKey(Held->Key, Key))' '            if (false)' 'DeepSpace.Sky.ShadowParameters$'; \
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    return SameRelief(A.Relief, B.Relief) && A.Sun.Direction' '    return A.Sun.Direction' 'DeepSpace.Sky.ShadowParameters$'; \
-Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'SkyMaterial::Shadows, ShipSky::ShadowStrength() * Fade);' 'SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'DeepSpace.Sky.ShadowParameters$'; \
+Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Instance->SetScalarParameterValue(SkyMaterial::ShadowMapFade, Fade);' 'Instance->SetScalarParameterValue(SkyMaterial::ShadowMapFade, 1.0f);' 'DeepSpace.Sky.ShadowParameters$'; \
 Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp '    Texture->LODGroup = TEXTUREGROUP_Pixels2D;' '' 'DeepSpace.Sky.ShadowParameters$'; \
 ./build.sh
 ```
 
 Expected: eight `KILLED`.
+
+**Amended after review (2026-09-28):** the fade is the map's alone. As first built, `Shadows` was the strength times the fade and the ground copied it, so `M_SkyGround` multiplied its vertices' own shadow out until a map had landed, and always under `ds.Sky.ShadowMaps 0`. `Shadows` is now the strength; a scalar `ShadowMapFade` (on all three sides) fades the map in, `lerp(lerp(1, Vertex, Morph), node, ShadowMapFade)` in both materials (`setup_sky_materials.py`'s `map_fade`), and `CopyBodyLook` carries it. The seventh mutant above is the fade's, rewritten from the strength-times-fade line that no longer exists; it was run and KILLED. `DeepSpace.Surface.GroundShadowLight` holds the look at full strength with no map.
+
 - The unclamped strength draws 7.
 - The ground that is not handed the map reads the white default.
 - The bakes ordered farthest first break the order.
@@ -4840,6 +4843,22 @@ No mutation proves a measurement. The budget lines' `OVER` wording is what Task 
 
 Reached from Task 7. Stop, and put the report's lines to the developer with the options that match the budget that failed. Do not tune past a budget without the ruling.
 
+**REACHED, 2026-09-28 -- awaiting the developer's ruling. Task 8 is not started.** `Eyes.ShadowBakeCost` (3742b25, two runs) read two budgets `OVER`: `flight_worst_cm` 25.99 and 25.22 against 15.00, and `map_land_ms` 9.71 and 9.35 against 4.00; every other line `within` (`cold_cut_s` 13.26 s, `tile_ratio` x9.44-9.50, `coarse_s` 9.61-9.65 s, `world_bake_s` 10.08 s, `system_gpu_mb` 63.92). A review then found the headless suite had hidden the first: `FSkyWorld` turns both shadow switches off, so `GroundKeepsUp` flew a configuration the game does not ship. Since then (this branch):
+- `GroundKeepsUp`, the handover, the landing playtests and `Loop.Jump` fly `EShadows::On`. `GroundKeepsUp` starts over the opening's side of IV, under a 62.6-degree sun, over the day exit: 14.40 cm with the shadow or without, within.
+- **`DeepSpace.Surface.GroundKeepsUpAtDusk`** flies the same flight from IV's 10-degree dusk, asserted, and is **red**. Measured headless (worst drawn gap, cm, against 15.00):
+
+  | build tasks | no shadow | shadow | shadow, `DetailSum` skipping faded bands |
+  |---|---|---|---|
+  | 2 (the default) | 15.03 | 25.22 | 25.22 |
+  | 3 | -- | -- | 15.03 |
+  | 4 | 7.19 | 15.03 | 9.52 |
+
+  The gap is the ground under the ship lagging its build queue, not the shadow's arithmetic: it falls with workers. **At 2 tasks it is 0.03 cm over even with no shadow at all**, so the dusk flight was marginal before the shadow existed; the opening side had hidden that too.
+- `FWorldRelief::DetailSum` now skips a band its footprint has faded whole (this section's "First, profile" item). It changes no value (`WorldRelief.KnownValues` exact; its mutant killed) and is committed; with 4 tasks it took the gap from 15.03 to 9.52, and at 2 it moves nothing.
+- The day exit by footprint (2(e)) is not built: at a 10-degree sun only tiles whose footprint has faded all but about two of the twenty bands could exit, which are the handful of coarsest levels, not the fine tiles the gap waits on. It stays on offer.
+
+The options to put to the developer, with these numbers: `ds.Terrain.BuildTasks` 3 alone does not reach 15.00 (15.03), 4 does (9.52) but is the machine's whole cap with the maps' 2 bake tasks; every other vertex, interpolated (a coarsening, ruled); 8 samples (a quality NO-GO unless relaxed); a larger tolerance than GearClearance / 10 at dusk (it was already 15.03 with no shadow); or prioritising the chain of tiles under the ship over the prefetch. For `map_land_ms`: the RHI upload on the render thread, or accept a ~9.5 ms hitch once a world. `GroundKeepsUpAtDusk` stays red until the ruling; `feat/landing-b-t` does not merge into `feat/landing-b` while it is.
+
 - **`cold_cut_s`, `tile_ratio`, `coarse_s` or a `flight_*` budget over:** Task 0's second question, with measured numbers now. The first remedy to propose is the day exit by footprint (Task 0, 2(e)).
   - It is `SunShadow::SteepestSlope(Params, FootprintCm)`: the sampled steepest slope of only the bands not yet faded at the tile's spacing, each band's sampled gradient measured as `.SteepestSlope` measures the sum.
   - It changes no value: a vertex over its exit is whole either way. `.Exits` must hold at every footprint it is given.
@@ -5364,6 +5383,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 Run: `cd /home/matt/Development/deepspace/.worktrees/landing-b-t && MUTATE_RUNNER=Tools/eyes.sh Tools/mutate.sh Source/DeepSpace/Sky/ShipSky.cpp 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());' 'Instance->SetScalarParameterValue(SkyMaterial::Shadows, 1.0f);' Eyes.LandingFrame; ./build.sh`
 
+(Reviewed 2026-09-28: Task 6 as first built wrote the strength times the fade, and this pattern matched nothing. Since the fade became the map's own `ShadowMapFade` (Task 6's amendment), the line reads exactly this again, once.)
+
 Expected: `KILLED`. With the proxy's strength pinned at 1, and the ground copying the proxy's, the frames with the switch at 0 and 1 are one scene, and the held-pixel coverage falls to the flicker's (0.5-2.3%), under the 10%. The `--not-rise` rule itself is proven by Step 1's tests: a timing mutant against ABBA medians is killed or not by noise alone.
 
 ---
@@ -5486,7 +5507,7 @@ Write a one-line judgement per world into the spec line below. The developer's o
   - **Measured, 2026-09-28** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (<N> samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is <W> columns (<texel> km texels on IV), baked when the system loads. The bake: the cold cut at 1.5 m <cut> s (was <cut0>), a tile <ratio>x its heights at a 10-degree dusk, a world's map <world> s and <MB> MB (the slowest and largest of I-V and the corpus's two extremes), the sky's five <sky> s on <tasks> tasks, <gpu> MB resident on the GPU and <cpu> MB left on the CPU (the corpus's worst system about <worst> MB), the slowest landing <land> ms; an in-system jump re-bakes <rebakes>; a release with builds in flight <release> ms; in flight with tile shadows on, <missing> frames without drawn ground, worst gap <gap> cm, the coarse cut <coarse> s after arriving; a 2:1 tile edge steps the shade by <step> on average. The frame: not rising (`Eyes.LandingFrame --not-rise`, every case within its band; whole frames <A>..<F> ms, handed to the ground's profiling). Parity: the map C++ vs GPU <worst> against the float mirror's <float>; the handover at a 3-degree dusk ground <g> vs orbit <o> (<share> of the light kept). Frames at the read exposure, mean luma on held pixels before -> after (coverage): at 10 degrees, orbit III <x> -> <y> (<c>%), IV ..., V ...; ground III ..., IV ..., V ...; at 3 degrees, orbit ..., ground .... Judged: <one line a world>. The developer's look carried to the playtest.
 ```
 
-- [ ] **Step 7: The parent plan and CLAUDE.md.** In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
+- [ ] **Step 7: The parent plan and CLAUDE.md.** (Reviewed 2026-09-28: the Architecture line, the *Landing* insert, the three table rows and the named constants below are already in CLAUDE.md; what is left is the *Sky* paragraph and the parent plan.) In `docs/superpowers/plans/2026-09-27-landing-slice-1.md`, append to the *RULINGS AFTER PLANNING* paragraph: "**Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T."
 
 In `CLAUDE.md`, *Architecture*'s `Source/DeepSpace/Surface/` bullet, after "`AWorldGround`, which streams ... (*The ground*).", add: "`SunShadow.*` (the cast shadow's pure horizon march) and `SunShadowMap.*` (each world's baked map for the orbit) are the shadow (*The sky*)."
 
@@ -5536,7 +5557,11 @@ unshadowed look. It costs the frame nothing (`Eyes.LandingFrame`, `--not-rise`
 against the frame before any shadow); what it costs the bake is
 `Eyes.ShadowBakeCost`'s, which also flies `GroundKeepsUp`'s flight with the
 tile shadows on. Test worlds build without either unless asked, and ask for
-each apart (`SkyTestWorld::EShadows::Tiles`, `::Maps`, `::On`).
+each apart (`SkyTestWorld::EShadows::Tiles`, `::Maps`, `::On`); every test
+of the ground in flight asks for `::On`, as the game ships, and
+`GroundKeepsUpAtDusk` flies the 10-degree dusk where the tiles' shadow
+costs most. The map's fade-in is its own (`ShadowMapFade`): the ground's
+vertex shadow draws before any map lands, and with `ds.Sky.ShadowMaps 0`.
 ```
 
 In *Landing*'s paragraph that begins "**The ground** (`AWorldGround`, `hauler_ground`)", after "shaded by `M_SkyGround` exactly as the orbit shades", add: "(each tile's vertices carrying the cast shadow, *The sky*)".
