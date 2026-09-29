@@ -107,13 +107,17 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     if (TestNotNull(TEXT("M_SkyGround is built"), GroundMaterial))
     {
         UMaterialInstanceDynamic* Ground = UMaterialInstanceDynamic::Create(GroundMaterial, Test.World);
+        // A flush lands its maps faded in, which the material's default
+        // matches: a fade part way is what shows the copy carried it. The
+        // next step writes the world's own back.
+        Fourth->SetScalarParameterValue(SkyMaterial::ShadowMapFade, 0.25f);
         ShipSky::CopyBodyLook(*Fourth, *Ground);
         TestTrue(TEXT("the ground reads the world's map"),
             Ground->K2_GetTextureParameterValue(SkyMaterial::ShadowMap) == Fourth->K2_GetTextureParameterValue(SkyMaterial::ShadowMap));
         TestTrue(TEXT("in its frame"), Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX) == Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX)
             && Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ) == Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ));
         TestEqual(TEXT("at its strength"), Ground->K2_GetScalarParameterValue(SkyMaterial::Shadows), Fourth->K2_GetScalarParameterValue(SkyMaterial::Shadows));
-        TestEqual(TEXT("with its map's fade"), Ground->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), Fourth->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade));
+        TestEqual(TEXT("with its map's fade"), Ground->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), 0.25f);
     }
 
     // A jump within the system: ShipNavState bumps the jump serial on an
