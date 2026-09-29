@@ -281,8 +281,11 @@ namespace
         /** Every Step since MovedFrom: the simulated time the ship flew. */
         int32 SimSteps = 0;
         /** A gliding case: of those Steps, how many found no drawn ground
-         *  under the ship -- what a carried ship can show about the game. */
+         *  under the ship, and the worst gap between the drawn ground there
+         *  and the analytic one, cm -- what a carried ship can show about the
+         *  game (GroundKeepsUp's measure). */
         int32 GroundMissing = 0;
+        double GroundWorstCm = 0.0;
         FString TimedRegion;
 
         const FSkyBody& Fourth() const { return Here.Bodies[FourthIndex]; }
@@ -319,9 +322,18 @@ namespace
         void CountStep()
         {
             ++SimSteps;
-            if (Case && Case->Motion == EMotion::Glide && !Test->Ground->DrawnHeightUnderShip())
+            if (Case && Case->Motion == EMotion::Glide)
             {
-                ++GroundMissing;
+                const FVector3d Nadir = (Test->Ship->GetFlightState().GetUniversePosition() - Fourth().Position).GetSafeNormal();
+                const TOptional<double> Drawn = Test->Ground->IsDrawingBody() ? Test->Ground->DrawnHeightUnderShip() : TOptional<double>();
+                if (!Drawn)
+                {
+                    ++GroundMissing;
+                }
+                else
+                {
+                    GroundWorstCm = FMath::Max(GroundWorstCm, FMath::Abs(*Drawn - Field->Height(Nadir, 0.0)));
+                }
             }
         }
 
@@ -490,6 +502,7 @@ namespace
                 StepSeconds = 0.0;
                 SimSteps = 0;
                 GroundMissing = 0;
+                GroundWorstCm = 0.0;
             }
             bPlaced = true;
         }
@@ -561,13 +574,13 @@ namespace
             const double Spread = FMath::Max(IqrOf(Times[0]), IqrOf(Times[1]));
             const double SunDegrees = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Up, Sunward)));
             const FString Line = FString::Printf(
-                TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f switch %s switch_cov %.4f switch_lit %.4f flicker %.4f read_stops %.0f read_p95 %d frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f speed_mps %.1f agl_m %.2f..%.2f times_on %s times_off %s\n%s\n"),
+                TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f switch %s switch_cov %.4f switch_lit %.4f flicker %.4f read_stops %.0f read_p95 %d frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f speed_mps %.1f agl_m %.2f..%.2f ground_missing %d ground_worst_cm %.2f times_on %s times_off %s\n%s\n"),
                 Case->Slug, SunDegrees, On, Off, Spread, Shadows ? TEXT("present") : TEXT("absent"),
                 Shade.Coverage, Shade.LitShare, Shade.Flicker, Case->ReadStops, Frames[0].Num() > 0 ? EyesFrames::LumaPercentile(Frames[0], 0.95) : 0,
                 FCrc::MemCrc32(Frames[2].GetData(), Frames[2].Num() * sizeof(FColor)),
                 FCrc::MemCrc32(Frames[0].GetData(), Frames[0].Num() * sizeof(FColor)),
                 Test->Ground->GetDrawnKeys().Num(), StepFrames > 0 ? StepSeconds * 1000.0 / StepFrames : 0.0,
-                SpeedCmPerSecond / 100.0, AglBefore / 100.0, AglAfter / 100.0,
+                SpeedCmPerSecond / 100.0, AglBefore / 100.0, AglAfter / 100.0, GroundMissing, GroundWorstCm,
                 *Joined(Times[1]), *Joined(Times[0]), *Test->Ground->Describe());
             Report += Line;
             Automation->AddInfo(Line);
@@ -582,6 +595,9 @@ namespace
                 // what the frame can show is that the ground kept up with it.
                 Automation->TestEqual(FString::Printf(TEXT("%s: the ground kept up with the carried ship, drawn under it every frame of %d"),
                     Case->Slug, SimSteps), GroundMissing, 0);
+                const double Tolerance = UShipSubsystem::GearClearance() / 10.0;
+                Automation->TestTrue(FString::Printf(TEXT("%s: the drawn ground under the carried ship is within GearClearance / 10 of the analytic ground (worst %.2f cm, at most %.2f)"),
+                    Case->Slug, GroundWorstCm, Tolerance), GroundWorstCm <= Tolerance);
             }
             // The ship is left under way until the case's profile has run
             // (QueueCase stops it last), so EYES_PROFILE breaks down the

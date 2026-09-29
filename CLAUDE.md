@@ -854,7 +854,8 @@ of a 4K capture for 2,200 tiles -- and moving their one parent instead
 +8.2, since the engine still updates every child. `UTerrainGroundComponent`
 holds every tile in one scene proxy; `AWorldGround` sets its one transform
 to minus the ship's position from the world's centre, and adds, removes and
-shows tiles by render command, never rebuilding the proxy. Each shown tile
+shows tiles by render command, never rebuilding the proxy (only a clear,
+on a new world or a fold, rebuilds it empty). Each shown tile
 is its own mesh element with its own GPU Scene primitive data -- its pivot
 composed with the component's transform in doubles on the render thread,
 its band limit and pivot as custom primitive data -- so `M_SkyGround` reads
@@ -919,7 +920,10 @@ Trabo's maps inside one `RunTest` grew the staging pool a page at a time,
 and a new page stalled one piece 4.3-5.2 ms about every 35 MB, whatever the
 pieces' size (512 KB or 128 KB). Landed a frame's pieces an engine frame
 (`PumpShadowBakesForTest`), the slowest is 0.11 ms, and
-`ds.Sky.ShadowUploadKB` stays 512. Look with `ds.Sky.Goto 4 10 dusk` (and
+`ds.Sky.ShadowUploadKB` stays 512 (the spec's ruling said smaller pieces;
+built otherwise, and on the sign-off list). That 4 ms is the one timing
+`Eyes.ShadowBakeCost` asserts: 0.11 against 4 is out of any load's reach,
+and a map landed inside one frame breaks it. Look with `ds.Sky.Goto 4 10 dusk` (and
 200 km).
 
 **The frame is profiled, not assumed** (the frame ruling: profile first,
@@ -931,11 +935,15 @@ the 10-degree dusk -- at the skim cap at 1.5 m (carried along the ground
 each frame: on the gear the flight law holds the ship at rest against the
 first rise) and at 500 m (HOVER, cruise full ahead), and on the drive's
 first notch at 50 km, nose 10 degrees down. **Every case, still or moving,
-is asserted within 16.6 ms** (ruled 2026-09-29), and each moving case that
-it kept at least half its speed. Read the `on_ms` of each line in
+is asserted within 16.6 ms** (ruled 2026-09-29); each case under the flight
+law (the skims at 500 m, the drive) that it kept at least half the speed it
+was set to, the drive half its first notch, 20 km/s; and each carried
+1.5 m case, whose speed is the test's own, that the ground was drawn under
+it every frame. `EYES_PROFILE=1` profiles a moving case before stopping it,
+every variant still under way. Read the `on_ms` of each line in
 `Saved/Eyes/LandingFrame/<EYES_TAG>/report.txt`, and compare two runs with
-`Tools/landing_frame_gate.py` (which reads the moving cases when both runs
-have them). Before the one transform the moving cases read 12.7-23.7 ms,
+`Tools/landing_frame_gate.py` (which leaves out a moving case only when the
+baseline predates it: a run under test missing one is UNDECIDED). Before the one transform the moving cases read 12.7-23.7 ms,
 and 43.4 at the drive's dusk; after, 9.2-15.4, the worst 1.5 m skimming at
 noon. `EYES_PROFILE=1` breaks each case down. Two
 things it found: **an Eyes test must end engine frames** (it is latent, a
