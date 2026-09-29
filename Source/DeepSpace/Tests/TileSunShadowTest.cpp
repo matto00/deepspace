@@ -1,6 +1,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Sky/LocalSystem.h"
+#include "Sky/ShipSky.h"
 #include "Sky/SkyProjection.h"
 #include "Surface/GroundField.h"
 #include "Surface/SunShadow.h"
@@ -208,7 +209,10 @@ bool FTileSunShadowTest::RunTest(const FString& Parameters)
  * slope and ds.Terrain.ShadowSamples, and rebuilds when ds.Terrain.Shadows
  * changes, letting go of what was building without waiting and without
  * oversubscribing its workers. 800 km over Baemsekai IV only the prefetch
- * chain is wanted, so the test builds a handful of tiles.
+ * chain is wanted, so the test builds a handful of tiles. It stands over
+ * IV's 10-degree dusk, where the march runs (over the opening side's
+ * 62.6-degree sun the day exit makes a build ~3 ms, and the builds the
+ * restart lets go could finish before it, leaving nothing to count).
  */
 bool FGroundShadowLightTest::RunTest(const FString& Parameters)
 {
@@ -222,7 +226,13 @@ bool FGroundShadowLightTest::RunTest(const FString& Parameters)
         return false;
     }
     const FSkyBody& Fourth = Here.Bodies[4];
-    const FVector Out = (Test.Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal();
+    const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, 0.0, Test.Ship->GetFlightState().GetUniversePosition(),
+                                                                 ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(10.0));
+    if (!TestTrue(TEXT("goto dusk places over Baemsekai IV"), Dusk.IsSet()))
+    {
+        return false;
+    }
+    const FVector Out = (Dusk->Position - Fourth.Position).GetSafeNormal();
     Test.Ship->PlaceShip(Fourth.Position + Out * (Fourth.Radius + 8.0e7), FRotationMatrix::MakeFromX(-Out).ToQuat());
     Test.Step(1.0f / 60.0f);
     Test.Ground->FlushBuildsForTest();
@@ -248,12 +258,16 @@ bool FGroundShadowLightTest::RunTest(const FString& Parameters)
     {
         // Off: the ground starts again, and every vertex is whole. The builds
         // in flight when it restarts are let go, not waited on, and they
-        // count against the cap until they finish.
-        FScopedCVar Samples(TEXT("ds.Terrain.ShadowSamples"), 13.0f);
+        // count against the cap until they finish. At 64 samples under a
+        // 10-degree sun a build is far longer than a step, so they are.
+        FScopedCVar Samples(TEXT("ds.Terrain.ShadowSamples"), 64.0f);
         Test.Step(1.0f / 60.0f);   // a restart under a new sample count: builds launch
         const int32 Cap = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Terrain.BuildTasks"))->GetInt();
         FScopedCVar Off(TEXT("ds.Terrain.Shadows"), 0.0f);
         Test.Step(1.0f / 60.0f);   // and another, with those still building
+        // Without builds let go the cap below holds of any launch budget.
+        TestTrue(FString::Printf(TEXT("the restart let go of builds still running (%d)"), Test.Ground->GetDrainingCount()),
+            Test.Ground->GetDrainingCount() > 0);
         TestTrue(FString::Printf(TEXT("a restart never oversubscribes the workers (%d building, %d let go, cap %d)"),
             Test.Ground->GetBuildingCount(), Test.Ground->GetDrainingCount(), Cap),
             Test.Ground->GetBuildingCount() + Test.Ground->GetDrainingCount() <= Cap);
