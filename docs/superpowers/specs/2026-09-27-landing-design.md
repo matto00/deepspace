@@ -95,6 +95,10 @@ below goes past them, it says so and is on the sign-off list.
   - Tile builds get **three background workers** (`ds.Terrain.BuildTasks` 3, from 2). Shadowed tiles at dusk cost up to 9.5x to build, and `GroundKeepsUpAtDusk`'s gap was 15.03 cm against 15 cm with two workers.
   - A world's orbital shadow map is **uploaded in pieces on the render thread over several frames**, so its landing never hitches a frame (it was about 9.5 ms in one frame, against the 4 ms budget).
   - The defaults stand: 4,096 columns, every tile vertex, 12 samples. But the orbital maps get a **per-system GPU memory cap of 128 MB**: a system with many worlds lowers its maps' resolution to fit (a 16-world system would otherwise reach about 205 MB).
+- **Slice (b)'s last open items (the orchestrator, 2026-09-29, applying the rulings above):**
+  - **The dusk handover** is held to 5e-3 relative under a sun below 5 degrees; noon stays at 1e-3. The measured 3.1e-3 at a 3-degree sun is 4.5e-5 of absolute brightness on a scene at 1.4%, and the shadow keeps the same share of light on both sides (0.8135 against 0.8137).
+  - **The orbital map's render-thread upload** uses smaller pieces, so every upload frame stays under 4 ms.
+  - **Tiles move every frame, because the ship is the origin.** Moving every tile cost +7.7 ms a frame in `Eyes.TerrainBudget`, and `Eyes.LandingFrame` only measured a still ship. Under the frame ruling (profile, then fix the real cost), the tiles are drawn through one shared transform, so a frame's motion is one update, not one per tile, and `Eyes.LandingFrame` gains cases in motion. Every case, moving or still, must stay within 16.6 ms at 4K.
 - **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
 
