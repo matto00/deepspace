@@ -715,6 +715,15 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             ShadowProbe->SetTextureParameterValue(SkyMaterial::ShadowMap, Texture);
             ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShipSky::ShadowFrameX(Map));
             ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShipSky::ShadowFrameZ(Map));
+            // The float mirror's own distance from double, as this leg's
+            // first passing run measured it, place by place and footprint by
+            // footprint; held to 1.25x that (never under 1e-4). The GPU's
+            // tolerance is taken from the float mirror's distance, so a
+            // double mirror gone wrong would widen its own tolerance with
+            // it; this is what catches that.
+            const double FloatRecorded[2][5] = { { 5.75e-5, 5.75e-5, 5.75e-5, 5.75e-5, 6.76e-6 },
+                                                 { 0.0,     0.0,     1.79e-3, 2.48e-4, 2.61e-5 } };
+            int32 FootprintIndex = 0;
             for (const double FootprintD : { 1.0e-5, 1.0e-4, 1.5e-3, 6.0e-3, 2.4e-2 })
             {
                 const float Footprint = static_cast<float>(FootprintD);
@@ -740,10 +749,13 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                     Shaded += Held < 0.5 ? 1 : 0;
                 }
                 const double HeldTo = FMath::Max(1.0e-3, FloorRuleFactor * FloatGap);
+                const double FloatHeldTo = FMath::Max(1.0e-4, FloorRuleFactor * FloatRecorded[bSeam ? 1 : 0][FootprintIndex++]);
                 const FString At = FString::Printf(TEXT("Baemsekai IV's shadow map, %s, footprint %.1e"), Place.Name, FootprintD);
                 TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
                 TestTrue(FString::Printf(TEXT("%s: SunShadowMap::Sample computes what the GPU drew, held to %.1e (the float mirror %.2e from double): %.2e"),
                     *At, HeldTo, FloatGap, Gap), Gap <= HeldTo);
+                TestTrue(FString::Printf(TEXT("%s: the float mirror is as far from double as it was measured, held to %.1e: %.2e"),
+                    *At, FloatHeldTo, FloatGap), FloatGap <= FloatHeldTo);
                 WorstShadow = FMath::Max(WorstShadow, Gap);
                 WorstShadowFloat = FMath::Max(WorstShadowFloat, FloatGap);
                 Report.Add(FString::Printf(TEXT("%s: %d compared, %.1f%% under half, %d not finite"), *At, Side * Side - NotFinite,
