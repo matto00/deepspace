@@ -146,7 +146,9 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     // that world alone is baked again, and its old map is let go at once.
     {
         FSkySystem Reloaded = Here;
-        Reloaded.Bodies[Order[0]].Relief.PeakCm *= 1.1;
+        // The seed, not the peak: a new peak moves the steepest slope too,
+        // and a key blind to the relief would still see that.
+        Reloaded.Bodies[Order[0]].Relief.SeedOffset.X += 1.0 / 256.0;
         Test.Sky->SyncTo(Reloaded, Serial, false);
         TestEqual(TEXT("a reload that moves one world's relief re-bakes that world alone"), Test.Sky->GetShadowBakesStarted(), Started + 1);
         TestNull(TEXT("and lets its stale map go"), Test.Sky->GetShadowTexture(Nearest));
