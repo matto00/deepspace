@@ -277,6 +277,16 @@ double FWorldRelief::DetailSum(const FVector3d& D, double FootprintD, FVector3d*
     FVector3d Gradient = FVector3d::ZeroVector;
     for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
     {
+        // A band the footprint has faded whole is scaled by saturate(1 -
+        // footprint x frequency) = exactly 0, value and gradient: skipping
+        // it changes nothing, and the finer bands cost most of a coarse
+        // read (the cast shadow's far samples; Task 7b). The margin keeps
+        // the skip off a band whose fade a contracted multiply-add could
+        // leave a hair above 0.
+        if (FootprintD * Frequencies[Band] >= 1.0 + 1.0e-9)
+        {
+            continue;
+        }
         const int32 Index = Indices[Band];
         // The band's lattice offset split as the shared file splits it
         // (Task 31b): the same function as the whole sum, rounded where the
