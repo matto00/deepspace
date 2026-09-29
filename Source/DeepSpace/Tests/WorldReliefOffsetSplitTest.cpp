@@ -51,8 +51,8 @@ namespace WorldReliefOffsetSplitLocal
      *  D x frequency's own rounding, which no offset split reaches.
      *
      *  The crater columns were measured again when Task T2 made the face's
-     *  craters the summed kernels (WR_CraterSum, up to 27 sites a band where
-     *  Voronoi read one), by the same rule, same run: crater albedo 1.95e-6,
+     *  craters the summed kernels (WR_CraterSum, then 27 corners a band, now
+     *  the 8 that can reach, the same sums; Voronoi read one), by the same rule, same run: crater albedo 1.95e-6,
      *  1.08e-5, 4.08e-5 and 1.88e-4, crater slope 7.78e-6, 4.07e-5, 2.04e-4
      *  and 7.64e-4 at 1/96 to 1/12288 -- still two orders under the unsplit
      *  Voronoi's. */

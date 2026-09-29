@@ -23,9 +23,14 @@
  * GroundKeepsUp starts over the opening's side of IV, under a 62.6-degree
  * sun, where the day exit makes the shadow nearly free (worst gap 14.40 cm
  * with it or without). GroundKeepsUpAtDusk starts under a 10-degree sun,
- * where a tile costs about 9x its heights: the worst gap was 25.22 cm with
- * the shadow and 15.03 without, against 15.00 (the cast-shadow plan's Task
- * 7b, measured 2026-09-28). It is red until the developer's ruling on it.
+ * where a tile costs about 8x its heights. Against 15.00 it reads 15.03 cm,
+ * with the shadow and without, five runs of each on a quiet machine, at the
+ * default 2 build tasks; 7.19 at 3 or 4 (the cast-shadow plan's Task 7b,
+ * re-measured after fc829a7, 2026-09-28; before the crater kernel's 8
+ * corners it was 25.22 with the shadow). The worst gap moves in steps, not
+ * smoothly -- 7.19, 9.52, 14.40, 15.03 and 25.22 are every value it has read
+ * -- and the flight is paced to the wall clock, so a loaded machine can read
+ * a step higher. It is red until the developer's ruling on it.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundKeepsUpTest, "DeepSpace.Surface.GroundKeepsUp",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
