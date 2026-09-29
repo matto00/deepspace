@@ -60,8 +60,12 @@
  *   -- Trabo, 12 solid worlds in Saved/procgen_corpus.tsv today; planning put
  *   it at 16 -- baked by the sky itself, its widths after the cap and its
  *   GPU memory; and the same system with four of its worlds again, 16 in
- *   all, held to the same cap. Run last, since the sky then drops the start
- *   system's maps.
+ *   all, held to the same cap. Run last, in a world of its own, and landed
+ *   over engine frames, a frame's pieces a frame, as play lands them
+ *   (FLandWorstSystems): landed inside RunTest, where no frame ends and the
+ *   Vulkan RHI never recycles a staging buffer, a new staging page stalled
+ *   one piece 4.3-5.2 ms about every 35 MB, at 512 KB and 128 KB pieces
+ *   alike -- map_upload_rt_ms_all 4.54 and 5.19 ms; over frames, 0.11.
  * - A jump within the system: the bakes it starts.
  * - The flight: GroundKeepsUp's, with the shadow on, paced to the wall clock;
  *   and the wait, from 49 km over fresh ground, for the ground to draw the
@@ -173,6 +177,99 @@ namespace ShadowBakeCostLocal
         }
         return M;
     }
+}
+
+namespace ShadowBakeCostLocal
+{
+    /** The worst systems' part, latent: every map lands over engine frames,
+     *  a frame's pieces a frame, as play lands them. Inside one RunTest no
+     *  engine frame ends, and the Vulkan RHI recycles an upload's staging
+     *  buffer only at a frame's end, so landing Trabo's maps there grew the
+     *  staging pool by every piece and a new page of it stalled one piece
+     *  4.3-5.2 ms about every 35 MB, at 512 KB pieces and at 128 KB alike
+     *  (2026-09-29) -- the harness's cost, which play never pays. */
+    struct FWorstSystems
+    {
+        FAutomationTestBase* Automation = nullptr;
+        TArray<FString> Report;
+        TArray<FSkySystem> Systems;
+        int32 Serial = 0;
+        TUniquePtr<SkyTestWorld::FSkyWorld> Test;
+        int32 Next = -1;          // -1: the world's own start system is landing
+        double Started = 0.0;
+        int32 Frames = 0;
+
+        void Line(const FString& Text)
+        {
+            Report.Add(Text);
+            Automation->AddInfo(Text);
+        }
+
+        void Close()
+        {
+            Line(Budget(TEXT("map_land_ms_all"), 1e3 * Test->Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
+            Line(Budget(TEXT("map_upload_rt_ms_all"), 1e3 * Test->Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
+            const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");
+            IFileManager::Get().MakeDirectory(*Dir, true);
+            FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
+                FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+            Test.Reset();
+        }
+    };
+
+    class FLandWorstSystems : public IAutomationLatentCommand
+    {
+    public:
+        explicit FLandWorstSystems(TSharedRef<FWorstSystems> InRun) : Run(InRun) {}
+
+        virtual bool Update() override
+        {
+            FWorstSystems& R = *Run;
+            if (!R.Test)
+            {
+                R.Test = MakeUnique<SkyTestWorld::FSkyWorld>(TEXT("ShadowBakeCostWorstWorld"), 8, SkyTestWorld::EShadows::On);
+                R.Test->Sky->bKeepShadowMapsForTest = true;
+                R.Test->BeginPlay();
+                R.Test->Step(1.0f / 60.0f);
+                return false;
+            }
+            // One frame's pieces a frame, the bakes waited for.
+            R.Test->Sky->PumpShadowBakesForTest();
+            ++R.Frames;
+            if (R.Test->Sky->GetShadowBakesPending() > 0)
+            {
+                return false;
+            }
+            if (R.Next >= 0)
+            {
+                FlushRenderingCommands();
+                const FSkySystem& System = R.Systems[R.Next];
+                const double Seconds = FPlatformTime::Seconds() - R.Started;
+                const FSystemMemory M = Measure(*R.Automation, *R.Test->Sky, System);
+                const TCHAR* Name = R.Next == 0 ? TEXT("worst") : TEXT("worst16");
+                R.Line(FString::Printf(TEXT("system %s (%s): %d solid worlds baked and landed over %d engine frames in %.2f s, GPU %.2f MB resident (the levels are %.2f MB) under the %.0f MB cap; widths %s"),
+                    Name, *System.SystemId.ToString(), M.Maps, R.Frames, Seconds, M.GpuMB, M.LevelsMB, MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)), *FString::Join(M.Widths, TEXT(", "))));
+                R.Line(Budget(R.Next == 0 ? TEXT("system_gpu_mb_worst") : TEXT("system_gpu_mb_worst16"), M.GpuMB, SystemGpuBudgetMB));
+                // The path the game uses: SyncShadowMaps' widths, sized by the
+                // RHI. The levels' own bytes are smaller, and a cap met on them
+                // left Trabo's twelve at 142 MB on the GPU.
+                R.Automation->TestTrue(FString::Printf(TEXT("%s's maps fit the per-system cap on the GPU (%.2f MB)"), Name, M.GpuMB),
+                    M.GpuMB <= MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)));
+            }
+            if (++R.Next >= R.Systems.Num())
+            {
+                R.Close();
+                return true;
+            }
+            R.Started = FPlatformTime::Seconds();
+            R.Frames = 0;
+            R.Test->Sky->SyncTo(R.Systems[R.Next], ++R.Serial, false);
+            return false;
+        }
+
+    private:
+        TSharedRef<FWorstSystems> Run;
+    };
 }
 
 bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
@@ -431,50 +528,30 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
     }
 
     // -- The per-system cap: the corpus's worst system, baked by the sky -----
+    UUniverseSubsystem* Universe = Test.World->GetSubsystem<UUniverseSubsystem>();
+    const TOptional<FStarSystem> Worst = Universe ? Universe->GetSystem(WorstSystem) : TOptional<FStarSystem>();
+    FSkySystem Twelve = LocalSystem::Here(Worst);
+    const int32 Solid = SolidWorlds(Twelve);
+    TestTrue(FString::Printf(TEXT("the corpus's worst system is generated (%s, %d solid worlds)"), *Twelve.SystemId.ToString(), Solid), Worst.IsSet() && Solid >= 10);
+    FSkySystem Sixteen = Twelve;
+    for (const FSkyBody& Body : Twelve.Bodies)
     {
-        UUniverseSubsystem* Universe = Test.World->GetSubsystem<UUniverseSubsystem>();
-        const TOptional<FStarSystem> Worst = Universe ? Universe->GetSystem(WorstSystem) : TOptional<FStarSystem>();
-        FSkySystem Twelve = LocalSystem::Here(Worst);
-        const int32 Solid = SolidWorlds(Twelve);
-        TestTrue(FString::Printf(TEXT("the corpus's worst system is generated (%s, %d solid worlds)"), *Twelve.SystemId.ToString(), Solid), Worst.IsSet() && Solid >= 10);
-        FSkySystem Sixteen = Twelve;
-        for (const FSkyBody& Body : Twelve.Bodies)
+        if (Sixteen.Bodies.Num() >= Twelve.Bodies.Num() + (WorstSystemWorlds - Solid) || Body.Ground != EGround::Solid || Body.Kind == ESkyBodyKind::Star)
         {
-            if (Sixteen.Bodies.Num() >= Twelve.Bodies.Num() + (WorstSystemWorlds - Solid) || Body.Ground != EGround::Solid || Body.Kind == ESkyBodyKind::Star)
-            {
-                continue;
-            }
-            FSkyBody Again = Body;
-            Again.Id = FName(*(Body.Id.ToString() + TEXT(" again")));
-            Sixteen.Bodies.Add(Again);
+            continue;
         }
-        int32 Serial = LocalSystem::Serial(Test.World) + 100;
-        for (const FSkySystem* System : { &Twelve, &Sixteen })
-        {
-            const double Start = FPlatformTime::Seconds();
-            Test.Sky->SyncTo(*System, ++Serial, false);
-            Test.Sky->FlushShadowBakesForTest();
-            FlushRenderingCommands();
-            const double Seconds = FPlatformTime::Seconds() - Start;
-            const FSystemMemory M = Measure(*this, *Test.Sky, *System);
-            const TCHAR* Name = System == &Twelve ? TEXT("worst") : TEXT("worst16");
-            Line(FString::Printf(TEXT("system %s (%s): %d solid worlds baked in %.2f s, GPU %.2f MB resident (the levels are %.2f MB) under the %.0f MB cap; widths %s"),
-                Name, *System->SystemId.ToString(), M.Maps, Seconds, M.GpuMB, M.LevelsMB, MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)), *FString::Join(M.Widths, TEXT(", "))));
-            Line(Budget(System == &Twelve ? TEXT("system_gpu_mb_worst") : TEXT("system_gpu_mb_worst16"), M.GpuMB, SystemGpuBudgetMB));
-            // The path the game uses: SyncShadowMaps' widths, sized by the
-            // RHI. The levels' own bytes are smaller, and a cap met on them
-            // left Trabo's twelve at 142 MB on the GPU.
-            TestTrue(FString::Printf(TEXT("%s's maps fit the per-system cap on the GPU (%.2f MB)"), Name, M.GpuMB),
-                M.GpuMB <= MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)));
-        }
-        Line(Budget(TEXT("map_land_ms_all"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
-        Line(Budget(TEXT("map_upload_rt_ms_all"), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
+        FSkyBody Again = Body;
+        Again.Id = FName(*(Body.Id.ToString() + TEXT(" again")));
+        Sixteen.Bodies.Add(Again);
     }
-
-    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");
-    IFileManager::Get().MakeDirectory(*Dir, true);
-    FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
-        FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+    // Landed over engine frames, as play lands them, in a world of their own
+    // (this one goes with RunTest): FWorstSystems.
+    TSharedRef<FWorstSystems> Systems = MakeShared<FWorstSystems>();
+    Systems->Automation = this;
+    Systems->Report = Report;
+    Systems->Systems = { Twelve, Sixteen };
+    Systems->Serial = LocalSystem::Serial(Test.World) + 100;
+    ADD_LATENT_AUTOMATION_COMMAND(FLandWorstSystems(Systems));
     return true;
 }
 

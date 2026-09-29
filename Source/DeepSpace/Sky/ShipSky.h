@@ -163,6 +163,16 @@ public:
      *  never catches a fade. */
     void FlushShadowBakesForTest();
 
+    /** One frame's shadow work as play does it -- land what has finished,
+     *  hand the render thread this frame's pieces -- but waiting for the
+     *  bakes in flight: for a test that lands a system over engine frames.
+     *  The Vulkan RHI recycles an upload's staging buffer only at a frame's
+     *  end, so a whole system landed inside one (FlushShadowBakesForTest)
+     *  grows the staging pool by every piece, and a new page of it stalled
+     *  the render thread 4.3-5.2 ms about every 35 MB -- whatever the
+     *  pieces' size (Eyes.ShadowBakeCost, 2026-09-29). */
+    void PumpShadowBakesForTest() { PumpShadowBakes(true); }
+
     /** The body's cast-shadow texture once its bake has landed and every
      *  piece of it has gone to the render thread; null before, for a body
      *  with no ground, and with ds.Sky.ShadowMaps 0. */
