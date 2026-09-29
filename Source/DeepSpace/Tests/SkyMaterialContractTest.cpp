@@ -87,6 +87,7 @@ namespace
             { TEXT("tile_pivot"), SkyMaterial::TilePivot, TEXT("vector") },
             { TEXT("vertex_band_limit"), SkyMaterial::VertexBandLimit, TEXT("scalar") },
             { TEXT("shadows"), SkyMaterial::Shadows, TEXT("scalar") },
+            { TEXT("shadow_map_fade"), SkyMaterial::ShadowMapFade, TEXT("scalar") },
             { TEXT("shadow_map"), SkyMaterial::ShadowMap, TEXT("texture") },
             { TEXT("shadow_frame_x"), SkyMaterial::ShadowFrameX, TEXT("vector") },
             { TEXT("shadow_frame_z"), SkyMaterial::ShadowFrameZ, TEXT("vector") },

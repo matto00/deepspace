@@ -63,7 +63,7 @@ namespace SkyMaterial
 
     // M_SkyBody: planets and moons.
     //   vectors Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY, ShadowFrameX, ShadowFrameZ;
-    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows;
+    //   scalars Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows, ShadowMapFade;
     //   texture ShadowMap.
     inline const FName Colour = TEXT("Colour");                 // vector: albedo colour, or the star's
     inline const FName LightDirection = TEXT("LightDirection"); // vector: world space, body toward its star
@@ -88,7 +88,11 @@ namespace SkyMaterial
     // blended into its vertices' shadow by Morph, both through one Custom node
     // over the shared file's WR_ShadowMapCoord (SunShadowMap::Sample is its
     // C++ mirror). The strength is ds.Sky.Shadows, lerp(1, shadow, Shadows).
+    // ShadowMapFade fades the map alone in as it lands, and never the
+    // ground's vertices: shadow = lerp(lerp(1, Vertex, Morph), node,
+    // ShadowMapFade), which is lerp(lerp(1, map, fade), Vertex, Morph).
     inline const FName Shadows = TEXT("Shadows");           // scalar: the cast shadow's strength, 0..1
+    inline const FName ShadowMapFade = TEXT("ShadowMapFade"); // scalar: the map's fade-in since it landed, 0..1; 0 without one
     inline const FName ShadowMap = TEXT("ShadowMap");       // texture: the world's map, G16, a mip per level (SunShadowMap)
     inline const FName ShadowFrameX = TEXT("ShadowFrameX"); // vector: the map's X axis, body axes; w its PsiLo, rad
     inline const FName ShadowFrameZ = TEXT("ShadowFrameZ"); // vector: its Z axis, the light, body axes; w its Step, rad
@@ -120,7 +124,7 @@ namespace SkyMaterial
     // Each asset's parameters, exactly: the test checks the JSON against
     // these and every loaded asset against the JSON, so a parameter added on
     // one side and not the other is a red test, not a silent no-op.
-    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows }; }
+    inline TArray<FName> BodyScalars() { return { Brightness, PointBlend, Mottle, Detail, Banding, ReliefScale, Cratering, Shadows, ShadowMapFade }; }
     inline TArray<FName> BodyVectors() { return { Colour, LightDirection, Rim, SurfaceSeed, BodyAxisX, BodyAxisY, ShadowFrameX, ShadowFrameZ }; }
     inline TArray<FName> BodyTextures() { return { ShadowMap }; }
     inline TArray<FName> StarScalars() { return { Brightness }; }
@@ -128,7 +132,7 @@ namespace SkyMaterial
     inline TArray<FName> ParameterScalars() { return { InteriorLight, Veil }; }
     inline TArray<FName> ProbeScalars() { return { Banding, ProbeFootprint }; }
     inline TArray<FName> ProbeVectors() { return { SurfaceSeed, ProbeSelect, ProbeBias }; }
-    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit, Shadows }; }
+    inline TArray<FName> GroundScalars() { return { Brightness, Mottle, Detail, Cratering, ReliefScale, Morph, BandLimit, Shadows, ShadowMapFade }; }
     inline TArray<FName> GroundVectors() { return { Colour, LightDirection, SurfaceSeed, TilePivot, ShadowFrameX, ShadowFrameZ }; }
     inline TArray<FName> GroundTextures() { return { ShadowMap }; }
     inline TArray<FName> GroundProbeScalars() { return { Cratering, ReliefScale, VertexBandLimit, ProbeFootprint }; }

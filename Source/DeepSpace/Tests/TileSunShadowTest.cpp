@@ -1,7 +1,9 @@
 #include "HAL/IConsoleManager.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
+#include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
 #include "Surface/GroundField.h"
 #include "Surface/SunShadow.h"
@@ -244,6 +246,26 @@ bool FGroundShadowLightTest::RunTest(const FString& Parameters)
         Shadow.Sun.Direction == Sky.Direction && Shadow.Sun.AngularRadius == Sky.AngularRadius);
     TestEqual(TEXT("with the real ground's steepest slope"), Shadow.SteepestSlope, SunShadow::SteepestSlope(Fourth.Relief));
     TestEqual(TEXT("and ds.Terrain.ShadowSamples' samples"), Shadow.Samples, SunShadow::DefaultSamples);
+
+    // With no map (ds.Sky.ShadowMaps 0 here, as before any map lands) the
+    // look the ground copies still casts at full strength: only the map's
+    // fade is 0, so the vertices' shadow draws (M_SkyGround's map_fade).
+    if (const UStaticMeshComponent* Proxy = Test.Sky->GetProxy(4))
+    {
+        if (UMaterialInstanceDynamic* Look = Cast<UMaterialInstanceDynamic>(Proxy->GetMaterial(0)))
+        {
+            TestEqual(TEXT("with no map the look casts at full strength"), Look->K2_GetScalarParameterValue(SkyMaterial::Shadows), ShipSky::ShadowStrength());
+            TestEqual(TEXT("and only the map's fade is 0"), Look->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), 0.0f);
+        }
+        else
+        {
+            AddError(TEXT("IV's proxy draws a dynamic instance"));
+        }
+    }
+    else
+    {
+        AddError(TEXT("IV has a proxy"));
+    }
 
     const FTileKey Key = TerrainQuadtree::KeyAt(FVector3d(Out), 8);
     const FTileBuild* Resident = Test.Ground->GetResidentTile(Key);

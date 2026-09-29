@@ -113,6 +113,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("in its frame"), Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX) == Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameX)
             && Ground->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ) == Fourth->K2_GetVectorParameterValue(SkyMaterial::ShadowFrameZ));
         TestEqual(TEXT("at its strength"), Ground->K2_GetScalarParameterValue(SkyMaterial::Shadows), Fourth->K2_GetScalarParameterValue(SkyMaterial::Shadows));
+        TestEqual(TEXT("with its map's fade"), Ground->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), Fourth->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade));
     }
 
     // A jump within the system: ShipNavState bumps the jump serial on an
@@ -177,8 +178,13 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         {
             TestEqual(TEXT("at 512 columns"), Landed->GetSizeX(), 512);
             UMaterialInstanceDynamic* Near = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Order[0])->GetMaterial(0));
-            TestEqual(TEXT("and the frame it lands in draws it at strength 0: no shadow appears in one frame"),
-                Near->K2_GetScalarParameterValue(SkyMaterial::Shadows), 0.0f);
+            TestEqual(TEXT("and the frame it lands in draws it faded to 0: no shadow appears in one frame"),
+                Near->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), 0.0f);
+            // The fade is the map's, never the strength's: the ground's
+            // vertices carry their own shadow, and it draws before any map
+            // has landed, or with ds.Sky.ShadowMaps 0.
+            TestEqual(TEXT("at the full strength, which the ground's vertices draw at"),
+                Near->K2_GetScalarParameterValue(SkyMaterial::Shadows), ShipSky::ShadowStrength());
             // The fade runs on the world's clock, which FSkyWorld::Step does
             // not move (it ticks the actors, not the world): moved here, a
             // frame at a time, as play moves it.
@@ -187,7 +193,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
                 Test.World->TimeSeconds += 1.0f / 60.0f;
                 Test.Step(1.0f / 60.0f);
             }
-            TestEqual(TEXT("and one fade later, whole"), Near->K2_GetScalarParameterValue(SkyMaterial::Shadows), ShipSky::ShadowStrength());
+            TestEqual(TEXT("and one fade later, whole"), Near->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), 1.0f);
         }
         TestEqual(TEXT("the fade is 0 as a map lands"), ShipSky::ShadowFade(0.0), 0.0f);
         TestEqual(TEXT("half at half the fade"), ShipSky::ShadowFade(0.5 * ShipSky::ShadowFadeSeconds), 0.5f);

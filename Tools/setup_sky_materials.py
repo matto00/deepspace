@@ -311,6 +311,21 @@ def sun_shadow(g, direction, footprint, default_texture, vertex, morph):
     return custom_node(g, SHADOW_CODE, pins, unreal.CustomMaterialOutputType.CMOT_FLOAT1)
 
 
+def map_fade(g, shadow, vertex, morph):
+    """The map faded in as it lands, and the vertices' own shadow never:
+    lerp(lerp(1, vertex, morph), shadow, ShadowMapFade), which is
+    lerp(lerp(1, map, fade), vertex, morph) exactly. With no map the node
+    reads white and this is the vertices' shadow alone, whatever the fade."""
+    bare = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0)
+    g.link(vertex, bare, "B")
+    g.link(morph, bare, "Alpha")
+    faded = g.node(unreal.MaterialExpressionLinearInterpolate)
+    g.link(bare, faded, "A")
+    g.link(shadow, faded, "B")
+    g.link(g.scalar("shadow_map_fade", 1.0), faded, "Alpha")
+    return faded
+
+
 def cast(g, shaded, shadow, strength):
     """shaded x lerp(1, shadow, Shadows): 0 draws the unshadowed look."""
     blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0)
@@ -663,7 +678,7 @@ def sky_ground(default_texture):
     # the map's is blended into it by the morph that grows the relief in, so at
     # the handover the ground's shadow is the orbit's exactly.
     vertex = mask(g, g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "r")
-    shadow = sun_shadow(g, direction, face_footprint(g, footprint), default_texture, vertex, morph)
+    shadow = map_fade(g, sun_shadow(g, direction, face_footprint(g, footprint), default_texture, vertex, morph), vertex, morph)
     g.emissive(g.mul(g.mul(colour, brightness), g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)))
 
     # The morph: every vertex lowered by (1 - Morph) x its height along its
@@ -796,7 +811,8 @@ def sky_body(default_texture):
     g.link(n_dot_l, soft, "Value")
 
     shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
-    shadow = sun_shadow(g, direction, face_footprint(g, footprint), default_texture, g.constant(1.0), g.constant(0.0))
+    no_vertex, no_morph = g.constant(1.0), g.constant(0.0)
+    shadow = map_fade(g, sun_shadow(g, direction, face_footprint(g, footprint), default_texture, no_vertex, no_morph), no_vertex, no_morph)
     disc = g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)
 
     blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_b=1.0)

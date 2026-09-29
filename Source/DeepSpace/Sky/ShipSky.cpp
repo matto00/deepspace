@@ -39,16 +39,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogShipSky, Log, All);
 // defaults once, at the end.
 namespace
 {
-    /**
-     * The galley's EV100, in the HDR visualisation's convention, which
-     * manual exposure fixes for the whole game (sky decision 6). The spec's
-     * default is "whatever auto exposure settles on in the galley"; nobody
-     * has read that off a rendered galley yet, so this is the estimate: a
-     * ceiling grid of ~2.5 cd lights 3 m apart puts about a lux on the
-     * floor, ~0.3 cd/m^2 on average, and log2((0.3 / 0.18) / 1) is +0.7.
-     * Read the real one with ds.Sky.ExposureMode 0 and VisualizeHDR, and put
-     * it here.
-     */
     TAutoConsoleVariable<float> CVarShadows(
         TEXT("ds.Sky.Shadows"), 1.0f,
         TEXT("The cast shadow's strength in M_SkyBody and M_SkyGround, 0..1: 0 draws the unshadowed look. Baked, so it costs nothing either way."),
@@ -56,7 +46,7 @@ namespace
 
     TAutoConsoleVariable<int32> CVarShadowMaps(
         TEXT("ds.Sky.ShadowMaps"), 1,
-        TEXT("1 bakes each solid world's cast-shadow map, off the game thread, re-baking one only when its relief, its light or the width changes; 0 bakes none and drops those held."),
+        TEXT("1 bakes each solid world's cast-shadow map, off the game thread, re-baking one only when its relief, its light or the width changes; 0 bakes none and drops those held. The ground's tiles keep their own (ds.Terrain.Shadows) either way."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarShadowMapWidth(
@@ -69,6 +59,16 @@ namespace
         TEXT("Cast-shadow maps baking at once, a world a task, on worker threads at low priority: with the terrain's 2, the machine's cap of 4, never the core count."),
         ECVF_Default);
 
+    /**
+     * The galley's EV100, in the HDR visualisation's convention, which
+     * manual exposure fixes for the whole game (sky decision 6). The spec's
+     * default is "whatever auto exposure settles on in the galley"; nobody
+     * has read that off a rendered galley yet, so this is the estimate: a
+     * ceiling grid of ~2.5 cd lights 3 m apart puts about a lux on the
+     * floor, ~0.3 cd/m^2 on average, and log2((0.3 / 0.18) / 1) is +0.7.
+     * Read the real one with ds.Sky.ExposureMode 0 and VisualizeHDR, and put
+     * it here.
+     */
     TAutoConsoleVariable<float> CVarExposure(
         TEXT("ds.Sky.Exposure"), 0.7f,
         TEXT("The fixed exposure: the scene EV100 shown at middle grey, as the HDR visualisation reports it. ")
@@ -519,13 +519,16 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             // floats: 6e-8, where the instance transform's rotation kept 3e-5.
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisX, AsParameter(Universe.GetAxisX()));
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisY, AsParameter(Universe.GetAxisY()));
-            // The cast shadow: the strength every frame, faded in from the
-            // frame the map landed; the map and its frame once it has.
+            // The cast shadow: the strength every frame; the map faded in
+            // from the frame it landed, and it and its frame once it has.
+            // The fade is the map's alone: the ground's vertices carry their
+            // own shadow, which draws whether or not a map has landed.
             const FName Id = System.Bodies[Index].Id;
             const FShadowEntry* Shadow = ShadowEntries.Find(Id);
             const TObjectPtr<UTexture2D>* Map = ShadowTextures.Find(Id);
             const float Fade = Shadow && Map ? ShipSky::ShadowFade(GetWorld()->GetTimeSeconds() - Shadow->LandedAt) : 0.0f;
-            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength() * Fade);
+            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
+            Instance->SetScalarParameterValue(SkyMaterial::ShadowMapFade, Fade);
             if (Shadow && Map)
             {
                 Instance->SetTextureParameterValue(SkyMaterial::ShadowMap, Map->Get());
@@ -831,7 +834,7 @@ void ShipSky::CopyBodyLook(UMaterialInstanceDynamic& From, UMaterialInstanceDyna
     {
         To.SetVectorParameterValue(Name, From.K2_GetVectorParameterValue(Name));
     }
-    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering, SkyMaterial::Shadows })
+    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering, SkyMaterial::Shadows, SkyMaterial::ShadowMapFade })
     {
         To.SetScalarParameterValue(Name, From.K2_GetScalarParameterValue(Name));
     }
