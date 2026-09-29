@@ -96,8 +96,11 @@ green merged.
 **Prove a test can fail with `Tools/mutate.sh`** before trusting it. A rendered check is proven the same way with
 `MUTATE_RUNNER=Tools/eyes.sh`. It
 checks everything that has made a mutation silently prove nothing here -- the
-text not found, the mutant not compiling, the library not rebuilt -- before
-reading a verdict, and restores the file. Rebuild afterwards: its last build
+text not found, the mutant not compiling, the library not rebuilt, the test
+already red before the mutant -- before reading a verdict, and restores the
+file. It runs the baseline first: a red test goes red under any mutant. For
+a check red on something else, `MUTATE_EXPECT='<assertion text>'` counts
+only that assertion failing as a kill. Rebuild afterwards: its last build
 held the mutant. `./test.sh` itself exits non-zero if no tests ran, or if
 the log shows a world torn down without `EndPlay` or a console variable
 looked up by name every frame -- both have been left by runs whose every
@@ -838,14 +841,20 @@ the invariant. LANDED is slice (c).
 cube-sphere quadtree, CDLOD from the ship, 2:1, tiles 33 x 33 with skirts,
 built on three workers (ruled 2026-09-28), uploaded four a frame, on the counter-frame, shaded by
 `M_SkyGround` exactly as the orbit shades (each tile's vertices carrying the cast shadow, which draws whether or not the orbit's map has landed) (the vertex normal carries what the
-tile resolves, the pixel the rest). The tiles are `UTerrainTileComponent`,
+tile resolves, the pixel the rest -- a split that grows in with the relief:
+at the handover, Morph 0, every band is the pixel's and the normal is the
+orbit's, since a vertex normal interpolated across a triangle is smoother
+than the orbit's and under a grazing sun that was a 2.2% darker frame). The tiles are `UTerrainTileComponent`,
 not `ProceduralMeshComponent`: PMC failed the first-day gate
 (`Eyes.TerrainBudget`, the verdict in landing decision 6). It takes the body
 from the sky under 50 km and grows the relief in to the drive floor.
 Residency never gates motion. `ds.Terrain.Describe` prints the cut.
 **Every key the cut needs is built, the leaves' ancestors too**, and a
-child's bounds, read from its resident parent, are remembered for the
-ground's life: `Balance` turns a leaf the ship has just reached into an
+child's bounds, read from its resident parent, are remembered while the cut
+is within three levels of it (`ForgetBoundsFarFrom`; less, and the cut
+changed with residency again -- `GroundKeepsUp` drew 790 m off -- and for
+the ground's life they grew with the ground flown). The resident cut and
+its tile components hold **one** copy of each tile between them. `Balance` turns a leaf the ship has just reached into an
 ancestor the frame it enters the cut, and an ancestor never built sent
 `Resolve` back to draw a level-2 tile over the ship, 792 m off the ground
 (`GroundKeepsUp`, found on three workers).
@@ -873,10 +882,22 @@ until they fit (`ShipSky::CappedShadowWidths`, sized by the RHI's own
 `M_SkyBody` and `M_SkyGround` read both through one Custom node over the
 shared file's `WR_ShadowMapCoord`, blended by `Morph`, so the handover
 carries the shadow with the relief; `ds.Sky.Shadows 0` draws the
-unshadowed look. It costs nothing per frame. **If worlds ever spin, the
-bake is redone as the sun moves.** `Eyes.ShadowBakeCost` holds the bake's
-cost per tile, per world, per system, in flight and in memory to its
-budgets; look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
+unshadowed look. The lookup runs whether the switch is on or not, and costs
+nothing measurable per frame: `Eyes.LandingFrame` against the same build
+with materials that never read the map, -0.10..+0.12 ms, every case within
+its band (2026-09-29). **If worlds ever spin, the bake is redone as the sun
+moves.** `Eyes.ShadowBakeCost` measures the bake's cost per tile, per world,
+per system and in flight against its budgets and prints each (a timing is
+never asserted), and asserts its memory: every solid world's map landed,
+each system under the cap as the RHI sizes it, the vertex shadows under
+12 MB. A system over the cap shares its widths among its worlds, so a reload
+that moves one world's radius or peak may re-bake another. Still open for
+the developer (the cast-shadow plan's *Review record*): `Eyes.HandoverParity`
+is red at a 3-degree dusk, 3.0e-3 apart without the shadow against 1e-3, on
+the face's Detail term; a few map pieces take 4.3-4.9 ms of render thread in
+Trabo's loads against 4; and `Eyes.TerrainBudget`, measured honestly, reads
+the tiles' draw at its 6 ms edge and moving them all each frame at +7.7 ms
+against 2. Look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
 
 **The frame is profiled, not assumed** (the frame ruling: profile first,
 with the shadows in, and fix the real cost; the split factor last).

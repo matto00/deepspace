@@ -98,6 +98,7 @@ below goes past them, it says so and is on the sign-off list.
   - A world's orbital shadow map is **uploaded in pieces on the render thread over several frames**, so its landing never hitches a frame (it was about 9.5 ms in one frame, against the 4 ms budget).
   - The defaults stand: 4,096 columns, every tile vertex, 12 samples. But the orbital maps get a **per-system GPU memory cap of 128 MB**: a system with many worlds lowers its maps' resolution to fit (a 16-world system would otherwise reach about 205 MB).
   - **Built** (track T, 2026-09-29): `ds.Terrain.BuildTasks` 3, where three workers exposed a streaming fault that drew a level-2 tile 792 m off the ground under the ship (ancestors never built) -- fixed, `GroundKeepsUp` 10.21 cm and `GroundKeepsUpAtDusk` 12.84 cm; the map uploaded in 512 KB pieces of rows over several frames (`ds.Sky.ShadowUploadKB`), 0.16 ms of game thread at worst; the cap on the RHI's own texture size (`ShipSky::CappedShadowWidths`), the finest texel halved first. The corpus's worst system today is Trabo, 12 solid worlds, not 16.
+  - **Reviewed, 2026-09-29** (track T's review, fixed on `feat/landing-b-t`; the plan's *Review record* has the runs): the cut's vertex shadows are held **once** -- the resident cut and its tile components share one tile, and a pooled component waiting for its next tile holds none -- 6.12 MB, within the 12 MB (it was 12.25 MB, OVER, as two copies). The 128 MB cap is **asserted** on the path the game uses: `Eyes.ShadowBakeCost` holds every system's maps, as the RHI sizes them, to it, and every solid world's map to having landed; `DeepSpace.Sky.ShadowCapSynced` holds `SyncShadowMaps`' own widths to `CappedShadowWidths` under `ShadowTextureBytes`. Under the cap a world's width depends on every world's radius and lowest row, so a reload that moves one world's radius or peak **may re-bake another**; one that moves a seed never does. The ground's remembered child ranges are bounded by the cut (three levels), not by the ground flown over. **The frame's price of the lookup, measured**: `Eyes.LandingFrame` against the same build with materials that never read the shadow, -0.10..+0.12 ms, every case within its band -- it costs nothing per frame. **The dusk handover step** was the ground's vertex normal, interpolated across triangles and so smoother than the orbit's per-pixel one, and at a grazing sun saturate(N.L) is convex: the ground's normal now takes its split between vertex and pixel **in with the relief** (the pixel's bands at lerp(1, BandLimit, Morph), the vertex normal lerp(D, it, Morph)), so at the handover it is the orbit's. Without the shadow the dusk frames are 3.0e-3 apart (were 2.2e-2), the 62.6-degree ones 5.4e-4 (were 2.3e-5): still red against 1e-3 at dusk, on the face's Detail term alone (zeroing terms on both materials: the bare sphere 2e-6, mottle 1e-6, craters 5e-5, detail 2.0e-3). **Open, for the developer:** that dusk tolerance; `map_upload_rt_ms_all` 4.74 ms against 4 -- 3 or 4 of about 480 pieces take 4.3-4.9 ms of the render thread, the rest under 0.5 ms, whatever the piece's size (a 225 KB piece alike), not the test flush's queueing (a frame end after every pump changed nothing), only in Trabo's loads; and `Eyes.TerrainBudget` read red once its harness stopped charging the empty scene for the engine's frame in flight and moved the tiles before every timed capture: 2,200 tiles +5.97..+6.13 ms of a 4K capture against 6, moving every tile each frame +7.72..+7.81 ms of render thread and GPU against 2, and 2.12..2.15 ms of game thread against 2. `Eyes.ReliefLook`'s off frames match a baseline taken on the same build with materials that never read the shadow, all twelve.
 - **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
 
@@ -830,9 +831,9 @@ pure: positions from `Height(D, spacing)` (the tile's vertex spacing as the
 footprint, so a coarse tile never samples fine bands into vertex noise),
 normals from the analytic gradient of the same band-limited height (no
 finite differences). It runs on `UE::Tasks::Launch` (Unreal's task system:
-work handed to worker threads) with **at most 2 builds in flight**
+work handed to worker threads) with **at most 3 builds in flight**
 (`ds.Terrain.BuildTasks`, the machine's cap: never sized to the core
-count). The game thread applies at most `ds.Terrain.UploadsPerFrame` (4)
+count; 3 since the cast-shadow ruling of 2026-09-28, from 2). The game thread applies at most `ds.Terrain.UploadsPerFrame` (4)
 finished tiles a frame. Estimated cost: 3-8 us a sample (more with the
 summed craters, decision 3), 5-10 ms a tile, 200-400 tiles a second on two
 workers. **Measured (Task T4, `DeepSpace.Surface.Tile`, 2026-09-27): 3.43 ms a
@@ -863,7 +864,7 @@ the ship, whenever AGL is under 1 km, the drawn ground must be within
 (`DeepSpace.Surface.GroundActor`, and a playtest flight at the skim cap).
 
 **Budgets** (CVars, read at use): `ds.Terrain.SplitFactor` 2.0,
-`.MaxTiles` 2,500, `.BuildTasks` 2, `.UploadsPerFrame` 4. Header constants
+`.MaxTiles` 2,500, `.BuildTasks` 3, `.UploadsPerFrame` 4. Header constants
 with tests: 32 cells a tile, 1 m target spacing. `ds.Terrain.Describe`
 prints the cut per level with resident and pending counts; `ds.Terrain.Show
 0` hides the ground for comparison.
@@ -1669,7 +1670,7 @@ recompiled once, by `setup_flight_input.py`, for the two new actions.
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
 | `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
 | `ds.Hum.HoldHiss` | 0.35 at the 3 g cap, never above `ds.Hum.CruiseHiss` | `ShipHumComponent.cpp` |
-| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp` |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 3, 4, 1 | `WorldGround.cpp` |
 
 Commands: `ds.Terrain.Describe`; `ds.Sky.Goto` as above.
 
