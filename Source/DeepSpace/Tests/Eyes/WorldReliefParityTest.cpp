@@ -1,5 +1,6 @@
 #include <limits>
 
+#include "Engine/Texture2DDynamic.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "HAL/FileManager.h"
 #include "Kismet/KismetRenderingLibrary.h"
@@ -13,8 +14,12 @@
 #include "ShaderCompiler.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
 #include "Universe/UniverseSubsystem.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/SunShadowMap.h"
 #include "Surface/TerrainQuadtree.h"
 #include "Surface/WorldRelief.h"
 #include "Tests/SkyTestWorld.h"
@@ -110,7 +115,8 @@
  *
  * R5 after review, the giant restored (stretch 6, held to the file in double at its recorded floor) and every pixel held finite: PASS, both worlds -- the giant's every gap identical to R4's (1/3072 detail 3.69e-04, 1/12288 detail slope 7.21e-03 held to 8.8e-03); 0 pixels not finite; SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.462% in one crater band
  *
- * Task T2, the craters summed (WR_CraterSum) and the relief the ground's own slope: PASS, both worlds, the crater columns held to the summed kernels' own measure (1.25x, re-measured: 1/12288 crater albedo 1.79e-04, slope 6.76e-04 on Baemsekai IV; 2.11e-04 and 7.17e-04 on the giant) and every other term to Task 31b's; SUMMARY C++-vs-GPU 6.10e-03, float-C++-vs-GPU 5.95e-03, left out at most 2.142% in all (0.462% in one crater band)
+ * Task T2, the craters summed (WR_CraterSum) and the relief the ground's own slope: PASS, both worlds, the crater columns held to the summed kernels' own measure (1.25x, re-measured: 1/12288 crater albedo 1.79e-04, slope 6.76e-04 on Baemsekai IV; 2.11e-04 and 7.17e-04 on the giant) and every other term to Task 31b's; SUMMARY C++-vs-GPU 6.10e-03, float-C++-vs-GPU 5.95e-03, left out at most 2.142% in all (0.462% in one crater band) *
+ * Cast shadow's map (the developer's ruling on slice (b)'s build, baked, 2026-09-28): PASS -- Baemsekai IV's map at 1,024 columns across the terminator (the star 3 degrees over the patch) and across the seam (75 degrees: no lower light puts this patch's centre at +-pi, and there the map is whole, so the seam is held on lit texels only), SunShadowMap::Sample vs the GPU 2.14e-03 against the float mirror's 1.79e-03 from double (held to 2.2e-03, at the seam, footprint 1.5e-03; every other footprint under 1.7e-04), at five footprints to level 2; SUMMARY shadow map C++-vs-GPU 2.14e-03, float-vs-double 1.79e-03
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -620,6 +626,133 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         }
     }
 
+    // -- The cast shadow's map (the developer's ruling on slice (b)'s build:
+    // baked, not marched) ------------------------------------------------------
+    // M_SkyShadowProbe draws the map's lookup -- the shared file's
+    // WR_ShadowMapCoord, WR_ShadowTapsAt and WR_Bilinear over the texture's own
+    // texels -- over the probe patch. The map is Baemsekai IV's, baked here at
+    // 1,024 columns under two lights 3 degrees over the patch's centre: one
+    // turned so the map's frame puts the centre at azimuth 0 (the patch across
+    // the terminator), one at +-pi (the patch across the map's seam). The C++
+    // is SunShadowMap::Sample at the very D the GPU drew, at five footprints
+    // from far finer than a texel (6.1e-3 rad) to one that reads level 2.
+    // Held by the measured floor as a rule: 1e-3, or 1.25 x the float
+    // mirror's distance from double at that footprint, whichever is larger.
+    double WorstShadow = 0.0;
+    double WorstShadowFloat = 0.0;
+    {
+        UMaterial* ShadowShared = LoadObject<UMaterial>(nullptr, SkyMaterial::ShadowProbePath);
+        if (!TestNotNull(TEXT("M_SkyShadowProbe is built (Tools/setup_sky_materials.py)"), ShadowShared))
+        {
+            return false;
+        }
+        UMaterialInstanceDynamic* ShadowProbe = UMaterialInstanceDynamic::Create(ShadowShared, Test.World);
+        const FLinearColor NoBias(0.0f, 0.0f, 0.0f, 0.0f);
+        const TArray<FVector3d> Directions = Draw(Test.World, Target, Probe, Selecting(EPass::Direction), NoBias);
+        const FVector3d Centre = Directions[(Side / 2) * Side + Side / 2].GetSafeNormal();
+        const FVector3d East = FVector3d::CrossProduct(FVector3d::UnitZ(), Centre).GetSafeNormal();
+        const FVector3d North = FVector3d::CrossProduct(Centre, East);
+        const FReliefGround Relief(Fourth.Relief);
+        const SunShadow::FSunLight HomeLight = SkyProjection::SunLightOf(HomeSky, 4);
+        const double Steepest = SunShadow::SteepestSlope(Fourth.Relief);
+        struct FPlace
+        {
+            const TCHAR* Name;
+            double Azimuth;
+        };
+        for (const FPlace& Place : { FPlace{ TEXT("across the terminator"), 0.0 }, FPlace{ TEXT("across the seam"), UE_DOUBLE_PI } })
+        {
+            // Turn the light about the centre until the map's frame puts the
+            // centre at the azimuth asked. Across the terminator the star
+            // stands 3 degrees over the centre, whatever the azimuth: the
+            // frame's X is square to the world's Z, so with this patch one
+            // turn of a 3-degree light only sweeps the centre's azimuth
+            // through about 100 degrees, and neither 0 nor pi is in it (the
+            // first run: 39.7 degrees off both). The seam needs the azimuth,
+            // so its light is also raised, 3 to 75 degrees, until one puts
+            // the centre at pi.
+            SunShadow::FSunLight Sun = HomeLight;
+            double Nearest = TNumericLimits<double>::Max();
+            double Raised = 3.0;
+            const bool bSeam = Place.Azimuth != 0.0;
+            for (const double Degrees : { 3.0, 6.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 75.0 })
+            {
+                if (!bSeam && Degrees != 3.0)
+                {
+                    break;
+                }
+                const double Elevation = FMath::DegreesToRadians(Degrees);
+                for (int32 Turn = 0; Turn < 3600; ++Turn)
+                {
+                    const double Around = Turn * 2.0 * UE_DOUBLE_PI / 3600.0;
+                    SunShadow::FSunLight Trial = HomeLight;
+                    Trial.Direction = (Centre * FMath::Sin(Elevation)
+                        + (East * FMath::Cos(Around) + North * FMath::Sin(Around)) * FMath::Cos(Elevation)).GetSafeNormal();
+                    const FSunShadowMap Shape = SunShadowMap::Shape(Relief, Trial, 1024);
+                    const double Phi = FMath::Atan2(FVector3d::DotProduct(Centre, Shape.FrameY), FVector3d::DotProduct(Centre, Shape.FrameX));
+                    const double Off = bSeam ? FMath::Abs(FMath::Fmod(Phi - Place.Azimuth + 3.0 * UE_DOUBLE_PI, 2.0 * UE_DOUBLE_PI) - UE_DOUBLE_PI) : 0.0;
+                    if (Off < Nearest)
+                    {
+                        Nearest = Off;
+                        Sun = Trial;
+                        Raised = Degrees;
+                    }
+                }
+            }
+            TestTrue(FString::Printf(TEXT("a light puts the patch %s (%.3f deg off, the star %.0f deg over the centre)"), Place.Name,
+                FMath::RadiansToDegrees(Nearest), Raised), Nearest < FMath::DegreesToRadians(0.5));
+            Report.Add(FString::Printf(TEXT("Baemsekai IV's shadow map, %s: the star %.0f deg over the patch's centre, the centre %.3f deg from the azimuth asked"),
+                Place.Name, Raised, FMath::RadiansToDegrees(Nearest)));
+            const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe> Baked =
+                MakeShared<const FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Relief, Sun, Steepest, 1024));
+            const FSunShadowMap& Map = *Baked;
+            UTexture2DDynamic* Texture = ShipSky::MakeShadowTextureNow(Baked, TEXT("Parity"));
+            if (!TestNotNull(TEXT("the map uploads"), Texture))
+            {
+                return false;
+            }
+            FlushRenderingCommands();
+            ShadowProbe->SetTextureParameterValue(SkyMaterial::ShadowMap, Texture);
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShipSky::ShadowFrameX(Map));
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShipSky::ShadowFrameZ(Map));
+            for (const double FootprintD : { 1.0e-5, 1.0e-4, 1.5e-3, 6.0e-3, 2.4e-2 })
+            {
+                const float Footprint = static_cast<float>(FootprintD);
+                ShadowProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
+                const TArray<FVector3d> Drawn = Draw(Test.World, Target, ShadowProbe, NoBias, NoBias);
+                double Gap = 0.0;
+                double FloatGap = 0.0;
+                int32 NotFinite = 0;
+                int32 Shaded = 0;
+                for (int32 Index = 0; Index < Side * Side; ++Index)
+                {
+                    const FVector3d& D = Directions[Index];
+                    const FVector3d& Pixel = Drawn[Index];
+                    if (!IsFinite(D) || !IsFinite(Pixel))
+                    {
+                        ++NotFinite;
+                        continue;
+                    }
+                    const double Held = SunShadowMap::Sample(Map, D, static_cast<double>(Footprint));
+                    const double Float = SunShadowMap::SampleF32(Map, FVector3f(D), Footprint);
+                    Gap = FGap::Wider(Gap, FMath::Abs(Held - Pixel.X));
+                    FloatGap = FGap::Wider(FloatGap, FMath::Abs(Held - Float));
+                    Shaded += Held < 0.5 ? 1 : 0;
+                }
+                const double HeldTo = FMath::Max(1.0e-3, FloorRuleFactor * FloatGap);
+                const FString At = FString::Printf(TEXT("Baemsekai IV's shadow map, %s, footprint %.1e"), Place.Name, FootprintD);
+                TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
+                TestTrue(FString::Printf(TEXT("%s: SunShadowMap::Sample computes what the GPU drew, held to %.1e (the float mirror %.2e from double): %.2e"),
+                    *At, HeldTo, FloatGap, Gap), Gap <= HeldTo);
+                WorstShadow = FMath::Max(WorstShadow, Gap);
+                WorstShadowFloat = FMath::Max(WorstShadowFloat, FloatGap);
+                Report.Add(FString::Printf(TEXT("%s: %d compared, %.1f%% under half, %d not finite"), *At, Side * Side - NotFinite,
+                    100.0 * Shaded / (Side * Side), NotFinite));
+                Report.Add(FString::Printf(TEXT("  shadow map C++ vs GPU %.2e, held to %.1e; float mirror vs double %.2e"), Gap, HeldTo, FloatGap));
+            }
+        }
+    }
+    Report.Add(FString::Printf(TEXT("SUMMARY shadow map C++-vs-GPU %.2e, float-vs-double %.2e"), WorstShadow, WorstShadowFloat));
     Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));
     Report.Add(FString::Printf(TEXT("SUMMARY C++-vs-GPU %.2e, float-C++-vs-GPU %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
         WorstReliefShared, WorstFloatShared, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
