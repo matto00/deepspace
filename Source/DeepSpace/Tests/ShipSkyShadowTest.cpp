@@ -9,12 +9,15 @@
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyProjection.h"
+#include "Surface/GroundField.h"
 #include "Surface/SunShadowMap.h"
 #include "Tests/SkyTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowParametersTest, "DeepSpace.Sky.ShadowParameters",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowCapSyncedTest, "DeepSpace.Sky.ShadowCapSynced",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 /**
@@ -26,7 +29,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowParametersTest, "DeepSpace.Sky.ShadowPar
  * Worlds with no ground get no map. Each map is keyed by what it is made
  * from, so a jump within the system (a new jump serial, the same system)
  * re-bakes nothing, a reload that moves one world's relief re-bakes that
- * world alone, a new system drops the old maps, and nothing waits for a
+ * world alone (in a system under the per-system cap), a new system drops the old maps, and nothing waits for a
  * bake it lets go. A map that lands goes to the render thread in pieces
  * over several frames (ds.Sky.ShadowUploadKB a frame; the ruling of
  * 2026-09-28), is read by no world before its last piece, and then fades in
@@ -151,14 +154,17 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("in transit the maps are kept"), Test.Sky->GetShadowTexture(Nearest) == Held[Nearest]);
 
     // A reload of the priors that moves one world's relief keeps the serial:
-    // that world alone is baked again, and its old map is let go at once.
+    // that world alone is baked again, and its old map is let go at once --
+    // in a system under the per-system cap, as this one is. Over it, a
+    // world's width depends on every world's, and a reload that moves a
+    // radius or a peak may re-bake another (DeepSpace.Sky.ShadowCapSynced).
     {
         FSkySystem Reloaded = Here;
         // The seed, not the peak: a new peak moves the steepest slope too,
         // and a key blind to the relief would still see that.
         Reloaded.Bodies[Order[0]].Relief.SeedOffset.X += 1.0 / 256.0;
         Test.Sky->SyncTo(Reloaded, Serial, false);
-        TestEqual(TEXT("a reload that moves one world's relief re-bakes that world alone"), Test.Sky->GetShadowBakesStarted(), Started + 1);
+        TestEqual(TEXT("under the cap a reload that moves one world's relief re-bakes that world alone"), Test.Sky->GetShadowBakesStarted(), Started + 1);
         TestNull(TEXT("and lets its stale map go"), Test.Sky->GetShadowTexture(Nearest));
         bool bOthers = true;
         for (const TPair<FName, UTexture2DDynamic*>& Was : Held)
@@ -175,7 +181,8 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     {
         FScopedCVar Wider(TEXT("ds.Sky.ShadowMapWidth"), 512.0f);
         // Pieces of 16 KB: the 512-column map, about 180 KB, goes up over a
-        // dozen frames, as a 4096-column one does at the default 1 MB.
+        // dozen frames, as a 4096-column one does in about two dozen at the
+        // default 512 KB.
         FScopedCVar Pieces(TEXT("ds.Sky.ShadowUploadKB"), 16.0f);
         UTexture2DDynamic* Landed = nullptr;
         int32 Uploading = 0;
@@ -230,6 +237,87 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("with ds.Sky.ShadowMaps 0 nothing is baked, and what was baking is let go"), Test.Sky->GetShadowBakesPending(), 0);
         TestNull(TEXT("and no map is held"), Test.Sky->GetShadowTexture(Nearest));
     }
+    return true;
+}
+
+/**
+ * The per-system cap on the path the game uses: the widths SyncShadowMaps
+ * gives a system too large for 128 MB at the full width -- the start system
+ * with twelve more IV-like worlds, seventeen in all, about 200 MB at 4096
+ * columns -- are ShipSky::CappedShadowWidths of its worlds sized as the RHI
+ * sizes a texture (ShadowTextureBytes; headless, the levels' own bytes),
+ * they fit the cap, and some are narrower than the full width. Under the
+ * cap each world's width is a function of every world's radius and lowest
+ * row (PsiLo), so a reload that moves one world's seed keeps every width,
+ * and every other world's map; one that moves a radius or a peak may halve
+ * another world's instead (DeepSpace.Sky.ShadowParameters holds a
+ * one-world re-bake only under the cap). Nothing is baked: the widths are
+ * the keys', set when the system loads.
+ */
+bool FShadowCapSyncedTest::RunTest(const FString& Parameters)
+{
+    using namespace SkyTestWorld;
+    FSkyWorld Test(TEXT("ShadowCapSyncedWorld"), 8, EShadows::Maps);
+    Test.BeginPlay();
+    const FSkySystem Here = LocalSystem::Here(Test.World);
+    if (!TestTrue(TEXT("the start system has IV"), Here.Bodies.IsValidIndex(4)))
+    {
+        return false;
+    }
+    FSkySystem Crowded = Here;
+    for (int32 Copy = 0; Copy < 12; ++Copy)
+    {
+        FSkyBody Again = Here.Bodies[4];
+        Again.Id = FName(*FString::Printf(TEXT("Baemsekai IV again %d"), Copy));
+        Again.Relief.SeedOffset.X += Copy + 1.0;
+        Crowded.Bodies.Add(Again);
+    }
+    const auto WidthsOf = [&](const FSkySystem& System, TArray<ShipSky::FShadowWorld>& Worlds, TArray<int32>& Held)
+    {
+        Worlds.Reset();
+        Held.Reset();
+        for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+        {
+            const FSkyBody& Body = System.Bodies[Index];
+            if (Body.Ground != EGround::Solid || Body.Kind == ESkyBodyKind::Star)
+            {
+                continue;
+            }
+            const FSunShadowMap Shape = SunShadowMap::Shape(FReliefGround(Body.Relief), SkyProjection::SunLightOf(System, Index), 2);
+            Worlds.Add({ Body.Relief.RadiusCm, Shape.Width > 0 ? Shape.PsiLo : 0.5 * UE_DOUBLE_PI });
+            Held.Add(Test.Sky->GetShadowWidth(Body.Id));
+        }
+    };
+    int32 Serial = LocalSystem::Serial(Test.World) + 100;
+    Test.Sky->SyncTo(Crowded, ++Serial, false);
+    TArray<ShipSky::FShadowWorld> Worlds;
+    TArray<int32> Held;
+    WidthsOf(Crowded, Worlds, Held);
+    int64 Full = 0;
+    int64 Total = 0;
+    FString Listed;
+    for (int32 Index = 0; Index < Worlds.Num(); ++Index)
+    {
+        Full += ShipSky::ShadowTextureBytes(ShipSky::ShadowMapWidth(), SunShadowMap::RowsFor(ShipSky::ShadowMapWidth(), Worlds[Index].PsiLo));
+        Total += ShipSky::ShadowTextureBytes(Held[Index], SunShadowMap::RowsFor(Held[Index], Worlds[Index].PsiLo));
+        Listed += FString::Printf(TEXT(" %d"), Held[Index]);
+    }
+    AddInfo(FString::Printf(TEXT("%d solid worlds: %.1f MB at %d columns, %.1f MB as synced; widths%s"),
+        Worlds.Num(), Full / 1048576.0, ShipSky::ShadowMapWidth(), Total / 1048576.0, *Listed));
+    TestTrue(TEXT("the crowded system is over the cap at the full width"), Full > ShipSky::ShadowSystemCapBytes);
+    TestTrue(FString::Printf(TEXT("and its synced maps fit the cap (%.1f MB)"), Total / 1048576.0), Total <= ShipSky::ShadowSystemCapBytes);
+    TestTrue(TEXT("with some narrower than the full width"), Held.ContainsByPredicate([](int32 W) { return W < ShipSky::ShadowMapWidth(); }));
+    const TArray<int32> Capped = ShipSky::CappedShadowWidths(Worlds, ShipSky::ShadowMapWidth(), ShipSky::ShadowSystemCapBytes,
+        [](int32 W, int32 R) { return ShipSky::ShadowTextureBytes(W, R); });
+    TestTrue(TEXT("each the capped width of the system's worlds, sized as the RHI sizes a texture"), Capped == Held);
+
+    // A seed moves no radius and no lowest row: every width stays.
+    FSkySystem Reseeded = Crowded;
+    Reseeded.Bodies[4].Relief.SeedOffset.X += 1.0 / 256.0;
+    Test.Sky->SyncTo(Reseeded, Serial, false);
+    TArray<int32> After;
+    WidthsOf(Reseeded, Worlds, After);
+    TestTrue(TEXT("under the cap a reload that moves one world's seed keeps every width"), After == Held);
     return true;
 }
 
