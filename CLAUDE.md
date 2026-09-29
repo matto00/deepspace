@@ -893,11 +893,12 @@ each system under the cap as the RHI sizes it, the vertex shadows under
 12 MB. A system over the cap shares its widths among its worlds, so a reload
 that moves one world's radius or peak may re-bake another. Still open for
 the developer (the cast-shadow plan's *Review record*): `Eyes.HandoverParity`
-is red at a 3-degree dusk, 3.0e-3 apart without the shadow against 1e-3, on
-the face's Detail term; a few map pieces take 4.3-4.9 ms of render thread in
+is red at a 3-degree dusk, 3.0-3.1e-3 apart without the shadow against 1e-3, on
+the face's Detail term; a few map pieces take 4.3-5.0 ms of render thread in
 Trabo's loads against 4; and `Eyes.TerrainBudget`, measured honestly, reads
-the tiles' draw at its 6 ms edge and moving them all each frame at +7.7 ms
-against 2. Look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
+the tiles' draw at its 6 ms edge (+5.8..+6.1) and moving them all each frame
+at +7.7 ms against 2 (re-measured at Task 39 (Z), 2026-09-29, unchanged).
+Look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
 
 **The frame is profiled, not assumed** (the frame ruling: profile first,
 with the shadows in, and fix the real cost; the split factor last).
