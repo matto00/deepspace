@@ -80,7 +80,7 @@ namespace TerrainTile
 
     /** UV2.y carries the height in kilometres. The scale was chosen for
      *  ProceduralMeshComponent, whose half-precision UVs cannot hold
-     *  centimetres to 10 km; UTerrainTileComponent, which draws the tiles,
+     *  centimetres to 10 km; UTerrainGroundComponent, which draws the tiles,
      *  keeps full-precision UVs (SetUseFullPrecisionUVs), where a float of
      *  kilometres holds 10 km to under a millimetre. */
     inline constexpr double HeightUVScaleCm = 1.0e5;

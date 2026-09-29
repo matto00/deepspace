@@ -12,6 +12,7 @@
 #include "WorldGround.generated.h"
 
 class UMaterialInstanceDynamic;
+class UTerrainGroundComponent;
 class UMaterialInterface;
 class UPrimitiveComponent;
 class USceneComponent;
@@ -22,9 +23,12 @@ struct FSkySystem;
  * world's cube-sphere quadtree, cut by CDLOD from the ship's origin, built on
  * worker threads (UE::Tasks, at most ds.Terrain.BuildTasks at once -- the
  * machine's cap, never the core count), uploaded into pooled mesh tiles at
- * most ds.Terrain.UploadsPerFrame a frame, and drawn attached to the
- * counter-frame: each tile at its double-precision pivot relative to the
- * ship, scale 1, turned by the counter-frame's rotation, its vertices local.
+ * most ds.Terrain.UploadsPerFrame a frame, and drawn as ONE primitive
+ * attached to the counter-frame (UTerrainGroundComponent): the component
+ * at minus the ship's position from the world's centre, each tile at its
+ * pivot in the component's space, composed in doubles on the render thread,
+ * scale 1, turned by the counter-frame's rotation, its vertices local. So a
+ * frame's motion is one transform, not one per tile.
  *
  * It takes the body from AShipSky below 50 km once the coarse cut is
  * resident (and gives it back over 55 km), and always under the drive floor,
@@ -69,7 +73,8 @@ public:
     double GetMorph() const { return Morph; }
 
     TArray<FTileKey> GetDrawnKeys() const { return Drawn; }
-    UPrimitiveComponent* GetTileComponent(const FTileKey& Key) const;
+    /** The one primitive every tile is drawn with; null before BeginPlay. */
+    UTerrainGroundComponent* GetTilesComponent() const { return Tiles; }
     const FTileBuild* GetResidentTile(const FTileKey& Key) const;
     int32 GetUploadsLastFrame() const { return UploadsLastFrame; }
     int32 GetResidentCount() const { return Resident.Num(); }
@@ -102,8 +107,8 @@ public:
     int32 GetDrainingCount() const { return Draining.Num(); }
 
     /** The bytes the resident cut's vertex shadows hold on the CPU, read
-     *  from the arrays: each tile once, whether the resident cut or a pooled
-     *  component (bKeepForTest, for proxy recreation) holds it, or both. */
+     *  from the arrays: each tile once, whether the resident cut or the
+     *  tiles' component (for proxy recreation) holds it, or both. */
     int64 GetTileShadowBytes() const;
 
     /** The cut per level -- drawn, resident, building -- the cap, the morph. */
@@ -118,8 +123,9 @@ private:
     UPROPERTY(VisibleAnywhere, Category = "Ground")
     TObjectPtr<USceneComponent> Root;
 
+    /** Made in BeginPlay, never saved into the level. */
     UPROPERTY(Transient)
-    TArray<TObjectPtr<UPrimitiveComponent>> Pool;
+    TObjectPtr<UTerrainGroundComponent> Tiles;
 
     UPROPERTY(Transient)
     TObjectPtr<UMaterialInstanceDynamic> Material;
@@ -130,7 +136,6 @@ private:
     struct FResident
     {
         FTileRef Tile;
-        int32 Component = INDEX_NONE;
     };
     TMap<FTileKey, FResident> Resident;
     /** Each child range the cut has read from a resident parent, kept while
@@ -148,7 +153,8 @@ private:
     TArray<FTileKey> Wanted;
     TArray<FTileKey> Prefetch;
     TArray<FTileKey> Drawn;
-    TArray<int32> FreeComponents;
+    /** What the component was last told to show. */
+    TArray<FTileKey> Shown;
 
     FGroundFieldRef Ground;
     FWorldReliefParams GroundParams;
@@ -186,18 +192,9 @@ private:
     void ForgetBoundsFarFrom(const TSet<FTileKey>& Needed);
     static bool IsNearCut(const FTileKey& Key, const TSet<FTileKey>& Needed);
     void Upload(FTileBuild&& Tile);
-    void Free(int32 Component);
     void Resolve();
     void Place();
     bool CoarseResident() const;
     TSet<FTileKey> NeededKeys() const;
     TOptional<TerrainQuadtree::FHeightRange> BoundsOf(const FTileKey& Key) const;
-
-    /** The mesh component a tile is drawn with, and how a tile gets into it:
-     *  UTerrainTileComponent, a custom primitive drawn on the dynamic path
-     *  (the static path cached its batch and drew nothing in UE 5.8), since
-     *  the first-day gate failed ProceduralMeshComponent (Eyes.TerrainBudget;
-     *  these two are all the swap touched). */
-    UPrimitiveComponent* NewTileComponent();
-    void UploadTo(UPrimitiveComponent* Component, const FTileRef& Tile, bool bFirst);
 };

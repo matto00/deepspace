@@ -4,6 +4,7 @@
 #include "Ship/ShipLanding.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
+#include "Surface/TerrainGroundComponent.h"
 #include "Surface/WorldGround.h"
 #include "Tests/SkyTestWorld.h"
 
@@ -55,24 +56,32 @@ bool FWorldGroundActorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("500 m up the ground draws a cut"), Drawn.Num() > 100);
     TestTrue(TEXT("and claims the body"), Ground->IsDrawingBody() && Ground->GetDrawnBody() == Fourth.Id);
 
+    // Every tile is drawn through one primitive, the frame's one transform.
+    const UTerrainGroundComponent* Tiles = Ground->GetTilesComponent();
+    if (!TestNotNull(TEXT("the ground draws its tiles through one component"), Tiles))
+    {
+        return false;
+    }
     int32 Misplaced = 0;
-    int32 Lit = 0;
+    int32 Hidden = 0;
     for (const FTileKey& Key : Drawn)
     {
-        const UPrimitiveComponent* Tile = Ground->GetTileComponent(Key);
         const FTileBuild* Built = Ground->GetResidentTile(Key);
-        if (!Tile || !Built)
+        if (!Built || !Tiles->HasTile(Key))
         {
             ++Misplaced;
             continue;
         }
         const FVector Expected = Ship->UniverseToWorld(Fourth.Position + FVector(Built->Pivot));
-        Misplaced += (Tile->GetComponentLocation() - Expected).Size() > 1.0 ? 1 : 0;
-        Lit += (Tile->CastShadow || Tile->bAffectDistanceFieldLighting || Tile->bAffectDynamicIndirectLighting
-                || Tile->bVisibleInRayTracing || Tile->GetCollisionEnabled() != ECollisionEnabled::NoCollision || !Tile->IsVisible()) ? 1 : 0;
+        Misplaced += (Tiles->GetTileWorldLocation(Key) - Expected).Size() > 1.0 ? 1 : 0;
+        Hidden += Tiles->IsTileShown(Key) ? 0 : 1;
     }
     TestEqual(TEXT("every drawn tile sits at UniverseToWorld of its pivot"), Misplaced, 0);
-    TestEqual(TEXT("and none casts a shadow, reaches distance fields, indirect light or ray tracing, or collides"), Lit, 0);
+    TestEqual(TEXT("and is shown"), Hidden, 0);
+    TestEqual(TEXT("and nothing else is"), Tiles->GetShownCount(), Drawn.Num());
+    TestFalse(TEXT("the tiles cast no shadow, reach no distance field, indirect light or ray tracing, and do not collide"),
+              Tiles->CastShadow || Tiles->bAffectDistanceFieldLighting || Tiles->bAffectDynamicIndirectLighting
+              || Tiles->bVisibleInRayTracing || Tiles->GetCollisionEnabled() != ECollisionEnabled::NoCollision || !Tiles->IsVisible());
 
     const double Nadir = Field->Height(FVector3d((Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal()), 0.0);
     const TOptional<double> DrawnHeight = Ground->DrawnHeightUnderShip();

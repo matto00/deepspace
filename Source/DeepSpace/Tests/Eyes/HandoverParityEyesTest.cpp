@@ -1,3 +1,5 @@
+#include "Components/PrimitiveComponent.h"
+#include "Surface/TerrainGroundComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -61,9 +63,8 @@ bool FHandoverParityEyesTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    const TArray<FTileKey> Keys = Test.Ground->GetDrawnKeys();
-    const UPrimitiveComponent* AnyTile = Keys.Num() > 0 ? Test.Ground->GetTileComponent(Keys[0]) : nullptr;
-    const UMaterialInterface* Worn = AnyTile ? AnyTile->GetMaterial(0) : nullptr;
+    const UPrimitiveComponent* Tiles = Test.Ground->GetDrawnKeys().Num() > 0 ? Test.Ground->GetTilesComponent() : nullptr;
+    const UMaterialInterface* Worn = Tiles ? Tiles->GetMaterial(0) : nullptr;
     TestTrue(TEXT("the tiles wear M_SkyGround, not the engine's default"),
              Worn && Worn->GetMaterial() && Worn->GetMaterial()->GetPathName() == FString(SkyMaterial::GroundPath));
 

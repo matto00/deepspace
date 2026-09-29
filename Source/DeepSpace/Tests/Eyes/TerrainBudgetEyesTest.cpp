@@ -11,7 +11,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "RenderingThread.h"
-#include "Surface/TerrainTileComponent.h"
+#include "Surface/TerrainGroundComponent.h"
 #include "Tests/GroundFixtures.h"
 #include "TextureResource.h"
 #include "UObject/StrongObjectPtr.h"
@@ -31,15 +31,18 @@
  * It asserts the gate. Run first on ProceduralMeshComponent, it failed three
  * of four (PMC's 148-byte FProcMeshVertex copies, 508.4 MB at 2,500 tiles;
  * its dynamic-path draw, 68.86 ms, and 108.36 ms after a move): the verdict
- * CUSTOM PRIMITIVE, recorded in the spec's decision 6. It now measures what
- * replaced it, UTerrainTileComponent (Task T5), and that it draws at all:
- *   - the CPU copies (the FTileBuild each tile component keeps, as
- *     AWorldGround sets bKeepForTest) at 2,500 tiles, at most 400 MB;
+ * CUSTOM PRIMITIVE, recorded in the spec's decision 6. Its replacement, a
+ * component per tile (UTerrainTileComponent, Task T5), drew in budget but
+ * moved at +7.7 ms (below); since slice (b)'s last open items the tiles are
+ * UTerrainGroundComponent, every tile in one primitive, and this measures
+ * that, and that it draws at all:
+ *   - the CPU copies (the FTileBuild the component holds per tile, as
+ *     AWorldGround's resident cut shares it) at 2,500 tiles, at most 400 MB;
  *   - a 4K capture of 2,200 tiles, over the empty scene's, at most 6 ms of
  *     render thread and GPU together;
- *   - moving every tile, as the ship-is-the-origin frame does every frame,
- *     at most 2 ms of game thread, and at most 2 ms more on the capture
- *     after it (GPU Scene updates).
+ *   - moving every tile, as the ship-is-the-origin frame does every frame --
+ *     now the component's one transform -- at most 2 ms of game thread,
+ *     and at most 2 ms more on the capture after it.
  * The numbers go to Saved/Eyes/TerrainBudget/report.txt and the log.
  *
  * EVERY CAPTURE IS ITS OWN ENGINE FRAMES. The test is latent: one capture
@@ -67,6 +70,15 @@
  * +7.72 ms against 2; the move 2.15 and 2.12 ms of game thread against 2
  * (1.4 moving, 0.8 sending). Red, for the developer (the landing
  * cast-shadow plan's review record).
+ *
+ * One transform (slice (b)'s last open items, 2026-09-29). Measured first,
+ * on the component per tile, the cheap candidate: the 2,200 tiles under one
+ * parent and only the parent moved -- the engine still updates every child
+ * -- read +8.17 ms on the capture and 1.67 ms of game thread, against the
+ * same run's per-tile move at +7.72 and 2.01. So the tiles became one
+ * primitive whose proxy draws each tile as its own mesh element with its
+ * own primitive data, the pivot composed with the component's transform in
+ * doubles as the frame is drawn.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainBudgetEyesTest, "Eyes.TerrainBudget",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -115,7 +127,8 @@ namespace TerrainBudgetLocal
         TStrongObjectPtr<AActor> Holder;
         TStrongObjectPtr<USceneCaptureComponent2D> Capture;
         TStrongObjectPtr<UTextureRenderTarget2D> Target;
-        TArray<TStrongObjectPtr<UTerrainTileComponent>> Pool;
+        TStrongObjectPtr<UTerrainGroundComponent> Ground;
+        TArray<FTileKey> Keys;
         TArray<TFunction<void()>> Steps;
         double CreateMsEach = 0.0;
         double ProcessMB = 0.0;
@@ -133,21 +146,16 @@ namespace TerrainBudgetLocal
 
         void ShowTiles(bool bShown)
         {
-            for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Pool)
-            {
-                Mesh->SetVisibility(bShown);
-            }
+            Ground->SetShown(bShown ? Keys : TArray<FTileKey>());
         }
 
         /** Moves every tile a centimetre, as the ship-is-the-origin frame
-         *  does every frame; the game thread's time into MoveMs. */
+         *  does every frame -- the one component's transform; the game
+         *  thread's time into MoveMs. */
         void MoveTiles()
         {
             const double MoveStart = FPlatformTime::Seconds();
-            for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Pool)
-            {
-                Mesh->SetRelativeLocation(Mesh->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
-            }
+            Ground->SetRelativeLocation(Ground->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
             const double Moved = FPlatformTime::Seconds();
             // The end of the frame's game thread: the new transforms sent to
             // the render thread. CaptureScene would send them itself, inside
@@ -214,7 +222,7 @@ namespace TerrainBudgetLocal
             const double MovedDrawMs = MovedMs - TilesMs;
             const FString Report = FString::Printf(
                 TEXT("tiles %d, %d triangles each\n")
-                TEXT("create %.3f ms/tile, SetTile %.3f ms/tile\n")
+                TEXT("add %.3f ms/tile, re-add %.3f ms/tile\n")
                 TEXT("tile CPU copies %.1f MB at %d tiles (%.1f MB counted at %d); process grew %.1f MB\n")
                 TEXT("4K capture: empty %.2f ms, tiles %.2f ms (+%.2f), every tile moved before each %.2f ms (+%.2f)\n")
                 TEXT("  each capture, min..max: empty %.2f..%.2f, tiles %.2f..%.2f, moved %.2f..%.2f ms\n")
@@ -237,7 +245,7 @@ namespace TerrainBudgetLocal
             T.TestTrue(FString::Printf(TEXT("and at most %.0f ms more to draw after (%.2f)"), MovedDrawBudgetMs, MovedDrawMs),
                        MovedDrawMs <= MovedDrawBudgetMs);
 
-            Pool.Reset();
+            Ground.Reset();
             Capture.Reset();
             Target.Reset();
             Holder.Reset();
@@ -303,40 +311,52 @@ bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
     const FGroundFieldRef Ground = ShipGround::FromRelief(Params);
     const FTileBuild Tile = TerrainTile::Build(*Ground, TerrainQuadtree::KeyAt(FVector3d(0.0, 0.0, 1.0), TerrainQuadtree::MaxLevel(Params.RadiusCm)));
     const int32 PerRow = FMath::CeilToInt(FMath::Sqrt(static_cast<double>(Tiles)));
-    const uint64 UsedBefore = FPlatformMemory::GetStats().UsedPhysical;
-    const double CreateStart = FPlatformTime::Seconds();
+    UTerrainGroundComponent* Tiled = NewObject<UTerrainGroundComponent>(Holder);
+    Tiled->SetupAttachment(Root);
+    Tiled->RegisterComponent();
+    Tiled->SetMaterial(0, Material);
+    Run->Ground.Reset(Tiled);
+    // Each tile its own copy, with its own key, its pivot on a square grid
+    // in the component's space: what AWorldGround hands it, tile by tile.
+    const auto Copy = [&Tile, PerRow](int32 N)
+    {
+        FTileBuild Placed = Tile;
+        Placed.Key = FTileKey{ Tile.Key.Face, Tile.Key.Level, static_cast<uint32>(N % PerRow), static_cast<uint32>(N / PerRow) };
+        Placed.Pivot = FVector3d((N % PerRow - PerRow / 2) * TileCm, (N / PerRow - PerRow / 2) * TileCm, 0.0);
+        return MakeShared<const FTileBuild, ESPMode::ThreadSafe>(MoveTemp(Placed));
+    };
+    TArray<UTerrainGroundComponent::FTileRef> Built;
     for (int32 N = 0; N < Tiles; ++N)
     {
-        UTerrainTileComponent* Mesh = NewObject<UTerrainTileComponent>(Holder);
-        Mesh->bKeepForTest = true;
-        Mesh->SetupAttachment(Root);
-        Mesh->RegisterComponent();
-        Mesh->SetMaterial(0, Material);
-        Mesh->SetTile(Tile);
-        Mesh->SetRelativeLocation(FVector((N % PerRow - PerRow / 2) * TileCm, (N / PerRow - PerRow / 2) * TileCm, 0.0));
-        Run->Pool.Emplace(Mesh);
+        Built.Add(Copy(N));
+        Run->Keys.Add(Built.Last()->Key);
     }
+    const uint64 UsedBefore = FPlatformMemory::GetStats().UsedPhysical;
+    const double CreateStart = FPlatformTime::Seconds();
+    for (const UTerrainGroundComponent::FTileRef& One : Built)
+    {
+        Tiled->AddTile(One, 1.0e-4f);
+    }
+    Tiled->SetShown(Run->Keys);
     FlushRenderingCommands();
     Run->CreateMsEach = (FPlatformTime::Seconds() - CreateStart) * 1000.0 / Tiles;
     Run->ProcessMB = (static_cast<double>(FPlatformMemory::GetStats().UsedPhysical) - UsedBefore) / 1048576.0;
 
-    for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Run->Pool)
+    for (const FTileBuild* Kept : Tiled->GetTiles())
     {
-        if (const FTileBuild* Kept = Mesh->GetTileForTest())
-        {
-            Run->CopyBytes += Kept->Positions.GetAllocatedSize() + Kept->Normals.GetAllocatedSize()
-                            + Kept->Heights.GetAllocatedSize() + Kept->Directions.GetAllocatedSize() + sizeof(FTileBuild);
-        }
+        Run->CopyBytes += Kept->Positions.GetAllocatedSize() + Kept->Normals.GetAllocatedSize()
+                        + Kept->Heights.GetAllocatedSize() + Kept->Directions.GetAllocatedSize() + sizeof(FTileBuild);
     }
     Run->CopyMBAtMax = Run->CopyBytes / 1048576.0 * MaxTiles / Tiles;
 
-    // What a pooled tile costs to refill: SetTile, a new render proxy, the
-    // per-frame upload the budget allows four of.
+    // What a tile costs to upload: its buffers filled, and the render
+    // thread's share, the per-frame upload the budget allows four of.
     const double UpdateStart = FPlatformTime::Seconds();
     for (int32 N = 0; N < 100; ++N)
     {
-        Run->Pool[N]->SetTile(Tile);
+        Tiled->AddTile(Built[N], 1.0e-4f);
     }
+    Tiled->SetShown(Run->Keys);
     FlushRenderingCommands();
     Run->UpdateMsEach = (FPlatformTime::Seconds() - UpdateStart) * 1000.0 / 100.0;
 

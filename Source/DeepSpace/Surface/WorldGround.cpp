@@ -14,7 +14,7 @@
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkySystem.h"
 #include "Surface/SunShadow.h"
-#include "Surface/TerrainTileComponent.h"
+#include "Surface/TerrainGroundComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWorldGround, Log, All);
 
@@ -123,6 +123,11 @@ void AWorldGround::BeginPlay()
         UE_LOG(LogWorldGround, Warning, TEXT("No AShipCounterFrame in the level; the ground will not turn with the ship."));
     }
     Material = UMaterialInstanceDynamic::Create(GroundMaterial ? GroundMaterial.Get() : UMaterial::GetDefaultMaterial(MD_Surface), this);
+    // Every tile, one primitive: made here, never saved into the level.
+    Tiles = NewObject<UTerrainGroundComponent>(this, TEXT("Tiles"));
+    Tiles->SetupAttachment(Root);
+    Tiles->RegisterComponent();
+    Tiles->SetMaterial(0, Material);
     // The sky writes the body's look into this ground's material and asks
     // whether it has the body: this frame's answer, so the ground goes first.
     for (TActorIterator<AShipSky> Sky(GetWorld()); Sky; ++Sky)
@@ -242,10 +247,11 @@ void AWorldGround::Release()
 {
     Detach();
     Finished.Reset();
-    for (const TPair<FTileKey, FResident>& Pair : Resident)
+    if (Tiles)
     {
-        Free(Pair.Value.Component);
+        Tiles->ClearTiles();
     }
+    Shown.Reset();
     Resident.Reset();
     KnownBounds.Reset();
     Wanted.Reset();
@@ -402,12 +408,15 @@ void AWorldGround::Collect(int32 Budget)
     }
     Finished.RemoveAt(0, Uploads);
 
-    // What nothing needs goes back to the pool.
+    // What nothing needs is let go.
     for (auto It = Resident.CreateIterator(); It; ++It)
     {
         if (!Needed.Contains(It.Key()))
         {
-            Free(It.Value().Component);
+            if (Tiles)
+            {
+                Tiles->RemoveTile(It.Key());
+            }
             It.RemoveCurrent();
             bResidencyChanged = true;
         }
@@ -470,41 +479,15 @@ void AWorldGround::ForgetBoundsFarFrom(const TSet<FTileKey>& Needed)
 void AWorldGround::Upload(FTileBuild&& Built)
 {
     const FTileRef Tile = MakeShared<const FTileBuild, ESPMode::ThreadSafe>(MoveTemp(Built));
-    int32 Index = INDEX_NONE;
-    bool bFirst = false;
-    if (FreeComponents.Num() > 0)
-    {
-        Index = FreeComponents.Pop();
-    }
-    else
-    {
-        NewTileComponent();
-        Index = Pool.Num() - 1;
-        bFirst = true;
-    }
-    UPrimitiveComponent* Component = Pool[Index];
-    UploadTo(Component, Tile, bFirst);
     // The band limit and the pivot, per tile, as custom primitive data: one
     // material instance serves every tile (decision 6).
-    Component->SetCustomPrimitiveDataFloat(SkyMaterial::BandLimitPrimitiveIndex, static_cast<float>(Tile->SpacingCm / Radius));
-    Component->SetCustomPrimitiveDataVector3(SkyMaterial::TilePivotPrimitiveIndex, FVector(Tile->Pivot));
-    Resident.Add(Tile->Key, FResident{ Tile, Index });
+    if (Tiles)
+    {
+        Tiles->AddTile(Tile, static_cast<float>(Tile->SpacingCm / Radius));
+    }
+    Resident.Add(Tile->Key, FResident{ Tile });
     ++UploadsLastFrame;
     bResidencyChanged = true;
-}
-
-void AWorldGround::Free(int32 Component)
-{
-    if (Pool.IsValidIndex(Component) && Pool[Component])
-    {
-        Pool[Component]->SetVisibility(false);
-        // Waiting for its next tile, a pooled component holds none.
-        if (UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pool[Component].Get()))
-        {
-            Tile->ClearTile();
-        }
-        FreeComponents.Push(Component);
-    }
 }
 
 void AWorldGround::Resolve()
@@ -573,28 +556,22 @@ bool AWorldGround::CoarseResident() const
 
 void AWorldGround::Place()
 {
-    const TSet<FTileKey> Shown(Drawn);
-    for (const TPair<FTileKey, FResident>& Pair : Resident)
+    if (!Tiles)
     {
-        UPrimitiveComponent* Component = Pool[Pair.Value.Component];
-        const bool bVisible = bDrawsBody && Shown.Contains(Pair.Key);
-        if (bVisible)
-        {
-            // The pivot relative to the ship, subtracted in doubles, in
-            // universe axes: the counter-frame's rotation turns it.
-            Component->SetRelativeLocation(FVector(Pair.Value.Tile->Pivot - ShipFromCentre));
-        }
-        if (Component->IsVisible() != bVisible)
-        {
-            Component->SetVisibility(bVisible);
-        }
+        return;
     }
-}
-
-UPrimitiveComponent* AWorldGround::GetTileComponent(const FTileKey& Key) const
-{
-    const FResident* Found = Resident.Find(Key);
-    return Found && Pool.IsValidIndex(Found->Component) ? Pool[Found->Component].Get() : nullptr;
+    // The frame's one move: every tile sits at its pivot in the component's
+    // space, and the component at minus the ship's position from the
+    // world's centre, in universe axes, which the counter-frame turns.
+    Tiles->SetRelativeLocation(FVector(-ShipFromCentre));
+    // And what is drawn, only when it changes.
+    static const TArray<FTileKey> None;
+    const TArray<FTileKey>& Now = bDrawsBody ? Drawn : None;
+    if (Now != Shown)
+    {
+        Shown = Now;
+        Tiles->SetShown(Shown);
+    }
 }
 
 const FTileBuild* AWorldGround::GetResidentTile(const FTileKey& Key) const
@@ -676,23 +653,6 @@ FString AWorldGround::Describe() const
     return Out;
 }
 
-UPrimitiveComponent* AWorldGround::NewTileComponent()
-{
-    UTerrainTileComponent* Tile = NewObject<UTerrainTileComponent>(this);
-    Tile->bKeepForTest = true;
-    Tile->SetupAttachment(Root);
-    Tile->SetVisibility(false);
-    Tile->RegisterComponent();
-    Tile->SetMaterial(0, Material);
-    Pool.Add(Tile);
-    return Tile;
-}
-
-void AWorldGround::UploadTo(UPrimitiveComponent* Component, const FTileRef& Tile, bool bFirst)
-{
-    CastChecked<UTerrainTileComponent>(Component)->SetTile(Tile);
-}
-
 void AWorldGround::Detach()
 {
     // Before the shadow a build was ~5 ms, and waiting was cheap. With it, a
@@ -723,12 +683,11 @@ int64 AWorldGround::GetTileShadowBytes() const
     {
         Count(&Pair.Value.Tile.Get());
     }
-    for (const TObjectPtr<UPrimitiveComponent>& Pooled : Pool)
+    if (Tiles)
     {
-        const UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pooled.Get());
-        if (const FTileBuild* Kept = Tile ? Tile->GetTileForTest() : nullptr)
+        for (const FTileBuild* Held : Tiles->GetTiles())
         {
-            Count(Kept);
+            Count(Held);
         }
     }
     return Bytes;

@@ -20,7 +20,7 @@
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
 #include "Surface/GroundField.h"
-#include "Surface/TerrainTileComponent.h"
+#include "Surface/TerrainGroundComponent.h"
 #include "Surface/WorldGround.h"
 #include "TextureResource.h"
 #include "Tests/Eyes/EyesFrames.h"
@@ -636,11 +636,9 @@ namespace
 
         void ShowAll(bool bPlainGround)
         {
-            TArray<UTerrainTileComponent*> Tiles;
-            Test->Ground->GetComponents<UTerrainTileComponent>(Tiles);
-            for (UTerrainTileComponent* Tile : Tiles)
+            if (UTerrainGroundComponent* Tiles = Test->Ground->GetTilesComponent())
             {
-                Tile->SetMaterial(0, bPlainGround ? static_cast<UMaterialInterface*>(UMaterial::GetDefaultMaterial(MD_Surface)) : Test->Ground->GetGroundMaterialInstance());
+                Tiles->SetMaterial(0, bPlainGround ? static_cast<UMaterialInterface*>(UMaterial::GetDefaultMaterial(MD_Surface)) : Test->Ground->GetGroundMaterialInstance());
             }
         }
 
