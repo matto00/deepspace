@@ -15,6 +15,7 @@
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "ShaderCompiler.h"
+#include "Ship/ShipDriveLever.h"
 #include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
@@ -128,7 +129,10 @@ namespace
          *  first rise ahead (the footprint cap: the first run read 0.0 m/s
          *  at 1.5 m under both suns), so there the ship is carried along
          *  the ground at the skim cap, placed every frame at its height over
-         *  the ground. The frame cannot tell who moved it. */
+         *  the ground. The frame cannot tell who moved it, and neither can a
+         *  speed check, so none is made: the case asserts instead that the
+         *  ground was drawn under the ship every frame. The flight velocity
+         *  stays near zero, so what the velocity drives is not exercised. */
         Glide,
         /** The drive's first notch, the nose 10 degrees under the level: the
          *  drive's approach toward its floor, the soft cap holding it. */
@@ -174,8 +178,9 @@ namespace
     /** The frame, ms: 60 Hz. */
     constexpr double FrameBudgetMs = 16.6;
 
-    /** A moving case's ship must move: at least this share of the speed it
-     *  was set to, over the timed rounds, or the case timed a ship at rest. */
+    /** A case under the flight law (Skim, Drive) must move: at least this
+     *  share of the speed it was set to, over the timed rounds, or the case
+     *  timed a ship at rest. */
     constexpr double MovingShare = 0.5;
 
     double MedianOf(TArray<double> Values)
@@ -260,8 +265,10 @@ namespace
         FVector Up = FVector::ZeroVector;
         TArray<double> Times[2];
         double AglBefore = 0.0;
-        /** A moving case: where the timed rounds began, and the speed the
-         *  ship must at least half keep over them, cm/s. */
+        /** A moving case under the flight law (Skim, Drive): where the timed
+         *  rounds began, and the speed the ship must at least half keep over
+         *  them, cm/s. A gliding case sets no such speed: the test carries
+         *  the ship itself, so its speed would be the test's own input. */
         TOptional<FUniversePosition> MovedFrom;
         double MustMoveCmPerSecond = 0.0;
         /** A gliding case: where it set off, which way, and how far on. */
@@ -273,6 +280,9 @@ namespace
         int32 StepFrames = 0;
         /** Every Step since MovedFrom: the simulated time the ship flew. */
         int32 SimSteps = 0;
+        /** A gliding case: of those Steps, how many found no drawn ground
+         *  under the ship -- what a carried ship can show about the game. */
+        int32 GroundMissing = 0;
         FString TimedRegion;
 
         const FSkyBody& Fourth() const { return Here.Bodies[FourthIndex]; }
@@ -303,6 +313,18 @@ namespace
             Test->Step(Dt);
         }
 
+        /** A Step since MovedFrom: counted, and for a gliding case whether
+         *  the ground kept up under the carried ship (as GroundKeepsUp holds
+         *  it: under 1 km there is always drawn ground under the ship). */
+        void CountStep()
+        {
+            ++SimSteps;
+            if (Case && Case->Motion == EMotion::Glide && !Test->Ground->DrawnHeightUnderShip())
+            {
+                ++GroundMissing;
+            }
+        }
+
         void Settle(USceneCaptureComponent2D* With)
         {
             if (GShaderCompilingManager)
@@ -324,7 +346,7 @@ namespace
             TArray<FColor> Pixel;
             // The sky writes this frame's Shadows into every material.
             StepShip();
-            ++SimSteps;
+            CountStep();
             for (int32 Warm = 0; Warm < 3; ++Warm)
             {
                 // A fresh editor draws a material as the engine's default until
@@ -345,7 +367,7 @@ namespace
             {
                 const double StepStart = FPlatformTime::Seconds();
                 StepShip();
-                ++SimSteps;
+                CountStep();
                 StepSeconds += FPlatformTime::Seconds() - StepStart;
                 Test->World->SendAllEndOfFrameUpdates();
                 Capture->CaptureScene();
@@ -442,7 +464,6 @@ namespace
                     GlideHeading = Heading;
                     GlideRadiansPerSecond = Cap / Fourth().Radius;
                     GlideSeconds = 0.0;
-                    MustMoveCmPerSecond = MovingShare * Cap;
                 }
                 else if (Case->Motion == EMotion::Skim)
                 {
@@ -453,8 +474,9 @@ namespace
                 {
                     Ship->SetDriveLever(Pilot, 1);
                     Ship->SetDriveEngaged(Pilot, true);
-                    // At least 1 km/s: fifty times the fastest skim at 1.5 m.
-                    MustMoveCmPerSecond = MovingShare * 1.0e5;
+                    // The first notch, 20 km/s: the ship at 50 km must keep
+                    // at least half of it (the run read 19,034 m/s).
+                    MustMoveCmPerSecond = MovingShare * ShipDriveLever::NotchSpeed(1);
                 }
                 for (int32 Frame = 0; Frame < 60; ++Frame)
                 {
@@ -467,6 +489,7 @@ namespace
                 StepFrames = 0;
                 StepSeconds = 0.0;
                 SimSteps = 0;
+                GroundMissing = 0;
             }
             bPlaced = true;
         }
@@ -548,12 +571,21 @@ namespace
                 *Joined(Times[1]), *Joined(Times[0]), *Test->Ground->Describe());
             Report += Line;
             Automation->AddInfo(Line);
-            if (Case->Motion != EMotion::Still)
+            if (Case->Motion == EMotion::Skim || Case->Motion == EMotion::Drive)
             {
                 Automation->TestTrue(FString::Printf(TEXT("%s timed a ship under way: %.1f m/s over the timed rounds, at least %.1f"),
                     Case->Slug, SpeedCmPerSecond / 100.0, MustMoveCmPerSecond / 100.0), SpeedCmPerSecond >= MustMoveCmPerSecond);
-                Stop();
             }
+            else if (Case->Motion == EMotion::Glide)
+            {
+                // The test carried the ship, so its speed is the test's own;
+                // what the frame can show is that the ground kept up with it.
+                Automation->TestEqual(FString::Printf(TEXT("%s: the ground kept up with the carried ship, drawn under it every frame of %d"),
+                    Case->Slug, SimSteps), GroundMissing, 0);
+            }
+            // The ship is left under way until the case's profile has run
+            // (QueueCase stops it last), so EYES_PROFILE breaks down the
+            // moving frame that was timed.
             // Every case, still or moving, within the frame (slice (b)'s last
             // open items, 2026-09-29): the median of its timed rounds.
             Automation->TestTrue(FString::Printf(TEXT("%s is within the 16.6 ms frame at 4K (%.2f)"), Case->Slug, On), On <= FrameBudgetMs);
@@ -600,9 +632,11 @@ namespace
                 FProfileProbe Probe;
                 FProfileProbe* P = &Probe;
                 const double T0 = FPlatformTime::Seconds();
-                if (bStep)
+                // A moving case steps every variant, still under way: the
+                // frame it breaks down is the moving one that was timed.
+                if (bStep || Case->Motion != EMotion::Still)
                 {
-                    Test->Step(1.0f / 60.0f);
+                    StepShip();
                 }
                 Test->World->SendAllEndOfFrameUpdates();
                 const double T1 = FPlatformTime::Seconds();
@@ -673,6 +707,8 @@ namespace
                 Steps.Add([this]() { Profile(TEXT("full_again"), Capture, Target, false); });
                 Steps.Add([this]() { Profile(TEXT("1080p"), ProfileCapture, ProfileTarget, false); });
             }
+            // Levers back to rest only now, after the profile.
+            Steps.Add([this]() { Stop(); });
         }
 
         void Close()
