@@ -169,7 +169,8 @@ bool FHandoverParityEyesTest::RunTest(const FString& Parameters)
              FMath::Abs(MeanGround - MeanOrbit) <= NoonTolerance * MeanOrbit);
     // The cast shadow at the handover (the developer's ruling on slice (b)'s
     // build): at 49.9 km over Baemsekai IV under a 3-degree dusk the ground's
-    // frame is still the orbit's to 1e-3, and the shadow reaches both -- with
+    // frame is the orbit's to DuskTolerance (5e-3: a sun under 5 degrees,
+    // ruled 2026-09-29), and the shadow reaches both -- with
     // ds.Sky.Shadows 0 each is brighter, by the same share. At 49.9 km the
     // morph is about 3e-5, so the ground's shadow is the orbit's map to that.
     // Restored on every way out, an early return's too: a leg that failed

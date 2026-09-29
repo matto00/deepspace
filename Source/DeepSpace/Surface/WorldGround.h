@@ -22,8 +22,8 @@ struct FSkySystem;
  * The ground under the ship (landing decisions 6 and 7): the nearest solid
  * world's cube-sphere quadtree, cut by CDLOD from the ship's origin, built on
  * worker threads (UE::Tasks, at most ds.Terrain.BuildTasks at once -- the
- * machine's cap, never the core count), uploaded into pooled mesh tiles at
- * most ds.Terrain.UploadsPerFrame a frame, and drawn as ONE primitive
+ * machine's cap, never the core count), uploaded as tiles at most
+ * ds.Terrain.UploadsPerFrame a frame, and drawn as ONE primitive
  * attached to the counter-frame (UTerrainGroundComponent): the component
  * at minus the ship's position from the world's centre, each tile at its
  * pivot in the component's space, composed in doubles on the render thread,

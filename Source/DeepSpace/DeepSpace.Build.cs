@@ -54,10 +54,11 @@ public class DeepSpace : ModuleRules
 		// ProceduralMeshComponent: not the terrain's tiles. Landing decision 6
 		// planned them as PMC sections, gated on the first day of slice (b) by
 		// Eyes.TerrainBudget; the gate's verdict was CUSTOM PRIMITIVE, and
-		// AWorldGround draws UTerrainTileComponent. PMC is linked only for
-		// Eyes.TerrainBudget, which still measures it beside the tile component
-		// (and DeepSpace.uproject enables the plugin for it): drop both with
-		// that comparison.
+		// AWorldGround draws its tiles as one UTerrainGroundComponent. No
+		// source uses PMC any more -- Eyes.TerrainBudget measures only the
+		// ground component now, and names PMC in comments alone -- so this
+		// dependency, and DeepSpace.uproject's plugin entry, are left over and
+		// can be dropped once no asset is found to reference PMC.
 		PrivateDependencyModuleNames.Add("ProceduralMeshComponent");
 		
 		// Uncomment if you are using online features

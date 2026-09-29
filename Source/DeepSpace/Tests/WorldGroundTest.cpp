@@ -12,8 +12,9 @@
 
 /*
  * Landing decision 6's actor: the cut built off the game thread and drawn
- * as pooled tiles on the counter-frame, each at UniverseToWorld of its
- * pivot, never casting a shadow or reaching distance fields, indirect light
+ * as tiles of one primitive (UTerrainGroundComponent) on the counter-frame,
+ * the component at minus the ship's position from the world's centre and
+ * each tile at its pivot in the component's space, never casting a shadow or reaching distance fields, indirect light
  * or ray tracing; a capped number of uploads a frame; and under 1 km the
  * drawn ground under the ship within GearClearance / 10 of the analytic
  * ground. Spawned before play, builds flushed inline.
