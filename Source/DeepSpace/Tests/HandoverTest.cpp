@@ -33,7 +33,7 @@ bool FSkyHandoverTest::RunTest(const FString& Parameters)
     // once the test flushes it: the prefetch starts building at 1,000 km,
     // and without this the 60 km frame's builds could land by the 45 km one.
     FScopedCVar Uploads(TEXT("ds.Terrain.UploadsPerFrame"), 0.0f);
-    FSkyWorld Test(TEXT("HandoverWorld"));
+    FSkyWorld Test(TEXT("HandoverWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     const FSkySystem Here = LocalSystem::Here(Test.World);

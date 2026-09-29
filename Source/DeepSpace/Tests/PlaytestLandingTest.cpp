@@ -100,7 +100,7 @@ bool FPlaytestKeysLiftTheShipTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("and BP_DeepSpaceCharacter carries both actions"), Blueprint
              && Blueprint->GetDefaultObject<ADeepSpaceCharacter>()->HasVerticalActions());
 
-    FSkyWorld Test(TEXT("PlaytestKeysLiftWorld"));
+    FSkyWorld Test(TEXT("PlaytestKeysLiftWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     StockShip::Install(Ship);
@@ -143,7 +143,7 @@ bool FPlaytestKeysLiftTheShipTest::RunTest(const FString& Parameters)
 bool FPlaytestHoverHoldsTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestHoverWorld"));
+    FSkyWorld Test(TEXT("PlaytestHoverWorld"), 8, EShadows::On);
     // The helm, spawned before play as every seat is.
     APilotSeat* Helm = Test.World->SpawnActor<APilotSeat>(FVector::ZeroVector, FRotator::ZeroRotator);
     Test.BeginPlay();
@@ -201,7 +201,7 @@ bool FPlaytestHoverHoldsTest::RunTest(const FString& Parameters)
 bool FPlaytestStarvedSinkTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestStarvedSinkWorld"));
+    FSkyWorld Test(TEXT("PlaytestStarvedSinkWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     StockShip::Install(Ship);
@@ -237,7 +237,7 @@ bool FPlaytestStarvedSinkTest::RunTest(const FString& Parameters)
 bool FPlaytestHeavyClimbTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestHeavyClimbWorld"));
+    FSkyWorld Test(TEXT("PlaytestHeavyClimbWorld"), 8, EShadows::On);
     APilotSeat* Helm = Test.World->SpawnActor<APilotSeat>(FVector::ZeroVector, FRotator::ZeroRotator);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
@@ -307,7 +307,7 @@ bool FPlaytestHeavyClimbTest::RunTest(const FString& Parameters)
 bool FPlaytestParkedTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestParkedWorld"));
+    FSkyWorld Test(TEXT("PlaytestParkedWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     StockShip::Install(Ship);
@@ -346,7 +346,7 @@ bool FPlaytestParkedTest::RunTest(const FString& Parameters)
 bool FPlaytestDescendsInTimeTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestDescentWorld"));
+    FSkyWorld Test(TEXT("PlaytestDescentWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     StockShip::Install(Ship);
@@ -383,7 +383,7 @@ bool FPlaytestDescendsInTimeTest::RunTest(const FString& Parameters)
 bool FPlaytestEtaToGroundTest::RunTest(const FString& Parameters)
 {
     using namespace PlaytestLandingLocal;
-    FSkyWorld Test(TEXT("PlaytestEtaGroundWorld"));
+    FSkyWorld Test(TEXT("PlaytestEtaGroundWorld"), 8, EShadows::On);
     Test.BeginPlay();
     UShipSubsystem* Ship = Test.Ship;
     StockShip::Install(Ship);

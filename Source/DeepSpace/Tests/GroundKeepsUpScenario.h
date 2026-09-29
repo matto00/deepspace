@@ -37,6 +37,30 @@ namespace GroundKeepsUpScenario
         bool bValid = false;
     };
 
+    /** The sun the flight starts under at IV's drive floor, degrees above
+     *  the level: 10 is the dusk the cast shadow costs most at (the tile's
+     *  build about 9x its heights, where the opening side's is about 1x,
+     *  over the day exit). */
+    inline constexpr double DuskDegrees = 10.0;
+
+    /** Put the ship 5,000 km over IV's dusk, DuskDegrees, so the Fly that
+     *  follows starts from there; false if there is no IV. Fly places the
+     *  ship itself, over whichever side of the world it is on. */
+    inline bool PlaceOverDusk(SkyTestWorld::FSkyWorld& Test)
+    {
+        const FSkySystem Here = LocalSystem::Here(Test.World);
+        const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Here, 4, 0.0, Test.Ship->GetFlightState().GetUniversePosition(),
+                                                                     ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(DuskDegrees));
+        if (!Here.Bodies.IsValidIndex(4) || !Dusk)
+        {
+            return false;
+        }
+        const FVector Up = (Dusk->Position - Here.Bodies[4].Position).GetSafeNormal();
+        Test.Ship->PlaceShip(Here.Bodies[4].Position + Up * (Here.Bodies[4].Radius + 5.0e8), FRotationMatrix::MakeFromX(-Up).ToQuat());
+        Test.Step(1.0f / 60.0f);
+        return true;
+    }
+
     /** Fly it in Test, already begun: ds.Terrain.BuildTasks and
      *  UploadsPerFrame as the caller set them. */
     inline FResult Fly(SkyTestWorld::FSkyWorld& Test)

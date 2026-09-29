@@ -167,7 +167,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
 {
     using namespace SliceLoopTestLocal;
 
-    FSkyWorld Test(TEXT("SliceLoopJumpWorld"));
+    FSkyWorld Test(TEXT("SliceLoopJumpWorld"), 8, EShadows::On);
     if (!TestNotNull(TEXT("the world has a ship"), Test.Ship) || !TestNotNull(TEXT("a universe"), Test.Universe)
         || !TestNotNull(TEXT("a counter-frame"), Test.Frame) || !TestNotNull(TEXT("and a sky"), Test.Sky))
     {

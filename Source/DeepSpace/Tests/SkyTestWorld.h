@@ -51,7 +51,10 @@ namespace SkyTestWorld
      *  vertices (ds.Terrain.Shadows), Maps bakes every solid world's map
      *  (ds.Sky.ShadowMaps), On both (the cast-shadow plan). They are the
      *  costliest things a test world does and most tests never look at one,
-     *  so they are off unless a test asks, and put back after. */
+     *  so they are off unless a test asks, and put back after. Off is not
+     *  what the game ships (both switches default to 1): a test of the
+     *  ground in flight -- GroundKeepsUp, the handover, the landing
+     *  playtests, the loop -- asks for On, so its timing is play's. */
     enum class EShadows : uint8
     {
         Off = 0,
