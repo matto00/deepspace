@@ -14,6 +14,7 @@
 #include "Surface/TerrainTileComponent.h"
 #include "Tests/GroundFixtures.h"
 #include "TextureResource.h"
+#include "UObject/StrongObjectPtr.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -40,6 +41,19 @@
  *     at most 2 ms of game thread, and at most 2 ms more on the capture
  *     after it (GPU Scene updates).
  * The numbers go to Saved/Eyes/TerrainBudget/report.txt and the log.
+ *
+ * EVERY CAPTURE IS ITS OWN ENGINE FRAMES. The test is latent: one capture
+ * (warm-up or timed), one move and one base-colour check per step, four
+ * engine frames apart, and each capture's time is its own -- capture, flush,
+ * one-pixel read-back -- averaged over the timed ones as before. Inside one
+ * RunTest no engine frame ends, and the Vulkan RHI retires what a capture
+ * frees only at a frame's end, while a Development build scans the whole
+ * deferred-deletion queue on every enqueue; so 69 captures in one frame each
+ * cost more than the last, and the tiles' 20, taken after the empty scene's
+ * 23, read +4.95 to +6.79 ms against 6 ms, intermittently. That is the
+ * harness flaw Eyes.LandingFrame had (19342c9), fixed the same way. What is
+ * measured is unchanged: the same captures, warm-ups, move and checks, in
+ * the same order.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainBudgetEyesTest, "Eyes.TerrainBudget",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -57,41 +71,165 @@ namespace TerrainBudgetLocal
     constexpr double MoveBudgetMs = 2.0;
     constexpr double MovedDrawBudgetMs = 2.0;
 
+    /** Engine frames between two steps: the Vulkan RHI retires a freed
+     *  resource two frames after the frame it was freed in. */
+    constexpr int32 FramesBetweenSteps = 4;
+
     /** Render thread and GPU together: capture, flush, then read one pixel
-     *  back, which cannot return before the GPU has drawn the frame. */
+     *  back, which cannot return before the GPU has drawn the frame. One
+     *  capture, in ms. */
     double CaptureMs(USceneCaptureComponent2D* Capture, UTextureRenderTarget2D* Target)
     {
         TArray<FColor> Pixel;
-        auto One = [&]()
+        const double Start = FPlatformTime::Seconds();
+        Capture->CaptureScene();
+        FlushRenderingCommands();
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(0, 0, 1, 1));
+        return (FPlatformTime::Seconds() - Start) * 1000.0;
+    }
+
+    /** What the steps share: the world, the tiles, the capture, and the sums. */
+    struct FBudgetRun
+    {
+        FAutomationTestBase* Automation = nullptr;
+        UWorld* World = nullptr;
+        TStrongObjectPtr<AActor> Holder;
+        TStrongObjectPtr<USceneCaptureComponent2D> Capture;
+        TStrongObjectPtr<UTextureRenderTarget2D> Target;
+        TArray<TStrongObjectPtr<UTerrainTileComponent>> Pool;
+        TArray<TFunction<void()>> Steps;
+        double CreateMsEach = 0.0;
+        double ProcessMB = 0.0;
+        int64 CopyBytes = 0;
+        double CopyMBAtMax = 0.0;
+        double UpdateMsEach = 0.0;
+        double EmptyMs = 0.0;
+        double TilesMs = 0.0;
+        double MovedMs = 0.0;
+        double MoveMs = 0.0;
+        int32 EmptyGrey = -1;
+        int32 TileGrey = -1;
+
+        void ShowTiles(bool bShown)
         {
+            for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Pool)
+            {
+                Mesh->SetVisibility(bShown);
+            }
+        }
+
+        /** Warmups untimed captures, then Captures timed ones, each its own
+         *  step; Into gets their mean. */
+        void QueueCaptures(double* Into)
+        {
+            for (int32 Warm = 0; Warm < Warmups; ++Warm)
+            {
+                Steps.Add([this]() { CaptureMs(Capture.Get(), Target.Get()); });
+            }
+            for (int32 Shot = 0; Shot < Captures; ++Shot)
+            {
+                Steps.Add([this, Into]() { *Into += CaptureMs(Capture.Get(), Target.Get()) / Captures; });
+            }
+        }
+
+        /** The base colour at the centre, tiles shown or not: a budget met
+         *  by drawing nothing is no verdict. */
+        int32 CentreBaseColour(bool bShown)
+        {
+            ShowTiles(bShown);
+            Capture->CaptureSource = SCS_BaseColor;
             Capture->CaptureScene();
             FlushRenderingCommands();
-            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(0, 0, 1, 1));
-        };
-        for (int32 Warm = 0; Warm < Warmups; ++Warm)
-        {
-            One();
+            TArray<FColor> Pixel;
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(1920, 1080, 1921, 1081));
+            Capture->CaptureSource = SCS_FinalColorLDR;
+            return Pixel.Num() > 0 ? static_cast<int32>(Pixel[0].G) : -1;
         }
-        const double Start = FPlatformTime::Seconds();
-        for (int32 Shot = 0; Shot < Captures; ++Shot)
+
+        void Close()
         {
-            One();
+            FAutomationTestBase& T = *Automation;
+            T.TestTrue(FString::Printf(TEXT("the tiles are drawn: the centre's base colour is %d with them, %d without"), TileGrey, EmptyGrey),
+                       TileGrey > EmptyGrey + 20);
+            const double DrawMs = TilesMs - EmptyMs;
+            const double MovedDrawMs = MovedMs - TilesMs;
+            const FString Report = FString::Printf(
+                TEXT("tiles %d, %d triangles each\n")
+                TEXT("create %.3f ms/tile, SetTile %.3f ms/tile\n")
+                TEXT("tile CPU copies %.1f MB at %d tiles (%.1f MB counted at %d); process grew %.1f MB\n")
+                TEXT("4K capture: empty %.2f ms, tiles %.2f ms (+%.2f), after moving every tile %.2f ms (+%.2f)\n")
+                TEXT("moving every tile: %.2f ms of game thread\n"),
+                Tiles, TerrainTile::TriangleCount, CreateMsEach, UpdateMsEach, CopyMBAtMax, MaxTiles,
+                CopyBytes / 1048576.0, Tiles, ProcessMB, EmptyMs, TilesMs, DrawMs, MovedMs, MovedDrawMs, MoveMs);
+            const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/TerrainBudget");
+            IFileManager::Get().MakeDirectory(*Dir, true);
+            FFileHelper::SaveStringToFile(Report, *(Dir / TEXT("report.txt")));
+            T.AddInfo(Report);
+
+            T.TestTrue(FString::Printf(TEXT("the tiles' CPU copies at %d tiles are within %.0f MB (%.1f)"), MaxTiles, CopyBudgetMB, CopyMBAtMax),
+                       CopyMBAtMax <= CopyBudgetMB);
+            T.TestTrue(FString::Printf(TEXT("2,200 tiles cost at most %.0f ms of a 4K frame (%.2f)"), DrawBudgetMs, DrawMs),
+                       DrawMs <= DrawBudgetMs);
+            T.TestTrue(FString::Printf(TEXT("moving every tile costs at most %.0f ms of game thread (%.2f)"), MoveBudgetMs, MoveMs),
+                       MoveMs <= MoveBudgetMs);
+            T.TestTrue(FString::Printf(TEXT("and at most %.0f ms more to draw after (%.2f)"), MovedDrawBudgetMs, MovedDrawMs),
+                       MovedDrawMs <= MovedDrawBudgetMs);
+
+            Pool.Reset();
+            Capture.Reset();
+            Target.Reset();
+            Holder.Reset();
+            World->EndPlay(EEndPlayReason::RemovedFromWorld);
+            GEngine->DestroyWorldContext(World);
+            World->DestroyWorld(false);
         }
-        return (FPlatformTime::Seconds() - Start) * 1000.0 / Captures;
-    }
+    };
+
+    /** Runs the steps one at a time, FramesBetweenSteps engine frames apart. */
+    class FTerrainBudgetSteps : public IAutomationLatentCommand
+    {
+    public:
+        explicit FTerrainBudgetSteps(TSharedRef<FBudgetRun> InRun) : Run(InRun) {}
+
+        virtual bool Update() override
+        {
+            if (Wait > 0)
+            {
+                --Wait;
+                return false;
+            }
+            if (Next < Run->Steps.Num())
+            {
+                Run->Steps[Next++]();
+                Wait = FramesBetweenSteps;
+                return false;
+            }
+            Run->Close();
+            return true;
+        }
+
+    private:
+        TSharedRef<FBudgetRun> Run;
+        int32 Next = 0;
+        int32 Wait = 0;
+    };
 }
 
 bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
 {
     using namespace TerrainBudgetLocal;
+    TSharedRef<FBudgetRun> Run = MakeShared<FBudgetRun>();
+    Run->Automation = this;
 
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("TerrainBudgetWorld"));
     FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
     Context.SetCurrentWorld(World);
     World->InitializeActorsForPlay(FURL());
     World->BeginPlay();
+    Run->World = World;
 
     AActor* Holder = World->SpawnActor<AActor>();
+    Run->Holder.Reset(Holder);
     USceneComponent* Root = NewObject<USceneComponent>(Holder, TEXT("Root"));
     Holder->SetRootComponent(Root);
     Root->RegisterComponent();
@@ -105,7 +243,6 @@ bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
     const int32 PerRow = FMath::CeilToInt(FMath::Sqrt(static_cast<double>(Tiles)));
     const uint64 UsedBefore = FPlatformMemory::GetStats().UsedPhysical;
     const double CreateStart = FPlatformTime::Seconds();
-    TArray<UTerrainTileComponent*> Pool;
     for (int32 N = 0; N < Tiles; ++N)
     {
         UTerrainTileComponent* Mesh = NewObject<UTerrainTileComponent>(Holder);
@@ -115,32 +252,31 @@ bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
         Mesh->SetMaterial(0, Material);
         Mesh->SetTile(Tile);
         Mesh->SetRelativeLocation(FVector((N % PerRow - PerRow / 2) * TileCm, (N / PerRow - PerRow / 2) * TileCm, 0.0));
-        Pool.Add(Mesh);
+        Run->Pool.Emplace(Mesh);
     }
     FlushRenderingCommands();
-    const double CreateMsEach = (FPlatformTime::Seconds() - CreateStart) * 1000.0 / Tiles;
-    const double ProcessMB = (static_cast<double>(FPlatformMemory::GetStats().UsedPhysical) - UsedBefore) / 1048576.0;
+    Run->CreateMsEach = (FPlatformTime::Seconds() - CreateStart) * 1000.0 / Tiles;
+    Run->ProcessMB = (static_cast<double>(FPlatformMemory::GetStats().UsedPhysical) - UsedBefore) / 1048576.0;
 
-    int64 CopyBytes = 0;
-    for (UTerrainTileComponent* Mesh : Pool)
+    for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : Run->Pool)
     {
         if (const FTileBuild* Kept = Mesh->GetTileForTest())
         {
-            CopyBytes += Kept->Positions.GetAllocatedSize() + Kept->Normals.GetAllocatedSize()
-                       + Kept->Heights.GetAllocatedSize() + Kept->Directions.GetAllocatedSize() + sizeof(FTileBuild);
+            Run->CopyBytes += Kept->Positions.GetAllocatedSize() + Kept->Normals.GetAllocatedSize()
+                            + Kept->Heights.GetAllocatedSize() + Kept->Directions.GetAllocatedSize() + sizeof(FTileBuild);
         }
     }
-    const double CopyMBAtMax = CopyBytes / 1048576.0 * MaxTiles / Tiles;
+    Run->CopyMBAtMax = Run->CopyBytes / 1048576.0 * MaxTiles / Tiles;
 
     // What a pooled tile costs to refill: SetTile, a new render proxy, the
     // per-frame upload the budget allows four of.
     const double UpdateStart = FPlatformTime::Seconds();
     for (int32 N = 0; N < 100; ++N)
     {
-        Pool[N]->SetTile(Tile);
+        Run->Pool[N]->SetTile(Tile);
     }
     FlushRenderingCommands();
-    const double UpdateMsEach = (FPlatformTime::Seconds() - UpdateStart) * 1000.0 / 100.0;
+    Run->UpdateMsEach = (FPlatformTime::Seconds() - UpdateStart) * 1000.0 / 100.0;
 
     USceneCaptureComponent2D* Capture = NewObject<USceneCaptureComponent2D>(Holder);
     Capture->SetupAttachment(Root);
@@ -155,67 +291,31 @@ bool FTerrainBudgetEyesTest::RunTest(const FString& Parameters)
     Capture->CaptureSource = SCS_FinalColorLDR;
     // 800 m up, straight down: the whole 890 m square of tiles is in view.
     Capture->SetRelativeLocationAndRotation(FVector(0.0, 0.0, 80000.0), FRotator(-90.0, 0.0, 0.0));
+    Run->Capture.Reset(Capture);
+    Run->Target.Reset(Target);
 
-    for (UTerrainTileComponent* Mesh : Pool) { Mesh->SetVisibility(false); }
-    const double EmptyMs = CaptureMs(Capture, Target);
-    for (UTerrainTileComponent* Mesh : Pool) { Mesh->SetVisibility(true); }
-    const double TilesMs = CaptureMs(Capture, Target);
-
-    const double MoveStart = FPlatformTime::Seconds();
-    for (UTerrainTileComponent* Mesh : Pool)
+    // The same captures in the same order as ever, each now its own step.
+    FBudgetRun& R = *Run;
+    R.Steps.Add([&R]() { R.ShowTiles(false); });
+    R.QueueCaptures(&R.EmptyMs);
+    R.Steps.Add([&R]() { R.ShowTiles(true); });
+    R.QueueCaptures(&R.TilesMs);
+    R.Steps.Add([&R]()
     {
-        Mesh->SetRelativeLocation(Mesh->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
-    }
-    const double MoveMs = (FPlatformTime::Seconds() - MoveStart) * 1000.0;
-    const double MovedMs = CaptureMs(Capture, Target);
-
-    // A budget met by drawing nothing is no verdict: the tiles must reach
-    // the picture. The world has no light, so the lit colour is black either
-    // way; the base colour pass shows the default material's grey where a
-    // tile is, and nothing where none is.
-    const auto CentreBaseColour = [&](bool bShown)
-    {
-        for (UTerrainTileComponent* Mesh : Pool) { Mesh->SetVisibility(bShown); }
-        Capture->CaptureSource = SCS_BaseColor;
-        Capture->CaptureScene();
-        FlushRenderingCommands();
-        TArray<FColor> Pixel;
-        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixel, FReadSurfaceDataFlags(), FIntRect(1920, 1080, 1921, 1081));
-        Capture->CaptureSource = SCS_FinalColorLDR;
-        return Pixel.Num() > 0 ? static_cast<int32>(Pixel[0].G) : -1;
-    };
-    const int32 EmptyGrey = CentreBaseColour(false);
-    const int32 TileGrey = CentreBaseColour(true);
-    TestTrue(FString::Printf(TEXT("the tiles are drawn: the centre's base colour is %d with them, %d without"), TileGrey, EmptyGrey),
-             TileGrey > EmptyGrey + 20);
-
-    const double DrawMs = TilesMs - EmptyMs;
-    const double MovedDrawMs = MovedMs - TilesMs;
-    const FString Report = FString::Printf(
-        TEXT("tiles %d, %d triangles each\n")
-        TEXT("create %.3f ms/tile, SetTile %.3f ms/tile\n")
-        TEXT("tile CPU copies %.1f MB at %d tiles (%.1f MB counted at %d); process grew %.1f MB\n")
-        TEXT("4K capture: empty %.2f ms, tiles %.2f ms (+%.2f), after moving every tile %.2f ms (+%.2f)\n")
-        TEXT("moving every tile: %.2f ms of game thread\n"),
-        Tiles, TerrainTile::TriangleCount, CreateMsEach, UpdateMsEach, CopyMBAtMax, MaxTiles,
-        CopyBytes / 1048576.0, Tiles, ProcessMB, EmptyMs, TilesMs, DrawMs, MovedMs, MovedDrawMs, MoveMs);
-    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/TerrainBudget");
-    IFileManager::Get().MakeDirectory(*Dir, true);
-    FFileHelper::SaveStringToFile(Report, *(Dir / TEXT("report.txt")));
-    AddInfo(Report);
-
-    TestTrue(FString::Printf(TEXT("the tiles' CPU copies at %d tiles are within %.0f MB (%.1f)"), MaxTiles, CopyBudgetMB, CopyMBAtMax),
-             CopyMBAtMax <= CopyBudgetMB);
-    TestTrue(FString::Printf(TEXT("2,200 tiles cost at most %.0f ms of a 4K frame (%.2f)"), DrawBudgetMs, DrawMs),
-             DrawMs <= DrawBudgetMs);
-    TestTrue(FString::Printf(TEXT("moving every tile costs at most %.0f ms of game thread (%.2f)"), MoveBudgetMs, MoveMs),
-             MoveMs <= MoveBudgetMs);
-    TestTrue(FString::Printf(TEXT("and at most %.0f ms more to draw after (%.2f)"), MovedDrawBudgetMs, MovedDrawMs),
-             MovedDrawMs <= MovedDrawBudgetMs);
-
-    World->EndPlay(EEndPlayReason::RemovedFromWorld);
-    GEngine->DestroyWorldContext(World);
-    World->DestroyWorld(false);
+        const double MoveStart = FPlatformTime::Seconds();
+        for (const TStrongObjectPtr<UTerrainTileComponent>& Mesh : R.Pool)
+        {
+            Mesh->SetRelativeLocation(Mesh->GetRelativeLocation() + FVector(1.0, 0.0, 0.0));
+        }
+        R.MoveMs = (FPlatformTime::Seconds() - MoveStart) * 1000.0;
+    });
+    R.QueueCaptures(&R.MovedMs);
+    // The world has no light, so the lit colour is black either way; the
+    // base colour pass shows the default material's grey where a tile is,
+    // and nothing where none is.
+    R.Steps.Add([&R]() { R.EmptyGrey = R.CentreBaseColour(false); });
+    R.Steps.Add([&R]() { R.TileGrey = R.CentreBaseColour(true); });
+    ADD_LATENT_AUTOMATION_COMMAND(FTerrainBudgetSteps(Run));
     return true;
 }
 
