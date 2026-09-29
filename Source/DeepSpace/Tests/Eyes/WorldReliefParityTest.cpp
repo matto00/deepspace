@@ -721,11 +721,23 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             // tolerance is taken from the float mirror's distance, so a
             // double mirror gone wrong would widen its own tolerance with
             // it; this is what catches that.
-            const double FloatRecorded[2][5] = { { 5.75e-5, 5.75e-5, 5.75e-5, 5.75e-5, 6.76e-6 },
-                                                 { 0.0,     0.0,     1.79e-3, 2.48e-4, 2.61e-5 } };
-            int32 FootprintIndex = 0;
-            for (const double FootprintD : { 1.0e-5, 1.0e-4, 1.5e-3, 6.0e-3, 2.4e-2 })
+            // Each footprint carries its own recorded distances, so a list
+            // reordered or extended cannot hold one footprint to another's.
+            struct FShadowFootprint
             {
+                double Footprint;
+                double FloatRecorded[2];   // [terminator, seam]
+            };
+            const FShadowFootprint ShadowFootprints[] = {
+                { 1.0e-5, { 5.75e-5, 0.0     } },
+                { 1.0e-4, { 5.75e-5, 0.0     } },
+                { 1.5e-3, { 5.75e-5, 1.79e-3 } },
+                { 6.0e-3, { 5.75e-5, 2.48e-4 } },
+                { 2.4e-2, { 6.76e-6, 2.61e-5 } },
+            };
+            for (const FShadowFootprint& Row : ShadowFootprints)
+            {
+                const double FootprintD = Row.Footprint;
                 const float Footprint = static_cast<float>(FootprintD);
                 ShadowProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
                 const TArray<FVector3d> Drawn = Draw(Test.World, Target, ShadowProbe, NoBias, NoBias);
@@ -749,7 +761,7 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
                     Shaded += Held < 0.5 ? 1 : 0;
                 }
                 const double HeldTo = FMath::Max(1.0e-3, FloorRuleFactor * FloatGap);
-                const double FloatHeldTo = FMath::Max(1.0e-4, FloorRuleFactor * FloatRecorded[bSeam ? 1 : 0][FootprintIndex++]);
+                const double FloatHeldTo = FMath::Max(1.0e-4, FloorRuleFactor * Row.FloatRecorded[bSeam ? 1 : 0]);
                 const FString At = FString::Printf(TEXT("Baemsekai IV's shadow map, %s, footprint %.1e"), Place.Name, FootprintD);
                 TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
                 TestTrue(FString::Printf(TEXT("%s: SunShadowMap::Sample computes what the GPU drew, held to %.1e (the float mirror %.2e from double): %.2e"),
