@@ -939,7 +939,7 @@ is asserted within 16.6 ms** (ruled 2026-09-29); each case under the flight
 law (the skims at 500 m, the drive) that it kept at least half the speed it
 was set to, the drive half its first notch, 20 km/s; and each carried
 1.5 m case, whose speed is the test's own, that the ground was drawn under
-it every frame. `EYES_PROFILE=1` profiles a moving case before stopping it,
+it every frame within GearClearance / 10 of the analytic ground. `EYES_PROFILE=1` profiles a moving case before stopping it,
 every variant still under way. Read the `on_ms` of each line in
 `Saved/Eyes/LandingFrame/<EYES_TAG>/report.txt`, and compare two runs with
 `Tools/landing_frame_gate.py` (which leaves out a moving case only when the

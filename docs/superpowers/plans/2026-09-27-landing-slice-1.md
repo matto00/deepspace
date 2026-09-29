@@ -17320,8 +17320,17 @@ again on the merged tree, library rebuilt after.
   4.37-5.19 ms (5.20). So `ds.Sky.ShadowUploadKB` stays 512 and the worst systems land over
   engine frames, as play lands them (`FLandWorstSystems`, the sky's `PumpShadowBakesForTest`):
   `map_upload_rt_ms_all` 0.106 ms, `map_land_ms_all` 0.092, every line of the report within
-  (Trabo's twelve over 239 frames, 123.99 MB; the sixteen over 42, 120.33 MB). The report
-  asserts no timing, so no mutant can prove this line; the instrumented runs are the evidence.
+  (Trabo's twelve over 239 frames, 123.99 MB; the sixteen over 42, 120.33 MB). *Review fix:*
+  the 4 ms is now asserted -- the one timing `Eyes.ShadowBakeCost` asserts, 0.11 against 4 --
+  and the spec's ruling amended (built otherwise, on the sign-off list). Mutant (the worst
+  systems landed inside one engine frame) KILLED on that assertion, 4.576 ms.
+- **Review fixes (2026-09-29).** `landing_frame_gate.py` leaves a moving case out only when the
+  baseline lacks it; a run under test missing one is UNDECIDED (two new tests, red without the
+  fix). `Eyes.LandingFrame`: the drive's floor is half its first notch (10 km/s, was 500 m/s);
+  the carried 1.5 m cases no longer assert their own speed but that the ground kept up --
+  drawn under the ship every frame, within GearClearance / 10 (2.07 and 2.13 cm); mutant (the
+  glide carried 200 km up) KILLED; `EYES_PROFILE` profiles a moving case before it stops.
+  `review-fix` against `move-after`: GO, every case within 16.6 ms.
 
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping
