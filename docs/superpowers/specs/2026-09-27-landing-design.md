@@ -84,12 +84,13 @@ below goes past them, it says so and is on the sign-off list.
 **Confirmed by the developer (same day):** the ruled table stays the minimum under the 1.25x rule (the ratio is a necessary condition for a port bug, not a sufficient one), and after R5 retired the engine's nodes their measured distance from double is frozen as `EngineFloor` constants per footprint and term. Slice (a) merged as `8cd12ab`, kept; the developer's in-play look at Baemsekai III, IV and V (and IV at dusk) is carried to the next playtest.
 
 **Ruled on slice (b)'s build, 2026-09-28:**
-- **Cast shadows.** Seen from 200 km at dusk, the physical relief (sign-off 2) read flat and dark: mean brightness fell from 42.9 to 17.3 (III), 12.7 to 2.0 (IV) and 13.2 to 4.5 (V), and the craters nearly vanished. Relief under a low sun reads by its cast shadows, and the unlit law has none. So the shared file gains a **shadow term marched through the height function toward the sun**, used by `M_SkyBody` and `M_SkyGround` alike. It is held to a C++ mirror by the parity test, its GPU cost is measured in `Eyes.LandingFrame`, and it is judged by before/after frames. Sign-off 2 stands as physical heights; it is not reversed to an exaggerated orbit.
+- **Cast shadows.** Seen from 200 km at dusk, the physical relief (sign-off 2) read flat and dark: mean brightness fell from 42.9 to 17.3 (III), 12.7 to 2.0 (IV) and 13.2 to 4.5 (V), and the craters nearly vanished. Relief under a low sun reads by its cast shadows, and the unlit law has none. So the shared file gains a ~~shadow term marched through the height function toward the sun~~ cast shadow, used by `M_SkyBody` and `M_SkyGround` alike, judged by before/after frames. **The march is withdrawn: superseded by "Cast shadows are baked, not marched" below**, which says how the shadow is made; what this bullet still rules is that there are cast shadows, and that sign-off 2 stands as physical heights, not reversed to an exaggerated orbit. (Its GPU cost is still read in `Eyes.LandingFrame`, with the shadows in.)
 - **`GroundAlwaysCatches` flies slopes up to 2 x the measured steepest** (about 45 degrees). The old `MaxSlope` bound, 7.9 once `S_max` was measured, would draw 83-degree cliffs no world can make.
 - **Near the ground, the footprint cap slows motion across a slope rather than lifting the ship over it.** This amends decision 10's along-the-ground cap.
 - **The terrain stays on the dynamic draw path** (4.96 ms of the 6 ms budget). The static path is shelved: in UE 5.8 it cached the tiles and drew nothing.
 - **The target's ETA while cruising above the near regime's 50 km top** is carried to the playtest.
 - **The frame at the ground** measured 19.4 ms (732 tiles drawn, 951 resident) against the 16.6 ms budget; 10.4 ms at 50 km. The ruling: **profile first, with the cast shadows in, and fix the real cost** (distant tiles' vertex counts, culling, batching draws). The split factor is the last resort, since it coarsens the ground and grows the pops.
+  - *Outcome, recorded 2026-09-28 (the landing plan's Task 39; not a new ruling):* profiled with the cast shadows in, the cost was **the ground's pixel shader, not geometry**: with the engine's plain material on the same 725 tiles BasePass is 0.24 ms, with `M_SkyGround` 9.2, while geometry, triangle count, culling and draw count together are under 2 ms, so none of the candidates named above could reach the budget. Most of the shader was the crater kernel, which visited 27 lattice corners a band where 8 can reach (decision 3, amended). Visiting the 8 changed no value and took `Eyes.LandingFrame`'s `on_ms` from 18.09 to 13.85 ms at 1.5 m and 10.21 to 8.39 at 50 km; **every case is under 16.6 ms**, the worst with 2.8 ms of headroom, and the split factor is untouched. The frame is reported, not asserted; `CraterKernelCorners` holds the change that bought it. The game's own `stat unit` at 4K in play stays the developer's reading.
 - **Cast shadows are baked, not marched** (2026-09-28). A per-pixel march cost +4 to +27 ms at low sun against a 1 ms budget (the spike, NO-GO at N 12, 8 and 6). Because worlds do not spin and nothing orbits in this slice, the sun is fixed over every surface. So each ground tile computes its vertices' shadow while it is built, off the game thread, from the height function, and the orbital proxy reads a per-world shadow texture baked in C++ when the system loads. It costs nothing per frame. If worlds ever spin, the bake is redone as the sun moves.
 - **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
@@ -436,11 +437,25 @@ cliff. The material never shows it, because it uses only the slope; as a
 height it would break `MaxSlope`, the ray march, `.Gradient` and
 `.SlopeBound`, and put vertical steps in the mesh. So in `WorldRelief`
 **a crater band is a sum of compact kernels, one per kept site, over the
-3 x 3 x 3 cells around the sample** (the profile unchanged, reaching 0 with
-zero slope at q = 1.5; a dropped site contributes 0; overlapping craters
-add). With jitter at most 0.26 cells, a 3 x 3 x 3 neighbourhood sees every
-site within 0.74 cells, past the profile's 0.525, so the sum is continuous
-and differentiable. It costs 27 site hashes a band instead of 8.
+2 x 2 x 2 lattice corners round the sample, floor(P) and the corner after
+it on each axis** (the profile unchanged, reaching 0 with zero slope at
+q = 1.5; a dropped site contributes 0; overlapping craters add). With jitter
+at most 0.2588 cells, a site within the profile's 0.525 cells of P has its
+corner within 0.784 cells of P on every axis, so floor(P) or the next one
+holds it, and the sum is continuous and differentiable. It costs 8 site
+hashes a band.
+
+*Amended 2026-09-28, as built (fc829a7):* this decision first read "over the
+3 x 3 x 3 cells around the sample ... 27 site hashes a band", round
+floor(P + 0.5), and slice (b) shipped that. The frame ruling's profile found
+the crater kernel most of the ground's pixel shader, and the 27 corners were
+19 more than can reach: the kernel now visits the 8, in the order the 27
+did, so every sum is the same to the last bit (the heights, the handover's
+parity and `Eyes.WorldReliefParity` unchanged). `DeepSpace.Surface.CraterKernelCorners`
+holds it to the 27-corner kernel over a million points in double and float,
+and holds it at 8 corners a band: a restored 3 x 3 x 3 matches the 8 bit
+for bit, so only the count can see it. Do not widen it again; it was 4.2 ms
+of the frame at 1.5 m.
 
 **Slice (a) keeps today's craters** for the look, in the material only:
 `Height` in (a) is the detail bands alone (nothing reads it yet but tests).
