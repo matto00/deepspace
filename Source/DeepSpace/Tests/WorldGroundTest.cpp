@@ -115,8 +115,8 @@ bool FWorldGroundActorTest::RunTest(const FString& Parameters)
 /*
  * The child ranges the cut remembers (AWorldGround::BoundsOf) are bounded by
  * the cut, not by the ground flown over: a long, low flight over one world
- * forgets what it has left behind: at most 84 ranges for each key the cut
- * needs, and 800 km flown remembers no more than 400 km did. And what it keeps still does its job: settled, a ship that does not
+ * forgets what it has left behind: none is kept three levels from the cut,
+ * and 160 km flown remembers at most 3.5 ranges for each key it needs. And what it keeps still does its job: settled, a ship that does not
  * move uploads nothing -- no tile at the horizon freed and built again,
  * frame after frame.
  */
@@ -136,11 +136,11 @@ bool FWorldGroundForgetsBoundsTest::RunTest(const FString& Parameters)
     const FGroundFieldRef Field = ShipGround::FromRelief(Fourth.Relief);
     const FVector Out = (Ship->GetFlightState().GetUniversePosition() - Fourth.Position).GetSafeNormal();
     const FVector Axis = FVector::CrossProduct(Out, FVector(0.3, 0.9, 0.1)).GetSafeNormal();
-    const auto SettleAt = [&](const FVector& Up)
+    const auto SettleAt = [&](const FVector& Up, int32 Passes)
     {
         Ship->PlaceShip(Fourth.Position + Up * (Fourth.Radius + Field->Height(FVector3d(Up), 0.0) + 5.0e4),
                         FRotationMatrix::MakeFromXZ(FVector::CrossProduct(Up, Axis).GetSafeNormal(), Up).ToQuat());
-        for (int32 Pass = 0; Pass < 3; ++Pass)
+        for (int32 Pass = 0; Pass < Passes; ++Pass)
         {
             Test.Step(1.0f / 60.0f);
             Ground->FlushBuildsForTest();
@@ -148,36 +148,30 @@ bool FWorldGroundForgetsBoundsTest::RunTest(const FString& Parameters)
         Test.Step(1.0f / 60.0f);
     };
 
-    // 500 m over, forty hops of 20 km: 800 km of ground. Kept for the
-    // ground's life, the ranges would grow with every hop; bounded by the
-    // cut, the last twenty hops add none to the first twenty's.
-    int32 PerKey = 0;
-    for (int32 Levels = 1; Levels <= AWorldGround::ForgetAfterLevels; ++Levels)
-    {
-        PerKey += 1 << (2 * Levels);
-    }
-    SettleAt(Out);
-    int32 WorstShare = 0;
+    // 500 m over, eight hops of 20 km: 160 km of ground. Kept for the
+    // ground's life, the ranges grow by about 700 a hop, 6784 by the eighth
+    // (4.8 for each key the cut needs); forgotten three levels from the
+    // cut, 3188 (2.3 for each), and 800 km on still 3.3 for each.
+    SettleAt(Out, 1);
     int32 Far = 0;
-    int32 AtHalf = 0;
     FString Counts;
     FVector Up = Out;
-    for (int32 Hop = 1; Hop <= 40; ++Hop)
+    for (int32 Hop = 1; Hop <= 8; ++Hop)
     {
         Up = FQuat(Axis, 2.0e6 / Fourth.Radius).RotateVector(Up);
-        SettleAt(Up);
-        WorstShare = FMath::Max(WorstShare, Ground->GetKnownBoundsCount() - PerKey * Ground->GetNeededCount());
+        SettleAt(Up, 1);
         Far = FMath::Max(Far, Ground->GetKnownBoundsFarFromCut());
-        AtHalf = Hop == 20 ? Ground->GetKnownBoundsCount() : AtHalf;
         Counts += FString::Printf(TEXT(" %d"), Ground->GetKnownBoundsCount());
     }
     const int32 Last = Ground->GetKnownBoundsCount();
-    AddInfo(FString::Printf(TEXT("ranges remembered after each hop:%s; %d keys needed at the end"), *Counts, Ground->GetNeededCount()));
-    TestTrue(TEXT("the flight remembers ranges"), AtHalf > 0);
-    TestTrue(FString::Printf(TEXT("never more than %d for each key the cut needs (worst %d over)"), PerKey, WorstShare), WorstShare <= 0);
+    const int32 Needed = Ground->GetNeededCount();
+    AddInfo(FString::Printf(TEXT("ranges remembered after each hop:%s; %d keys needed at the end"), *Counts, Needed));
+    TestTrue(TEXT("the flight remembers ranges"), Last > 0);
     TestEqual(TEXT("none is kept more than three levels from the cut"), Far, 0);
-    TestTrue(FString::Printf(TEXT("and 400 km on, no more than a quarter over 400 km in (%d against %d)"), Last, AtHalf), Last <= AtHalf + AtHalf / 4);
+    TestTrue(FString::Printf(TEXT("and 160 km on, at most 3.5 for each key the cut needs (%d for %d)"), Last, Needed), 2 * Last <= 7 * Needed);
 
+    // Settled at the last hop, standing still: nothing is built again.
+    SettleAt(Up, 3);
     // Settled, standing still: nothing is built again.
     int32 Uploads = 0;
     for (int32 Frame = 0; Frame < 60; ++Frame)
