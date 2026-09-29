@@ -17223,6 +17223,11 @@ shadows in; the split factor last).** `feat/landing-b-t`, RTX 4070 Ti Super, 4K 
   candidates, if the frame needs more, are the depth prepass for the tiles (their overdraw) and
   skipping detail bands the footprint has faded whole in the shader (no gain at 1.5 m, where none
   is).
+- **The suite after it:** 244 passed, one red, `DeepSpace.Surface.GroundKeepsUpAtDusk` at 15.03 cm
+  against 15.00 -- the cast-shadow plan's Task 7b, awaiting the developer's ruling, which recorded
+  25.22 cm there with the shadow at 2 build tasks. With the crater kernel's cheaper heights it
+  reads 15.03, the figure 7b measured with no shadow at all: the build lag the shadow added is
+  gone, and the flight's own 0.03 cm margin remains. So `feat/landing-b-t` still does not merge.
 - **What `Eyes.LandingFrame` does not show:** the game's own `stat unit` at 4K with the project's
   AA and upscaler (Step 3, item 5): the capture has no TSR and no view state, and play overlaps
   the game step with the GPU. That stays the developer's reading.
