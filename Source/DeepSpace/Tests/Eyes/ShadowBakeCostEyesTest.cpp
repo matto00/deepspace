@@ -74,7 +74,10 @@
  *
  * Each budget prints one line, `budget <name> <measured> <limit> within|OVER`;
  * the plan's rule reads them. No timing is asserted, because a loaded
- * machine would make a timing assertion a coin toss. Memory is asserted: every
+ * machine would make a timing assertion a coin toss -- save one: the
+ * slowest upload frame's render-thread work within 4 ms (ruled 2026-09-29),
+ * which reads about 0.11 ms, far past any load's reach, and which a map
+ * landed inside one frame breaks. Memory is asserted: every
  * solid world's map baked and on the GPU, each system's maps within the
  * per-system cap as the RHI sizes them, and the cut's vertex shadows within
  * their budget.
@@ -208,7 +211,14 @@ namespace ShadowBakeCostLocal
         void Close()
         {
             Line(Budget(TEXT("map_land_ms_all"), 1e3 * Test->Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
-            Line(Budget(TEXT("map_upload_rt_ms_all"), 1e3 * Test->Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
+            const double UploadMs = 1e3 * Test->Sky->GetSlowestShadowUploadRenderSeconds();
+            Line(Budget(TEXT("map_upload_rt_ms_all"), UploadMs, MapUploadBudgetMs));
+            // The one timing asserted (ruled 2026-09-29: every upload frame
+            // under 4 ms): landed over engine frames the slowest reads about
+            // 0.11 ms, a margin no loaded machine closes, and landed inside
+            // one frame it read 4.3-5.2 -- the stall this keeps out.
+            Automation->TestTrue(FString::Printf(TEXT("every upload frame's render-thread work is within %.0f ms, landed as play lands it (the slowest %.3f ms)"),
+                MapUploadBudgetMs, UploadMs), UploadMs <= MapUploadBudgetMs);
             const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");
             IFileManager::Get().MakeDirectory(*Dir, true);
             FFileHelper::SaveStringToFile(FString::Join(Report, TEXT("\n")) + TEXT("\n"), *(Dir / TEXT("report.txt")),
