@@ -2,6 +2,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "DynamicRHI.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
@@ -14,6 +15,7 @@
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "ShaderCompiler.h"
+#include "Ship/ShipFlightSurface.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/LocalSystem.h"
 #include "Sky/ShipSky.h"
@@ -36,16 +38,25 @@
  * series, so game thread, render thread and GPU are summed, where play
  * overlaps them.
  *
- * The frame is REPORTED, not asserted: the frame ruling ("profile first,
- * with the cast shadows in, and fix the real cost") owns the budget, and the
- * landing plan's Task 39 notes hold the profile.
+ * The frame is ASSERTED, every case within 16.6 ms, still or moving (slice
+ * (b)'s last open items, 2026-09-29: "every case, moving or still, must stay
+ * within 16.6 ms at 4K"); it was reported only, while the frame ruling
+ * ("profile first, with the cast shadows in, and fix the real cost") owned
+ * it, and the landing plan's Task 39 notes hold that profile.
  *
  * With the cast shadows in, as the game ships them: the tiles' vertices
  * carry theirs and every world's map is baked before any case is timed.
  * Six cases: the two above under the start's sun, and four at a dusk placed
  * as Eyes.ReliefLook places it -- 50 km, 1.5 m and 200 km at the dusk goto's
- * 10 degrees, and 1.5 m at 3. Each case prints its sun's elevation and its
- * height over the ground itself (agl_m, before and after timing). Each is
+ * 10 degrees, and 1.5 m at 3. And six in motion (slice (b)'s last open
+ * items: the ship is the origin, so a ship under way moves every drawn tile
+ * every frame, which no still case paid for): HOVER and cruise full ahead at
+ * the skim cap at 1.5 m and 500 m, and the drive's first notch with the nose
+ * 10 degrees down at 50 km, each under the start's sun and at the 10-degree
+ * dusk; each flies a second before its clock, asserts it kept at least half
+ * the speed it was set to (speed_mps), and has no switch proof. Each case
+ * prints its sun's elevation and its height over the ground itself (agl_m,
+ * before and after timing). Each is
  * timed with ds.Sky.Shadows 0 and 1 in ABBA order, five times over after
  * one untimed round, and the medians are reported with their interquartile
  * spread and the raw times. Tools/landing_frame_gate.py reads two runs'
@@ -73,7 +84,7 @@
  * (1.5m_dusk10 at 16 ms taken last, 51-90 ms after another case) was that
  * queue. The game ends a frame every frame.
  *
- * The one assertion is that the switch reaches the materials, proven by
+ * Beside the frame, the switch is asserted to reach the materials, proven by
  * pixels at 1.5m_dusk3. Not by comparing one capture with another over the
  * whole frame: the far tiles flicker between captures. So the proof is drawn
  * at the game's exposure some stops brighter (ReadStops; EyesFrames.h),
@@ -105,12 +116,32 @@ namespace
      *  resource two frames after the frame it was freed in. */
     constexpr int32 FramesBetweenSteps = 4;
 
+    /** How the ship moves while a case is timed. The ship is the origin, so
+     *  a ship in motion moves every drawn tile every frame: the still cases
+     *  never paid for that (slice (b)'s last open items). */
+    enum class EMotion : uint8
+    {
+        Still,
+        /** HOVER, cruise full ahead: held to the skim cap, max(20 m/s, AGL / 2.5 s). */
+        Skim,
+        /** On the gear the flight law holds the ship at rest against the
+         *  first rise ahead (the footprint cap: the first run read 0.0 m/s
+         *  at 1.5 m under both suns), so there the ship is carried along
+         *  the ground at the skim cap, placed every frame at its height over
+         *  the ground. The frame cannot tell who moved it. */
+        Glide,
+        /** The drive's first notch, the nose 10 degrees under the level: the
+         *  drive's approach toward its floor, the soft cap holding it. */
+        Drive,
+    };
+
     struct FLandingCase
     {
         const TCHAR* Slug;     // one word: Tools/landing_frame_gate.py splits on spaces
         double AglCm;
         double DuskDegrees;    // 0: the start's own sun
         double ReadStops;      // the switch proof's exposure, brighter than the game's exposure
+        EMotion Motion = EMotion::Still;
     };
 
     const FLandingCase LandingCases[] = {
@@ -121,16 +152,31 @@ namespace
         { TEXT("1.5m_dusk3"), 150.0, 3.0, 5.0 },
         { TEXT("200km_dusk10"), 2.0e7, 10.0, 3.0 },
         { TEXT("1.5m_dusk10"), 150.0, 10.0, 4.0 },
+        // In motion (slice (b)'s last open items): at the skim cap at 1.5 m
+        // and 500 m, and on the drive's approach at 50 km, noon and dusk.
+        { TEXT("1.5m_skim"), 150.0, 0.0, 0.0, EMotion::Glide },
+        { TEXT("500m_skim"), 5.0e4, 0.0, 0.0, EMotion::Skim },
+        { TEXT("50km_drive"), 5.0e6, 0.0, 0.0, EMotion::Drive },
+        { TEXT("1.5m_skim_dusk10"), 150.0, 10.0, 0.0, EMotion::Glide },
+        { TEXT("500m_skim_dusk10"), 5.0e4, 10.0, 0.0, EMotion::Skim },
+        { TEXT("50km_drive_dusk10"), 5.0e6, 10.0, 0.0, EMotion::Drive },
     };
 
     /** The case the switch's proof reads (1.5m_dusk3): the only one under a
-     *  sun low enough, from near enough, for the term to shade held ground.
-     *  Its two assertions are the test's only ones past the setup, so a run
-     *  that leaves it out says so (RunTest). */
+     *  sun low enough, from near enough, for the term to shade held ground,
+     *  and still, so the proof's frames hold. A run that leaves it out
+     *  proves nothing about the switch, and says so (RunTest). */
     bool ProvesTheSwitch(const FLandingCase& Case)
     {
-        return Case.DuskDegrees > 0.0 && Case.DuskDegrees < 5.0 && Case.AglCm < 1.0e5;
+        return Case.Motion == EMotion::Still && Case.DuskDegrees > 0.0 && Case.DuskDegrees < 5.0 && Case.AglCm < 1.0e5;
     }
+
+    /** The frame, ms: 60 Hz. */
+    constexpr double FrameBudgetMs = 16.6;
+
+    /** A moving case's ship must move: at least this share of the speed it
+     *  was set to, over the timed rounds, or the case timed a ship at rest. */
+    constexpr double MovingShare = 0.5;
 
     double MedianOf(TArray<double> Values)
     {
@@ -204,6 +250,7 @@ namespace
         FVector StartHeading = FVector::ZeroVector;
         FString Tag;
         bool bProfile = false;
+        APawn* Pilot = nullptr;
         FString Report;
         TArray<TFunction<void()>> Steps;
 
@@ -213,8 +260,19 @@ namespace
         FVector Up = FVector::ZeroVector;
         TArray<double> Times[2];
         double AglBefore = 0.0;
+        /** A moving case: where the timed rounds began, and the speed the
+         *  ship must at least half keep over them, cm/s. */
+        TOptional<FUniversePosition> MovedFrom;
+        double MustMoveCmPerSecond = 0.0;
+        /** A gliding case: where it set off, which way, and how far on. */
+        FVector GlideUp = FVector::ZeroVector;
+        FVector GlideHeading = FVector::ZeroVector;
+        double GlideRadiansPerSecond = 0.0;
+        double GlideSeconds = 0.0;
         double StepSeconds = 0.0;
         int32 StepFrames = 0;
+        /** Every Step since MovedFrom: the simulated time the ship flew. */
+        int32 SimSteps = 0;
         FString TimedRegion;
 
         const FSkyBody& Fourth() const { return Here.Bodies[FourthIndex]; }
@@ -227,13 +285,31 @@ namespace
             return Offset.Length() - Fourth().Radius - Field->Height(Offset.GetSafeNormal(), 0.0);
         }
 
+        /** One frame of the game: a gliding case's ship first carried along
+         *  its great circle, AglCm over the ground itself, heading level. */
+        void StepShip()
+        {
+            constexpr float Dt = 1.0f / 60.0f;
+            if (Case && GlideRadiansPerSecond > 0.0)
+            {
+                GlideSeconds += Dt;
+                const FVector Axis = FVector::CrossProduct(GlideUp, GlideHeading).GetSafeNormal();
+                const FQuat Turn(Axis, GlideRadiansPerSecond * GlideSeconds);
+                const FVector Along = Turn.RotateVector(GlideUp);
+                const FVector Ahead = Turn.RotateVector(GlideHeading);
+                Test->Ship->PlaceShip(Fourth().Position + Along * (Fourth().Radius + Field->Height(FVector3d(Along), 0.0) + Case->AglCm),
+                                      FRotationMatrix::MakeFromXZ(Ahead, Along).ToQuat());
+            }
+            Test->Step(Dt);
+        }
+
         void Settle(USceneCaptureComponent2D* With)
         {
             if (GShaderCompilingManager)
             {
                 GShaderCompilingManager->FinishAllCompilation();
             }
-            Test->Step(1.0f / 60.0f);
+            StepShip();
             Test->World->SendAllEndOfFrameUpdates();
             With->CaptureScene();
         }
@@ -247,7 +323,8 @@ namespace
             }
             TArray<FColor> Pixel;
             // The sky writes this frame's Shadows into every material.
-            Test->Step(1.0f / 60.0f);
+            StepShip();
+            ++SimSteps;
             for (int32 Warm = 0; Warm < 3; ++Warm)
             {
                 // A fresh editor draws a material as the engine's default until
@@ -267,7 +344,8 @@ namespace
             for (int32 Shot = 0; Shot < 20; ++Shot)
             {
                 const double StepStart = FPlatformTime::Seconds();
-                Test->Step(1.0f / 60.0f);
+                StepShip();
+                ++SimSteps;
                 StepSeconds += FPlatformTime::Seconds() - StepStart;
                 Test->World->SendAllEndOfFrameUpdates();
                 Capture->CaptureScene();
@@ -283,11 +361,19 @@ namespace
         {
             Case = &InCase;
             bPlaced = false;
+            GlideRadiansPerSecond = 0.0;
             Times[0].Reset();
             Times[1].Reset();
             StepSeconds = 0.0;
             StepFrames = 0;
             UShipSubsystem* Ship = Test->Ship;
+            // A case after a moving one starts from rest: PlaceShip moves the
+            // ship and keeps its velocity and the drive's eased lever.
+            for (int32 Frame = 0; Frame < 1200 && Ship->GetShipSpeed() > 1.0f; ++Frame)
+            {
+                Ship->AllStop(Pilot);
+                Test->Step(1.0f / 60.0f);
+            }
             Up = StartUp;
             FVector Heading = StartHeading;
             if (Case->AglCm > 1.0e7)
@@ -317,8 +403,12 @@ namespace
             }
             if (Case->AglCm <= 1.0e7)
             {
+                // The drive's approach: the nose 10 degrees under the level.
+                const FVector Nose = Case->Motion == EMotion::Drive
+                    ? (Heading * FMath::Cos(FMath::DegreesToRadians(10.0)) - Up * FMath::Sin(FMath::DegreesToRadians(10.0))).GetSafeNormal()
+                    : Heading;
                 Ship->PlaceShip(Fourth().Position + Up * (Fourth().Radius + Field->Height(FVector3d(Up), 0.0) + Case->AglCm),
-                                FRotationMatrix::MakeFromXZ(Heading, Up).ToQuat());
+                                FRotationMatrix::MakeFromXZ(Nose, Up).ToQuat());
             }
             Test->Step(1.0f / 60.0f);
             Test->Ground->FlushBuildsForTest();
@@ -336,7 +426,62 @@ namespace
                 FPlatformProcess::Sleep(0.05f);
             }
             AglBefore = Agl();
+            MovedFrom.Reset();
+            MustMoveCmPerSecond = 0.0;
+            if (Case->Motion != EMotion::Still)
+            {
+                // Under way before the clock: HOVER and cruise full ahead, or
+                // the drive's first notch engaged; then a second of flight,
+                // paced to the wall clock so the workers build as in play.
+                Ship->SetPilot(Pilot);
+                Ship->SetVerticalLever(Pilot, 0.0);
+                if (Case->Motion == EMotion::Glide)
+                {
+                    const double Cap = ShipFlight::SkimCap(Case->AglCm, ShipFlight::DefaultSkimSeconds, ShipFlight::DefaultSkimFloor);
+                    GlideUp = Up;
+                    GlideHeading = Heading;
+                    GlideRadiansPerSecond = Cap / Fourth().Radius;
+                    GlideSeconds = 0.0;
+                    MustMoveCmPerSecond = MovingShare * Cap;
+                }
+                else if (Case->Motion == EMotion::Skim)
+                {
+                    Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
+                    MustMoveCmPerSecond = MovingShare * ShipFlight::SkimCap(AglBefore, ShipFlight::DefaultSkimSeconds, ShipFlight::DefaultSkimFloor);
+                }
+                else
+                {
+                    Ship->SetDriveLever(Pilot, 1);
+                    Ship->SetDriveEngaged(Pilot, true);
+                    // At least 1 km/s: fifty times the fastest skim at 1.5 m.
+                    MustMoveCmPerSecond = MovingShare * 1.0e5;
+                }
+                for (int32 Frame = 0; Frame < 60; ++Frame)
+                {
+                    const double Began = FPlatformTime::Seconds();
+                    Settle(Capture);
+                    FlushRenderingCommands();
+                    FPlatformProcess::Sleep(FMath::Max(0.0f, static_cast<float>(1.0 / 60.0 - (FPlatformTime::Seconds() - Began))));
+                }
+                MovedFrom = Test->Ship->GetFlightState().GetUniversePosition();
+                StepFrames = 0;
+                StepSeconds = 0.0;
+                SimSteps = 0;
+            }
             bPlaced = true;
+        }
+
+        /** Levers back to rest, so the next case is placed from a ship that
+         *  is not under way. */
+        void Stop()
+        {
+            GlideRadiansPerSecond = 0.0;
+            if (Case && Case->Motion != EMotion::Still)
+            {
+                Test->Ship->AllStop(Pilot);
+                Test->Ship->SetDriveEngaged(Pilot, false);
+                Test->Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
+            }
         }
 
         void Round(float Strength, bool bTimed)
@@ -365,12 +510,17 @@ namespace
             }
             TRACE_END_REGION(*TimedRegion);
             const double AglAfter = Agl();
+            // A moving case: how fast the ship flew over the timed rounds.
+            const double SimSeconds = SimSteps / 60.0;
+            const double SpeedCmPerSecond = MovedFrom && SimSeconds > 0.0
+                ? (Test->Ship->GetFlightState().GetUniversePosition() - *MovedFrom).Length() / SimSeconds : 0.0;
             // The switch's proof, at the read exposure: without the term twice,
-            // back to back, then with it (the class comment says why).
+            // back to back, then with it (the class comment says why). Only
+            // for a still ship: a moving one holds no pixel still.
             TArray<FColor> Frames[3];
             ProofCapture->SetWorldLocationAndRotation(Capture->GetComponentLocation(), Capture->GetComponentRotation());
             EyesFrames::Expose(ProofCapture, Case->ReadStops);
-            for (int32 Pass = 0; Pass < 3; ++Pass)
+            for (int32 Pass = 0; Pass < 3 && Case->Motion == EMotion::Still; ++Pass)
             {
                 if (Shadows)
                 {
@@ -382,26 +532,31 @@ namespace
                 }
                 ProofTarget->GameThread_GetRenderTargetResource()->ReadPixels(Frames[Pass]);
             }
-            const EyesFrames::FShade Shade = EyesFrames::Shade(Frames[0], Frames[1], Frames[2]);
+            const EyesFrames::FShade Shade = Case->Motion == EMotion::Still ? EyesFrames::Shade(Frames[0], Frames[1], Frames[2]) : EyesFrames::FShade();
             const double On = MedianOf(Times[1]);
             const double Off = MedianOf(Times[0]);
             const double Spread = FMath::Max(IqrOf(Times[0]), IqrOf(Times[1]));
             const double SunDegrees = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Up, Sunward)));
             const FString Line = FString::Printf(
-                TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f switch %s switch_cov %.4f switch_lit %.4f flicker %.4f read_stops %.0f read_p95 %d frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f agl_m %.2f..%.2f times_on %s times_off %s\n%s\n"),
+                TEXT("case %s sun %.2f on_ms %.3f off_ms %.3f spread_ms %.3f switch %s switch_cov %.4f switch_lit %.4f flicker %.4f read_stops %.0f read_p95 %d frame_crc_on %08x frame_crc_off %08x tiles %d step_ms %.3f speed_mps %.1f agl_m %.2f..%.2f times_on %s times_off %s\n%s\n"),
                 Case->Slug, SunDegrees, On, Off, Spread, Shadows ? TEXT("present") : TEXT("absent"),
-                Shade.Coverage, Shade.LitShare, Shade.Flicker, Case->ReadStops, EyesFrames::LumaPercentile(Frames[0], 0.95),
+                Shade.Coverage, Shade.LitShare, Shade.Flicker, Case->ReadStops, Frames[0].Num() > 0 ? EyesFrames::LumaPercentile(Frames[0], 0.95) : 0,
                 FCrc::MemCrc32(Frames[2].GetData(), Frames[2].Num() * sizeof(FColor)),
                 FCrc::MemCrc32(Frames[0].GetData(), Frames[0].Num() * sizeof(FColor)),
                 Test->Ground->GetDrawnKeys().Num(), StepFrames > 0 ? StepSeconds * 1000.0 / StepFrames : 0.0,
-                AglBefore / 100.0, AglAfter / 100.0,
+                SpeedCmPerSecond / 100.0, AglBefore / 100.0, AglAfter / 100.0,
                 *Joined(Times[1]), *Joined(Times[0]), *Test->Ground->Describe());
             Report += Line;
             Automation->AddInfo(Line);
-            if (On > 16.6)
+            if (Case->Motion != EMotion::Still)
             {
-                Automation->AddInfo(FString::Printf(TEXT("%s is over the 16.6 ms frame (%.2f): reported for the frame ruling's profiling, not asserted here"), Case->Slug, On));
+                Automation->TestTrue(FString::Printf(TEXT("%s timed a ship under way: %.1f m/s over the timed rounds, at least %.1f"),
+                    Case->Slug, SpeedCmPerSecond / 100.0, MustMoveCmPerSecond / 100.0), SpeedCmPerSecond >= MustMoveCmPerSecond);
+                Stop();
             }
+            // Every case, still or moving, within the frame (slice (b)'s last
+            // open items, 2026-09-29): the median of its timed rounds.
+            Automation->TestTrue(FString::Printf(TEXT("%s is within the 16.6 ms frame at 4K (%.2f)"), Case->Slug, On), On <= FrameBudgetMs);
             if (Shadows && ProvesTheSwitch(*Case))
             {
                 Automation->TestTrue(FString::Printf(TEXT("the switch's proof can see: at %s at least 1%% of the frame is lit and held still (%.2f%%)"),
@@ -588,6 +743,7 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
     Run->ProofCapture = NewCapture(Test.Sky, 1920, 1080, Run->ProofTarget);
     Run->ProfileCapture = NewCapture(Test.Sky, 1920, 1080, Run->ProfileTarget);
 
+    Run->Pilot = Test.World->SpawnActor<APawn>();
     Run->Here = LocalSystem::Here(Test.World);
     if (!TestTrue(TEXT("the start system has a fourth body"), Run->Here.Bodies.Num() > 4))
     {
@@ -645,7 +801,7 @@ bool FLandingFrameEyesTest::RunTest(const FString& Parameters)
     }
     if (!bProofQueued)
     {
-        AddWarning(TEXT("EYES_CASES leaves out 1.5m_dusk3, the switch's proof: this run times frames and asserts nothing about them."));
+        AddWarning(TEXT("EYES_CASES leaves out 1.5m_dusk3, the switch's proof: this run asserts the frames' time and nothing about the switch."));
     }
     ADD_LATENT_AUTOMATION_COMMAND(FLandingFrameSteps(Run));
     return true;

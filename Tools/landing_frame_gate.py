@@ -37,6 +37,10 @@ import statistics
 import sys
 
 CASES = ("50km", "1.5m", "50km_dusk10", "1.5m_dusk3", "200km_dusk10", "1.5m_dusk10")
+# The cases in motion (slice (b)'s last open items, 2026-09-29): read when
+# both runs have them, and left out, never UNDECIDED, when a run predates
+# them -- every baseline before 2026-09-29 does.
+MOVING = ("1.5m_skim", "500m_skim", "50km_drive", "1.5m_skim_dusk10", "500m_skim_dusk10", "50km_drive_dusk10")
 # Measured: baseline against baseline-2 (2026-09-28, no term in either), the
 # largest |on - on| of the six cases was 0.175 ms.
 RUN_TO_RUN_MS = 0.2
@@ -75,10 +79,11 @@ def main(baseline_dir, after_dir, budget=1.0, not_rise=False):
     states = set()
     undecided = []
     notes = []
-    print("%-14s %7s %9s %9s %9s %9s %8s %8s" % ("case", "sun", "baseline", "on", "cost", "on-off", "band", "spread"))
-    for name in CASES:
+    print("%-18s %7s %9s %9s %9s %9s %8s %8s" % ("case", "sun", "baseline", "on", "cost", "on-off", "band", "spread"))
+    skipped = [name for name in MOVING if name not in base or name not in after]
+    for name in CASES + tuple(n for n in MOVING if n not in skipped):
         if name not in base or name not in after:
-            print("%-14s missing from the %s" % (name, "baseline" if name not in base else "run"))
+            print("%-18s missing from the %s" % (name, "baseline" if name not in base else "run"))
             undecided.append("%s missing" % name)
             continue
         was, now = base[name], after[name]
@@ -94,10 +99,12 @@ def main(baseline_dir, after_dir, budget=1.0, not_rise=False):
         else:
             close = abs(cost - budget) < band
             over = cost > budget and not close
-        print("%-14s %7s %9s %9s %+9.3f %+9.3f %8.3f %8.3f%s" % (
+        print("%-18s %7s %9s %9s %+9.3f %+9.3f %8.3f %8.3f%s" % (
             name, now["sun"], was["on_ms"], now["on_ms"], cost, float(now["on_ms"]) - float(now["off_ms"]), band, spread,
             "  TOO CLOSE TO CALL" if close else ("  OVER" if over else "")))
         states.add("over" if over else ("close" if close else "fits"))
+    if skipped:
+        print("in motion, not in both runs, left out: %s" % ", ".join(skipped))
     if notes:
         print("switch absent (no ds.Sky.Shadows) in %s: on-off compares a frame with itself" % ", ".join(notes))
     for reason in undecided:

@@ -18,18 +18,20 @@ MEASURED = (12.75, 12.14, 12.66, 12.58, 12.81, 13.22, 13.39, 13.24, 13.45, 13.61
 MEASURED_IQR = 0.922
 
 
-def run(directory, on, off=None, spread=MEASURED_IQR, skip=(), raw=True, switch=None, times=MEASURED):
-    """A run whose every case's times are the measured ones, moved to a median of `on`."""
+def run(directory, on, off=None, spread=MEASURED_IQR, skip=(), raw=True, switch=None, times=MEASURED, moving=False, moving_on=None):
+    """A run whose every case's times are the measured ones, moved to a median of `on`
+    (the moving cases, when written, to `moving_on`, or `on`)."""
     os.makedirs(directory, exist_ok=True)
-    middle = sorted(times)[len(times) // 2 - 1: len(times) // 2 + 1]
-    shift = on - 0.5 * sum(middle)
     with open(os.path.join(directory, "report.txt"), "w") as f:
-        for case in CASES:
+        for case in CASES + (gate.MOVING if moving else ()):
             if case in skip:
                 continue
+            at = moving_on if moving_on is not None and case in gate.MOVING else on
+            middle = sorted(times)[len(times) // 2 - 1: len(times) // 2 + 1]
+            shift = at - 0.5 * sum(middle)
             f.write("case %s sun 10.00 on_ms %.3f off_ms %.3f spread_ms %.3f coverage 0.0000 "
                     "frame_crc_on 0 frame_crc_off 0 tiles 700%s%s\nground: ...\n" % (
-                        case, on, off if off else on, spread,
+                        case, at, off if off else at, spread,
                         " switch %s" % switch if switch else "",
                         " times_on %s" % ",".join("%.2f" % (t + shift) for t in times) if raw else ""))
 
@@ -54,6 +56,19 @@ class GateTest(unittest.TestCase):
     def test_on_minus_off_is_not_the_gate(self):
         # The switch's own frame is dearer than the baseline: on - off looks free.
         self.assertEqual(self.verdict(on=12.0, off=11.9), 1)
+
+    def test_a_baseline_without_the_moving_cases_is_still_decided(self):
+        # Every baseline before 2026-09-29 predates them: left out, not UNDECIDED.
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0)
+            run(os.path.join(root, "after"), 10.0, moving=True)
+            self.assertEqual(gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0), 0)
+
+    def test_the_moving_cases_are_read_when_both_runs_have_them(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0, moving=True)
+            run(os.path.join(root, "after"), 10.0, moving=True, moving_on=16.0)
+            self.assertEqual(gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 1.0), 1)
 
     def test_too_close_to_call(self):
         self.assertEqual(self.verdict(on=10.95, off=10.0), 2)
