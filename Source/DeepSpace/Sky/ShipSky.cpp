@@ -7,6 +7,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "DynamicRHI.h"
 #include "Engine/Texture2DDynamic.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -60,8 +61,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarShadowUploadKB(
-        TEXT("ds.Sky.ShadowUploadKB"), 1024,
-        TEXT("KB of landed cast-shadow maps handed to the render thread a frame, all maps together, in pieces of whole rows: a 4096-column map goes up over about a dozen frames, so no frame hitches (ruled 2026-09-28). A world reads its map once the last piece has gone."),
+        TEXT("ds.Sky.ShadowUploadKB"), 512,
+        TEXT("KB of landed cast-shadow maps handed to the render thread a frame, all maps together, in pieces of whole rows: a 4096-column map goes up over about two dozen frames, so no frame hitches (ruled 2026-09-28). A world reads its map once the last piece has gone."),
         ECVF_Default);
 
     /**
@@ -1051,7 +1052,8 @@ void AShipSky::SyncShadowMaps(const FSkySystem& System)
             const FSunShadowMap Shape = SunShadowMap::Shape(FReliefGround(Body.Relief), SkyProjection::SunLightOf(System, Index), 2);
             Worlds.Add({ Body.Relief.RadiusCm, Shape.Width > 0 ? Shape.PsiLo : 0.5 * UE_DOUBLE_PI });
         }
-        const TArray<int32> Widths = ShipSky::CappedShadowWidths(Worlds, ShipSky::ShadowMapWidth());
+        const TArray<int32> Widths = ShipSky::CappedShadowWidths(Worlds, ShipSky::ShadowMapWidth(), ShipSky::ShadowSystemCapBytes,
+            [](int32 W, int32 R) { return ShipSky::ShadowTextureBytes(W, R); });
         for (const int32 Index : Order)
         {
             const FSkyBody& Body = System.Bodies[Index];
@@ -1185,6 +1187,18 @@ void AShipSky::PumpShadowBakes(bool bWait)
     // Land: an empty texture for each map that finished, and its pieces
     // queued. Nothing reads it yet.
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    if (bWait)
+    {
+        // A test's flush waits for the bakes before the landing is timed:
+        // play never waits, and the wait is the bake's, not the landing's.
+        for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+        {
+            if (Pair.Value.Task.IsValid())
+            {
+                Pair.Value.Task.Wait();
+            }
+        }
+    }
     const double Began = FPlatformTime::Seconds();
     for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
     {
@@ -1192,10 +1206,6 @@ void AShipSky::PumpShadowBakes(bool bWait)
         if (!Entry.Task.IsValid())
         {
             continue;
-        }
-        if (bWait)
-        {
-            Entry.Task.Wait();
         }
         if (!Entry.Task.IsCompleted())
         {
@@ -1373,13 +1383,51 @@ int64 ShipSky::ShadowLevelsBytes(int32 Width, int32 Rows)
     }
 }
 
+int64 ShipSky::ShadowTextureBytes(int32 Width, int32 Rows)
+{
+    if (Width <= 0 || Rows <= 0)
+    {
+        return 0;
+    }
+    static TMap<FIntPoint, int64> Asked;
+    if (const int64* Known = Asked.Find(FIntPoint(Width, Rows)))
+    {
+        return *Known;
+    }
+    int64 Bytes = 0;
+    if (GDynamicRHI && FCString::Stricmp(GDynamicRHI->GetName(), TEXT("Null")) != 0)
+    {
+        FSunShadowMap Shape;
+        Shape.Width = Width;
+        Shape.Rows = Rows;
+        int32 Levels = 1;
+        while (Shape.WidthAt(Levels - 1) > 1 || Shape.RowsAt(Levels - 1) > 1)
+        {
+            ++Levels;
+        }
+        const FRHITextureDesc Desc = FRHITextureCreateDesc::Create2D(TEXT("ShadowMapSize"), Width, Rows, PF_G16).SetNumMips(Levels);
+        Bytes = static_cast<int64>(RHICalcTexturePlatformSize(Desc).Size);
+    }
+    if (Bytes <= 0)
+    {
+        Bytes = ShadowLevelsBytes(Width, Rows);
+    }
+    return Asked.Add(FIntPoint(Width, Rows), Bytes);
+}
+
 TArray<int32> ShipSky::CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes)
+{
+    return CappedShadowWidths(Worlds, Width, CapBytes, [](int32 W, int32 R) { return ShadowLevelsBytes(W, R); });
+}
+
+TArray<int32> ShipSky::CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes,
+                                          TFunctionRef<int64(int32, int32)> BytesOf)
 {
     TArray<int32> Widths;
     Widths.Init(Width, Worlds.Num());
     const auto Bytes = [&](int32 Index)
     {
-        return ShadowLevelsBytes(Widths[Index], SunShadowMap::RowsFor(Widths[Index], Worlds[Index].PsiLo));
+        return BytesOf(Widths[Index], SunShadowMap::RowsFor(Widths[Index], Worlds[Index].PsiLo));
     };
     int64 Total = 0;
     for (int32 Index = 0; Index < Worlds.Num(); ++Index)

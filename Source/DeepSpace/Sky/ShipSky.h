@@ -439,6 +439,12 @@ namespace ShipSky
      *  holds on the GPU before the driver's own alignment. */
     DEEPSPACE_API int64 ShadowLevelsBytes(int32 Width, int32 Rows);
 
+    /** What the texture for a map of Width x Rows takes on the GPU, as the
+     *  RHI would make it (RHICalcTexturePlatformSize: its alignment and mip
+     *  tail included, about 10-15% over the levels' own bytes on Vulkan),
+     *  memoised; the levels' bytes where there is no RHI to ask. */
+    DEEPSPACE_API int64 ShadowTextureBytes(int32 Width, int32 Rows);
+
     /**
      * Each world's map width under the per-system cap. Every world starts at
      * Width; while the maps together hold more than CapBytes, the map whose
@@ -450,6 +456,10 @@ namespace ShipSky
      */
     DEEPSPACE_API TArray<int32> CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width,
                                                    int64 CapBytes = ShadowSystemCapBytes);
+    /** The same, each map's bytes as BytesOf(width, rows) says: the sky
+     *  passes ShadowTextureBytes, so the cap is on what the GPU holds. */
+    DEEPSPACE_API TArray<int32> CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes,
+                                                   TFunctionRef<int64(int32, int32)> BytesOf);
 
     /** An empty texture for the map, created on the render thread with no
      *  data: G16, linear, a mip per level, never streamed and never
