@@ -48,6 +48,7 @@ namespace EyesFrames
         double HeldShare = 0.0;  // of the frame: held between the two captures without it
         double Coverage = 0.0;   // of the lit and held: taken to under half by the term
         double Flicker = 0.0;    // the same measure between the two captures without it, over all their lit pixels: the noise
+        double TakenShare = 0.0; // of the frame: lit and held without the term, taken to under half by it
     };
 
     inline FShade Shade(const TArray<FColor>& Off, const TArray<FColor>& OffAgain, const TArray<FColor>& On)
@@ -81,6 +82,7 @@ namespace EyesFrames
         Out.HeldShare = N > 0 ? static_cast<double>(Held) / N : 0.0;
         Out.LitShare = N > 0 ? static_cast<double>(Lit) / N : 0.0;
         Out.Coverage = Lit > 0 ? static_cast<double>(Taken) / Lit : 0.0;
+        Out.TakenShare = N > 0 ? static_cast<double>(Taken) / N : 0.0;
         Out.Flicker = LitAny > 0 ? static_cast<double>(Flickered) / LitAny : 0.0;
         return Out;
     }

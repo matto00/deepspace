@@ -408,6 +408,14 @@ namespace
                     Case->Slug, 100.0 * Shade.LitShare), Shade.LitShare >= 0.01);
                 Automation->TestTrue(FString::Printf(TEXT("the switch reaches the materials: at %s the term shades at least 10%% of the lit, held ground (%.2f%%)"),
                     Case->Slug, 100.0 * Shade.Coverage), Shade.Coverage >= 0.10);
+                // And of the frame: a switch that never reached the materials
+                // leaves every frame shadowed, the lit share a few far ridge
+                // tops that flicker, and the coverage above is then theirs --
+                // 11-45% of 3.5% of the frame, where the switch takes 98% of
+                // 57% (the proxy's strength pinned at 1 survived the coverage
+                // alone, twice).
+                Automation->TestTrue(FString::Printf(TEXT("the switch reaches the materials: at %s the term darkens at least 5%% of the whole frame (%.2f%%)"),
+                    Case->Slug, 100.0 * Shade.TakenShare), Shade.TakenShare >= 0.05);
             }
             if (Shadows)
             {
