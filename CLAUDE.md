@@ -1340,7 +1340,7 @@ tests that assert it.
 | `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
 | `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g, counted to 3 g and ramped in over the first km under the floor; 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp`, from `ShipPower::DefaultHoldWattsPerG` and `DefaultStarvedSinkMetresPerSecond` (`ShipPowerState.h`), beside the named constants `HoldGCap` (3 g) and `HoldRampCm` (1 km) |
-| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp`: the first two from `TerrainQuadtree::DefaultSplitFactor` and `DefaultMaxTiles` (`TerrainQuadtree.h`), the other three literals in their declarations |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 3 (ruled 2026-09-28), 4, 1 | `WorldGround.cpp`: the first two from `TerrainQuadtree::DefaultSplitFactor` and `DefaultMaxTiles` (`TerrainQuadtree.h`), the other three literals in their declarations |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |

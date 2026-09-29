@@ -121,6 +121,9 @@ private:
         int32 Component = INDEX_NONE;
     };
     TMap<FTileKey, FResident> Resident;
+    /** Each child range the cut has read from a resident parent, kept for
+     *  the ground's life: see BoundsOf. */
+    mutable TMap<FTileKey, TerrainQuadtree::FHeightRange> KnownBounds;
 
     struct FPending
     {

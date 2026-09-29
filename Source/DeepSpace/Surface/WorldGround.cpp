@@ -33,8 +33,8 @@ namespace
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarBuildTasks(
-        TEXT("ds.Terrain.BuildTasks"), 2,
-        TEXT("Terrain tile builds in flight at once, on worker threads: the machine's cap, never sized to the core count."),
+        TEXT("ds.Terrain.BuildTasks"), 3,
+        TEXT("Terrain tile builds in flight at once, on worker threads: 3 (ruled 2026-09-28: shadowed tiles at dusk cost up to 9.5x to build), never sized to the core count."),
         ECVF_Default);
 
     TAutoConsoleVariable<int32> CVarUploadsPerFrame(
@@ -247,6 +247,7 @@ void AWorldGround::Release()
         Free(Pair.Value.Component);
     }
     Resident.Reset();
+    KnownBounds.Reset();
     Wanted.Reset();
     Prefetch.Reset();
     Drawn.Reset();
@@ -262,9 +263,19 @@ TOptional<TerrainQuadtree::FHeightRange> AWorldGround::BoundsOf(const FTileKey& 
     {
         return TerrainQuadtree::FHeightRange{ Ground->MinHeightCm(), Ground->MaxHeightCm() };
     }
+    // Remembered once known: a child's range is its resident parent's, and
+    // the cut culls and splits by it. Forgotten when the parent is freed, the
+    // cut changed with residency -- a tile at the horizon that culled its
+    // own children once resident was then not needed, freed, and needed
+    // again, rebuilt frame after frame. The range is the parent tile's, so
+    // it cannot change for the ground's life (Release forgets them).
+    if (const TerrainQuadtree::FHeightRange* Known = KnownBounds.Find(Key))
+    {
+        return *Known;
+    }
     if (const FResident* Parent = Resident.Find(Key.Parent()))
     {
-        return TerrainTile::ChildRange(Parent->Tile, Key.QuadrantInParent(), *Ground);
+        return KnownBounds.Add(Key, TerrainTile::ChildRange(Parent->Tile, Key.QuadrantInParent(), *Ground));
     }
     return {};
 }
@@ -331,11 +342,14 @@ void AWorldGround::Launch()
             Candidates.AddUnique(Key);
         }
     };
-    for (const FTileKey& Key : Prefetch)
-    {
-        Consider(Key);
-    }
-    for (const FTileKey& Key : Wanted)
+    // Every key the cut needs: the prefetch, the leaves, and the leaves'
+    // ancestors, which Resolve draws while a leaf under them builds. An
+    // ancestor that was never a leaf -- Balance splits a leaf the ship has
+    // just reached into children, making it interior the frame it enters
+    // the cut -- was never built, so the cut stopped at it again next frame
+    // and Balance split it again: the chain under the ship stuck at level 12
+    // at 30 m, 163 cm off the ground (GroundKeepsUp, on 3 build tasks).
+    for (const FTileKey& Key : NeededKeys())
     {
         Consider(Key);
     }
