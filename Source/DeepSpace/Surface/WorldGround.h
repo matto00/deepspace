@@ -102,8 +102,8 @@ public:
     int32 GetDrainingCount() const { return Draining.Num(); }
 
     /** The bytes the resident cut's vertex shadows hold on the CPU, read
-     *  from the arrays: each resident tile's, and each pooled component's
-     *  kept copy (bKeepForTest, for proxy recreation). */
+     *  from the arrays: each tile once, whether the resident cut or a pooled
+     *  component (bKeepForTest, for proxy recreation) holds it, or both. */
     int64 GetTileShadowBytes() const;
 
     /** The cut per level -- drawn, resident, building -- the cap, the morph. */
@@ -124,9 +124,12 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<UMaterialInstanceDynamic> Material;
 
+    /** One tile, held by the resident cut and by the component drawing it:
+     *  one copy between them, not two. */
+    using FTileRef = TSharedRef<const FTileBuild, ESPMode::ThreadSafe>;
     struct FResident
     {
-        FTileBuild Tile;
+        FTileRef Tile;
         int32 Component = INDEX_NONE;
     };
     TMap<FTileKey, FResident> Resident;
@@ -182,7 +185,7 @@ private:
     void Collect(int32 Budget);
     void ForgetBoundsFarFrom(const TSet<FTileKey>& Needed);
     static bool IsNearCut(const FTileKey& Key, const TSet<FTileKey>& Needed);
-    void Upload(const FTileBuild& Tile);
+    void Upload(FTileBuild&& Tile);
     void Free(int32 Component);
     void Resolve();
     void Place();
@@ -196,5 +199,5 @@ private:
      *  the first-day gate failed ProceduralMeshComponent (Eyes.TerrainBudget;
      *  these two are all the swap touched). */
     UPrimitiveComponent* NewTileComponent();
-    void UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst);
+    void UploadTo(UPrimitiveComponent* Component, const FTileRef& Tile, bool bFirst);
 };

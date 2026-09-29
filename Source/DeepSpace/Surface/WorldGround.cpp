@@ -277,7 +277,7 @@ TOptional<TerrainQuadtree::FHeightRange> AWorldGround::BoundsOf(const FTileKey& 
     }
     if (const FResident* Parent = Resident.Find(Key.Parent()))
     {
-        return KnownBounds.Add(Key, TerrainTile::ChildRange(Parent->Tile, Key.QuadrantInParent(), *Ground));
+        return KnownBounds.Add(Key, TerrainTile::ChildRange(*Parent->Tile, Key.QuadrantInParent(), *Ground));
     }
     return {};
 }
@@ -398,7 +398,7 @@ void AWorldGround::Collect(int32 Budget)
     const int32 Uploads = FMath::Min(Budget, Finished.Num());
     for (int32 Index = 0; Index < Uploads; ++Index)
     {
-        Upload(Finished[Index]);
+        Upload(MoveTemp(Finished[Index]));
     }
     Finished.RemoveAt(0, Uploads);
 
@@ -467,8 +467,9 @@ void AWorldGround::ForgetBoundsFarFrom(const TSet<FTileKey>& Needed)
     }
 }
 
-void AWorldGround::Upload(const FTileBuild& Tile)
+void AWorldGround::Upload(FTileBuild&& Built)
 {
+    const FTileRef Tile = MakeShared<const FTileBuild, ESPMode::ThreadSafe>(MoveTemp(Built));
     int32 Index = INDEX_NONE;
     bool bFirst = false;
     if (FreeComponents.Num() > 0)
@@ -485,9 +486,9 @@ void AWorldGround::Upload(const FTileBuild& Tile)
     UploadTo(Component, Tile, bFirst);
     // The band limit and the pivot, per tile, as custom primitive data: one
     // material instance serves every tile (decision 6).
-    Component->SetCustomPrimitiveDataFloat(SkyMaterial::BandLimitPrimitiveIndex, static_cast<float>(Tile.SpacingCm / Radius));
-    Component->SetCustomPrimitiveDataVector3(SkyMaterial::TilePivotPrimitiveIndex, FVector(Tile.Pivot));
-    Resident.Add(Tile.Key, FResident{ Tile, Index });
+    Component->SetCustomPrimitiveDataFloat(SkyMaterial::BandLimitPrimitiveIndex, static_cast<float>(Tile->SpacingCm / Radius));
+    Component->SetCustomPrimitiveDataVector3(SkyMaterial::TilePivotPrimitiveIndex, FVector(Tile->Pivot));
+    Resident.Add(Tile->Key, FResident{ Tile, Index });
     ++UploadsLastFrame;
     bResidencyChanged = true;
 }
@@ -497,6 +498,11 @@ void AWorldGround::Free(int32 Component)
     if (Pool.IsValidIndex(Component) && Pool[Component])
     {
         Pool[Component]->SetVisibility(false);
+        // Waiting for its next tile, a pooled component holds none.
+        if (UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pool[Component].Get()))
+        {
+            Tile->ClearTile();
+        }
         FreeComponents.Push(Component);
     }
 }
@@ -576,7 +582,7 @@ void AWorldGround::Place()
         {
             // The pivot relative to the ship, subtracted in doubles, in
             // universe axes: the counter-frame's rotation turns it.
-            Component->SetRelativeLocation(FVector(Pair.Value.Tile.Pivot - ShipFromCentre));
+            Component->SetRelativeLocation(FVector(Pair.Value.Tile->Pivot - ShipFromCentre));
         }
         if (Component->IsVisible() != bVisible)
         {
@@ -594,7 +600,7 @@ UPrimitiveComponent* AWorldGround::GetTileComponent(const FTileKey& Key) const
 const FTileBuild* AWorldGround::GetResidentTile(const FTileKey& Key) const
 {
     const FResident* Found = Resident.Find(Key);
-    return Found ? &Found->Tile : nullptr;
+    return Found ? &Found->Tile.Get() : nullptr;
 }
 
 TOptional<double> AWorldGround::DrawnHeightUnderShip() const
@@ -606,7 +612,7 @@ TOptional<double> AWorldGround::DrawnHeightUnderShip() const
         {
             if (const FResident* Found = Resident.Find(Key))
             {
-                if (const TOptional<double> Height = TerrainTile::SampleHeight(Found->Tile, Nadir))
+                if (const TOptional<double> Height = TerrainTile::SampleHeight(*Found->Tile, Nadir))
                 {
                     return *Height * Morph;
                 }
@@ -682,7 +688,7 @@ UPrimitiveComponent* AWorldGround::NewTileComponent()
     return Tile;
 }
 
-void AWorldGround::UploadTo(UPrimitiveComponent* Component, const FTileBuild& Tile, bool bFirst)
+void AWorldGround::UploadTo(UPrimitiveComponent* Component, const FTileRef& Tile, bool bFirst)
 {
     CastChecked<UTerrainTileComponent>(Component)->SetTile(Tile);
 }
@@ -705,17 +711,24 @@ void AWorldGround::Detach()
 
 int64 AWorldGround::GetTileShadowBytes() const
 {
+    TSet<const FTileBuild*> Counted;
     int64 Bytes = 0;
+    const auto Count = [&](const FTileBuild* Tile)
+    {
+        bool bAlready = false;
+        Counted.Add(Tile, &bAlready);
+        Bytes += bAlready ? 0 : Tile->SunVisible.GetAllocatedSize();
+    };
     for (const TPair<FTileKey, FResident>& Pair : Resident)
     {
-        Bytes += Pair.Value.Tile.SunVisible.GetAllocatedSize();
+        Count(&Pair.Value.Tile.Get());
     }
     for (const TObjectPtr<UPrimitiveComponent>& Pooled : Pool)
     {
         const UTerrainTileComponent* Tile = Cast<UTerrainTileComponent>(Pooled.Get());
         if (const FTileBuild* Kept = Tile ? Tile->GetTileForTest() : nullptr)
         {
-            Bytes += Kept->SunVisible.GetAllocatedSize();
+            Count(Kept);
         }
     }
     return Bytes;

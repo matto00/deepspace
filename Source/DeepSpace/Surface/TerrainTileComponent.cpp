@@ -151,14 +151,19 @@ UTerrainTileComponent::UTerrainTileComponent()
 
 void UTerrainTileComponent::SetTile(const FTileBuild& Tile)
 {
+    SetTile(MakeShared<const FTileBuild, ESPMode::ThreadSafe>(Tile));
+}
+
+void UTerrainTileComponent::SetTile(const FTileRef& Tile)
+{
     LocalBounds = FBox(ForceInit);
-    for (const FVector3f& Position : Tile.Positions)
+    for (const FVector3f& Position : Tile->Positions)
     {
         LocalBounds += FVector(Position);
     }
     // The morph lowers vertices by up to their height along their direction.
-    LocalBounds = LocalBounds.ExpandBy(FMath::Max(FMath::Abs(Tile.Range.MinCm), FMath::Abs(Tile.Range.MaxCm)));
-    Pending = MakeShared<FTileBuild, ESPMode::ThreadSafe>(Tile);
+    LocalBounds = LocalBounds.ExpandBy(FMath::Max(FMath::Abs(Tile->Range.MinCm), FMath::Abs(Tile->Range.MaxCm)));
+    Pending = Tile;
     if (bKeepForTest)
     {
         Kept = Tile;
@@ -168,15 +173,18 @@ void UTerrainTileComponent::SetTile(const FTileBuild& Tile)
     MarkRenderStateDirty();
 }
 
+void UTerrainTileComponent::ClearTile()
+{
+    Pending.Reset();
+    Kept.Reset();
+    bHasTile = false;
+}
+
 FPrimitiveSceneProxy* UTerrainTileComponent::CreateSceneProxy()
 {
-    if (!Pending.IsValid() && !bHasTile)
-    {
-        return nullptr;
-    }
-    const TSharedPtr<FTileBuild, ESPMode::ThreadSafe> Tile = Pending.IsValid() ? Pending : MakeShared<FTileBuild, ESPMode::ThreadSafe>(Kept);
+    const TSharedPtr<const FTileBuild, ESPMode::ThreadSafe> Tile = Pending.IsValid() ? Pending : Kept;
     Pending.Reset();
-    return Tile->Positions.Num() > 0 ? new FTerrainTileSceneProxy(this, *Tile) : nullptr;
+    return Tile.IsValid() && Tile->Positions.Num() > 0 ? new FTerrainTileSceneProxy(this, *Tile) : nullptr;
 }
 
 FBoxSphereBounds UTerrainTileComponent::CalcBounds(const FTransform& LocalToWorld) const

@@ -23,11 +23,20 @@ class DEEPSPACE_API UTerrainTileComponent : public UMeshComponent
 public:
     UTerrainTileComponent();
 
-    /** The tile to draw; rebuilds the render proxy. */
+    using FTileRef = TSharedRef<const FTileBuild, ESPMode::ThreadSafe>;
+
+    /** The tile to draw; rebuilds the render proxy. The shared overload
+     *  keeps the caller's tile rather than a copy of it: AWorldGround's
+     *  resident cut and its components hold one tile between them. */
     void SetTile(const FTileBuild& Tile);
+    void SetTile(const FTileRef& Tile);
+
+    /** Lets the tile go: a pooled component waiting for its next tile holds
+     *  none, and draws nothing if the renderer recreates its proxy. */
+    void ClearTile();
 
     /** Only when bKeepForTest: the last tile set. */
-    const FTileBuild* GetTileForTest() const { return bKeepForTest && bHasTile ? &Kept : nullptr; }
+    const FTileBuild* GetTileForTest() const { return bKeepForTest && bHasTile ? Kept.Get() : nullptr; }
     bool bKeepForTest = false;
 
     virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
@@ -36,8 +45,8 @@ public:
 
 private:
     /** Handed to the next proxy, then dropped. */
-    TSharedPtr<FTileBuild, ESPMode::ThreadSafe> Pending;
-    FTileBuild Kept;
+    TSharedPtr<const FTileBuild, ESPMode::ThreadSafe> Pending;
+    TSharedPtr<const FTileBuild, ESPMode::ThreadSafe> Kept;
     bool bHasTile = false;
     FBox LocalBounds = FBox(ForceInit);
 };
