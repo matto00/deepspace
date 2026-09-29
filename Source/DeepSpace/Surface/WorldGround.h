@@ -73,6 +73,15 @@ public:
     const FTileBuild* GetResidentTile(const FTileKey& Key) const;
     int32 GetUploadsLastFrame() const { return UploadsLastFrame; }
     int32 GetResidentCount() const { return Resident.Num(); }
+    /** The child ranges the cut remembers (BoundsOf), and the keys it needs. */
+    int32 GetKnownBoundsCount() const { return KnownBounds.Num(); }
+    int32 GetNeededCount() const { return NeededKeys().Num(); }
+    /** The remembered ranges with no needed ancestor within
+     *  ForgetAfterLevels: 0 after every tick. */
+    int32 GetKnownBoundsFarFromCut() const;
+    /** How many levels over a remembered range one of its ancestors must be
+     *  needed for it to be kept. */
+    static constexpr int32 ForgetAfterLevels = 3;
 
     /** The drawn (morphed) ground's height over the datum at the ship's
      *  nadir, cm; unset if no drawn tile holds it. */
@@ -121,8 +130,8 @@ private:
         int32 Component = INDEX_NONE;
     };
     TMap<FTileKey, FResident> Resident;
-    /** Each child range the cut has read from a resident parent, kept for
-     *  the ground's life: see BoundsOf. */
+    /** Each child range the cut has read from a resident parent, kept while
+     *  the cut is within two levels of it: see BoundsOf and ForgetBoundsFarFrom. */
     mutable TMap<FTileKey, TerrainQuadtree::FHeightRange> KnownBounds;
 
     struct FPending
@@ -160,6 +169,8 @@ private:
     FVector3d LastCutFrom = FVector3d::ZeroVector;
     double LastCutTime = -1.0;
     bool bResidencyChanged = true;
+    /** Select made a new cut since the last Collect. */
+    bool bCutChanged = true;
     bool bCapBinding = false;
     double Morph = 0.0;
     bool bDrawsBody = false;
@@ -169,6 +180,8 @@ private:
     void Select(double GroundAltitudeCm);
     void Launch();
     void Collect(int32 Budget);
+    void ForgetBoundsFarFrom(const TSet<FTileKey>& Needed);
+    static bool IsNearCut(const FTileKey& Key, const TSet<FTileKey>& Needed);
     void Upload(const FTileBuild& Tile);
     void Free(int32 Component);
     void Resolve();

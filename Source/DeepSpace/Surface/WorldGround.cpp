@@ -268,7 +268,9 @@ TOptional<TerrainQuadtree::FHeightRange> AWorldGround::BoundsOf(const FTileKey& 
     // cut changed with residency -- a tile at the horizon that culled its
     // own children once resident was then not needed, freed, and needed
     // again, rebuilt frame after frame. The range is the parent tile's, so
-    // it cannot change for the ground's life (Release forgets them).
+    // it cannot change for the ground's life; it is forgotten only once the
+    // cut has moved two levels away from it (ForgetBoundsFarFrom), and all
+    // of them by Release.
     if (const TerrainQuadtree::FHeightRange* Known = KnownBounds.Find(Key))
     {
         return *Known;
@@ -303,6 +305,7 @@ void AWorldGround::Select(double GroundAltitudeCm)
     LastCutFrom = ShipFromCentre;
     LastCutTime = Now;
     bResidencyChanged = false;
+    bCutChanged = true;
 }
 
 TSet<FTileKey> AWorldGround::NeededKeys() const
@@ -407,6 +410,59 @@ void AWorldGround::Collect(int32 Budget)
             Free(It.Value().Component);
             It.RemoveCurrent();
             bResidencyChanged = true;
+        }
+    }
+    // And what the cut has moved away from is forgotten, once for each new cut.
+    if (bCutChanged)
+    {
+        ForgetBoundsFarFrom(Needed);
+        bCutChanged = false;
+    }
+}
+
+bool AWorldGround::IsNearCut(const FTileKey& Key, const TSet<FTileKey>& Needed)
+{
+    FTileKey Up = Key;
+    for (int32 Step = 0; Step < ForgetAfterLevels && Up.Level > 0; ++Step)
+    {
+        Up = Up.Parent();
+        if (Needed.Contains(Up))
+        {
+            return true;
+        }
+    }
+    return Key.Level <= ForgetAfterLevels;
+}
+
+int32 AWorldGround::GetKnownBoundsFarFromCut() const
+{
+    const TSet<FTileKey> Needed = NeededKeys();
+    int32 Far = 0;
+    for (const TPair<FTileKey, TerrainQuadtree::FHeightRange>& Known : KnownBounds)
+    {
+        Far += IsNearCut(Known.Key, Needed) ? 0 : 1;
+    }
+    return Far;
+}
+
+void AWorldGround::ForgetBoundsFarFrom(const TSet<FTileKey>& Needed)
+{
+    // A child's range is kept while one of its three nearest ancestors is
+    // needed. BoundsOf keeps them so that the cut does not change with
+    // residency -- the horizon tile freed because the ranges it gave let the
+    // cut stop above it -- and so they must outlive their parent by more
+    // than a level: kept only while the parent or grandparent was needed,
+    // the cut changed with residency again, and GroundKeepsUp's skim at 50 m
+    // drew ground 790 m off under the ship. Farther from the cut than three
+    // levels, nothing reads them until the ship comes back, when a resident
+    // parent gives the same range again. So the ranges are bounded by the
+    // cut -- at most 84 for each key it needs -- and not by the ground flown
+    // over (DeepSpace.Surface.GroundForgetsBounds).
+    for (auto It = KnownBounds.CreateIterator(); It; ++It)
+    {
+        if (!IsNearCut(It.Key(), Needed))
+        {
+            It.RemoveCurrent();
         }
     }
 }
