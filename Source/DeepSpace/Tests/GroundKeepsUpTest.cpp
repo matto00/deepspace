@@ -1,14 +1,5 @@
-#include "GameFramework/Pawn.h"
-#include "HAL/PlatformProcess.h"
-#include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
-#include "Ship/ShipFlightSurface.h"
-#include "Ship/ShipSubsystem.h"
-#include "Sky/LocalSystem.h"
-#include "Sky/ShipSky.h"
-#include "Surface/GroundField.h"
-#include "Surface/WorldGround.h"
-#include "Tests/SkyTestWorld.h"
+#include "Tests/GroundKeepsUpScenario.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -23,7 +14,9 @@
  * slowest test in the suite, about two minutes, by design. Every frame
  * under the drive floor the ground draws the body and the proxy is hidden;
  * every frame under 1 km the drawn ground under the ship is within
- * GearClearance / 10 of the analytic ground.
+ * GearClearance / 10 of the analytic ground. The flight itself is
+ * GroundKeepsUpScenario.h's, which Eyes.ShadowBakeCost flies with the
+ * cast shadow on.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundKeepsUpTest, "DeepSpace.Surface.GroundKeepsUp",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -39,117 +32,26 @@ bool FGroundKeepsUpTest::RunTest(const FString& Parameters)
         return false;
     }
     Test.BeginPlay();
-    UShipSubsystem* Ship = Test.Ship;
-    const FShipFlightState& Flight = Ship->GetFlightState();
-    const FSkySystem Here = LocalSystem::Here(Test.World);
-    const int32 Index = 4;
-    const FSkyBody& Fourth = Here.Bodies[Index];
-    const FGroundFieldRef Field = ShipGround::FromRelief(Fourth.Relief);
-    const FVector Out = (Flight.GetUniversePosition() - Fourth.Position).GetSafeNormal();
-    const FVector Heading = FVector::CrossProduct(Out, FVector(0.3, 0.9, 0.1)).GetSafeNormal();
-    const double DriveFloor = UShipSubsystem::FloorFor(Fourth);
-    const double Tolerance = UShipSubsystem::GearClearance() / 10.0;
-    constexpr float Dt = 1.0f / 60.0f;
-
-    APawn* Pilot = Test.World->SpawnActor<APawn>();
-    Ship->SetPilot(Pilot);
-    // At the drive floor, level, over the ship's own side of the world.
-    Ship->PlaceShip(Fourth.Position + Out * (Fourth.Radius + DriveFloor - 100.0), FRotationMatrix::MakeFromXZ(Heading, Out).ToQuat());
-
-    int32 UnderFloor = 0;
-    int32 ProxyShown = 0;
-    int32 NotDrawing = 0;
-    int32 Low = 0;
-    int32 Missing = 0;
-    double Worst = 0.0;
-    // One frame as play has it: the wall clock paced to Dt, so the workers
-    // build what they would in a real frame.
-    const auto Frame = [&]()
+    const GroundKeepsUpScenario::FResult R = GroundKeepsUpScenario::Fly(Test);
+    if (!TestTrue(TEXT("the flight was flown"), R.bValid && R.Top.Num() == 2 && R.HeldOff.Num() == 2))
     {
-        const double Began = FPlatformTime::Seconds();
-        Test.Step(Dt);
-        while (FPlatformTime::Seconds() - Began < Dt)
-        {
-            FPlatformProcess::Sleep(0.001f);
-        }
-        const FVector Up = (Flight.GetUniversePosition() - Fourth.Position).GetSafeNormal();
-        if (Flight.GetUniversePosition().DistanceTo(Fourth.Position) - Fourth.Radius < DriveFloor)
-        {
-            ++UnderFloor;
-            const UStaticMeshComponent* Proxy = Test.Sky->GetProxy(Index);
-            ProxyShown += Proxy && Proxy->IsVisible() ? 1 : 0;
-            NotDrawing += Test.Ground->IsDrawingBody() ? 0 : 1;
-        }
-        const TOptional<double> Agl = Flight.GetGroundAltitude();
-        if (Agl && *Agl < 1.0e5)
-        {
-            ++Low;
-            const TOptional<double> Drawn = Test.Ground->DrawnHeightUnderShip();
-            if (!Drawn)
-            {
-                ++Missing;
-            }
-            else
-            {
-                Worst = FMath::Max(Worst, FMath::Abs(*Drawn - Field->Height(FVector3d(Up), 0.0)));
-            }
-        }
-    };
-    const auto Agl = [&]() { return Flight.GetGroundAltitude().Get(TNumericLimits<double>::Max()); };
-
-    // Two seconds' hover at the floor: a placement is a teleport, not
-    // motion, and the coarse cut comes first.
-    for (int32 Tick = 0; Tick < 120; ++Tick)
-    {
-        Frame();
+        return false;
     }
-    // The full sink, from the drive floor to 500 m.
-    Ship->SetVerticalLever(Pilot, -1.0);
-    double Fastest = 0.0;
-    for (double Seconds = 0.0; Seconds < 200.0 && Agl() > 5.0e4; Seconds += Dt)
+    TestTrue(FString::Printf(TEXT("the descent reached the full sink, 200 m/s (%.1f m/s)"), R.Fastest / 100.0), R.Fastest >= 0.99 * 2.0e4);
+    for (int32 Leg = 0; Leg < 2; ++Leg)
     {
-        Frame();
-        Fastest = FMath::Max(Fastest, -Flight.GetVerticalSpeed());
+        const double Height = Leg == 0 ? 500.0 : 50.0;
+        AddInfo(FString::Printf(TEXT("at %.0f m: cruise reached %.2f of the skim cap%s"), Height, R.Top[Leg], R.HeldOff[Leg] ? TEXT(", held off a ridge") : TEXT("")));
+        TestTrue(FString::Printf(TEXT("at %.0f m the ship flew at the skim cap's top, or a ridge held it off (%.2f)"), Height, R.Top[Leg]),
+                 R.Top[Leg] >= 0.9 || R.HeldOff[Leg]);
     }
-    TestTrue(FString::Printf(TEXT("the descent reached the full sink, 200 m/s (%.1f m/s)"), Fastest / 100.0), Fastest >= 0.99 * 2.0e4);
-
-    // The skim cap's top at 500 m, then at 50 m: HOVER, cruise full ahead.
-    for (const double Height : { 5.0e4, 5.0e3 })
-    {
-        Ship->SetVerticalLever(Pilot, -1.0);
-        for (double Seconds = 0.0; Seconds < 60.0 && Agl() > Height; Seconds += Dt)
-        {
-            Frame();
-        }
-        Ship->SetVerticalLever(Pilot, 0.0);
-        for (int32 Tick = 0; Tick < 5 * 60; ++Tick)
-        {
-            Frame();
-        }
-        Ship->SetFlightCommand(Pilot, 1.0f, FVector::ZeroVector);
-        double Top = 0.0;
-        bool bHeldOff = false;
-        for (int32 Tick = 0; Tick < 10 * 60; ++Tick)
-        {
-            Frame();
-            const FVector Up = (Flight.GetUniversePosition() - Fourth.Position).GetSafeNormal();
-            const FVector Along = Flight.GetVelocity() - Up * FVector::DotProduct(Flight.GetVelocity(), Up);
-            Top = FMath::Max(Top, Along.Size() / ShipFlight::SkimCap(Agl(), ShipFlight::DefaultSkimSeconds, ShipFlight::DefaultSkimFloor));
-            bHeldOff |= Flight.GetHold() != EFlightHold::Free && Top < 0.9;
-        }
-        Ship->SetFlightCommand(Pilot, 0.0f, FVector::ZeroVector);
-        AddInfo(FString::Printf(TEXT("at %.0f m: cruise reached %.2f of the skim cap%s"), Height / 100.0, Top, bHeldOff ? TEXT(", held off a ridge") : TEXT("")));
-        TestTrue(FString::Printf(TEXT("at %.0f m the ship flew at the skim cap's top, or a ridge held it off (%.2f)"), Height / 100.0, Top),
-                 Top >= 0.9 || bHeldOff);
-    }
-
-    AddInfo(FString::Printf(TEXT("%d frames under the drive floor, %d under 1 km; worst drawn gap %.2f cm"), UnderFloor, Low, Worst));
-    TestTrue(TEXT("the flight spent frames under the floor and under 1 km"), UnderFloor > 1000 && Low > 1000);
-    TestEqual(TEXT("under the drive floor the proxy is never drawn"), ProxyShown, 0);
-    TestEqual(TEXT("and the ground draws the body every frame"), NotDrawing, 0);
-    TestEqual(TEXT("under 1 km there is always drawn ground under the ship"), Missing, 0);
-    TestTrue(FString::Printf(TEXT("and it is within GearClearance / 10 of the analytic ground, moving (worst %.2f cm)"), Worst),
-             Worst <= Tolerance);
+    AddInfo(FString::Printf(TEXT("%d frames under the drive floor, %d under 1 km; worst drawn gap %.2f cm"), R.UnderFloor, R.Low, R.Worst));
+    TestTrue(TEXT("the flight spent frames under the floor and under 1 km"), R.UnderFloor > 1000 && R.Low > 1000);
+    TestEqual(TEXT("under the drive floor the proxy is never drawn"), R.ProxyShown, 0);
+    TestEqual(TEXT("and the ground draws the body every frame"), R.NotDrawing, 0);
+    TestEqual(TEXT("under 1 km there is always drawn ground under the ship"), R.Missing, 0);
+    TestTrue(FString::Printf(TEXT("and it is within GearClearance / 10 of the analytic ground, moving (worst %.2f cm)"), R.Worst),
+             R.Worst <= R.Tolerance);
     return true;
 }
 
