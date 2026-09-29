@@ -48,6 +48,10 @@ namespace SunShadowMap
      *  the world is under 35 degrees across (the cast-shadow plan, Task 0). */
     inline constexpr int32 DefaultWidth = 4096;
 
+    /** The rows a map of Width columns keeps above PsiLo: from PsiLo to the
+     *  point under the star, a texel of 2 pi / Width each. */
+    DEEPSPACE_API int32 RowsFor(int32 Width, double PsiLo);
+
     /** The map's frame, rows and step for Ground under Sun, and no texels;
      *  Width 0 where there is no star or no ground. */
     DEEPSPACE_API FSunShadowMap Shape(const IGroundField& Ground, const SunShadow::FSunLight& Sun, int32 Width);

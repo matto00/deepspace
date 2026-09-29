@@ -1,5 +1,5 @@
 #include "Components/StaticMeshComponent.h"
-#include "Engine/Texture2D.h"
+#include "Engine/Texture2DDynamic.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -19,16 +19,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowParametersTest, "DeepSpace.Sky.ShadowPar
 
 /**
  * The sky bakes each solid world's cast-shadow map and hands it to the
- * world's material: a 16-bit texture, a mip per level, never LOD-biased, its
- * CPU copy discarded once uploaded, its frame the sky's own light
+ * world's material: a 16-bit texture, a mip per level, never LOD-biased or
+ * streamed, no CPU copy left once the render thread has it, its frame the sky's own light
  * (SkyProjection::SunLightOf) and ds.Sky.Shadows clamped to 0..1 as the
  * strength; the ground's instance gets all of it through CopyBodyLook.
  * Worlds with no ground get no map. Each map is keyed by what it is made
  * from, so a jump within the system (a new jump serial, the same system)
  * re-bakes nothing, a reload that moves one world's relief re-bakes that
  * world alone, a new system drops the old maps, and nothing waits for a
- * bake it lets go. A map that lands fades in over ShadowFadeSeconds. At 256
- * columns, so the test bakes in a moment.
+ * bake it lets go. A map that lands goes to the render thread in pieces
+ * over several frames (ds.Sky.ShadowUploadKB a frame; the ruling of
+ * 2026-09-28), is read by no world before its last piece, and then fades in
+ * over ShadowFadeSeconds. At 256 columns, so the test bakes in a moment.
  */
 bool FShadowParametersTest::RunTest(const FString& Parameters)
 {
@@ -42,6 +44,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     Test.Sky->FlushShadowBakesForTest();
     Test.Step(1.0f / 60.0f);
     TestEqual(TEXT("and all land"), Test.Sky->GetShadowBakesPending(), 0);
+    TestEqual(TEXT("with no copy left on the CPU once the render thread has every piece"), Test.Sky->GetShadowUploadCpuBytes(), static_cast<int64>(0));
 
     const FSkySystem Here = LocalSystem::Here(Test.World);
     const int32 Serial = LocalSystem::Serial(Test.World);
@@ -53,7 +56,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         const bool bSolid = Body.Ground == EGround::Solid && Body.Kind != ESkyBodyKind::Star;
         Solid += bSolid ? 1 : 0;
         TestEqual(FString::Printf(TEXT("%s is baked exactly when it has ground"), *Body.Id.ToString()), Order.Contains(Index), bSolid);
-        UTexture2D* Texture = Test.Sky->GetShadowTexture(Body.Id);
+        UTexture2DDynamic* Texture = Test.Sky->GetShadowTexture(Body.Id);
         if (!bSolid)
         {
             TestNull(FString::Printf(TEXT("%s has no map"), *Body.Id.ToString()), Texture);
@@ -65,12 +68,12 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
             continue;
         }
         TestTrue(FString::Printf(TEXT("%s: the texture is the map, 256 x %d, G16, a mip per level"), *Body.Id.ToString(), Map->Rows),
-            Texture->GetSizeX() == 256 && Texture->GetSizeY() == Map->Rows && Texture->GetPixelFormat() == PF_G16
-            && Texture->GetNumMips() == Map->LevelCount());
+            Texture->SizeX == 256 && Texture->SizeY == Map->Rows && Texture->Format == PF_G16
+            && Texture->NumMips == Map->LevelCount());
         // A device profile's LOD bias would drop mip 0 while the lookup's U
         // is still in level-0 texels: every read in the wrong place.
         TestEqual(TEXT("in an LOD group no profile biases"), static_cast<int32>(Texture->LODGroup), static_cast<int32>(TEXTUREGROUP_Pixels2D));
-        TestEqual(TEXT("with no copy left on the CPU once uploaded"), ShipSky::ShadowTextureCpuBytes(*Texture), static_cast<int64>(0));
+        TestTrue(TEXT("never streamed"), Texture->NeverStream != 0);
         TestTrue(TEXT("baked under the sky's own light"), Map->FrameZ.Equals(SkyProjection::SunLightOf(Here, Index).Direction.GetSafeNormal(), 1e-12));
         UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Index)->GetMaterial(0));
         if (!TestNotNull(TEXT("the proxy draws a dynamic instance"), Instance))
@@ -124,7 +127,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     // in-system arrival, and the sky rebuilds its proxies for it. Neither of a
     // map's inputs moved, so nothing is baked again and every texture stays.
     const FName Nearest = Here.Bodies[Order[0]].Id;
-    TMap<FName, UTexture2D*> Held;
+    TMap<FName, UTexture2DDynamic*> Held;
     for (const int32 Index : Order)
     {
         Held.Add(Here.Bodies[Index].Id, Test.Sky->GetShadowTexture(Here.Bodies[Index].Id));
@@ -136,7 +139,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("a jump within the system re-bakes nothing"), Test.Sky->GetShadowBakesStarted(), Started);
     TestEqual(TEXT("and leaves nothing pending"), Test.Sky->GetShadowBakesPending(), 0);
     bool bSame = true;
-    for (const TPair<FName, UTexture2D*>& Was : Held)
+    for (const TPair<FName, UTexture2DDynamic*>& Was : Held)
     {
         bSame = bSame && Test.Sky->GetShadowTexture(Was.Key) == Was.Value;
     }
@@ -158,7 +161,7 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("a reload that moves one world's relief re-bakes that world alone"), Test.Sky->GetShadowBakesStarted(), Started + 1);
         TestNull(TEXT("and lets its stale map go"), Test.Sky->GetShadowTexture(Nearest));
         bool bOthers = true;
-        for (const TPair<FName, UTexture2D*>& Was : Held)
+        for (const TPair<FName, UTexture2DDynamic*>& Was : Held)
         {
             bOthers = bOthers && (Was.Key == Nearest || Test.Sky->GetShadowTexture(Was.Key) == Was.Value);
         }
@@ -171,16 +174,26 @@ bool FShadowParametersTest::RunTest(const FString& Parameters)
     // world is baked back to its own relief with the rest.)
     {
         FScopedCVar Wider(TEXT("ds.Sky.ShadowMapWidth"), 512.0f);
-        UTexture2D* Landed = nullptr;
+        // Pieces of 16 KB: the 512-column map, about 180 KB, goes up over a
+        // dozen frames, as a 4096-column one does at the default 1 MB.
+        FScopedCVar Pieces(TEXT("ds.Sky.ShadowUploadKB"), 16.0f);
+        UTexture2DDynamic* Landed = nullptr;
+        int32 Uploading = 0;
+        bool bReadEarly = false;
         for (int32 Tries = 0; Tries < 600 && !Landed; ++Tries)
         {
             Test.Step(1.0f / 60.0f);
             FPlatformProcess::Sleep(0.005f);
             Landed = Test.Sky->GetShadowTexture(Nearest);
+            const bool bUploading = Test.Sky->GetShadowPiecesLeft(Nearest) > 0;
+            Uploading += bUploading ? 1 : 0;
+            bReadEarly |= bUploading && Landed;
         }
+        TestTrue(FString::Printf(TEXT("the map goes to the render thread over several frames (%d)"), Uploading), Uploading >= 8);
+        TestFalse(TEXT("and no world reads it before its last piece"), bReadEarly);
         if (TestNotNull(TEXT("the nearest world's map lands at the new width"), Landed))
         {
-            TestEqual(TEXT("at 512 columns"), Landed->GetSizeX(), 512);
+            TestEqual(TEXT("at 512 columns"), Landed->SizeX, 512);
             UMaterialInstanceDynamic* Near = Cast<UMaterialInstanceDynamic>(Test.Sky->GetProxy(Order[0])->GetMaterial(0));
             TestEqual(TEXT("and the frame it lands in draws it faded to 0: no shadow appears in one frame"),
                 Near->K2_GetScalarParameterValue(SkyMaterial::ShadowMapFade), 0.0f);

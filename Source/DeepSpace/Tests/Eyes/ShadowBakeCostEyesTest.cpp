@@ -1,4 +1,5 @@
-#include "Engine/Texture2D.h"
+#include "DynamicRHI.h"
+#include "Engine/Texture2DDynamic.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMemory.h"
@@ -19,6 +20,8 @@
 #include "Surface/WorldGround.h"
 #include "Tests/GroundKeepsUpScenario.h"
 #include "Tests/SkyTestWorld.h"
+#include "TextureResource.h"
+#include "Universe/UniverseSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -45,11 +48,19 @@
  *   costliest, under IV's light, each baked here on one thread at
  *   ds.Sky.ShadowMapWidth.
  * - The system: the sky's own bakes of every solid world on
- *   ds.Sky.ShadowBakeTasks, the GPU memory they hold as the engine counts it
- *   (TMC_ResidentMips), what they still hold on the CPU, the process's
- *   physical memory before and after, and the slowest landing on the game
- *   thread; the corpus's worst system (16 worlds) by the same per-world
- *   figure, reported.
+ *   ds.Sky.ShadowBakeTasks, the GPU memory they hold as the RHI counts it
+ *   (RHIComputeMemorySize), what the sky still holds on the CPU for their
+ *   uploads, the process's physical memory before and after, and the
+ *   landing: the slowest frame's game-thread work (a texture's creation and
+ *   that frame's pieces handed over) and the render thread's on the slowest
+ *   frame's pieces -- a map goes up in pieces over several frames (the
+ *   developer's ruling, 2026-09-28).
+ * - The per-system cap (ruled 2026-09-28: 128 MB): the corpus's worst system
+ *   -- Trabo, 12 solid worlds in Saved/procgen_corpus.tsv today; planning put
+ *   it at 16 -- baked by the sky itself, its widths after the cap and its
+ *   GPU memory; and the same system with four of its worlds again, 16 in
+ *   all, held to the same cap. Run last, since the sky then drops the start
+ *   system's maps.
  * - A jump within the system: the bakes it starts.
  * - The flight: GroundKeepsUp's, with the shadow on, paced to the wall clock;
  *   and the wait, from 49 km over fresh ground, for the ground to draw the
@@ -65,19 +76,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowBakeCostEyesTest, "Eyes.ShadowBakeCost",
 
 namespace ShadowBakeCostLocal
 {
-    // The budgets: Task 0's answers (the plan's recommended defaults until then).
+    // The budgets: Task 0's answers, and Task 7b's rulings (2026-09-28).
     constexpr double ColdCutBudgetSeconds = 30.0;
     constexpr double ReleaseBudgetMs = 2.0;
     constexpr double TileRatioBudget = 10.0;
     constexpr double WorldBakeBudgetSeconds = 15.0;
     constexpr double WorldMapBudgetMB = 16.0;
-    constexpr double SystemGpuBudgetMB = 64.0;
+    constexpr double SystemGpuBudgetMB = 128.0;   // the per-system cap, ruled: every system, the worst included
     constexpr double SystemCpuBudgetMB = 0.0;
-    constexpr double MapLandBudgetMs = 4.0;
+    constexpr double MapLandBudgetMs = 4.0;       // the game thread's slowest frame of a landing
+    constexpr double MapUploadBudgetMs = 4.0;     // and the render thread's: no frame hitches, either side
     constexpr double JumpRebakesBudget = 0.0;
     constexpr double CoarseBudgetSeconds = 10.0;
     constexpr double TileShadowBudgetMB = 12.0;
-    constexpr int32 WorstSystemWorlds = 16;   // Saved/procgen_corpus.tsv's most solid worlds in one system
+    // Saved/procgen_corpus.tsv's system with the most solid worlds (12), today.
+    const FSystemId WorstSystem{ FInt64Vector(-3, -10, -1), 0 };
+    constexpr int32 WorstSystemWorlds = 16;   // planning's figure, made from it with four worlds again
     constexpr double EarthRadiusCm = 6.371e8;
 
     double Percentile(TArray<double> Values, double Share)
@@ -99,13 +113,52 @@ namespace ShadowBakeCostLocal
     {
         return Bytes / (1024.0 * 1024.0);
     }
+
+    /** The GPU's own size for a texture, as the RHI counts it; after a flush. */
+    double GpuBytes(const UTexture2DDynamic* Texture)
+    {
+        const FTextureResource* Resource = Texture ? Texture->GetResource() : nullptr;
+        return Resource && Resource->TextureRHI ? static_cast<double>(RHIComputeMemorySize(Resource->TextureRHI)) : 0.0;
+    }
+
+    struct FSystemMemory
+    {
+        int32 Maps = 0;
+        double GpuMB = 0.0;
+        double LevelsMB = 0.0;
+        TArray<FString> Widths;
+    };
+
+    /** Every solid world's texture the sky holds for System, as the RHI counts it. */
+    FSystemMemory Measure(FAutomationTestBase& T, AShipSky& Sky, const FSkySystem& System)
+    {
+        FSystemMemory M;
+        for (const FSkyBody& Body : System.Bodies)
+        {
+            UTexture2DDynamic* Texture = Sky.GetShadowTexture(Body.Id);
+            const FSunShadowMap* Map = Sky.GetShadowMapForTest(Body.Id);
+            if (!Texture || !Map)
+            {
+                continue;
+            }
+            ++M.Maps;
+            M.GpuMB += MB(GpuBytes(Texture));
+            M.LevelsMB += MB(Map->Bytes());
+            M.Widths.Add(FString::Printf(TEXT("%s %d"), *Body.Id.ToString(), Map->Width));
+            const FTextureResource* Resource = Texture->GetResource();
+            T.TestTrue(FString::Printf(TEXT("%s: the GPU holds every level at the map's width"), *Body.Id.ToString()),
+                Resource && Resource->TextureRHI && Resource->GetSizeX() == static_cast<uint32>(Map->Width)
+                && Resource->TextureRHI->GetNumMips() == static_cast<uint32>(Map->LevelCount()));
+        }
+        return M;
+    }
 }
 
 bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
 {
     using namespace SkyTestWorld;
     using namespace ShadowBakeCostLocal;
-    FScopedCVar Tasks(TEXT("ds.Terrain.BuildTasks"), 2.0f);
+    // The game's own ds.Terrain.BuildTasks (3, ruled), never pinned.
     FScopedCVar Uploads(TEXT("ds.Terrain.UploadsPerFrame"), 4.0f);
     const FPlatformMemoryStats Before = FPlatformMemory::GetStats();
     FSkyWorld Test(TEXT("ShadowBakeCostWorld"), 8, EShadows::On);
@@ -132,36 +185,21 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         AddInfo(Text);
     };
 
-    // -- The system: the sky's own bakes, and their memory as the engine counts it
+    // -- The system: the sky's own bakes, and their memory as the RHI counts it
     {
-        int32 Maps = 0;
-        double GpuMB = 0.0;
-        double CpuMB = 0.0;
-        double LevelsMB = 0.0;
-        for (const FSkyBody& Body : Here.Bodies)
-        {
-            UTexture2D* Texture = Test.Sky->GetShadowTexture(Body.Id);
-            const FSunShadowMap* Map = Test.Sky->GetShadowMapForTest(Body.Id);
-            if (!Texture || !Map)
-            {
-                continue;
-            }
-            ++Maps;
-            GpuMB += MB(Texture->CalcTextureMemorySizeEnum(TMC_ResidentMips));
-            CpuMB += MB(ShipSky::ShadowTextureCpuBytes(*Texture));
-            LevelsMB += MB(Map->Bytes());
-            TestTrue(FString::Printf(TEXT("%s: the GPU holds mip 0 at the map's width (no LOD bias)"), *Body.Id.ToString()),
-                Texture->GetResource() && Texture->GetResource()->GetSizeX() == static_cast<uint32>(Map->Width));
-        }
+        const FSystemMemory M = Measure(*this, *Test.Sky, Here);
+        const double CpuMB = MB(static_cast<double>(Test.Sky->GetShadowUploadCpuBytes()));
         IConsoleVariable* BakeTasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowBakeTasks"));
-        Line(FString::Printf(TEXT("system the sky's bakes: %d worlds on %d tasks, %.2f s from the load to the last texture; GPU %.2f MB resident (the levels are %.2f MB), CPU %.2f MB left; process physical %+.1f MB over the world's start"),
-            Maps, BakeTasks ? BakeTasks->GetInt() : 0, SkySeconds, GpuMB, LevelsMB, CpuMB,
-            MB(static_cast<double>(After.UsedPhysical) - static_cast<double>(Before.UsedPhysical))));
-        Line(FString::Printf(TEXT("system the corpus's worst, %d solid worlds, at this system's %.2f MB a world: %.1f MB on the GPU (reported, not held)"),
-            WorstSystemWorlds, GpuMB / FMath::Max(Maps, 1), WorstSystemWorlds * GpuMB / FMath::Max(Maps, 1)));
-        Line(Budget(TEXT("system_gpu_mb"), GpuMB, SystemGpuBudgetMB));
+        IConsoleVariable* UploadKB = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.ShadowUploadKB"));
+        Line(FString::Printf(TEXT("system the sky's bakes: %d worlds on %d tasks, %.2f s from the load to the last texture; GPU %.2f MB resident (the levels are %.2f MB), CPU %.2f MB left; process physical %+.1f MB over the world's start; widths %s"),
+            M.Maps, BakeTasks ? BakeTasks->GetInt() : 0, SkySeconds, M.GpuMB, M.LevelsMB, CpuMB,
+            MB(static_cast<double>(After.UsedPhysical) - static_cast<double>(Before.UsedPhysical)), *FString::Join(M.Widths, TEXT(", "))));
+        Line(FString::Printf(TEXT("upload in pieces of %d KB a frame: the slowest frame's landing %.3f ms on the game thread, %.3f ms on the render thread"),
+            UploadKB ? UploadKB->GetInt() : 0, 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds()));
+        Line(Budget(TEXT("system_gpu_mb"), M.GpuMB, SystemGpuBudgetMB));
         Line(Budget(TEXT("system_cpu_mb"), CpuMB, SystemCpuBudgetMB));
         Line(Budget(TEXT("map_land_ms"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
+        Line(Budget(TEXT("map_upload_rt_ms"), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
     }
 
     // -- A jump within the system: the serial moves, the sky rebuilds, nothing is baked
@@ -364,6 +402,46 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         }
         Line(FString::Printf(TEXT("coarse the ground drew the body %.2f s after arriving 49 km over fresh ground, shadow on (-1: not in 60 s)"), Waited));
         Line(Budget(TEXT("coarse_s"), Waited < 0.0 ? 60.0 : Waited, CoarseBudgetSeconds));
+    }
+
+    // -- The per-system cap: the corpus's worst system, baked by the sky -----
+    {
+        UUniverseSubsystem* Universe = Test.World->GetSubsystem<UUniverseSubsystem>();
+        const TOptional<FStarSystem> Worst = Universe ? Universe->GetSystem(WorstSystem) : TOptional<FStarSystem>();
+        FSkySystem Twelve = LocalSystem::Here(Worst);
+        int32 Solid = 0;
+        for (const FSkyBody& Body : Twelve.Bodies)
+        {
+            Solid += Body.Ground == EGround::Solid && Body.Kind != ESkyBodyKind::Star ? 1 : 0;
+        }
+        TestTrue(FString::Printf(TEXT("the corpus's worst system is generated (%s, %d solid worlds)"), *Twelve.SystemId.ToString(), Solid), Worst.IsSet() && Solid >= 10);
+        FSkySystem Sixteen = Twelve;
+        for (const FSkyBody& Body : Twelve.Bodies)
+        {
+            if (Sixteen.Bodies.Num() >= Twelve.Bodies.Num() + (WorstSystemWorlds - Solid) || Body.Ground != EGround::Solid || Body.Kind == ESkyBodyKind::Star)
+            {
+                continue;
+            }
+            FSkyBody Again = Body;
+            Again.Id = FName(*(Body.Id.ToString() + TEXT(" again")));
+            Sixteen.Bodies.Add(Again);
+        }
+        int32 Serial = LocalSystem::Serial(Test.World) + 100;
+        for (const FSkySystem* System : { &Twelve, &Sixteen })
+        {
+            const double Start = FPlatformTime::Seconds();
+            Test.Sky->SyncTo(*System, ++Serial, false);
+            Test.Sky->FlushShadowBakesForTest();
+            FlushRenderingCommands();
+            const double Seconds = FPlatformTime::Seconds() - Start;
+            const FSystemMemory M = Measure(*this, *Test.Sky, *System);
+            const TCHAR* Name = System == &Twelve ? TEXT("worst") : TEXT("worst16");
+            Line(FString::Printf(TEXT("system %s (%s): %d solid worlds baked in %.2f s, GPU %.2f MB resident (the levels are %.2f MB) under the %.0f MB cap; widths %s"),
+                Name, *System->SystemId.ToString(), M.Maps, Seconds, M.GpuMB, M.LevelsMB, MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)), *FString::Join(M.Widths, TEXT(", "))));
+            Line(Budget(System == &Twelve ? TEXT("system_gpu_mb_worst") : TEXT("system_gpu_mb_worst16"), M.GpuMB, SystemGpuBudgetMB));
+        }
+        Line(Budget(TEXT("map_land_ms_all"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
+        Line(Budget(TEXT("map_upload_rt_ms_all"), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
     }
 
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes/ShadowBakeCost");

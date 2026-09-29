@@ -28,8 +28,13 @@ FSunShadowMap SunShadowMap::Shape(const IGroundField& Ground, const SunShadow::F
     Map.FrameY = FVector3d::CrossProduct(Map.FrameZ, Map.FrameX);
     const double Radius = FMath::Clamp(Sun.AngularRadius, 1.0e-6, SunShadow::SunRadiusMax);
     Map.PsiLo = -(SunShadow::NightDip(Ground.RadiusCm(), Ground.MaxHeightCm(), Ground.MinHeightCm()) + Radius);
-    Map.Rows = FMath::CeilToInt32((0.5 * UE_DOUBLE_PI - Map.PsiLo) / Map.Step);
+    Map.Rows = RowsFor(Width, Map.PsiLo);
     return Map;
+}
+
+int32 SunShadowMap::RowsFor(int32 Width, double PsiLo)
+{
+    return Width > 0 ? FMath::CeilToInt32((0.5 * UE_DOUBLE_PI - PsiLo) / (2.0 * UE_DOUBLE_PI / Width)) : 0;
 }
 
 FVector3d SunShadowMap::TexelDirection(const FSunShadowMap& Map, int32 Column, int32 Row)

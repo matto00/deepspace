@@ -7,7 +7,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "Engine/Texture2D.h"
+#include "Engine/Texture2DDynamic.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
@@ -56,7 +56,12 @@ namespace
 
     TAutoConsoleVariable<int32> CVarShadowBakeTasks(
         TEXT("ds.Sky.ShadowBakeTasks"), 2,
-        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads at low priority: with the terrain's 2, the machine's cap of 4, never the core count."),
+        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads at low priority: beside the terrain's 3 tile builds, and only while a system's maps bake; never the core count."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowUploadKB(
+        TEXT("ds.Sky.ShadowUploadKB"), 1024,
+        TEXT("KB of landed cast-shadow maps handed to the render thread a frame, all maps together, in pieces of whole rows: a 4096-column map goes up over about a dozen frames, so no frame hitches (ruled 2026-09-28). A world reads its map once the last piece has gone."),
         ECVF_Default);
 
     /**
@@ -525,7 +530,7 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             // own shadow, which draws whether or not a map has landed.
             const FName Id = System.Bodies[Index].Id;
             const FShadowEntry* Shadow = ShadowEntries.Find(Id);
-            const TObjectPtr<UTexture2D>* Map = ShadowTextures.Find(Id);
+            const TObjectPtr<UTexture2DDynamic>* Map = ShadowTextures.Find(Id);
             const float Fade = Shadow && Map ? ShipSky::ShadowFade(GetWorld()->GetTimeSeconds() - Shadow->LandedAt) : 0.0f;
             Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
             Instance->SetScalarParameterValue(SkyMaterial::ShadowMapFade, Fade);
@@ -1034,8 +1039,20 @@ void AShipSky::SyncShadowMaps(const FSkySystem& System)
     {
         const UShipSubsystem* Ship = UShipSubsystem::Get(this);
         const FUniversePosition From = Ship ? Ship->GetFlightState().GetUniversePosition() : FUniversePosition();
-        const int32 Width = ShipSky::ShadowMapWidth();
-        for (const int32 Index : ShipSky::ShadowBakeOrder(System, From))
+        const TArray<int32> Order = ShipSky::ShadowBakeOrder(System, From);
+        // The per-system cap: each world's width from what its key is made
+        // of, in the system's own order, never the ship's.
+        TArray<int32> BySystem = Order;
+        BySystem.Sort();
+        TArray<ShipSky::FShadowWorld> Worlds;
+        for (const int32 Index : BySystem)
+        {
+            const FSkyBody& Body = System.Bodies[Index];
+            const FSunShadowMap Shape = SunShadowMap::Shape(FReliefGround(Body.Relief), SkyProjection::SunLightOf(System, Index), 2);
+            Worlds.Add({ Body.Relief.RadiusCm, Shape.Width > 0 ? Shape.PsiLo : 0.5 * UE_DOUBLE_PI });
+        }
+        const TArray<int32> Widths = ShipSky::CappedShadowWidths(Worlds, ShipSky::ShadowMapWidth());
+        for (const int32 Index : Order)
         {
             const FSkyBody& Body = System.Bodies[Index];
             Wanted.Add(Body.Id);
@@ -1043,7 +1060,7 @@ void AShipSky::SyncShadowMaps(const FSkySystem& System)
             Key.Relief = Body.Relief;
             Key.Sun = SkyProjection::SunLightOf(System, Index);
             Key.SteepestSlope = SunShadow::SteepestSlope(Body.Relief);
-            Key.Width = Width;
+            Key.Width = Widths[BySystem.IndexOfByKey(Index)];
             const FShadowEntry* Held = ShadowEntries.Find(Body.Id);
             if (Held && ShipSky::SameShadowKey(Held->Key, Key))
             {
@@ -1084,8 +1101,11 @@ void AShipSky::DropShadowMap(FName Body)
     }
     ShadowQueue.Remove(Body);
     ShadowTextures.Remove(Body);
+    ShadowTexturesMade.Remove(Body);
     KeptShadowMaps.Remove(Body);
-    ShadowUploads.RemoveAll([Body](const TPair<FName, TUniquePtr<FRenderCommandFence>>& Upload) { return Upload.Key == Body; });
+    // Pieces already handed over hold the map themselves, and run before
+    // the texture's release, which the collector queues behind them.
+    ShadowUploads.RemoveAll([Body](const FShadowUpload& Upload) { return Upload.Body == Body; });
 }
 
 int32 AShipSky::GetShadowBakesPending() const
@@ -1095,7 +1115,38 @@ int32 AShipSky::GetShadowBakesPending() const
     {
         Pending += Pair.Value.Task.IsValid() ? 1 : 0;
     }
+    for (const FShadowUpload& Upload : ShadowUploads)
+    {
+        Pending += Upload.Next < Upload.Pieces.Num() ? 1 : 0;
+    }
     return Pending;
+}
+
+int64 AShipSky::GetShadowUploadCpuBytes() const
+{
+    int64 Bytes = 0;
+    for (const FShadowUpload& Upload : ShadowUploads)
+    {
+        Bytes += Upload.Map.IsValid() ? Upload.Map->Bytes() : 0;
+    }
+    return Bytes;
+}
+
+double AShipSky::GetSlowestShadowUploadRenderSeconds() const
+{
+    return 1.0e-9 * static_cast<double>(SlowestShadowUploadNs->load(std::memory_order_relaxed));
+}
+
+int32 AShipSky::GetShadowPiecesLeft(FName Body) const
+{
+    const FShadowUpload* Upload = ShadowUploads.FindByPredicate([Body](const FShadowUpload& Candidate) { return Candidate.Body == Body; });
+    return Upload ? Upload->Pieces.Num() - Upload->Next : 0;
+}
+
+int32 AShipSky::GetShadowWidth(FName Body) const
+{
+    const FShadowEntry* Entry = ShadowEntries.Find(Body);
+    return Entry ? Entry->Key.Width : 0;
 }
 
 void AShipSky::PumpShadowBakes(bool bWait)
@@ -1131,8 +1182,10 @@ void AShipSky::PumpShadowBakes(bool bWait)
         ++ShadowBakesStarted;
     }
 
-    // Land.
+    // Land: an empty texture for each map that finished, and its pieces
+    // queued. Nothing reads it yet.
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    const double Began = FPlatformTime::Seconds();
     for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
     {
         FShadowEntry& Entry = Pair.Value;
@@ -1154,42 +1207,80 @@ void AShipSky::PumpShadowBakes(bool bWait)
         {
             continue;
         }
-        const double Began = FPlatformTime::Seconds();
-        UTexture2D* Texture = ShipSky::MakeShadowTexture(*Map, Pair.Key);
-        SlowestShadowLandSeconds = FMath::Max(SlowestShadowLandSeconds, FPlatformTime::Seconds() - Began);
+        UTexture2DDynamic* Texture = ShipSky::MakeShadowTexture(*Map, Pair.Key);
         if (!Texture)
         {
             continue;
         }
-        ShadowTextures.Add(Pair.Key, Texture);
+        ShadowTexturesMade.Add(Pair.Key, Texture);
         Entry.Frame = { ShipSky::ShadowFrameX(*Map), ShipSky::ShadowFrameZ(*Map) };
-        // In play the fade starts now; a test's flush lands it whole.
-        Entry.LandedAt = bWait ? Now - ShipSky::ShadowFadeSeconds : Now;
-        TUniquePtr<FRenderCommandFence> Fence = MakeUnique<FRenderCommandFence>();
-        Fence->BeginFence();
-        ShadowUploads.Emplace(Pair.Key, MoveTemp(Fence));
+        FShadowUpload& Upload = ShadowUploads.AddDefaulted_GetRef();
+        Upload.Body = Pair.Key;
+        Upload.Map = Map;
+        Upload.Pieces = ShipSky::ShadowUploadPieces(*Map, ShipSky::ShadowUploadBytesPerFrame());
         if (bKeepShadowMapsForTest)
         {
             KeptShadowMaps.Add(Pair.Key, Map);
         }
     }
 
-    // Once the render thread has a texture, its CPU copy is dead weight.
-    for (int32 Index = ShadowUploads.Num() - 1; Index >= 0; --Index)
+    // This frame's pieces, oldest map first: at most the frame's bytes, and
+    // at least one piece, so every map goes up. A map whose last piece has
+    // gone is the world's to read from now, and fades in from now.
+    int64 Left = ShipSky::ShadowUploadBytesPerFrame();
+    bool bHanded = false;
+    for (FShadowUpload& Upload : ShadowUploads)
     {
-        if (bWait)
-        {
-            ShadowUploads[Index].Value->Wait();
-        }
-        if (!ShadowUploads[Index].Value->IsFenceComplete())
+        if (Upload.Next >= Upload.Pieces.Num())
         {
             continue;
         }
-        if (const TObjectPtr<UTexture2D>* Texture = ShadowTextures.Find(ShadowUploads[Index].Key))
+        const TObjectPtr<UTexture2DDynamic>* Texture = ShadowTexturesMade.Find(Upload.Body);
+        TArray<ShipSky::FShadowPiece> Handed;
+        while (Upload.Next < Upload.Pieces.Num() && (!bHanded || Upload.Pieces[Upload.Next].Bytes <= Left))
         {
-            ShipSky::DiscardShadowTextureCpu(*Texture->Get());
+            Left -= Upload.Pieces[Upload.Next].Bytes;
+            Handed.Add(Upload.Pieces[Upload.Next++]);
+            bHanded = true;
         }
-        ShadowUploads.RemoveAt(Index);
+        if (Texture && Handed.Num() > 0)
+        {
+            ShipSky::UploadShadowPieces(*Texture->Get(), Upload.Map, MoveTemp(Handed), SlowestShadowUploadNs);
+        }
+        if (Upload.Next >= Upload.Pieces.Num() && Texture)
+        {
+            ShadowTextures.Add(Upload.Body, *Texture);
+            if (FShadowEntry* Entry = ShadowEntries.Find(Upload.Body))
+            {
+                // In play the fade starts now; a test's flush lands it whole.
+                Entry->LandedAt = bWait ? Now - ShipSky::ShadowFadeSeconds : Now;
+            }
+            Upload.Fence = MakeUnique<FRenderCommandFence>();
+            Upload.Fence->BeginFence();
+        }
+        if (Left <= 0)
+        {
+            break;
+        }
+    }
+    SlowestShadowLandSeconds = FMath::Max(SlowestShadowLandSeconds, FPlatformTime::Seconds() - Began);
+
+    // Once the render thread has run every piece, the CPU copy is dead weight.
+    for (int32 Index = ShadowUploads.Num() - 1; Index >= 0; --Index)
+    {
+        FShadowUpload& Upload = ShadowUploads[Index];
+        if (!Upload.Fence.IsValid())
+        {
+            continue;
+        }
+        if (bWait)
+        {
+            Upload.Fence->Wait();
+        }
+        if (Upload.Fence->IsFenceComplete())
+        {
+            ShadowUploads.RemoveAt(Index);
+        }
     }
 }
 
@@ -1202,9 +1293,9 @@ void AShipSky::FlushShadowBakesForTest()
     while (GetShadowBakesPending() > 0 || ShadowUploads.Num() > 0);
 }
 
-UTexture2D* AShipSky::GetShadowTexture(FName Body) const
+UTexture2DDynamic* AShipSky::GetShadowTexture(FName Body) const
 {
-    const TObjectPtr<UTexture2D>* Found = ShadowTextures.Find(Body);
+    const TObjectPtr<UTexture2DDynamic>* Found = ShadowTextures.Find(Body);
     return Found ? Found->Get() : nullptr;
 }
 
@@ -1262,62 +1353,163 @@ FLinearColor ShipSky::ShadowFrameZ(const FSunShadowMap& Map)
     return FLinearColor(static_cast<float>(Map.FrameZ.X), static_cast<float>(Map.FrameZ.Y), static_cast<float>(Map.FrameZ.Z), static_cast<float>(Map.Step));
 }
 
-UTexture2D* ShipSky::MakeShadowTexture(const FSunShadowMap& Map, FName Name)
+int64 ShipSky::ShadowLevelsBytes(int32 Width, int32 Rows)
+{
+    if (Width <= 0 || Rows <= 0)
+    {
+        return 0;
+    }
+    FSunShadowMap Shape;
+    Shape.Width = Width;
+    Shape.Rows = Rows;
+    int64 Bytes = 0;
+    for (int32 Level = 0;; ++Level)
+    {
+        Bytes += static_cast<int64>(Shape.WidthAt(Level)) * Shape.RowsAt(Level) * static_cast<int64>(sizeof(uint16));
+        if (Shape.WidthAt(Level) <= 1 && Shape.RowsAt(Level) <= 1)
+        {
+            return Bytes;
+        }
+    }
+}
+
+TArray<int32> ShipSky::CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes)
+{
+    TArray<int32> Widths;
+    Widths.Init(Width, Worlds.Num());
+    const auto Bytes = [&](int32 Index)
+    {
+        return ShadowLevelsBytes(Widths[Index], SunShadowMap::RowsFor(Widths[Index], Worlds[Index].PsiLo));
+    };
+    int64 Total = 0;
+    for (int32 Index = 0; Index < Worlds.Num(); ++Index)
+    {
+        Total += Bytes(Index);
+    }
+    while (Total > CapBytes)
+    {
+        int32 Finest = INDEX_NONE;
+        double FinestTexel = TNumericLimits<double>::Max();
+        for (int32 Index = 0; Index < Worlds.Num(); ++Index)
+        {
+            const double Texel = 2.0 * UE_DOUBLE_PI * Worlds[Index].RadiusCm / Widths[Index];
+            if (Widths[Index] / 2 >= ShadowMinWidth && Texel < FinestTexel)
+            {
+                FinestTexel = Texel;
+                Finest = Index;
+            }
+        }
+        if (Finest == INDEX_NONE)
+        {
+            break;   // every map at the floor: the cap cannot be met
+        }
+        Total -= Bytes(Finest);
+        Widths[Finest] /= 2;
+        Total += Bytes(Finest);
+    }
+    return Widths;
+}
+
+UTexture2DDynamic* ShipSky::MakeShadowTexture(const FSunShadowMap& Map, FName Name)
 {
     if (Map.LevelCount() == 0)
     {
         return nullptr;
     }
-    const TArray<uint16>& Finest = Map.Levels[0];
-    const FName Unique = MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(),
+    const FName Unique = MakeUniqueObjectName(GetTransientPackage(), UTexture2DDynamic::StaticClass(),
         FName(*(TEXT("ShadowMap_") + Name.ToString().Replace(TEXT(" "), TEXT("_")))));
-    UTexture2D* Texture = UTexture2D::CreateTransient(Map.Width, Map.Rows, PF_G16, Unique,
-        TConstArrayView64<uint8>(reinterpret_cast<const uint8*>(Finest.GetData()), static_cast<int64>(Finest.Num()) * sizeof(uint16)));
-    if (!Texture)
-    {
-        return nullptr;
-    }
-    FTexturePlatformData* Data = Texture->GetPlatformData();
-    for (int32 Level = 1; Level < Map.LevelCount(); ++Level)
-    {
-        const TArray<uint16>& Texels = Map.Levels[Level];
-        FTexture2DMipMap* Mip = new FTexture2DMipMap(Map.WidthAt(Level), Map.RowsAt(Level), 1);
-        Data->Mips.Add(Mip);
-        Mip->BulkData.Lock(LOCK_READ_WRITE);
-        FMemory::Memcpy(Mip->BulkData.Realloc(static_cast<int64>(Texels.Num()) * sizeof(uint16)), Texels.GetData(), Texels.Num() * sizeof(uint16));
-        Mip->BulkData.Unlock();
-    }
-    // Grayscale and linear, as the parameters' default is (SAMPLERTYPE_GRAYSCALE);
-    // in a group no device profile biases, so mip 0 is always resident.
-    Texture->CompressionSettings = TC_Grayscale;
+    UTexture2DDynamic* Texture = NewObject<UTexture2DDynamic>(GetTransientPackage(), Unique, RF_Transient);
+    Texture->SizeX = Map.Width;
+    Texture->SizeY = Map.Rows;
+    Texture->Format = PF_G16;
+    Texture->NumMips = Map.LevelCount();
+    Texture->bIsResolveTarget = false;
     Texture->SRGB = false;
+    Texture->bNoTiling = false;
     Texture->Filter = TF_Nearest;
+    Texture->SamplerAddressMode = AM_Clamp;
+    // Grayscale and linear, as the parameters' default is; in a group no
+    // device profile biases, and a dynamic texture is never streamed: every
+    // mip is on the GPU from its creation.
+    Texture->CompressionSettings = TC_Grayscale;
     Texture->LODGroup = TEXTUREGROUP_Pixels2D;
     Texture->NeverStream = true;
     Texture->UpdateResource();
     return Texture;
 }
 
-int64 ShipSky::ShadowTextureCpuBytes(const UTexture2D& Texture)
+TArray<ShipSky::FShadowPiece> ShipSky::ShadowUploadPieces(const FSunShadowMap& Map, int64 PieceBytes)
 {
-    int64 Bytes = 0;
-    if (const FTexturePlatformData* Data = Texture.GetPlatformData())
+    TArray<FShadowPiece> Pieces;
+    for (int32 Level = 0; Level < Map.LevelCount(); ++Level)
     {
-        for (const FTexture2DMipMap& Mip : Data->Mips)
+        const int64 RowBytes = static_cast<int64>(Map.WidthAt(Level)) * static_cast<int64>(sizeof(uint16));
+        const int32 Rows = Map.RowsAt(Level);
+        const int32 Each = static_cast<int32>(FMath::Clamp<int64>(PieceBytes / RowBytes, 1, Rows));
+        for (int32 First = 0; First < Rows; First += Each)
         {
-            Bytes += Mip.BulkData.GetBulkDataSize();
+            FShadowPiece& Piece = Pieces.AddDefaulted_GetRef();
+            Piece.Level = Level;
+            Piece.FirstRow = First;
+            Piece.Rows = FMath::Min(Each, Rows - First);
+            Piece.Bytes = Piece.Rows * RowBytes;
         }
     }
-    return Bytes;
+    return Pieces;
 }
 
-void ShipSky::DiscardShadowTextureCpu(UTexture2D& Texture)
+void ShipSky::UploadShadowPieces(UTexture2DDynamic& Texture, const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map,
+                                 TArray<FShadowPiece> Pieces, TSharedPtr<std::atomic<int64>, ESPMode::ThreadSafe> SlowestNs)
 {
-    if (FTexturePlatformData* Data = Texture.GetPlatformData())
+    FTextureResource* Resource = Texture.GetResource();
+    if (!Resource || !Map.IsValid() || Pieces.Num() == 0)
     {
-        for (FTexture2DMipMap& Mip : Data->Mips)
-        {
-            Mip.BulkData.RemoveBulkData();
-        }
+        return;
     }
+    // The resource outlives this command: a texture's release is queued
+    // behind it, since the collector's BeginDestroy enqueues later.
+    ENQUEUE_RENDER_COMMAND(ShadowMapPieces)(
+        [Resource, Map, Pieces = MoveTemp(Pieces), SlowestNs](FRHICommandListImmediate& RHICmdList)
+        {
+            const double Start = FPlatformTime::Seconds();
+            FRHITexture* Target = Resource->TextureRHI;
+            if (!Target)
+            {
+                return;
+            }
+            for (const FShadowPiece& Piece : Pieces)
+            {
+                const int32 Width = Map->WidthAt(Piece.Level);
+                const FUpdateTextureRegion2D Region(0, Piece.FirstRow, 0, 0, Width, Piece.Rows);
+                const uint16* Rows = Map->Levels[Piece.Level].GetData() + static_cast<int64>(Piece.FirstRow) * Width;
+                RHICmdList.UpdateTexture2D(Target, Piece.Level, Region, Width * sizeof(uint16), reinterpret_cast<const uint8*>(Rows));
+            }
+            if (SlowestNs.IsValid())
+            {
+                const int64 Took = static_cast<int64>(1.0e9 * (FPlatformTime::Seconds() - Start));
+                int64 Was = SlowestNs->load(std::memory_order_relaxed);
+                while (Took > Was && !SlowestNs->compare_exchange_weak(Was, Took, std::memory_order_relaxed))
+                {
+                }
+            }
+        });
+}
+
+UTexture2DDynamic* ShipSky::MakeShadowTextureNow(const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map, FName Name)
+{
+    if (!Map.IsValid())
+    {
+        return nullptr;
+    }
+    UTexture2DDynamic* Texture = MakeShadowTexture(*Map, Name);
+    if (Texture)
+    {
+        UploadShadowPieces(*Texture, Map, ShadowUploadPieces(*Map, TNumericLimits<int64>::Max()));
+    }
+    return Texture;
+}
+
+int64 ShipSky::ShadowUploadBytesPerFrame()
+{
+    return static_cast<int64>(FMath::Max(1, CVarShadowUploadKB.GetValueOnGameThread())) * 1024;
 }
