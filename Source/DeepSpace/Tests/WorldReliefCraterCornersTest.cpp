@@ -8,6 +8,13 @@
 // The shared file once more, in this test's own namespaces, so the kernel it
 // ships can be held to the one it replaced, written below from the file's own
 // parts.
+// The kernel's cost is held by counting the corners it visits: the file calls
+// WR_CRATER_CORNER_VISITED() at each, and here that counts them.
+namespace CraterCornersCount
+{
+    int64 Visited = 0;
+}
+#define WR_CRATER_CORNER_VISITED() (++::CraterCornersCount::Visited)
 #define WR_CPP 1
 namespace CraterCornersF64
 {
@@ -121,6 +128,7 @@ namespace CraterCornersF32
 #undef WR_REAL
 }
 #undef WR_CPP
+#undef WR_CRATER_CORNER_VISITED
 
 /*
  * The frame ruling's profile found the ground's pixel shader the frame's
@@ -156,6 +164,8 @@ bool FCraterKernelCornersTest::RunTest(const FString& Parameters)
     int32 Differ32 = 0;
     int32 Hit = 0;
     int32 Overlap = 0;
+    int32 Busy64 = 0;
+    int32 Busy32 = 0;
     constexpr int32 Samples = 1000000;
     for (int32 Sample = 0; Sample < Samples; ++Sample)
     {
@@ -175,11 +185,15 @@ bool FCraterKernelCornersTest::RunTest(const FString& Parameters)
         }
         const int32 K[3] = { Random.RandRange(-9000, 9000), Random.RandRange(-9000, 9000), Random.RandRange(-9000, 9000) };
 
+        CraterCornersCount::Visited = 0;
         const CraterCornersF64::WR_CraterTerm New64 = CraterCornersF64::WR_CraterKernelBand(P[0], P[1], P[2], K[0], K[1], K[2]);
+        Busy64 += CraterCornersCount::Visited == 8 ? 0 : 1;
         const CraterCornersF64::WR_CraterTerm Old64 = CraterCornersF64::WR_CraterKernelBand27(P[0], P[1], P[2], K[0], K[1], K[2]);
         Differ64 += Same(New64, Old64) ? 0 : 1;
         const float F[3] = { static_cast<float>(P[0]), static_cast<float>(P[1]), static_cast<float>(P[2]) };
+        CraterCornersCount::Visited = 0;
         const CraterCornersF32::WR_CraterTerm New32 = CraterCornersF32::WR_CraterKernelBand(F[0], F[1], F[2], K[0], K[1], K[2]);
+        Busy32 += CraterCornersCount::Visited == 8 ? 0 : 1;
         const CraterCornersF32::WR_CraterTerm Old32 = CraterCornersF32::WR_CraterKernelBand27(F[0], F[1], F[2], K[0], K[1], K[2]);
         Differ32 += Same(New32, Old32) ? 0 : 1;
 
@@ -210,11 +224,17 @@ bool FCraterKernelCornersTest::RunTest(const FString& Parameters)
         Hit += Reaching > 0 ? 1 : 0;
         Overlap += Reaching > 1 ? 1 : 0;
     }
-    AddInfo(FString::Printf(TEXT("%d points: %d under a crater, %d under two or more; %d differ in double, %d in float"),
-        Samples, Hit, Overlap, Differ64, Differ32));
+    AddInfo(FString::Printf(TEXT("%d points: %d under a crater, %d under two or more; %d differ in double, %d in float; %d visit other than 8 corners in double, %d in float"),
+        Samples, Hit, Overlap, Differ64, Differ32, Busy64, Busy32));
     TestTrue(FString::Printf(TEXT("the sample meets overlapping craters (%d of %d points)"), Overlap, Samples), Overlap > Samples / 100);
     TestEqual(TEXT("the 2 x 2 x 2 kernel is the 27-corner one to the last bit, in double"), Differ64, 0);
     TestEqual(TEXT("the 2 x 2 x 2 kernel is the 27-corner one to the last bit, in float"), Differ32, 0);
+    // The speed-up itself: the sums above cannot see a corner visited in
+    // vain, so a restored 3 x 3 x 3 would pass them. The frame it cost (the
+    // landing plan's Task 39: 18.09 -> 13.85 ms at 1.5 m) is not asserted
+    // anywhere; this holds what bought it.
+    TestEqual(TEXT("and it visits 8 corners a band, never 27, in double"), Busy64, 0);
+    TestEqual(TEXT("and it visits 8 corners a band, never 27, in float"), Busy32, 0);
     return true;
 }
 

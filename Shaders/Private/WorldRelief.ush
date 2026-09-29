@@ -553,6 +553,15 @@ WR_REAL WR_VertexCarries(WR_REAL VertexBandLimit, WR_REAL Frequency)
     return WR_saturate(WR_REAL(1.0) - VertexBandLimit * Frequency);
 }
 
+// A test's hook, and nothing anywhere else: called once for every lattice
+// corner a crater band visits, so DeepSpace.Surface.CraterKernelCorners can
+// hold the kernel at 8 corners a band. The sums alone cannot: a corner too far
+// to reach adds nothing, so a kernel that visited 27 again would match the 8
+// to the last bit and cost the frame 4 ms.
+#ifndef WR_CRATER_CORNER_VISITED
+#define WR_CRATER_CORNER_VISITED()
+#endif
+
 // One band at P + K, in cells: P = D x frequency + the offset's fraction, K
 // its integer part, a lattice shift (WR_Offset).
 WR_CraterTerm WR_CraterKernelBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, int KX, int KY, int KZ)
@@ -580,6 +589,7 @@ WR_CraterTerm WR_CraterKernelBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, int KX, in
                 const int X = CX + I;
                 const int Y = CY + J;
                 const int Z = CZ + K;
+                WR_CRATER_CORNER_VISITED();
                 const WR_REAL Keep = WR_REAL(WR_Rand3DPCG16(X + KX, Y + KY, Z + KZ).X) / WR_REAL(65535.0);
                 if (Keep > WR_CRATER_KEEP)
                 {
