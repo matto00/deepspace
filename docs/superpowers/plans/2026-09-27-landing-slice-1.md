@@ -17259,6 +17259,24 @@ shadows in; the split factor last).** `feat/landing-b-t`, RTX 4070 Ti Super, 4K 
   AA and upscaler (Step 3, item 5): the capture has no TSR and no view state, and play overlaps
   the game step with the GPU. That stays the developer's reading.
 
+**Close-out run (2026-09-29, `feat/landing-b-t` at 6002655, `feat/landing-b` and `main` merged in,
+nothing to merge).** `./rebuild.sh` OK. `./test.sh`: 244 passed, one red --
+`DeepSpace.Surface.GroundKeepsUpAtDusk`, 15.03 cm against 15.00, the step the cast-shadow plan's
+Task 7b carries to the developer; so `feat/landing-b-t` is **not** merged into `feat/landing-b`.
+`Eyes.LandingFrame` (`EYES_TAG=z-close`), `on_ms`: 50km 8.32, 1.5m 13.79 (732 tiles drawn, 951
+resident), 50km_dusk10 7.52, 1.5m_dusk3 11.13, 200km_dusk10 8.34, 1.5m_dusk10 10.96 -- every case
+under 16.6; against `frame-craters` every case within 0.07 ms (`landing_frame_gate.py`: too close
+to call). `Eyes.WorldReliefParity` green (SUMMARY 6.10e-03, float 5.95e-03, at most 2.142% left
+out). `Eyes.HandoverParity` green (relative gap 3.07e-04, p99 4.31e-02). `Eyes.ReliefLook` ran
+(frames, not a guard) -- but its world is still `EShadows::Off`, so its `shadows1` frames carry no
+baked shadow (the cast-shadow plan's Task 10 Step 3 is not done; Tasks 8-10 wait on 7b).
+**`Eyes.TerrainBudget` is flaky at its 6 ms line**: five runs, the 2,200-tile draw over the empty
+capture +6.35, +6.79 (FAIL), +5.13, +4.95, +5.12 (pass); it draws the engine's default material,
+so no shader change here moves it, and it is not latent (the RHI deletion queue this task found in
+`Eyes.LandingFrame` is the first suspect). `validate_hauler.py` PASS, `check_blueprints.py` PASS (5,
+exit 0), `verify_level.py` PASS (within 1.0 cm). `CraterKernelCorners`' mutant (I from -1) KILLED
+again on the merged tree, library rebuilt after.
+
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping
 every task's paragraph).
