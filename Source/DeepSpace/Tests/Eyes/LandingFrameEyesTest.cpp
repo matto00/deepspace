@@ -51,6 +51,15 @@
  * spread and the raw times. Tools/landing_frame_gate.py reads two runs'
  * reports against the medians' own error.
  *
+ * The cast shadow is BAKED (the developer's ruling on slice (b)'s build,
+ * 2026-09-28): the tiles' vertices carry it, each world's map is baked when
+ * the system loads, and the ruling is that it costs nothing per frame. So
+ * the gate is that the frame does not rise: each of the six cases with
+ * ds.Sky.Shadows 1, against the same case in the run with EYES_TAG=baseline,
+ * taken before any shadow existed, read by Tools/landing_frame_gate.py
+ * --not-rise against the medians' own error. On minus off is reported
+ * beside it, and is about 0 by construction: the lookup runs either way.
+ *
  * EVERY ROUND IS ITS OWN ENGINE FRAMES. The test is latent: one step (a
  * case's placement, one timed round, the proof, one profile variant) per
  * engine frame, four frames apart. Inside one RunTest no engine frame ends,
@@ -82,6 +91,11 @@
  *
  *   EYES_TAG=<tag> Tools/eyes.sh Eyes.LandingFrame
  *   python3 Tools/landing_frame_gate.py Saved/Eyes/LandingFrame/<before> Saved/Eyes/LandingFrame/<after> [budget]
+ *   EYES_TAG=baseline      Tools/eyes.sh Eyes.LandingFrame      (before any shadow: Task 1's)
+ *   EYES_TAG=shadows-baked Tools/eyes.sh Eyes.LandingFrame
+ *   python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
+ *
+ * Cast shadow, baked (2026-09-29): GO -- not rising; cost over the before-baseline, ms: 50km -3.09, 1.5m -5.83, 50km_dusk10 -1.52, 1.5m_dusk10 -3.85, 1.5m_dusk3 -3.25, 200km_dusk10 -5.43, each within its band (1.05, 0.37, 0.20, 0.26, 0.20, 0.36); whole frames 8.05..13.21 ms (not gated: the spec's profiling); the switch at 1.5m_dusk3 took 98.6% of the lit and held pixels. The baseline predates this test's per-frame harness (19342c9) and the crater kernel's 8 corners (fc829a7), both of which cut the frame, so GO here cannot price the shadow alone; on minus off in the same run is -0.09..+0.08 ms. Against the last run before the ground's ancestors were built (z-close, the same harness, shadows in), the dusk ground cases rose +0.53 (50km_dusk10), +1.43 (1.5m_dusk3), +1.46 ms (1.5m_dusk10), with the drawn tiles 174 -> 347, 694 -> 1116, 685 -> 1091: the cut is now drawn as selected, where before it fell back to coarse ancestors that were never built.
  */
 namespace
 {

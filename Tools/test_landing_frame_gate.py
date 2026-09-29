@@ -86,5 +86,40 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.verdict(on=16.0, switch="absent"), 1)
 
 
+class NotRiseTest(unittest.TestCase):
+    """--not-rise: the baked shadow must cost the frame nothing measurable.
+    GO only if no case's cost is over its band -- the medians' error, floored
+    at RUN_TO_RUN_MS -- and a case faster than its baseline is GO too."""
+
+    def verdict(self, **after):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0)
+            run(os.path.join(root, "after"), **after)
+            return gate.main(os.path.join(root, "base"), os.path.join(root, "after"), 0.0, not_rise=True)
+
+    def test_a_free_bake_is_go(self):
+        self.assertEqual(self.verdict(on=10.0), 0)
+
+    def test_a_cost_inside_the_band_is_go(self):
+        # The measured spread's band is about 0.6 ms: 0.3 ms cannot be told from nothing.
+        self.assertEqual(self.verdict(on=10.3), 0)
+
+    def test_faster_is_go(self):
+        self.assertEqual(self.verdict(on=9.0), 0)
+
+    def test_a_rise_over_the_band_is_no_go(self):
+        self.assertEqual(self.verdict(on=11.0), 1)
+
+    def test_a_missing_case_is_undecided(self):
+        self.assertEqual(self.verdict(on=10.0, skip=("1.5m_dusk3",)), 2)
+
+    def test_the_command_line_takes_the_flag(self):
+        with tempfile.TemporaryDirectory() as root:
+            run(os.path.join(root, "base"), 10.0)
+            run(os.path.join(root, "after"), 11.0)
+            self.assertEqual(gate.cli(["--not-rise", os.path.join(root, "base"), os.path.join(root, "after")]), 1)
+            # Without it the budget is 1 ms, and a cost of 1 ms is too close to call.
+            self.assertEqual(gate.cli([os.path.join(root, "base"), os.path.join(root, "after")]), 2)
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,12 @@ printed, and read only for a report without raw times. The review found the
 first rule, 2 x the IQR, wider than the budget: a free term came back
 UNDECIDED however often it was repeated.
 
+With --not-rise (the baked cast shadow, whose ruling is that it costs nothing
+per frame) there is no budget: GO only if no case's cost is over its band, a
+case faster than its baseline included; NO-GO if one is.
+
+    python3 Tools/landing_frame_gate.py --not-rise Saved/Eyes/LandingFrame/baseline Saved/Eyes/LandingFrame/shadows-baked
+
 Every case in CASES must be in both runs: a report with none of them (a
 misspelt EYES_CASES, a changed line) is UNDECIDED, never GO. A run reporting
 `switch absent` found no ds.Sky.Shadows: its times still price whatever the
@@ -64,7 +70,7 @@ def median_error(case):
     return 1.2533 * sigma / math.sqrt(len(times))
 
 
-def main(baseline_dir, after_dir, budget=1.0):
+def main(baseline_dir, after_dir, budget=1.0, not_rise=False):
     base, after = read(baseline_dir), read(after_dir)
     states = set()
     undecided = []
@@ -81,8 +87,13 @@ def main(baseline_dir, after_dir, budget=1.0):
         cost = float(now["on_ms"]) - float(was["on_ms"])
         band = max(2.0 * math.hypot(median_error(was), median_error(now)), RUN_TO_RUN_MS)
         spread = max(float(now["spread_ms"]), float(was["spread_ms"]))
-        close = abs(cost - budget) < band
-        over = cost > budget and not close
+        if not_rise:
+            # Nothing may be added: over is a cost the noise cannot explain.
+            close = False
+            over = cost > band
+        else:
+            close = abs(cost - budget) < band
+            over = cost > budget and not close
         print("%-14s %7s %9s %9s %+9.3f %+9.3f %8.3f %8.3f%s" % (
             name, now["sun"], was["on_ms"], now["on_ms"], cost, float(now["on_ms"]) - float(now["off_ms"]), band, spread,
             "  TOO CLOSE TO CALL" if close else ("  OVER" if over else "")))
@@ -97,5 +108,13 @@ def main(baseline_dir, after_dir, budget=1.0):
     return verdict
 
 
+def cli(argv):
+    """[--not-rise] <baseline> <after> [budget ms]: --not-rise holds every case to its own band."""
+    not_rise = "--not-rise" in argv
+    args = [a for a in argv if a != "--not-rise"]
+    budget = float(args[2]) if len(args) > 2 else (0.0 if not_rise else 1.0)
+    return main(args[0], args[1], budget, not_rise=not_rise)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 1.0))
+    sys.exit(cli(sys.argv[1:]))
