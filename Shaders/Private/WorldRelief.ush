@@ -509,10 +509,10 @@ WR_Crater WR_CraterBand(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Frequency,
 
 // -- Craters as a height (landing decision 3) --------------------------------
 // A crater band is a sum of compact kernels, one per kept site in the
-// 3 x 3 x 3 cells round the sample: the profile unchanged, reaching 0 with
+// 2 x 2 x 2 corners round the sample: the profile unchanged, reaching 0 with
 // zero slope at q = 1.5; a dropped site contributes 0; overlapping craters
-// add. With jitter 0.2588 cells a 3 x 3 x 3 neighbourhood sees every site
-// within 0.74 cells, past the profile's 0.525, so the sum is continuous --
+// add. With jitter 0.2588 cells those corners hold every site within the
+// profile's 0.525 (WR_CraterKernelBand says why), so the sum is continuous --
 // where Voronoi F1, the nearest site only, jumped to 0 at the bisector with
 // a dropped neighbour.
 //
@@ -558,14 +558,24 @@ WR_REAL WR_VertexCarries(WR_REAL VertexBandLimit, WR_REAL Frequency)
 WR_CraterTerm WR_CraterKernelBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, int KX, int KY, int KZ)
 {
     WR_CraterTerm Sum = WR_CraterZero();
-    const int CX = int(WR_floor(PX + WR_REAL(0.5)));
-    const int CY = int(WR_floor(PY + WR_REAL(0.5)));
-    const int CZ = int(WR_floor(PZ + WR_REAL(0.5)));
-    for (int I = -1; I <= 1; ++I)
+    // Only the 2 x 2 x 2 corners round P can reach it: a site within
+    // WR_CRATER_REACH x WR_CRATER_RADIUS (0.525) of P has its corner within
+    // 0.525 + 0.2588 = 0.784 cells of P on every axis, so floor(P) or the
+    // corner after it; the one before and the one after that are a cell or
+    // more away. The 3 x 3 x 3 round floor(P + 0.5) this replaced found no
+    // other site, and visited these in the same order, so every sum is the
+    // same to the last bit (DeepSpace.Surface.CraterKernelCorners), at 8
+    // corners a band instead of 27 -- the ground's pixel shader spent most
+    // of its time here (the frame ruling's profile, the landing plan's
+    // Task 39).
+    const int CX = int(WR_floor(PX));
+    const int CY = int(WR_floor(PY));
+    const int CZ = int(WR_floor(PZ));
+    for (int I = 0; I <= 1; ++I)
     {
-        for (int J = -1; J <= 1; ++J)
+        for (int J = 0; J <= 1; ++J)
         {
-            for (int K = -1; K <= 1; ++K)
+            for (int K = 0; K <= 1; ++K)
             {
                 const int X = CX + I;
                 const int Y = CY + J;
