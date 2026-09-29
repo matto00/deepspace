@@ -844,6 +844,48 @@ not `ProceduralMeshComponent`: PMC failed the first-day gate
 from the sky under 50 km and grows the relief in to the drive floor.
 Residency never gates motion. `ds.Terrain.Describe` prints the cut.
 
+**Cast shadows are baked, never marched** (the developer's ruling on slice
+(b)'s build, 2026-09-28). Under a low sun the unlit law read flat, and a
+per-pixel march cost +4 to +27 ms against a 1 ms budget. Worlds do not spin
+and nothing orbits, so the star stands still over every surface and the
+shadow is a fixed function of where a point is: `SunShadow` (pure) marches
+the height function toward the star's disc and gives the share of it seen,
+with no fill light. A ground tile's vertices carry theirs, computed as the
+tile is built, off the game thread (`ds.Terrain.Shadows`,
+`.ShadowSamples`); the orbital proxy reads `SunShadowMap`, a per-world G16
+texture in the star's own frame (the night side not stored), baked by
+`AShipSky` when the system loads, nearest world first, at most
+`ds.Sky.ShadowBakeTasks` at once, re-baked only when the relief, the light
+or `ds.Sky.ShadowMapWidth` changes, and faded in over 1 s as it lands.
+`M_SkyBody` and `M_SkyGround` read both through one Custom node over the
+shared file's `WR_ShadowMapCoord`, blended by `Morph`, so the handover
+carries the shadow with the relief; `ds.Sky.Shadows 0` draws the
+unshadowed look. It costs nothing per frame. **If worlds ever spin, the
+bake is redone as the sun moves.** `Eyes.ShadowBakeCost` holds the bake's
+cost per tile, per world, per system, in flight and in memory to its
+budgets; look with `ds.Sky.Goto 4 10 dusk` (and 200 km).
+
+**The frame is profiled, not assumed** (the frame ruling: profile first,
+with the shadows in, and fix the real cost; the split factor last).
+`Eyes.LandingFrame` times six 4K captures (50 km and 1.5 m at the start's
+sun, and 50 km, 1.5 m and 200 km at a 10-degree dusk and 1.5 m at 3), ABBA
+with `ds.Sky.Shadows` 0 and 1, and **reports** the frame rather than
+asserting it: read the `on_ms` of each line in
+`Saved/Eyes/LandingFrame/<EYES_TAG>/report.txt`, and compare two runs with
+`Tools/landing_frame_gate.py`. `EYES_PROFILE=1` breaks each case down. Two
+things it found: **an Eyes test must end engine frames** (it is latent, a
+step per frame, four apart) -- inside one `RunTest` the Vulkan RHI never
+retires freed resources and a Development build rescans that queue on
+every enqueue, so each capture cost more than the last (4 ms, then 32); and
+**the ground's cost is its pixel shader**, not its geometry (BasePass 0.24
+ms with a plain material on the same tiles, 9.2 with `M_SkyGround`). The
+crater kernel now visits the 2 x 2 x 2 corners that can reach, not 27, bit
+for bit the same sums (`DeepSpace.Surface.CraterKernelCorners` counts the
+corners through the `WR_CRATER_CORNER_VISITED()` hook), and the worst case,
+1.5 m, went from 18.1 to 13.9 ms. The capture has no TSR and runs game,
+render and GPU in series; the game's own `stat unit` is the developer's
+reading.
+
 **The HUD below the floor:** `840 M ABOVE GROUND · SINKING 3 M/S`, the
 vertical lever in the motion line (`HOVER`, `CLIMB 5 M/S`, `SINK 3 M/S`, `ABOVE
 THE GROUND'S REACH`), `DRIVE ABOVE THE FLOOR`; the target's ETA in cruise over
