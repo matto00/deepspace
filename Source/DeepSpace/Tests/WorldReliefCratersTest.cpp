@@ -7,7 +7,9 @@
 
 /*
  * Landing decision 3: a crater band as a sum of compact kernels, one per
- * kept site over the 3 x 3 x 3 cells round the sample, so craters are a
+ * kept site over the 2 x 2 x 2 corners that can reach the sample (the 3 x 3
+ * x 3 round it until the frame ruling's profile, the same sums to the bit:
+ * DeepSpace.Surface.CraterKernelCorners), so craters are a
  * continuous height -- no cliff where a kept crater's rim meets the bisector
  * with a dropped neighbour, which Voronoi F1 had and the material hid. The
  * bounds, the slope bound and the gradient hold with craters in.

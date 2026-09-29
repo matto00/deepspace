@@ -17146,6 +17146,87 @@ test for that work: six cases, ABBA medians, a tagged report
 never failed. So a green `Eyes.LandingFrame` says nothing about the budget: read the `on_ms` of its
 `50km` and `1.5m` lines. The test code and Step 1's expectation below are the first version.
 
+**The frame, profiled and brought in (2026-09-28, the frame ruling: profile first, with the cast
+shadows in; the split factor last).** `feat/landing-b-t`, RTX 4070 Ti Super, 4K capture, the six
+`Eyes.LandingFrame` cases, `ds.Terrain.SplitFactor` and `MaxTiles` untouched.
+
+- **How it was measured.** `EYES_PROFILE=1` adds `profile` lines per case: the game step, the
+  capture's game-thread enqueue, the render thread's span, the flush and the read-back's wait, and
+  the same frame with the ground hidden, the sky hidden, both (the capture's floor), the ground's
+  material swapped for the engine's plain one (geometry and draws against pixels), and at 1080p. A
+  trace region brackets each case and variant, so a run with
+  `-trace=cpu,gpu,frame,region` is read headless by
+  `UnrealInsights -OpenTraceFile=<utrace> -NoUI -AutoQuit -nullrhi -ExecOnAnalysisCompleteCmd="TimingInsights.ExportTimingEvents <dir>/ev_{region}.csv -region=LF* -threads=GPU0-Graphics0,RenderThread*,RHIThread,GameThread -columns=ThreadName,TimerName,StartTime,EndTime,Depth"`
+  (or `ExportTimerStatistics`), which gives the GPU's own pass timings per capture. The
+  harness's frame is serial -- game step, then capture, then a one-pixel read-back -- so it sums
+  game thread, render thread and GPU, where play overlaps them.
+- **First finding: the harness, not the frame.** Every case's frame rose with the run: an empty
+  4K capture cost 4.2 ms in the first case and 32 ms in the last, 1.5m_dusk10 read 28 ms, and a
+  case's raw times climbed within it. The trace put it on the RHI thread: `DeleteRHIResources`
+  inside `RHI_SubmitClose`, 4.8 ms a capture in the second case and 24 ms in the sixth, waited on
+  by every `FlushRenderingCommands`. Inside one `RunTest` no engine frame ends; the Vulkan RHI
+  retires freed resources only at a frame's end (`GVulkanRHIDeletionFrameNumber`), and a
+  Development build scans the whole deferred-deletion queue on every enqueue
+  (`FDeferredDeletionQueue2::EnqueueGenericResource`'s double-delete check), so each capture cost
+  more than the one before. It was the order-dependent "accumulation" the test had recorded and
+  not diagnosed, and the reason a view state once made later cases 100-190 ms. **Fix:**
+  `Eyes.LandingFrame` is latent, each placement, timed round, proof and profile variant its own
+  step, four engine frames apart (19342c9). An empty capture is then 4.0 ms in all six cases and
+  the spreads 0.1-0.4 ms. It changes no frame the game draws.
+- **The breakdown, latent, cast shadows in** (`frame-before`, and the profile run `trace-1`), ms:
+
+  | case | frame | game step | GPU (SceneRender) | BasePass | ground's material (full - plain) | ground's geometry and draws (plain - no ground) | capture floor (empty) |
+  |---|---|---|---|---|---|---|---|
+  | 50km | 10.21 | 0.7 | 7.9 | 4.0 | 3.8 | 1.1 | 4.0 |
+  | 1.5m | 18.09 | 2.3-3.2 | 13.5 | 9.2 | 8.3 | 1.8 | 4.0 |
+  | 50km_dusk10 | 9.00 | 0.4 | -- | -- | 3.4 | 0.7 | 4.0 |
+  | 1.5m_dusk3 | 14.49 | 0.6 | -- | -- | 7.3 | 2.0 | 4.0 |
+  | 200km_dusk10 | 10.12 | 0.6 | 8.6 | 4.4 (the proxy, M_SkyBody) | -- | -- | 4.0 |
+  | 1.5m_dusk10 | 14.31 | 0.6 | -- | -- | 7.4 | 1.7 | 4.0 |
+
+  The render thread's span of a capture is 1.0-1.6 ms and the enqueue under 0.1 ms in every case.
+  The capture's floor (4.0 ms with nothing drawn) is mostly screen-space AO at 4K
+  (`LightCompositionTasks_PreLighting`, 1.5-1.7 ms of GPU), post-processing (0.5) and a ~1.5 ms
+  render-thread lead before the GPU starts. **The dominant cost is the ground's pixel shader**: with
+  the engine's plain material on the same 725 tiles BasePass is 0.24 ms, with `M_SkyGround` 9.2.
+  Geometry, triangle count, culling and draw count together are under 2 ms: fewer vertices on
+  distant tiles, tighter culling or merged draws could not reach the budget. Two further facts,
+  not acted on: the tiles are never in the depth prepass (`PrePass` 0.04 ms; a Movable primitive
+  with WPO is left for a velocity pass under `DDM_AllOpaqueNoVelocity`, while the proxy draws no
+  velocity), so the base pass shades overdraw at full cost; and the 1.5m case's game step is
+  2.3-3.7 ms against 0.6 in the dusk cases.
+- **Change 1: the crater kernel visits 8 corners, not 27** (fc829a7). Inside the shader, the
+  crater bands' kernel searched the 3 x 3 x 3 lattice corners round floor(P + 0.5), six bands a
+  pixel. A site within a crater's reach (0.525 cells) has its corner within 0.784 cells of P on
+  every axis, so only floor(P) and the corner after it can hold one; the kernel visits those 8, in
+  the order the 27 did, so every sum is identical to the last bit (the detail is untouched and
+  the handover's parity is exact by construction). `DeepSpace.Surface.CraterKernelCorners` holds
+  it to the old kernel over a million points in double and float (0 differ; 16,343 under two
+  craters), proven by two mutants (a dropped corner, the old base corner), both KILLED.
+  `Eyes.WorldReliefParity` reads the same SUMMARY as before (6.10e-03, float 5.95e-03),
+  `Eyes.HandoverParity` a gap of 3.07e-04. The C++ ground's heights go through the same kernel,
+  so tile builds are cheaper too. Measured, `frame-before` -> `frame-craters`, `on_ms`, the
+  gate (`landing_frame_gate.py ... 0`) GO in every case:
+
+  | case | before | after | change |
+  |---|---|---|---|
+  | 50km | 10.21 | 8.39 | -1.82 |
+  | 1.5m | 18.09 | 13.85 | -4.23 |
+  | 50km_dusk10 | 9.00 | 7.52 | -1.49 |
+  | 1.5m_dusk3 | 14.49 | 11.17 | -3.33 |
+  | 200km_dusk10 | 10.12 | 8.30 | -1.82 |
+  | 1.5m_dusk10 | 14.31 | 10.93 | -3.38 |
+
+  BasePass (traced): 1.5m 9.2 -> 5.8 ms, 50km 4.0 -> 2.6 ms. **Every case is now under 16.6 ms**,
+  the worst 1.5m at 13.85 with 2.8 ms of headroom, so the split factor is not touched. The ground's
+  material is still the largest GPU cost (5.6 ms at 1.5 m), then the capture's floor; the next
+  candidates, if the frame needs more, are the depth prepass for the tiles (their overdraw) and
+  skipping detail bands the footprint has faded whole in the shader (no gain at 1.5 m, where none
+  is).
+- **What `Eyes.LandingFrame` does not show:** the game's own `stat unit` at 4K with the project's
+  AA and upscaler (Step 3, item 5): the capture has no TSR and no view state, and play overlaps
+  the game step with the GPU. That stays the developer's reading.
+
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping
 every task's paragraph).
