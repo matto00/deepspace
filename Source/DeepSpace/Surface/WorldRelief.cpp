@@ -517,12 +517,14 @@ WorldReliefShading::FSurface WorldReliefShading::Orbit(const FWorldReliefParams&
 }
 
 WorldReliefShading::FSurface WorldReliefShading::Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
-                                                        double FootprintRadius, double VertexBandLimit)
+                                                        double FootprintRadius, double VertexBandLimit, double Morph)
 {
     FSurface Out;
-    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, VertexBandLimit);
+    const double Limit = FMath::Lerp(1.0, VertexBandLimit, Morph);
+    const FVector3d Vertex = FMath::Lerp(D, VertexNormal, Morph);
+    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, Limit);
     Out.Slope = WorldReliefShadingLocal::SlopeOf(Params, Out.Terms);
-    const WR64::WR_GroundNormalOut N = WR64::WR_GroundNormal(D.X, D.Y, D.Z, VertexNormal.X, VertexNormal.Y, VertexNormal.Z,
+    const WR64::WR_GroundNormalOut N = WR64::WR_GroundNormal(D.X, D.Y, D.Z, Vertex.X, Vertex.Y, Vertex.Z,
                                                              Out.Slope.X, Out.Slope.Y, Out.Slope.Z);
     Out.Normal = FVector3d(N.NX, N.NY, N.NZ);
     return Out;

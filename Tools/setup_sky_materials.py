@@ -336,6 +336,15 @@ def cast(g, shaded, shadow, strength):
 
 # -- the materials -------------------------------------------------------------
 
+def lerp(g, a, b, alpha):
+    """lerp(a, b, alpha)."""
+    node = g.node(unreal.MaterialExpressionLinearInterpolate)
+    g.link(a, node, "A")
+    g.link(b, node, "B")
+    g.link(alpha, node, "Alpha")
+    return node
+
+
 def mask(g, source, channels, output_name=""):
     """A ComponentMask of `channels` ("rgb", "a") from source."""
     node = g.node(unreal.MaterialExpressionComponentMask,
@@ -621,8 +630,8 @@ def sky_ground(default_texture):
 
         D, footprint = ground_direction(TilePivot)            (universe axes)
         face, slope  = surface(the look, D, footprint,
-                               shared_terms(..., BandLimit))  (M_SkyBody's own graph)
-        N            = WR_GroundNormal(D, the vertex normal, slope)
+                               shared_terms(..., lerp(1, BandLimit, Morph)))  (M_SkyBody's own graph)
+        N            = WR_GroundNormal(D, lerp(D, the vertex normal, Morph), slope)
         shaded       = gain * saturate(N.L) * smoothstep(-w, w, N.L) * lerp(1, shadow, Shadows), N in world space,
                        shadow = lerp(the map at D, UV0.x, Morph)
         emissive     = Colour * Brightness * shaded * face
@@ -631,7 +640,10 @@ def sky_ground(default_texture):
     M_SkyBody's own law, so the handover at 50 km has no brightness step: the
     same light direction, colour and brightness (AShipSky copies the body's
     look into this material's one instance), the same face, and a normal that
-    is the orbit's band for band wherever the tiles are finer than the pixels.
+    is the orbit's at the handover, where Morph is 0 and every band is the
+    pixel's -- the vertex normal, interpolated across a triangle, loses some of
+    a band its vertices barely resolve, and at a 3-degree dusk that stepped the
+    frame 2.2% darker -- and the tile's plus the pixel's by the drive floor.
     """
     asset = "M_SkyGround"
     material = fresh_material(asset)
@@ -653,14 +665,25 @@ def sky_ground(default_texture):
     pivot = primitive_parameter(g.vector("tile_pivot", (0.0, 0.0, 0.0, 0.0)), parameters["tile_pivot"]["custom_primitive_data"])
 
     local, direction, footprint = ground_direction(g, pivot)
+    # The normal's split grows in with the relief (WorldReliefShading::
+    # Ground's Morph): the pixel's share is taken at lerp(1, BandLimit, Morph)
+    # and the vertex normal is lerp(D, the tile's, Morph). At the handover
+    # (Morph 0) that is the orbit's normal exactly, every band per pixel, so
+    # no dusk can show the step a vertex normal interpolated across a
+    # triangle makes; at the drive floor (Morph 1) it is the tile's plus the
+    # pixel's, as before.
+    limit = lerp(g, g.constant(1.0), band_limit, morph)
     # Ground is never banded: the knobs' banding is 0, so the stretch is 1.
     knobs = (mottle, detail, g.constant(0.0), relief_scale, cratering)
     factor, slope = surface(g, knobs, seed, direction, footprint,
-                            lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, band_limit))
+                            lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, limit))
     uv1 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
     uv2 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=2)
+    tile_normal = g.binary(unreal.MaterialExpressionAppendVector, mask(g, uv1, "rg"), mask(g, uv2, "r"))
+    vertex_normal = lerp(g, direction, tile_normal, morph)
     normal_local = custom_node(g, GROUND_NORMAL_CODE,
-                               [("D", direction), ("NormalXY", uv1), ("NormalZH", uv2), ("Slope", slope)],
+                               [("D", direction), ("NormalXY", mask(g, vertex_normal, "rg")),
+                                ("NormalZH", mask(g, vertex_normal, "b")), ("Slope", slope)],
                                unreal.CustomMaterialOutputType.CMOT_FLOAT3)
 
     to_world = g.node(unreal.MaterialExpressionTransform,

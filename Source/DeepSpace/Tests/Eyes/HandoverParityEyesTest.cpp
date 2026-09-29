@@ -142,12 +142,10 @@ bool FHandoverParityEyesTest::RunTest(const FString& Parameters)
     // frame is still the orbit's to 1e-3, and the shadow reaches both -- with
     // ds.Sky.Shadows 0 each is brighter, by the same share. At 49.9 km the
     // morph is about 3e-5, so the ground's shadow is the orbit's map to that.
-    IConsoleVariable* Shadows = IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Shadows"));
-    if (!TestNotNull(TEXT("ds.Sky.Shadows exists"), Shadows))
-    {
-        return false;
-    }
-    const float ShadowsWere = Shadows->GetFloat();
+    // Restored on every way out, an early return's too: a leg that failed
+    // must not leave the next Eyes check in the run drawing without the
+    // cast shadow (or with it, where it was switched off).
+    FScopedCVar Shadows(TEXT("ds.Sky.Shadows"), 1.0f);
     const auto CentralMean = [](const TArray<FLinearColor>& Pixels)
     {
         double Sum = 0.0;
@@ -247,7 +245,7 @@ bool FHandoverParityEyesTest::RunTest(const FString& Parameters)
     double DuskP99[2] = { 0.0, 0.0 };                          // [shadows]
     for (int32 On = 0; On < 2; ++On)
     {
-        Shadows->Set(static_cast<float>(On), ECVF_SetByCode);
+        Shadows.Variable->Set(static_cast<float>(On), ECVF_SetByCode);
         Test.Ground->SetActorHiddenInGame(false);
         Ship->PlaceShip(Placed.Position, Placed.Orientation);
         Test.Step(1.0f / 60.0f);
@@ -268,7 +266,6 @@ bool FHandoverParityEyesTest::RunTest(const FString& Parameters)
         Means[On][1] = CentralMean(Seen);
         DuskP99[On] = GapP99(GroundSeen, Seen);
     }
-    Shadows->Set(ShadowsWere, ECVF_SetByCode);
     const double GroundShare = Means[1][0] / FMath::Max(Means[0][0], 1e-12);
     const double OrbitShare = Means[1][1] / FMath::Max(Means[0][1], 1e-12);
     const FString DuskLine = FString::Printf(TEXT("49.9 km over Baemsekai IV at a 3-degree dusk (the map's mean over the view %.3f): ground %.6f (%.6f without the shadow), orbit %.6f (%.6f); the shadow keeps %.4f of the ground's light, %.4f of the orbit's; per-pixel p99 %.2e with it, %.2e without"),

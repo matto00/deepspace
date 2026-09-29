@@ -52,6 +52,24 @@ bool FGroundShadesAsOrbitTest::RunTest(const FString& Parameters)
     const WorldReliefShading::FSurface Bare = WorldReliefShading::Ground(Params, D, D, 1.0e-6, 1.0);
     TestTrue(TEXT("a flat vertex with no bands carried shades as the orbit"), (Orbit.Normal - Bare.Normal).Size() <= 1.0e-12);
     TestTrue(TEXT("and the orbit's relief is really tilting it"), (Orbit.Normal - D).Size() > 1.0e-6);
+
+    // The split grows in with the relief. At the handover (Morph 0) the
+    // ground shades as the orbit whatever its vertex normal holds -- the GPU
+    // interpolates that normal across a triangle, which loses a band the
+    // vertices barely resolve, and at a 3-degree dusk the frame stepped 2.2%
+    // darker (Eyes.HandoverParity). At the drive floor (Morph 1) it is the
+    // tile's plus the pixel's, as it always was.
+    {
+        const double Spacing = TerrainQuadtree::SpacingCm(8, R);
+        const FVector3d Tilted = (D + FVector3d(0.05, -0.02, 0.03)).GetSafeNormal();
+        const WorldReliefShading::FSurface AtHandover = WorldReliefShading::Ground(Params, D, Tilted, 1.0e-6, Spacing / R, 0.0);
+        TestTrue(FString::Printf(TEXT("at Morph 0 any vertex normal shades as the orbit (%.3g)"), (Orbit.Normal - AtHandover.Normal).Size()),
+            (Orbit.Normal - AtHandover.Normal).Size() <= 1.0e-12);
+        const WorldReliefShading::FSurface AtFloor = WorldReliefShading::Ground(Params, D, Tilted, 1.0e-6, Spacing / R, 1.0);
+        const WorldReliefShading::FSurface Before = WorldReliefShading::Ground(Params, D, Tilted, 1.0e-6, Spacing / R);
+        TestTrue(TEXT("at Morph 1 it is the tile's plus the pixel's, the default"), AtFloor.Normal == Before.Normal);
+        TestTrue(TEXT("and there the vertex normal really moves it"), (AtFloor.Normal - Orbit.Normal).Size() > 1.0e-3);
+    }
     return true;
 }
 

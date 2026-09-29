@@ -308,7 +308,13 @@ namespace WorldReliefShading
     DEEPSPACE_API FSurface Orbit(const FWorldReliefParams& Params, const FVector3d& D, double FootprintRadius);
 
     /** M_SkyGround's: the tile's VertexNormal, and the pixel's slope of the
-     *  bands the vertices at VertexBandLimit (radius units) do not carry. */
+     *  bands the vertices at VertexBandLimit (radius units) do not carry --
+     *  split as the relief grows in: the pixel's share taken at
+     *  lerp(1, VertexBandLimit, Morph) and the vertex normal lerp(D,
+     *  VertexNormal, Morph). At the handover (Morph 0) that is the orbit's
+     *  normal whatever the vertex holds, so a normal interpolated across a
+     *  triangle cannot step the brightness there; at the drive floor (Morph
+     *  1) it is the tile's plus the pixel's. */
     DEEPSPACE_API FSurface Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
-                                  double FootprintRadius, double VertexBandLimit);
+                                  double FootprintRadius, double VertexBandLimit, double Morph = 1.0);
 }
