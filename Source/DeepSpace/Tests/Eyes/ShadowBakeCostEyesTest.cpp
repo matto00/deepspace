@@ -6,6 +6,7 @@
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "RenderingThread.h"
@@ -68,8 +69,11 @@
  * - The resident cut's vertex shadows, both copies, from the arrays.
  *
  * Each budget prints one line, `budget <name> <measured> <limit> within|OVER`;
- * the plan's rule reads them. Nothing is asserted but that each measure was
- * taken, because a loaded machine would make a timing assertion a coin toss.
+ * the plan's rule reads them. No timing is asserted, because a loaded
+ * machine would make a timing assertion a coin toss. Memory is asserted: every
+ * solid world's map baked and on the GPU, each system's maps within the
+ * per-system cap as the RHI sizes them, and the cut's vertex shadows within
+ * their budget.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShadowBakeCostEyesTest, "Eyes.ShadowBakeCost",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -129,10 +133,27 @@ namespace ShadowBakeCostLocal
         TArray<FString> Widths;
     };
 
-    /** Every solid world's texture the sky holds for System, as the RHI counts it. */
+    int32 SolidWorlds(const FSkySystem& System)
+    {
+        int32 Solid = 0;
+        for (const FSkyBody& Body : System.Bodies)
+        {
+            Solid += Body.Ground == EGround::Solid && Body.Kind != ESkyBodyKind::Star ? 1 : 0;
+        }
+        return Solid;
+    }
+
+    /** Every solid world's texture the sky holds for System, as the RHI
+     *  counts it -- and every solid world must have one, or the memory is
+     *  a count of the maps that happened to land. */
     FSystemMemory Measure(FAutomationTestBase& T, AShipSky& Sky, const FSkySystem& System)
     {
         FSystemMemory M;
+        ON_SCOPE_EXIT
+        {
+            T.TestEqual(FString::Printf(TEXT("%s: every solid world's map is baked and on the GPU"), *System.SystemId.ToString()),
+                M.Maps, SolidWorlds(System));
+        };
         for (const FSkyBody& Body : System.Bodies)
         {
             UTexture2DDynamic* Texture = Sky.GetShadowTexture(Body.Id);
@@ -197,6 +218,9 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         Line(FString::Printf(TEXT("upload in pieces of %d KB a frame: the slowest frame's landing %.3f ms on the game thread, %.3f ms on the render thread"),
             UploadKB ? UploadKB->GetInt() : 0, 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds()));
         Line(Budget(TEXT("system_gpu_mb"), M.GpuMB, SystemGpuBudgetMB));
+        // Memory is not a timing: the cap is asserted, as the RHI sizes it.
+        TestTrue(FString::Printf(TEXT("the start system's maps fit the per-system cap on the GPU (%.2f MB)"), M.GpuMB),
+            M.GpuMB <= MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)));
         Line(Budget(TEXT("system_cpu_mb"), CpuMB, SystemCpuBudgetMB));
         Line(Budget(TEXT("map_land_ms"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
         Line(Budget(TEXT("map_upload_rt_ms"), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
@@ -253,9 +277,11 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         Resident, BuildTasks->GetInt(), CutWithout, CutWith, CutWith / FMath::Max(CutWithout, 1e-6)));
     Line(Budget(TEXT("cold_cut_s"), CutWith, ColdCutBudgetSeconds));
     const double TileShadowMB = MB(static_cast<double>(Test.Ground->GetTileShadowBytes()));
-    Line(FString::Printf(TEXT("cut vertex shadows: %.2f MB from the arrays, both copies (%.2f MB by the formula for one)"),
+    Line(FString::Printf(TEXT("cut vertex shadows: %.2f MB from the arrays, each tile once (%.2f MB by the formula)"),
         TileShadowMB, MB(Resident * TerrainTile::GridVerts * sizeof(float))));
     Line(Budget(TEXT("tile_shadow_mb"), TileShadowMB, TileShadowBudgetMB));
+    TestTrue(FString::Printf(TEXT("the cut's vertex shadows are held once, within %.0f MB (%.2f MB)"), TileShadowBudgetMB, TileShadowMB),
+        TileShadowMB <= TileShadowBudgetMB);
     {
         // A restart with builds in flight: a sample count the cut was not
         // built at. The release is read as its frame over an ordinary one's
@@ -409,11 +435,7 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
         UUniverseSubsystem* Universe = Test.World->GetSubsystem<UUniverseSubsystem>();
         const TOptional<FStarSystem> Worst = Universe ? Universe->GetSystem(WorstSystem) : TOptional<FStarSystem>();
         FSkySystem Twelve = LocalSystem::Here(Worst);
-        int32 Solid = 0;
-        for (const FSkyBody& Body : Twelve.Bodies)
-        {
-            Solid += Body.Ground == EGround::Solid && Body.Kind != ESkyBodyKind::Star ? 1 : 0;
-        }
+        const int32 Solid = SolidWorlds(Twelve);
         TestTrue(FString::Printf(TEXT("the corpus's worst system is generated (%s, %d solid worlds)"), *Twelve.SystemId.ToString(), Solid), Worst.IsSet() && Solid >= 10);
         FSkySystem Sixteen = Twelve;
         for (const FSkyBody& Body : Twelve.Bodies)
@@ -439,6 +461,11 @@ bool FShadowBakeCostEyesTest::RunTest(const FString& Parameters)
             Line(FString::Printf(TEXT("system %s (%s): %d solid worlds baked in %.2f s, GPU %.2f MB resident (the levels are %.2f MB) under the %.0f MB cap; widths %s"),
                 Name, *System->SystemId.ToString(), M.Maps, Seconds, M.GpuMB, M.LevelsMB, MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)), *FString::Join(M.Widths, TEXT(", "))));
             Line(Budget(System == &Twelve ? TEXT("system_gpu_mb_worst") : TEXT("system_gpu_mb_worst16"), M.GpuMB, SystemGpuBudgetMB));
+            // The path the game uses: SyncShadowMaps' widths, sized by the
+            // RHI. The levels' own bytes are smaller, and a cap met on them
+            // left Trabo's twelve at 142 MB on the GPU.
+            TestTrue(FString::Printf(TEXT("%s's maps fit the per-system cap on the GPU (%.2f MB)"), Name, M.GpuMB),
+                M.GpuMB <= MB(static_cast<double>(ShipSky::ShadowSystemCapBytes)));
         }
         Line(Budget(TEXT("map_land_ms_all"), 1e3 * Test.Sky->GetSlowestShadowLandSeconds(), MapLandBudgetMs));
         Line(Budget(TEXT("map_upload_rt_ms_all"), 1e3 * Test.Sky->GetSlowestShadowUploadRenderSeconds(), MapUploadBudgetMs));
