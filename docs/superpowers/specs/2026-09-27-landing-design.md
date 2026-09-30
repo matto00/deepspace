@@ -22,6 +22,17 @@ generator, C++), ADR 0007 (chunked coordinates, hierarchical seeds), ADR
 *the anti-chore principle*; CLAUDE.md: *Flying*, *The drive and the jump*,
 *The sky*, *Screens, the pointer, and power*
 
+## The fourth playtest, 2026-09-29: slice (b) flown, merged, and what comes next
+
+The developer flew slice (b) on `feat/landing-b` (99cae07) and merged it to `main` (700776c): "the foundation is there but there's still a lot to do to clean it up". The four notes, verbatim, each with what was known when it was written. They are the next session's work, and each is to be root-caused before it is fixed.
+
+1. **"approach stops between 10km and 20km. i completely stall (this time around 18.1km), i have to use Goto command to try to land."** The drive's floor is 10 km above the world's highest peak (decision 3), so it sits 10-20 km up, and the drive rests there by design. Below it the pilot is meant to press F (cruise) and hold C (the vertical lever), as decision 4 specifies. The playtest shows that handover is not legible: the pilot reads a stall. Open: whether the HUD says what to do there, whether the drive should hand down to cruise and the vertical lever by itself, and whether F then C actually descends from that floor in play. That last one was not confirmed in this playtest.
+2. **"Frame rate dropped massively the first time i went below 50km--optimization needs to be done, since we're only going to be expanding on planet detail going forward."** It happened *the first time*, so suspect first-use costs before steady-state ones: the ground material's shader and pipeline compiling on first draw, the cold cut (5.3 s measured), and the world's shadow bake (about 4 s on two tasks), all landing at once. `Eyes.LandingFrame` measures the steady state after warm-up, so it could not see this. Planet detail will only grow, so the next work needs a first-descent frame-time trace and a budget for hitches, not just for the frame.
+3. **"mountains and valleys are good, they are legible and feel like an appropriate scale (i'll know better when i can walk around). however they look very jagged (rendering problem)."** The scale is right. The jaggedness is to be found: candidates are the 33 x 33 tiles' facets, per-vertex shadow and normals stepping across triangles, LOD pops between levels, or aliasing on the ridges.
+4. **"planets are transparent(?). black dots where stars would be on the opposite side of a planet appear and move on the surface. some planets are a translucent-white-ish color?"** Stars behind a world show through it as moving black dots, and some worlds read as translucent white. Suspect draw order and depth between the dome's stars, the body proxies and the ground tiles, and a material drawn with defaults (the ground's look is copied from the body at the handover; a world whose look never arrives would draw unlit white). To be reproduced and root-caused.
+
+The developer invited questions on look and feel. Slice (c) (touchdown and LANDED) and the atmosphere's orbital slice wait on these four.
+
 ## The developer's rulings, 2026-09-27 (third playtest)
 
 These are binding. Everything below is built on them; where a decision
