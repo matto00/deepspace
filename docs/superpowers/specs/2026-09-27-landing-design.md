@@ -33,6 +33,12 @@ The developer flew slice (b) on `feat/landing-b` (99cae07) and merged it to `mai
 
 The developer invited questions on look and feel. Slice (c) (touchdown and LANDED) and the atmosphere's orbital slice wait on these four.
 
+**The developer's answers, same day:**
+- **The stall.** "we should automatically shift / show hint on the first occasion. i feel like i tried cruise though and it didn't work? worth verifying in code." So: below the drive floor the ship shifts to cruise and the vertical lever by itself, and the first time it shows a hint. First, though, verify in code and in a headless flight that F then C actually descends from the drive floor. The developer believes it did not.
+- **The frame drop** was "a hitch, then smooth". That points to first-use costs (shader and pipeline compiles, the cold cut, the shadow bake), not the steady frame.
+- **The jaggedness** is "stair-steps that shimmer when moving". That is aliasing on ridges and shadow lines, not coarse facets or wrong shapes.
+- **The orbital look** "generally looks good", and more comments may come in the next playtest.
+
 ## The developer's rulings, 2026-09-27 (third playtest)
 
 These are binding. Everything below is built on them; where a decision
