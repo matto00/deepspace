@@ -84,20 +84,25 @@ below goes past them, it says so and is on the sign-off list.
 **Confirmed by the developer (same day):** the ruled table stays the minimum under the 1.25x rule (the ratio is a necessary condition for a port bug, not a sufficient one), and after R5 retired the engine's nodes their measured distance from double is frozen as `EngineFloor` constants per footprint and term. Slice (a) merged as `8cd12ab`, kept; the developer's in-play look at Baemsekai III, IV and V (and IV at dusk) is carried to the next playtest.
 
 **Ruled on slice (b)'s build, 2026-09-28:**
-- **Cast shadows.** Seen from 200 km at dusk, the physical relief (sign-off 2) read flat and dark: mean brightness fell from 42.9 to 17.3 (III), 12.7 to 2.0 (IV) and 13.2 to 4.5 (V), and the craters nearly vanished. Relief under a low sun reads by its cast shadows, and the unlit law has none. So the shared file gains a **shadow term marched through the height function toward the sun**, used by `M_SkyBody` and `M_SkyGround` alike. It is held to a C++ mirror by the parity test, its GPU cost is measured in `Eyes.LandingFrame`, and it is judged by before/after frames. Sign-off 2 stands as physical heights; it is not reversed to an exaggerated orbit.
+- **Cast shadows.** Seen from 200 km at dusk, the physical relief (sign-off 2) read flat and dark: mean brightness fell from 42.9 to 17.3 (III), 12.7 to 2.0 (IV) and 13.2 to 4.5 (V), and the craters nearly vanished. Relief under a low sun reads by its cast shadows, and the unlit law has none. So the shared file gains a ~~shadow term marched through the height function toward the sun~~ cast shadow, used by `M_SkyBody` and `M_SkyGround` alike, judged by before/after frames. **The march is withdrawn: superseded by "Cast shadows are baked, not marched" below**, which says how the shadow is made; what this bullet still rules is that there are cast shadows, and that sign-off 2 stands as physical heights, not reversed to an exaggerated orbit. (Its GPU cost is still read in `Eyes.LandingFrame`, with the shadows in.)
 - **`GroundAlwaysCatches` flies slopes up to 2 x the measured steepest** (about 45 degrees). The old `MaxSlope` bound, 7.9 once `S_max` was measured, would draw 83-degree cliffs no world can make.
 - **Near the ground, the footprint cap slows motion across a slope rather than lifting the ship over it.** This amends decision 10's along-the-ground cap.
 - **The terrain stays on the dynamic draw path** (4.96 ms of the 6 ms budget). The static path is shelved: in UE 5.8 it cached the tiles and drew nothing.
 - **The target's ETA while cruising above the near regime's 50 km top** is carried to the playtest.
 - **The frame at the ground** measured 19.4 ms (732 tiles drawn, 951 resident) against the 16.6 ms budget; 10.4 ms at 50 km. The ruling: **profile first, with the cast shadows in, and fix the real cost** (distant tiles' vertex counts, culling, batching draws). The split factor is the last resort, since it coarsens the ground and grows the pops.
+  - *Outcome, recorded 2026-09-28 (the landing plan's Task 39; not a new ruling):* profiled with the cast shadows in, the cost was **the ground's pixel shader, not geometry**: with the engine's plain material on the same 725 tiles BasePass is 0.24 ms, with `M_SkyGround` 9.2, while geometry, triangle count, culling and draw count together are under 2 ms, so none of the candidates named above could reach the budget. Most of the shader was the crater kernel, which visited 27 lattice corners a band where 8 can reach (decision 3, amended). Visiting the 8 changed no value and took `Eyes.LandingFrame`'s `on_ms` from 18.09 to 13.85 ms at 1.5 m and 10.21 to 8.39 at 50 km; **every case is under 16.6 ms**, the worst with 2.8 ms of headroom, and the split factor is untouched. The frame is reported, not asserted; `CraterKernelCorners` holds the change that bought it. The game's own `stat unit` at 4K in play stays the developer's reading.
 - **Cast shadows are baked, not marched** (2026-09-28). A per-pixel march cost +4 to +27 ms at low sun against a 1 ms budget (the spike, NO-GO at N 12, 8 and 6). Because worlds do not spin and nothing orbits in this slice, the sun is fixed over every surface. So each ground tile computes its vertices' shadow while it is built, off the game thread, from the height function, and the orbital proxy reads a per-world shadow texture baked in C++ when the system loads. It costs nothing per frame. If worlds ever spin, the bake is redone as the sun moves.
+  - **Measured, 2026-09-29** (plan `2026-09-28-landing-b-cast-shadows.md`): baked. Each tile's vertices march `SunShadow::Visible` (12 samples) at the tile's spacing under the sky's own light, craters and every band of `Height` in; each solid world's map is 4096 columns (8.8 km texels on IV), baked when the system loads, under the 128 MB per-system cap. The bake (`Eyes.ShadowBakeCost`, 3 build tasks): the cold cut at 1.5 m 5.27 s (0.80 without the shadow; 1474 tiles, the ancestors now built), a tile 7.70x its heights at a 10-degree dusk, a world's map 4.16 s and 12.57 MB (the slowest and largest of I-V and the corpus's two extremes), the sky's five 10.06 s on 2 tasks, 63.92 MB resident on the GPU and 0 MB left on the CPU; the corpus's worst system (Trabo, 12 worlds) 123.99 MB after the cap, and with four worlds again (16) 120.33 MB; the slowest landing 0.16 ms of game thread and 0.07 ms of render thread a frame (4.34 ms of render thread once, in a sixteen-world flush: not diagnosed); an in-system jump re-bakes 0; a release with builds in flight -0.02 ms; in flight with tile shadows on, 0 frames without drawn ground, worst gap 12.84 cm, the coarse cut 2.89 s after arriving; the kept vertex shadows 12.25 MB, OVER the 12 MB budget since the ancestors are resident; a 2:1 tile edge steps the shade by 0.085 on average (0.469 at most, level 6 to 7, a 2-degree sun). The frame: `Eyes.LandingFrame --not-rise` GO against the pre-shadow baseline in every case (whole frames 8.05..13.21 ms), but that baseline predates the per-frame harness and the crater kernel, so it cannot price the shadow alone; on minus off in one run -0.09..+0.08 ms; the ground's ancestors built raised the dusk ground cases 0.5-1.5 ms over the same harness before them (more of the selected cut drawn). Parity: the map C++ vs GPU 2.14e-03 against the float mirror's 1.79e-03 (at the seam, footprint 1.5e-03); the handover at a 3-degree dusk: the shadow keeps 0.8146 of the ground's light and 0.8137 of the orbit's, but the frames are 2.1% apart, and 2.2% apart without the shadow -- a dusk handover step the shadow did not make (`Eyes.HandoverParity` red on it). Frames at the read exposure (`Saved/Eyes/ReliefLook/shadows-before` and `shadows-after`), mean luma on held pixels before -> without -> with the shadow (coverage on still pixels): at 10 degrees, orbit III 191.35 -> 191.35 -> 191.36 (0.0%), IV 120.31 -> 120.31 -> 120.31 (0.0%), V 126.26 -> 126.26 -> 126.26 (0.0%); ground III 143.20 -> 143.48 -> 143.47 (0.0%), IV 78.04 -> 71.90 -> 68.36 (8.2%), V 113.69 -> 113.73 -> 113.65 (0.5%); at 3 degrees, orbit III 131.22 -> 131.22 -> 127.31 (0.9%), IV 85.17 -> 85.17 -> 78.89 (10.8%), V 84.49 -> 84.49 -> 75.23 (16.3%); ground III 103.69 -> 104.07 -> 94.85 (0.3%), IV 83.51 -> 84.93 -> 1.96 (97.8%), V 84.54 -> 87.21 -> 3.36 (95.2%). The ground frames without the shadow differ from before by the ground's new cut, not the switch (the same run on the old streaming matches all twelve). Judged: III casts next to nothing -- its star is 2.95 degrees in radius; IV's orbit shadows are soft at the texel and never blocky, and at the ground a cast shadow lies across the mid-ground at 10 degrees, with one straight step in it that may be a 2:1 tile edge; at 3 degrees the viewpoint on IV and V sits in a cast shadow and only far ridge tops are lit. The developer's look carried to the playtest.
 - **The cast-shadow plan's Task 0 and Task 7b, ruled (2026-09-28):**
   - Tile builds get **three background workers** (`ds.Terrain.BuildTasks` 3, from 2). Shadowed tiles at dusk cost up to 9.5x to build, and `GroundKeepsUpAtDusk`'s gap was 15.03 cm against 15 cm with two workers.
   - A world's orbital shadow map is **uploaded in pieces on the render thread over several frames**, so its landing never hitches a frame (it was about 9.5 ms in one frame, against the 4 ms budget).
   - The defaults stand: 4,096 columns, every tile vertex, 12 samples. But the orbital maps get a **per-system GPU memory cap of 128 MB**: a system with many worlds lowers its maps' resolution to fit (a 16-world system would otherwise reach about 205 MB).
+  - **Built** (track T, 2026-09-29): `ds.Terrain.BuildTasks` 3, where three workers exposed a streaming fault that drew a level-2 tile 792 m off the ground under the ship (ancestors never built) -- fixed, `GroundKeepsUp` 10.21 cm and `GroundKeepsUpAtDusk` 12.84 cm; the map uploaded in 512 KB pieces of rows over several frames (`ds.Sky.ShadowUploadKB`), 0.16 ms of game thread at worst; the cap on the RHI's own texture size (`ShipSky::CappedShadowWidths`), the finest texel halved first. The corpus's worst system today is Trabo, 12 solid worlds, not 16.
+  - **Reviewed, 2026-09-29** (track T's review, fixed on `feat/landing-b-t`; the plan's *Review record* has the runs): the cut's vertex shadows are held **once** -- the resident cut and its tile components share one tile, and a pooled component waiting for its next tile holds none -- 6.12 MB, within the 12 MB (it was 12.25 MB, OVER, as two copies). The 128 MB cap is **asserted** on the path the game uses: `Eyes.ShadowBakeCost` holds every system's maps, as the RHI sizes them, to it, and every solid world's map to having landed; `DeepSpace.Sky.ShadowCapSynced` holds `SyncShadowMaps`' own widths to `CappedShadowWidths` under `ShadowTextureBytes`. Under the cap a world's width depends on every world's radius and lowest row, so a reload that moves one world's radius or peak **may re-bake another**; one that moves a seed never does. The ground's remembered child ranges are bounded by the cut (three levels), not by the ground flown over. **The frame's price of the lookup, measured**: `Eyes.LandingFrame` against the same build with materials that never read the shadow, -0.10..+0.12 ms, every case within its band -- it costs nothing per frame. **The dusk handover step** was the ground's vertex normal, interpolated across triangles and so smoother than the orbit's per-pixel one, and at a grazing sun saturate(N.L) is convex: the ground's normal now takes its split between vertex and pixel **in with the relief** (the pixel's bands at lerp(1, BandLimit, Morph), the vertex normal lerp(D, it, Morph)), so at the handover it is the orbit's. Without the shadow the dusk frames are 3.0e-3 apart (were 2.2e-2), the 62.6-degree ones 5.4e-4 (were 2.3e-5): still red against 1e-3 at dusk, on the face's Detail term alone (zeroing terms on both materials: the bare sphere 2e-6, mottle 1e-6, craters 5e-5, detail 2.0e-3). **Open, for the developer:** that dusk tolerance; `map_upload_rt_ms_all` 4.74 ms against 4 -- 3 or 4 of about 480 pieces take 4.3-4.9 ms of the render thread, the rest under 0.5 ms, whatever the piece's size (a 225 KB piece alike), not the test flush's queueing (a frame end after every pump changed nothing), only in Trabo's loads; and `Eyes.TerrainBudget` read red once its harness stopped charging the empty scene for the engine's frame in flight and moved the tiles before every timed capture: 2,200 tiles +5.97..+6.13 ms of a 4K capture against 6, moving every tile each frame +7.72..+7.81 ms of render thread and GPU against 2, and 2.12..2.15 ms of game thread against 2. `Eyes.ReliefLook`'s off frames match a baseline taken on the same build with materials that never read the shadow, all twelve.
 - **Slice (b)'s last open items (the orchestrator, 2026-09-29, applying the rulings above):**
   - **The dusk handover** is held to 5e-3 relative under a sun below 5 degrees; noon stays at 1e-3. The measured 3.1e-3 at a 3-degree sun is 4.5e-5 of absolute brightness on a scene at 1.4%, and the shadow keeps the same share of light on both sides (0.8135 against 0.8137).
   - **The orbital map's render-thread upload** uses smaller pieces, so every upload frame stays under 4 ms.
+    - **Built otherwise, 2026-09-29 -- past this ruling, on the sign-off list** (`feat/landing-b-t`; the plan's Task 39 notes have the runs): the pieces were **not** made smaller. Measured, smaller pieces did not reach it: at 128 KB the slow pieces still took 4.37-5.19 ms, as at 512 KB. The stall was the test's, not the upload's: `Eyes.ShadowBakeCost` landed Trabo's maps inside one `RunTest`, where no engine frame ends, and the Vulkan RHI recycles an upload's staging buffer only at a frame's end, so its staging pool grew a page at a time and each new page stalled one piece. Play lands a frame's pieces a frame; the test now does too (`AShipSky::PumpShadowBakesForTest`, one pump per engine frame), and the slowest upload frame reads 0.11 ms. So `ds.Sky.ShadowUploadKB` stays 512, and the 4 ms is met on the pieces as built. **It is asserted**: `Eyes.ShadowBakeCost` fails if the slowest upload frame's render-thread work (`map_upload_rt_ms_all`) is over 4 ms -- the one timing that test asserts, since 0.11 against 4 is a margin no loaded machine closes.
   - **Tiles move every frame, because the ship is the origin.** Moving every tile cost +7.7 ms a frame in `Eyes.TerrainBudget`, and `Eyes.LandingFrame` only measured a still ship. Under the frame ruling (profile, then fix the real cost), the tiles are drawn through one shared transform, so a frame's motion is one update, not one per tile, and `Eyes.LandingFrame` gains cases in motion. Every case, moving or still, must stay within 16.6 ms at 4K.
 - **Eyes captures now honour the game's exposure** (they ignored `ds.Sky.Exposure` until then). The ruled before/after means were read at the capture's default, so they compare with each other but not with play.
 
@@ -444,11 +449,25 @@ cliff. The material never shows it, because it uses only the slope; as a
 height it would break `MaxSlope`, the ray march, `.Gradient` and
 `.SlopeBound`, and put vertical steps in the mesh. So in `WorldRelief`
 **a crater band is a sum of compact kernels, one per kept site, over the
-3 x 3 x 3 cells around the sample** (the profile unchanged, reaching 0 with
-zero slope at q = 1.5; a dropped site contributes 0; overlapping craters
-add). With jitter at most 0.26 cells, a 3 x 3 x 3 neighbourhood sees every
-site within 0.74 cells, past the profile's 0.525, so the sum is continuous
-and differentiable. It costs 27 site hashes a band instead of 8.
+2 x 2 x 2 lattice corners round the sample, floor(P) and the corner after
+it on each axis** (the profile unchanged, reaching 0 with zero slope at
+q = 1.5; a dropped site contributes 0; overlapping craters add). With jitter
+at most 0.2588 cells, a site within the profile's 0.525 cells of P has its
+corner within 0.784 cells of P on every axis, so floor(P) or the next one
+holds it, and the sum is continuous and differentiable. It costs 8 site
+hashes a band.
+
+*Amended 2026-09-28, as built (fc829a7):* this decision first read "over the
+3 x 3 x 3 cells around the sample ... 27 site hashes a band", round
+floor(P + 0.5), and slice (b) shipped that. The frame ruling's profile found
+the crater kernel most of the ground's pixel shader, and the 27 corners were
+19 more than can reach: the kernel now visits the 8, in the order the 27
+did, so every sum is the same to the last bit (the heights, the handover's
+parity and `Eyes.WorldReliefParity` unchanged). `DeepSpace.Surface.CraterKernelCorners`
+holds it to the 27-corner kernel over a million points in double and float,
+and holds it at 8 corners a band: a restored 3 x 3 x 3 matches the 8 bit
+for bit, so only the count can see it. Do not widen it again; it was 4.2 ms
+of the frame at 1.5 m.
 
 **Slice (a) keeps today's craters** for the look, in the material only:
 `Height` in (a) is the detail bands alone (nothing reads it yet but tests).
@@ -715,6 +734,30 @@ day. If either fails, the fallback is a small custom primitive,
 and no CPU copy beyond a test hook; the pure core is unchanged by the
 swap. Sign-off item 15.
 
+**Measured, the first day of (b)** (`Eyes.TerrainBudget`, this machine's RTX 4070 Ti SUPER, 4K):
+PMC's CPU copies 508.4 MB at 2,500 tiles; 2,200 tiles cost 68.86 ms of a 4K capture over the
+empty scene; moving every tile 1.17 ms of game thread and 108.36 ms more to draw; one
+`UpdateMeshSection` 0.013 ms. **Verdict: CUSTOM PRIMITIVE.** Three of the four budgets failed:
+the CPU copies (508.4 MB against 400; `FProcMeshVertex` is 148 bytes a vertex and a tile has
+1,221, so this one is arithmetic, not timing), the draw (68.86 ms against 6) and the draw after
+moving every tile (108.36 ms against 2); only the move's game thread (1.17 ms against 2) passed.
+A second run agreed to within 1 ms on the draw (69.47, 105.86) and exactly on the copies.
+`UTerrainTileComponent` (Task T5) replaces PMC in `AWorldGround`. The draw numbers are so far
+past the budget that T5 must measure its static path through the same gate before T6 builds on
+it: a draw cost that is the GPU's, not the dynamic path's, would fail the custom primitive too.
+
+**Measured again with `UTerrainTileComponent` (Task T5, 2026-09-28, the same gate, same machine):**
+its kept tiles 153.5 MB at 2,500 tiles (against 400); 2,200 tiles cost 4.96 ms of a 4K capture
+over the empty scene (against 6); moving every tile 0.95 ms of game thread (against 2) and no more
+to draw after it (-0.76 ms, against 2); one `SetTile` 0.012 ms. **All four pass.** Two things
+differ from the plan. The proxy draws on the *dynamic* path, not the static one: on the static
+path the batch was cached (`DrawStaticElements` ran with the vertex factory initialised) but
+nothing reached the picture, which the gate now checks -- a base-colour capture must find a tile
+at the centre -- and the same proxy on the dynamic path draws. The draw cost was PMC's per-section
+dynamic path, not the GPU's, so the dynamic path of a primitive with one batch and no CPU rebuild
+passes; the static path stays a possible saving (the budget's 6 ms has 1 ms spare). And the
+kept copy (one `FTileBuild` per tile, for proxy recreation) is about 30% of PMC's, not a quarter.
+
 **The frame.** `AWorldGround` (new, `Source/DeepSpace/Surface/`) attaches
 to `AShipCounterFrame`, identity relative, and is spawned by
 `build_hauler.py` as `hauler_ground` (tagged `Sky.Ground`). Each tile's
@@ -775,6 +818,14 @@ split factor 1.5 with 65 x 65 tiles it is 530-1,300 tiles but 4-10 M
 triangles. `DeepSpace.Surface.Quadtree` computes these counts per altitude,
 and the budgets below are revised from it on slice (b)'s first day.
 
+**Measured, slice (b)** (`DeepSpace.Surface.Quadtree`, Task T3; an Earth, split factor 2, 33 x 33,
+each node's box its own range -- a rise of a quarter of its edge, the roots the 2 km analytic peaks
+for the horizon): **408 tiles at 50 km, 573 at 10 km, 797 at 1 km, 1,186 at 20 m and 1,177 at
+1.5 m**, 0.9-2.7 M triangles -- about half the simulation's at every height, and under half of
+`MaxTiles`, so the ceiling is not raised. Given the whole 2 km shell as every node's box, which this
+decision forbids, the same cut draws 4,591 tiles at 1.5 m and 15,734 at 1 km: the near field under
+the highest peak's height refines to `MaxLevel`, and no split factor can coarsen it under the cap.
+
 **`MaxTiles` (2,500) is a ceiling, not a target.** A cut that would exceed
 it coarsens **the farthest levels first**, lowering their split factor a
 step at a time; the ship's own chain, root to `MaxLevel`, is never
@@ -785,12 +836,13 @@ pure: positions from `Height(D, spacing)` (the tile's vertex spacing as the
 footprint, so a coarse tile never samples fine bands into vertex noise),
 normals from the analytic gradient of the same band-limited height (no
 finite differences). It runs on `UE::Tasks::Launch` (Unreal's task system:
-work handed to worker threads) with **at most 2 builds in flight**
+work handed to worker threads) with **at most 3 builds in flight**
 (`ds.Terrain.BuildTasks`, the machine's cap: never sized to the core
-count). The game thread applies at most `ds.Terrain.UploadsPerFrame` (4)
+count; 3 since the cast-shadow ruling of 2026-09-28, from 2). The game thread applies at most `ds.Terrain.UploadsPerFrame` (4)
 finished tiles a frame. Estimated cost: 3-8 us a sample (more with the
 summed craters, decision 3), 5-10 ms a tile, 200-400 tiles a second on two
-workers.
+workers. **Measured (Task T4, `DeepSpace.Surface.Tile`, 2026-09-27): 3.43 ms a
+tile** on the fixture barren world, craters in, single-threaded.
 
 **What the build must keep up with.** Under the drive floor the skim cap
 (decision 10) holds horizontal speed to at most 0.4 x AGL a second, so the
@@ -817,7 +869,7 @@ the ship, whenever AGL is under 1 km, the drawn ground must be within
 (`DeepSpace.Surface.GroundActor`, and a playtest flight at the skim cap).
 
 **Budgets** (CVars, read at use): `ds.Terrain.SplitFactor` 2.0,
-`.MaxTiles` 2,500, `.BuildTasks` 2, `.UploadsPerFrame` 4. Header constants
+`.MaxTiles` 2,500, `.BuildTasks` 3, `.UploadsPerFrame` 4. Header constants
 with tests: 32 cells a tile, 1 m target spacing. `ds.Terrain.Describe`
 prints the cut per level with resident and pending counts; `ds.Terrain.Show
 0` hides the ground for comparison.
@@ -828,7 +880,11 @@ different levels carry different bands). A split still pops by what the
 child's finer bands add: at split factor 2 that is about slope / 64
 radians, a few 4K pixels. `DeepSpace.Surface.Tile` computes the largest
 vertex jump at a split in 4K pixels at the split distance, and slice (b)
-reports it. Geomorphing (vertices easing between levels) is sign-off item
+reports it. **Measured (Task T4, 2026-09-27): 1.66 4K pixels** at split factor
+2 on the fixture barren world (and the half-float height's rounding PMC's UVs
+would give, 195 cm at most, was 0.07 of a pixel at the handover; since T5 the
+tiles are UTerrainTileComponent's, with full-precision UVs, and the height in
+kilometres rounds to under a millimetre). Geomorphing (vertices easing between levels) is sign-off item
 16.
 
 **Rejected:** `UDynamicMeshComponent` (full half-edge topology, heavier than
@@ -1161,8 +1217,17 @@ deterministic, independent of what the mesh has streamed.
   raised in (b), before anything else).
 - **Cost:** marched **once a frame** per direction, at the frame's first
   substep; each later substep reduces the proven-clear distance by the
-  distance flown along the ray (conservative), and marches again only if
-  the direction has turned by more than a degree. Per substep only the
+  distance flown along the ray, and marches again when the direction has
+  turned by more than a degree. **Amended in review (slice b):** that is
+  conservative only for motion along the ray -- a sinking ship's horizontal
+  ray meets rising ground nearer by the drop over the slope's tangent, and
+  no distance bound covers a ray that only grazed a crest. So the cache is
+  reused only while the clearance the new ray can have lost against the old,
+  (offset across it + the distance left x the turn) x (1 + `MaxSlope`),
+  stays under 1 cm (`ShipFlight::RayReuseToleranceCm`); otherwise it
+  marches again. Flying along the ray it is still once a frame; sinking,
+  sliding or turning it is once a substep
+  (`DeepSpace.Ship.Landing.GroundRayMovedAcross`). Per substep only the
   footprint's eight points are sampled (decision 11). At 3-8 us a sample
   that is about 0.3-0.6 ms a frame at 60 Hz; a 2 s hitch (240 substeps)
   costs 240 x 8 samples, about 10-15 ms, once. Measured in slice (b).
@@ -1283,8 +1348,9 @@ feet** at the gear's foot height, `Z = -GearClearance` (-150 cm), about
 (-700, -300), (-700, 400), (1600, -100), (1600, 200) cm, and **four belly
 corners** at the belly, `Z = -10` cm, at the hull's plan corners.
 `GEAR` and `BELLY` in `Tools/hauler_layout.py`, mirrored as
-`ShipLanding::GearFeet` and `ShipLanding::BellyCorners`, held equal by
-`test_placement.py` reading the C++ (as it does the dressing tags).
+`ShipLanding::GearFeetXY` (the feet in plan, their Z the gear clearance,
+live on `ds.Land.GearClearance`) and `ShipLanding::BellyCorners`, held
+equal by `test_placement.py` reading the C++ (as it does the dressing tags).
 
 **`FootprintClearance`** is the least height of any footprint point above
 the ground under it: 0 when a foot touches. The descent cap, the hard stop,
@@ -1609,7 +1675,7 @@ recompiled once, by `setup_flight_input.py`, for the two new actions.
 | `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
 | `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g (cap 3 g), 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp` |
 | `ds.Hum.HoldHiss` | 0.35 at the 3 g cap, never above `ds.Hum.CruiseHiss` | `ShipHumComponent.cpp` |
-| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 2, 4, 1 | `WorldGround.cpp` |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 3, 4, 1 | `WorldGround.cpp` |
 
 Commands: `ds.Terrain.Describe`; `ds.Sky.Goto` as above.
 

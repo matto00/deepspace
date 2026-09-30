@@ -22,6 +22,8 @@ namespace WorldReliefF32
 }
 #undef WR_CPP
 
+namespace WR64 = WorldReliefF64;
+
 namespace WorldReliefLocal
 {
     template <typename TTerms>
@@ -34,6 +36,32 @@ namespace WorldReliefLocal
         Face.CraterAlbedo = Terms.CraterAlbedo;
         Face.CraterSlope = FVector3d(Terms.CraterSlopeX, Terms.CraterSlopeY, Terms.CraterSlopeZ);
         return Face;
+    }
+
+    template <typename TCoord>
+    WorldReliefNoise::FShadowCoord ToShadowCoord(const TCoord& C)
+    {
+        WorldReliefNoise::FShadowCoord Out;
+        Out.U = C.U;
+        Out.V = C.V;
+        Out.Level0 = C.Level0;
+        Out.Level1 = C.Level1;
+        Out.Blend = C.Blend;
+        Out.Night = C.Night;
+        return Out;
+    }
+
+    template <typename TTaps>
+    WorldReliefNoise::FShadowTaps ToShadowTaps(const TTaps& T)
+    {
+        WorldReliefNoise::FShadowTaps Out;
+        Out.X0 = T.X0;
+        Out.X1 = T.X1;
+        Out.Y0 = T.Y0;
+        Out.Y1 = T.Y1;
+        Out.FX = T.FX;
+        Out.FY = T.FY;
+        return Out;
     }
 }
 
@@ -66,14 +94,60 @@ double WorldReliefNoise::CellHash(const FVector3d& V)
     return WorldReliefF64::WR_CellHash(V.X, V.Y, V.Z);
 }
 
-FFaceTerms WorldReliefNoise::FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch)
+FFaceTerms WorldReliefNoise::FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch,
+                                       double VertexBandLimit)
 {
-    return WorldReliefLocal::ToFaceTerms(WorldReliefF64::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch));
+    return WorldReliefLocal::ToFaceTerms(WorldReliefF64::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch, VertexBandLimit));
 }
 
-FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch)
+FFaceTerms WorldReliefNoise::FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch,
+                                       float VertexBandLimit)
 {
-    return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch));
+    return WorldReliefLocal::ToFaceTerms(WorldReliefF32::WR_SurfaceTerms(D.X, D.Y, D.Z, FootprintD, Offset.X, Offset.Y, Offset.Z, Stretch, VertexBandLimit));
+}
+
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo,
+                                                                   double Step, double Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF64::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowCoord WorldReliefNoise::ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo,
+                                                                   float Step, float Footprint, int32 Levels)
+{
+    return WorldReliefLocal::ToShadowCoord(WorldReliefF32::WR_ShadowMapCoord(D.X, D.Y, D.Z, X.X, X.Y, X.Z, Z.X, Z.Y, Z.Z,
+        PsiLo, Step, Footprint, Levels));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF64::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+WorldReliefNoise::FShadowTaps WorldReliefNoise::ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level)
+{
+    return WorldReliefLocal::ToShadowTaps(WorldReliefF32::WR_ShadowTapsAt(U, V, Width, Rows, Level));
+}
+
+double WorldReliefNoise::BilinearF64(double A, double B, double C, double D, double FX, double FY)
+{
+    return WorldReliefF64::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+float WorldReliefNoise::BilinearF32(float A, float B, float C, float D, float FX, float FY)
+{
+    return WorldReliefF32::WR_Bilinear(A, B, C, D, FX, FY);
+}
+
+double WorldReliefNoise::LerpF64(double A, double B, double T)
+{
+    return WorldReliefF64::WR_Lerp(A, B, T);
+}
+
+float WorldReliefNoise::LerpF32(float A, float B, float T)
+{
+    return WorldReliefF32::WR_Lerp(A, B, T);
 }
 
 double WorldReliefNoise::CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band)
@@ -203,9 +277,22 @@ double FWorldRelief::DetailSum(const FVector3d& D, double FootprintD, FVector3d*
     FVector3d Gradient = FVector3d::ZeroVector;
     for (int32 Band = 0; Band < Frequencies.Num(); ++Band)
     {
+        // A band the footprint has faded whole is scaled by saturate(1 -
+        // footprint x frequency) = exactly 0, value and gradient: skipping
+        // it changes nothing, and the finer bands cost most of a coarse
+        // read (the cast shadow's far samples; Task 7b). The margin keeps
+        // the skip off a band whose fade a contracted multiply-add could
+        // leave a hair above 0.
+        if (FootprintD * Frequencies[Band] >= 1.0 + 1.0e-9)
+        {
+            continue;
+        }
         const int32 Index = Indices[Band];
+        // The band's lattice offset split as the shared file splits it
+        // (Task 31b): the same function as the whole sum, rounded where the
+        // GPU's float build rounds.
         const WorldReliefF64::WR_Noise4 Noise = WorldReliefF64::WR_DetailBand(D.X, D.Y, D.Z, Frequencies[Band],
-            Params.SeedOffset.X + 37.0 * Index, Params.SeedOffset.Y + 59.0 * Index, Params.SeedOffset.Z + 83.0 * Index,
+            WorldReliefF64::WR_SplitOffset(Params.SeedOffset.X, Params.SeedOffset.Y, Params.SeedOffset.Z, Index),
             FootprintD, Weights[Band]);
         // A band's height is its value over its frequency, so its gradient
         // in D is the noise's own gradient: every band has the same slope.
@@ -263,6 +350,88 @@ double FWorldRelief::PeakCap(double X, double* OutSlope)
     return FMath::Sign(X) * FMath::Min(1.0, PeakCapKnee + Room * Bent);
 }
 
+namespace WorldReliefCraterLocal
+{
+    /** The crater profile's largest magnitude, depth units: the bowl's floor,
+     *  depth (1 - rim), or the rim's crest, depth rim. */
+    double ProfileMagnitude()
+    {
+        return FMath::Max(WR64::WR_CRATER_DEPTH * (1.0 - WR64::WR_CRATER_RIM), WR64::WR_CRATER_DEPTH * WR64::WR_CRATER_RIM);
+    }
+
+    /** Its slope's largest magnitude: the bowl's 2 depth at the crest, or the
+     *  rim's 4 depth rim. */
+    double WallMagnitude()
+    {
+        return FMath::Max(2.0 * WR64::WR_CRATER_DEPTH, 4.0 * WR64::WR_CRATER_DEPTH * WR64::WR_CRATER_RIM);
+    }
+}
+
+double FWorldRelief::CraterBound()
+{
+    using namespace WorldReliefCraterLocal;
+    double Bound = 0.0;
+    for (int32 Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
+    {
+        const double F = WR64::WR_CRATER_FREQUENCY[Crater];
+        Bound += WR64::WR_CRATER_BOUND_COUNT * WR64::WR_CRATER_RADIUS * ProfileMagnitude() / F;
+    }
+    return Bound;
+}
+
+double FWorldRelief::CraterSlopeBound()
+{
+    return WR_CRATER_BANDS * WR64::WR_CRATER_BOUND_COUNT * WorldReliefCraterLocal::WallMagnitude();
+}
+
+double FWorldRelief::CraterOmittedBound(double FootprintRadius)
+{
+    using namespace WorldReliefCraterLocal;
+    double Bound = 0.0;
+    for (int32 Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
+    {
+        const double F = WR64::WR_CRATER_FREQUENCY[Crater];
+        Bound += (1.0 - FMath::Clamp(1.0 - FootprintRadius * F, 0.0, 1.0)) * WR64::WR_CRATER_BOUND_COUNT * WR64::WR_CRATER_RADIUS * ProfileMagnitude() / F;
+    }
+    return Bound;
+}
+
+double FWorldRelief::CraterSum(const FVector3d& D, double FootprintRadius, FVector3d* OutGradient) const
+{
+    const WR64::WR_CraterTerm Craters = WR64::WR_CraterSum(D.X, D.Y, D.Z, Params.SeedOffset.X, Params.SeedOffset.Y,
+                                                           Params.SeedOffset.Z, FootprintRadius, 1.0);
+    if (OutGradient)
+    {
+        *OutGradient = FVector3d(Craters.GX, Craters.GY, Craters.GZ);
+    }
+    return Craters.H;
+}
+
+bool FWorldRelief::HasGround() const
+{
+    return Params.Ground == EGround::Solid && Params.PeakCm > 0.0 && Params.RadiusCm > 0.0 && SumBound > 0.0;
+}
+
+double FWorldRelief::Kept() const
+{
+    return FMath::Max(Params.Cratering, 0.0);
+}
+
+double FWorldRelief::MaxHeightCm() const
+{
+    return Params.Ground == EGround::Solid ? FMath::Max(Params.PeakCm, 0.0) : 0.0;
+}
+
+double FWorldRelief::MinHeightCm() const
+{
+    return -MaxHeightCm();
+}
+
+double FWorldRelief::SlopeScale() const
+{
+    return HasGround() ? Params.PeakCm / (Params.RadiusCm * SMax()) : 0.0;
+}
+
 double FWorldRelief::Height(const FVector3d& D, double FootprintCm) const
 {
     FVector3d Unused;
@@ -271,16 +440,20 @@ double FWorldRelief::Height(const FVector3d& D, double FootprintCm) const
 
 double FWorldRelief::HeightAndGradient(const FVector3d& D, FVector3d& Grad, double FootprintCm) const
 {
-    if (Params.PeakCm <= 0.0 || SumBound <= 0.0)
+    Grad = FVector3d::ZeroVector;
+    if (!HasGround())
     {
-        Grad = FVector3d::ZeroVector;
         return 0.0;
     }
-    FVector3d Gradient;
-    const double Total = DetailSum(D, FootprintOf(FootprintCm), &Gradient);
+    const double Footprint = FootprintOf(FootprintCm);
+    FVector3d DetailGradient;
+    const double Detail = DetailSum(D, Footprint, &DetailGradient);
+    FVector3d CraterGradient;
+    const double Craters = CraterSum(D, Footprint, &CraterGradient);
+    const double Total = Detail + Kept() * Craters;
     double CapSlope = 1.0;
     const double Capped = PeakCap(Total / SMax(), &CapSlope);
-    Grad = Gradient * (Params.PeakCm / SMax() * CapSlope);
+    Grad = (DetailGradient + CraterGradient * Kept()) * (Params.PeakCm / SMax() * CapSlope);
     return Params.PeakCm * Capped;
 }
 
@@ -291,16 +464,17 @@ FFaceTerms FWorldRelief::Face(const FVector3d& D, double FootprintCm) const
 
 double FWorldRelief::OmittedBoundCm(double FootprintCm) const
 {
-    if (Params.PeakCm <= 0.0 || SumBound <= 0.0)
+    if (!HasGround())
     {
         return 0.0;
     }
     // PeakCap is 1-Lipschitz, so the height moves at most PeakCm / S_max
-    // times what S lost. And what remains of S, at most SumBound less what
+    // times what S lost. And what remains of S, at most its bound less what
     // was omitted, bounds the faded height: with every band faded it is 0,
     // and the difference is at most the peak itself.
-    const double Omitted = DetailOmittedBound(FootprintOf(FootprintCm));
-    const double Remaining = FMath::Max(0.0, SumBound - Omitted);
+    const double Footprint = FootprintOf(FootprintCm);
+    const double Omitted = DetailOmittedBound(Footprint) + Kept() * CraterOmittedBound(Footprint);
+    const double Remaining = FMath::Max(0.0, SumBound + Kept() * CraterBound() - Omitted);
     const double ByLipschitz = Params.PeakCm * Omitted / SMax();
     const double ByRange = Params.PeakCm * (1.0 + FMath::Min(1.0, Remaining / SMax()));
     return FMath::Min(ByLipschitz, ByRange);
@@ -308,16 +482,50 @@ double FWorldRelief::OmittedBoundCm(double FootprintCm) const
 
 double FWorldRelief::MaxSlope() const
 {
-    if (Params.PeakCm <= 0.0 || SumBound <= 0.0 || Params.RadiusCm <= 0.0)
+    if (!HasGround())
     {
         return 0.0;
     }
     // dHeight/dD is bounded by PeakCm / S_max x PeakCap's slope (at most 1)
-    // x sum(w G), and an arc of length s along the ground moves D by s / R.
-    return Params.PeakCm / SMax() * DetailSlopeBound() / Params.RadiusCm;
+    // x the sum's Lipschitz bound, detail and craters; an arc of length s
+    // along the ground moves D by s / R.
+    return SlopeScale() * (DetailSlopeBound() + Kept() * CraterSlopeBound());
 }
 
 double FWorldRelief::FinestWavelengthCm() const
 {
     return Frequencies.IsEmpty() ? 0.0 : Params.RadiusCm / Frequencies.Last();
+}
+
+namespace WorldReliefShadingLocal
+{
+    /** surface()'s slope for a rocky world (stretch 1). */
+    FVector3d SlopeOf(const FWorldReliefParams& Params, const FFaceTerms& Terms)
+    {
+        const double ReliefScale = FWorldRelief(Params).SlopeScale();
+        return (Terms.DetailSlope + Terms.CraterSlope * FMath::Max(Params.Cratering, 0.0)) * ReliefScale;
+    }
+}
+
+WorldReliefShading::FSurface WorldReliefShading::Orbit(const FWorldReliefParams& Params, const FVector3d& D, double FootprintRadius)
+{
+    FSurface Out;
+    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, 1.0);
+    Out.Slope = WorldReliefShadingLocal::SlopeOf(Params, Out.Terms);
+    Out.Normal = (D - (Out.Slope - D * FVector3d::DotProduct(Out.Slope, D))).GetSafeNormal();
+    return Out;
+}
+
+WorldReliefShading::FSurface WorldReliefShading::Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
+                                                        double FootprintRadius, double VertexBandLimit, double Morph)
+{
+    FSurface Out;
+    const double Limit = FMath::Lerp(1.0, VertexBandLimit, Morph);
+    const FVector3d Vertex = FMath::Lerp(D, VertexNormal, Morph);
+    Out.Terms = WorldReliefNoise::FaceF64(D, FootprintRadius, Params.SeedOffset, 1.0, Limit);
+    Out.Slope = WorldReliefShadingLocal::SlopeOf(Params, Out.Terms);
+    const WR64::WR_GroundNormalOut N = WR64::WR_GroundNormal(D.X, D.Y, D.Z, Vertex.X, Vertex.Y, Vertex.Z,
+                                                             Out.Slope.X, Out.Slope.Y, Out.Slope.Z);
+    Out.Normal = FVector3d(N.NX, N.NY, N.NZ);
+    return Out;
 }

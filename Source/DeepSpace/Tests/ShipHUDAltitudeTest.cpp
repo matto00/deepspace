@@ -35,8 +35,8 @@ bool FShipHUDAltitudeTest::RunTest(const FString& Parameters)
     const auto Words = [](double Cm) { return UShipHUDWidget::AltitudeWords(Cm); };
 
     // -- The units, at each boundary ----------------------------------------
-    TestEqual(TEXT("on the surface"), Words(0.0), FString(TEXT("0 M")));
-    TestEqual(TEXT("never below it"), Words(-5.0e4), FString(TEXT("0 M")));
+    TestEqual(TEXT("on the surface"), Words(0.0), FString(TEXT("0.0 M")));
+    TestEqual(TEXT("never below it"), Words(-5.0e4), FString(TEXT("0.0 M")));
     TestEqual(TEXT("metres under a kilometre"), Words(999.4 * 100.0), FString(TEXT("999 M")));
     TestEqual(TEXT("a kilometre, never 1000 M"), Words(999.6 * 100.0), FString(TEXT("1.0 KM")));
     TestEqual(TEXT("tenths of a kilometre close in"), Words(42.26 * Km), FString(TEXT("42.3 KM")));

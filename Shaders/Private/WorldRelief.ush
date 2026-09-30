@@ -29,6 +29,16 @@
 // Everything is a function of D, the unit direction from the body's centre in
 // its own axes (the universe's: worlds do not spin), and every frequency is
 // in cycles per body radius.
+//
+// Every band's lattice offset -- the seed offset plus (37, 59, 83) x its band
+// number -- is kept as an exact integer part apart from its fraction
+// (landing slice (b), Task 31b; the developer's ruling at R2). The noise's
+// float arithmetic sees only D x frequency and a fraction; the integer part
+// reaches the lattice hash alone, in integer arithmetic. Summed whole, the
+// coordinates reached about 1,250 (detail) and 9,000 (craters), where a
+// float's step is 1e-4 to 1e-3 of a cell: the floor every GPU evaluation sat
+// on, the engine's own nodes included. The value is the same function in
+// exact arithmetic: only where float rounds has moved.
 
 #if defined(WR_CPP)
 // -- C++ ---------------------------------------------------------------------
@@ -45,6 +55,9 @@ inline WR_REAL WR_min(WR_REAL A, WR_REAL B) { return A < B ? A : B; }
 inline WR_REAL WR_max(WR_REAL A, WR_REAL B) { return A > B ? A : B; }
 inline WR_REAL WR_sqrt(WR_REAL X) { return std::sqrt(X); }
 inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0) : WR_REAL(0.0); }
+inline WR_REAL WR_asin(WR_REAL X) { return std::asin(X); }
+inline WR_REAL WR_atan2(WR_REAL Y, WR_REAL X) { return std::atan2(Y, X); }
+inline WR_REAL WR_log2(WR_REAL X) { return std::log2(X); }
 #else
 // -- HLSL --------------------------------------------------------------------
 #pragma once
@@ -60,6 +73,9 @@ inline WR_REAL WR_step(WR_REAL Edge, WR_REAL X) { return X >= Edge ? WR_REAL(1.0
 #define WR_max(A, B) max(A, B)
 #define WR_sqrt(X) sqrt(X)
 #define WR_step(Edge, X) step(Edge, X)
+#define WR_asin(X) asin(X)
+#define WR_atan2(Y, X) atan2(Y, X)
+#define WR_log2(X) log2(X)
 #endif
 
 // -- The bands ---------------------------------------------------------------
@@ -131,6 +147,38 @@ WR_Vec3 WR_MakeVec3(WR_REAL X, WR_REAL Y, WR_REAL Z)
     return V;
 }
 
+// A band's lattice offset, split: I, integer, and F, the fraction, 0..1.
+struct WR_Offset { int IX; int IY; int IZ; WR_REAL FX; WR_REAL FY; WR_REAL FZ; };
+
+// The seed offset O plus (37, 59, 83) x Index, split exactly: O is a
+// multiple of 1/256 under 256, so its floor and its fraction are exact in
+// float, and the band's own shift is an integer.
+WR_Offset WR_SplitOffset(WR_REAL OX, WR_REAL OY, WR_REAL OZ, int Index)
+{
+    const WR_REAL FloorX = WR_floor(OX);
+    const WR_REAL FloorY = WR_floor(OY);
+    const WR_REAL FloorZ = WR_floor(OZ);
+    WR_Offset O;
+    O.IX = int(FloorX) + 37 * Index;
+    O.IY = int(FloorY) + 59 * Index;
+    O.IZ = int(FloorZ) + 83 * Index;
+    O.FX = OX - FloorX;
+    O.FY = OY - FloorY;
+    O.FZ = OZ - FloorZ;
+    return O;
+}
+
+// Floor division by 3 of an int, in either compiler (both truncate).
+int WR_FloorDiv3(int S)
+{
+    int Q = S / 3;
+    if (Q * 3 > S)
+    {
+        Q -= 1;
+    }
+    return Q;
+}
+
 // -- The hash: Rand3DPCG16 (RandomPCG.ush), bit for bit ----------------------
 // An LCG step, then six multiply-add Feistel rounds; the top 16 bits of each.
 WR_Hash3 WR_Rand3DPCG16(int PX, int PY, int PZ)
@@ -178,32 +226,34 @@ WR_REAL WR_Lerp(WR_REAL A, WR_REAL B, WR_REAL T)
     return A + T * (B - A);
 }
 
-WR_REAL WR_GradientNoise(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+// At V + K, K an integer lattice shift: the lattice cell is V's own plus K,
+// the position in it V's own.
+WR_REAL WR_GradientNoiseAt(WR_REAL VX, WR_REAL VY, WR_REAL VZ, int KX, int KY, int KZ)
 {
-    const WR_REAL IX = WR_floor(VX);
-    const WR_REAL IY = WR_floor(VY);
-    const WR_REAL IZ = WR_floor(VZ);
+    const int IX = int(WR_floor(VX)) + KX;
+    const int IY = int(WR_floor(VY)) + KY;
+    const int IZ = int(WR_floor(VZ)) + KZ;
     const WR_REAL FX = WR_frac(VX);
     const WR_REAL FY = WR_frac(VY);
     const WR_REAL FZ = WR_frac(VZ);
     // NoiseSeeds, untiled: the corners' seeds are the lattice point dotted
     // with the primes (19, 47, 101), then offsets of those primes.
-    const WR_REAL S000 = IX * WR_REAL(19.0) + IY * WR_REAL(47.0) + IZ * WR_REAL(101.0);
-    const WR_REAL S100 = S000 + WR_REAL(19.0);
-    const WR_REAL S010 = S000 + WR_REAL(47.0);
-    const WR_REAL S110 = S100 + WR_REAL(47.0);
-    const WR_REAL S001 = S000 + WR_REAL(101.0);
-    const WR_REAL S101 = S100 + WR_REAL(101.0);
-    const WR_REAL S011 = S010 + WR_REAL(101.0);
-    const WR_REAL S111 = S110 + WR_REAL(101.0);
-    const WR_REAL R000 = WR_MGradientDot(int(S000), FX, FY, FZ);
-    const WR_REAL R100 = WR_MGradientDot(int(S100), FX - WR_REAL(1.0), FY, FZ);
-    const WR_REAL R010 = WR_MGradientDot(int(S010), FX, FY - WR_REAL(1.0), FZ);
-    const WR_REAL R110 = WR_MGradientDot(int(S110), FX - WR_REAL(1.0), FY - WR_REAL(1.0), FZ);
-    const WR_REAL R001 = WR_MGradientDot(int(S001), FX, FY, FZ - WR_REAL(1.0));
-    const WR_REAL R101 = WR_MGradientDot(int(S101), FX - WR_REAL(1.0), FY, FZ - WR_REAL(1.0));
-    const WR_REAL R011 = WR_MGradientDot(int(S011), FX, FY - WR_REAL(1.0), FZ - WR_REAL(1.0));
-    const WR_REAL R111 = WR_MGradientDot(int(S111), FX - WR_REAL(1.0), FY - WR_REAL(1.0), FZ - WR_REAL(1.0));
+    const int S000 = IX * 19 + IY * 47 + IZ * 101;
+    const int S100 = S000 + 19;
+    const int S010 = S000 + 47;
+    const int S110 = S100 + 47;
+    const int S001 = S000 + 101;
+    const int S101 = S100 + 101;
+    const int S011 = S010 + 101;
+    const int S111 = S110 + 101;
+    const WR_REAL R000 = WR_MGradientDot(S000, FX, FY, FZ);
+    const WR_REAL R100 = WR_MGradientDot(S100, FX - WR_REAL(1.0), FY, FZ);
+    const WR_REAL R010 = WR_MGradientDot(S010, FX, FY - WR_REAL(1.0), FZ);
+    const WR_REAL R110 = WR_MGradientDot(S110, FX - WR_REAL(1.0), FY - WR_REAL(1.0), FZ);
+    const WR_REAL R001 = WR_MGradientDot(S001, FX, FY, FZ - WR_REAL(1.0));
+    const WR_REAL R101 = WR_MGradientDot(S101, FX - WR_REAL(1.0), FY, FZ - WR_REAL(1.0));
+    const WR_REAL R011 = WR_MGradientDot(S011, FX, FY - WR_REAL(1.0), FZ - WR_REAL(1.0));
+    const WR_REAL R111 = WR_MGradientDot(S111, FX - WR_REAL(1.0), FY - WR_REAL(1.0), FZ - WR_REAL(1.0));
     const WR_REAL WX = WR_PerlinRamp(FX);
     const WR_REAL WY = WR_PerlinRamp(FY);
     const WR_REAL WZ = WR_PerlinRamp(FZ);
@@ -212,10 +262,17 @@ WR_REAL WR_GradientNoise(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
     return WR_Lerp(I, J, WZ);
 }
 
+WR_REAL WR_GradientNoise(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+{
+    return WR_GradientNoiseAt(VX, VY, VZ, 0, 0, 0);
+}
+
 // MaterialExpressionNoise (Common.ush) as M_SkyBody's coarse band calls it:
 // GradientALU, WR_CONTINENT_LEVELS octaves at WR_LEVEL_SCALE, each faded by
 // saturate(1 - its filter width), mapped back to -1..1.
-WR_REAL WR_Continent(WR_REAL PX, WR_REAL PY, WR_REAL PZ, WR_REAL FilterWidth)
+// P is D x the frequency plus the offset's fraction, and K its integer
+// part: each level doubles both, the integer part exactly.
+WR_REAL WR_Continent(WR_REAL PX, WR_REAL PY, WR_REAL PZ, int KX, int KY, int KZ, WR_REAL FilterWidth)
 {
     WR_REAL Out = WR_REAL(0.0);
     WR_REAL OutScale = WR_REAL(1.0);
@@ -223,13 +280,19 @@ WR_REAL WR_Continent(WR_REAL PX, WR_REAL PY, WR_REAL PZ, WR_REAL FilterWidth)
     WR_REAL X = PX;
     WR_REAL Y = PY;
     WR_REAL Z = PZ;
+    int IX = KX;
+    int IY = KY;
+    int IZ = KZ;
     for (int Level = 0; Level < WR_CONTINENT_LEVELS; ++Level)
     {
         OutScale *= WR_saturate(WR_REAL(1.0) - Width);
-        Out += WR_GradientNoise(X, Y, Z) * OutScale;
+        Out += WR_GradientNoiseAt(X, Y, Z, IX, IY, IZ) * OutScale;
         X *= WR_LEVEL_SCALE;
         Y *= WR_LEVEL_SCALE;
         Z *= WR_LEVEL_SCALE;
+        IX *= 2;   // WR_LEVEL_SCALE, as an integer
+        IY *= 2;
+        IZ *= 2;
         OutScale *= WR_REAL(1.0) / WR_LEVEL_SCALE;
         Width *= WR_LEVEL_SCALE;
     }
@@ -239,15 +302,18 @@ WR_REAL WR_Continent(WR_REAL PX, WR_REAL PY, WR_REAL PZ, WR_REAL FilterWidth)
 // -- The detail bands: JacobianSimplex_ALU's first channel -----------------
 // One corner of the tetrahedron: its smoothed contribution to the value and
 // to the gradient, added to N.
-WR_Noise4 WR_SimplexCorner(WR_Noise4 N, WR_REAL VX, WR_REAL VY, WR_REAL VZ, WR_REAL TX, WR_REAL TY, WR_REAL TZ)
+// H shifts the corner's hash: six times the corner's unskewed position,
+// the hash's input, is 6 x T here plus H (WR_SimplexAt's Shift).
+WR_Noise4 WR_SimplexCorner(WR_Noise4 N, WR_REAL VX, WR_REAL VY, WR_REAL VZ, WR_REAL TX, WR_REAL TY, WR_REAL TZ,
+                           int HX, int HY, int HZ)
 {
     const WR_REAL FX = VX - TX;
     const WR_REAL FY = VY - TY;
     const WR_REAL FZ = VZ - TZ;
     const WR_Vec3 G = WR_GradientDirection(WR_Rand3DPCG16(
-        int(WR_floor(WR_REAL(6.0) * TX + WR_REAL(0.5))),
-        int(WR_floor(WR_REAL(6.0) * TY + WR_REAL(0.5))),
-        int(WR_floor(WR_REAL(6.0) * TZ + WR_REAL(0.5)))).X);
+        int(WR_floor(WR_REAL(6.0) * TX + WR_REAL(0.5))) + HX,
+        int(WR_floor(WR_REAL(6.0) * TY + WR_REAL(0.5))) + HY,
+        int(WR_floor(WR_REAL(6.0) * TZ + WR_REAL(0.5))) + HZ).X);
     const WR_REAL GF = G.X * FX + G.Y * FY + G.Z * FZ;
     const WR_REAL D2 = FX * FX + FY * FY + FZ * FZ;
     const WR_REAL S = WR_saturate(WR_REAL(2.0) * D2);
@@ -261,7 +327,11 @@ WR_Noise4 WR_SimplexCorner(WR_Noise4 N, WR_REAL VX, WR_REAL VY, WR_REAL VZ, WR_R
     return N;
 }
 
-WR_Noise4 WR_Simplex(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+// The simplex at V + U(K), where U unskews and K is an integer point of the
+// skewed lattice: skewing is linear and U(K) skews back to K exactly, so the
+// base corner is V's own plus K, the offsets from it are V's own, and only
+// the corners' hash inputs move, by 6 U(K) = Shift, an integer vector.
+WR_Noise4 WR_SimplexAt(WR_REAL VX, WR_REAL VY, WR_REAL VZ, int ShiftX, int ShiftY, int ShiftZ)
 {
     // SimplexCorners: the base corner by skewing to tetrahedral space and
     // back, in the engine's own order of operations.
@@ -292,21 +362,33 @@ WR_Noise4 WR_Simplex(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
     N.GY = WR_REAL(0.0);
     N.GZ = WR_REAL(0.0);
     N.Value = WR_REAL(0.0);
-    N = WR_SimplexCorner(N, VX, VY, VZ, BX, BY, BZ);
-    N = WR_SimplexCorner(N, VX, VY, VZ, BX + A1X, BY + A1Y, BZ + A1Z);
-    N = WR_SimplexCorner(N, VX, VY, VZ, BX + A2X, BY + A2Y, BZ + A2Z);
-    N = WR_SimplexCorner(N, VX, VY, VZ, BX + WR_REAL(0.5), BY + WR_REAL(0.5), BZ + WR_REAL(0.5));
+    N = WR_SimplexCorner(N, VX, VY, VZ, BX, BY, BZ, ShiftX, ShiftY, ShiftZ);
+    N = WR_SimplexCorner(N, VX, VY, VZ, BX + A1X, BY + A1Y, BZ + A1Z, ShiftX, ShiftY, ShiftZ);
+    N = WR_SimplexCorner(N, VX, VY, VZ, BX + A2X, BY + A2Y, BZ + A2Z, ShiftX, ShiftY, ShiftZ);
+    N = WR_SimplexCorner(N, VX, VY, VZ, BX + WR_REAL(0.5), BY + WR_REAL(0.5), BZ + WR_REAL(0.5), ShiftX, ShiftY, ShiftZ);
     return N;
+}
+
+WR_Noise4 WR_Simplex(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+{
+    return WR_SimplexAt(VX, VY, VZ, 0, 0, 0);
 }
 
 // One detail band, as M_SkyBody's detail_band: the simplex at
 // P x Frequency + Offset, times its footprint fade and its weight. P is the
 // stretched direction (a giant's detail is drawn out across its belts);
-// Width is the stretched footprint.
+// Width is the stretched footprint. The offset comes split (WR_Offset): its
+// integer part I goes to the skewed lattice point K = I + q (1, 1, 1),
+// q = floor((Ix + Iy + Iz) / 3), which leaves V + r / 6 in each axis with
+// r = Ix + Iy + Iz - 3q, and moves the hash by 6 U(K) = 6 I + 3q - (Ix + Iy + Iz).
 WR_Noise4 WR_DetailBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, WR_REAL Frequency,
-                        WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Width, WR_REAL Weight)
+                        WR_Offset O, WR_REAL Width, WR_REAL Weight)
 {
-    const WR_Noise4 N = WR_Simplex(PX * Frequency + OX, PY * Frequency + OY, PZ * Frequency + OZ);
+    const int Sum = O.IX + O.IY + O.IZ;
+    const int Q = WR_FloorDiv3(Sum);
+    const WR_REAL Left = WR_REAL(Sum - 3 * Q) / WR_REAL(6.0);
+    const WR_Noise4 N = WR_SimplexAt(PX * Frequency + O.FX + Left, PY * Frequency + O.FY + Left, PZ * Frequency + O.FZ + Left,
+                                     6 * O.IX + 3 * Q - Sum, 6 * O.IY + 3 * Q - Sum, 6 * O.IZ + 3 * Q - Sum);
     const WR_REAL Scale = WR_saturate(WR_REAL(1.0) - Width * Frequency) * Weight;
     WR_Noise4 R;
     R.GX = N.GX * Scale;
@@ -318,9 +400,9 @@ WR_Noise4 WR_DetailBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, WR_REAL Frequency,
 
 // -- The craters: VoronoiNoise3D_ALU at quality 1 --------------------------
 // VoronoiCornerSample: a site's jitter from its lattice corner.
-WR_Vec3 WR_VoronoiJitter(WR_REAL CX, WR_REAL CY, WR_REAL CZ)
+WR_Vec3 WR_VoronoiJitterAt(int CX, int CY, int CZ)
 {
-    const WR_Hash3 H = WR_Rand3DPCG16(int(CX), int(CY), int(CZ));
+    const WR_Hash3 H = WR_Rand3DPCG16(CX, CY, CZ);
     const WR_REAL NX = WR_REAL(H.X) / WR_REAL(65535.0) - WR_REAL(0.5);
     const WR_REAL NY = WR_REAL(H.Y) / WR_REAL(65535.0) - WR_REAL(0.5);
     const WR_REAL NZ = WR_REAL(H.Z) / WR_REAL(65535.0) - WR_REAL(0.5);
@@ -328,8 +410,14 @@ WR_Vec3 WR_VoronoiJitter(WR_REAL CX, WR_REAL CY, WR_REAL CZ)
     return WR_MakeVec3(NX * Inv * WR_VORONOI_JITTER, NY * Inv * WR_VORONOI_JITTER, NZ * Inv * WR_VORONOI_JITTER);
 }
 
-// The nearest of the eight sites around V, and how far it is.
-WR_Site WR_Voronoi(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+WR_Vec3 WR_VoronoiJitter(WR_REAL CX, WR_REAL CY, WR_REAL CZ)
+{
+    return WR_VoronoiJitterAt(int(CX), int(CY), int(CZ));
+}
+
+// The nearest of the eight sites around V + K, K an integer lattice shift,
+// and how far it is. The site is given relative to K: V's own frame.
+WR_Site WR_VoronoiAt(WR_REAL VX, WR_REAL VY, WR_REAL VZ, int KX, int KY, int KZ)
 {
     const WR_REAL FX = WR_frac(VX);
     const WR_REAL FY = WR_frac(VY);
@@ -348,7 +436,7 @@ WR_Site WR_Voronoi(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
         {
             for (int OffZ = 0; OffZ <= 1; ++OffZ)
             {
-                const WR_Vec3 J = WR_VoronoiJitter(IX + WR_REAL(OffX), IY + WR_REAL(OffY), IZ + WR_REAL(OffZ));
+                const WR_Vec3 J = WR_VoronoiJitterAt(int(IX) + OffX + KX, int(IY) + OffY + KY, int(IZ) + OffZ + KZ);
                 const WR_REAL PX = WR_REAL(OffX) + J.X;
                 const WR_REAL PY = WR_REAL(OffY) + J.Y;
                 const WR_REAL PZ = WR_REAL(OffZ) + J.Z;
@@ -370,6 +458,11 @@ WR_Site WR_Voronoi(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
     return Best;
 }
 
+WR_Site WR_Voronoi(WR_REAL VX, WR_REAL VY, WR_REAL VZ)
+{
+    return WR_VoronoiAt(VX, VY, VZ, 0, 0, 0);
+}
+
 // The CellnoiseALU vector noise's first channel: 0..1 from the lattice cell.
 WR_REAL WR_CellHash(WR_REAL X, WR_REAL Y, WR_REAL Z)
 {
@@ -379,14 +472,19 @@ WR_REAL WR_CellHash(WR_REAL X, WR_REAL Y, WR_REAL Z)
 // One crater band, as M_SkyBody's crater_band: the nearest site is the
 // crater's centre, kept or not by the hash of its own cell, its albedo a
 // darker floor and brighter rim, its slope the profile's along the way out.
+// The offset comes split: the fraction in V, the integer part a lattice shift.
 WR_Crater WR_CraterBand(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Frequency,
-                        WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Footprint)
+                        WR_Offset O, WR_REAL Footprint)
 {
-    const WR_REAL VX = DX * Frequency + OX;
-    const WR_REAL VY = DY * Frequency + OY;
-    const WR_REAL VZ = DZ * Frequency + OZ;
-    const WR_Site Site = WR_Voronoi(VX, VY, VZ);
-    const WR_REAL Held = WR_step(WR_CellHash(Site.X + WR_REAL(0.5), Site.Y + WR_REAL(0.5), Site.Z + WR_REAL(0.5)), WR_CRATER_KEEP);
+    const WR_REAL VX = DX * Frequency + O.FX;
+    const WR_REAL VY = DY * Frequency + O.FY;
+    const WR_REAL VZ = DZ * Frequency + O.FZ;
+    const WR_Site Site = WR_VoronoiAt(VX, VY, VZ, O.IX, O.IY, O.IZ);
+    // The site's own cell, the shift put back: its lattice corner.
+    const WR_REAL Keep = WR_REAL(WR_Rand3DPCG16(int(WR_floor(Site.X + WR_REAL(0.5))) + O.IX,
+                                                int(WR_floor(Site.Y + WR_REAL(0.5))) + O.IY,
+                                                int(WR_floor(Site.Z + WR_REAL(0.5))) + O.IZ).X) / WR_REAL(65535.0);
+    const WR_REAL Held = WR_step(Keep, WR_CRATER_KEEP);
     const WR_REAL Q = Site.Distance * WR_CRATER_INV_RADIUS;
     const WR_REAL Outside = WR_step(WR_REAL(1.0), Q);
     const WR_REAL Inside = WR_REAL(1.0) - Outside;
@@ -409,19 +507,174 @@ WR_Crater WR_CraterBand(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Frequency,
     return C;
 }
 
+// -- Craters as a height (landing decision 3) --------------------------------
+// A crater band is a sum of compact kernels, one per kept site in the
+// 2 x 2 x 2 corners round the sample: the profile unchanged, reaching 0 with
+// zero slope at q = 1.5; a dropped site contributes 0; overlapping craters
+// add. With jitter 0.2588 cells those corners hold every site within the
+// profile's 0.525 (WR_CraterKernelBand says why), so the sum is continuous --
+// where Voronoi F1, the nearest site only, jumped to 0 at the bisector with
+// a dropped neighbour.
+//
+// Sites are exactly WR_Voronoi's: each lattice corner's jitter is
+// WR_VoronoiJitter of that corner, and whether it holds a crater is the
+// corner's own hash's first channel against WR_CRATER_KEEP -- what
+// WR_CraterBand reads as WR_CellHash(site + 0.5).
+static const WR_REAL WR_CRATER_REACH = WR_REAL(1.5);
+// At most four lattice corners lie within 0.525 + 0.2588 cells of any point
+// (checked by sampling for the landing spec), so at most four kernels overlap.
+static const WR_REAL WR_CRATER_BOUND_COUNT = WR_REAL(4.0);
+
+struct WR_CraterTerm
+{
+    WR_REAL H;       // the band's height in cells (radius units once over the frequency)
+    WR_REAL GX;      // its gradient with respect to D, radius units per unit of D
+    WR_REAL GY;
+    WR_REAL GZ;
+    WR_REAL Albedo;  // darker floors and brighter rims, summed
+};
+
+WR_CraterTerm WR_CraterZero()
+{
+    WR_CraterTerm T;
+    T.H = WR_REAL(0.0);
+    T.GX = WR_REAL(0.0);
+    T.GY = WR_REAL(0.0);
+    T.GZ = WR_REAL(0.0);
+    T.Albedo = WR_REAL(0.0);
+    return T;
+}
+
+// How much of a band of Frequency a tile's vertices carry at VertexBandLimit
+// (radius units): the fade the vertices were built with. A radius (1.0) or
+// more is no vertices at all, the orbit: they carry nothing.
+WR_REAL WR_VertexCarries(WR_REAL VertexBandLimit, WR_REAL Frequency)
+{
+    return WR_saturate(WR_REAL(1.0) - VertexBandLimit * Frequency);
+}
+
+// A test's hook, and nothing anywhere else: called once for every lattice
+// corner a crater band visits, so DeepSpace.Surface.CraterKernelCorners can
+// hold the kernel at 8 corners a band. The sums alone cannot: a corner too far
+// to reach adds nothing, so a kernel that visited 27 again would match the 8
+// to the last bit and cost the frame 4 ms.
+#ifndef WR_CRATER_CORNER_VISITED
+#define WR_CRATER_CORNER_VISITED()
+#endif
+
+// One band at P + K, in cells: P = D x frequency + the offset's fraction, K
+// its integer part, a lattice shift (WR_Offset).
+WR_CraterTerm WR_CraterKernelBand(WR_REAL PX, WR_REAL PY, WR_REAL PZ, int KX, int KY, int KZ)
+{
+    WR_CraterTerm Sum = WR_CraterZero();
+    // Only the 2 x 2 x 2 corners round P can reach it: a site within
+    // WR_CRATER_REACH x WR_CRATER_RADIUS (0.525) of P has its corner within
+    // 0.525 + 0.2588 = 0.784 cells of P on every axis, so floor(P) or the
+    // corner after it; the one before and the one after that are a cell or
+    // more away. The 3 x 3 x 3 round floor(P + 0.5) this replaced found no
+    // other site, and visited these in the same order, so every sum is the
+    // same to the last bit (DeepSpace.Surface.CraterKernelCorners), at 8
+    // corners a band instead of 27 -- the ground's pixel shader spent most
+    // of its time here (the frame ruling's profile, the landing plan's
+    // Task 39).
+    const int CX = int(WR_floor(PX));
+    const int CY = int(WR_floor(PY));
+    const int CZ = int(WR_floor(PZ));
+    for (int I = 0; I <= 1; ++I)
+    {
+        for (int J = 0; J <= 1; ++J)
+        {
+            for (int K = 0; K <= 1; ++K)
+            {
+                const int X = CX + I;
+                const int Y = CY + J;
+                const int Z = CZ + K;
+                WR_CRATER_CORNER_VISITED();
+                const WR_REAL Keep = WR_REAL(WR_Rand3DPCG16(X + KX, Y + KY, Z + KZ).X) / WR_REAL(65535.0);
+                if (Keep > WR_CRATER_KEEP)
+                {
+                    continue;
+                }
+                const WR_Vec3 Jitter = WR_VoronoiJitterAt(X + KX, Y + KY, Z + KZ);
+                const WR_REAL AX = PX - (WR_REAL(X) + Jitter.X);
+                const WR_REAL AY = PY - (WR_REAL(Y) + Jitter.Y);
+                const WR_REAL AZ = PZ - (WR_REAL(Z) + Jitter.Z);
+                const WR_REAL Dist = WR_sqrt(AX * AX + AY * AY + AZ * AZ);
+                const WR_REAL Q = Dist * WR_CRATER_INV_RADIUS;
+                if (Q >= WR_CRATER_REACH)
+                {
+                    continue;
+                }
+                // The bowl, depth (q^2 - 1 + rim), then the rim falling away,
+                // depth rim (3 - 2q)^2: continuous at q = 1, 0 with zero slope
+                // at 1.5. Heights in cells: radius x profile; the slope with
+                // respect to P is d(profile)/dq along the way out.
+                const WR_REAL Fall = WR_REAL(3.0) - WR_REAL(2.0) * Q;
+                const WR_REAL Profile = Q < WR_REAL(1.0) ? WR_CRATER_DEPTH * (Q * Q - WR_REAL(1.0) + WR_CRATER_RIM)
+                                                : WR_CRATER_DEPTH * WR_CRATER_RIM * Fall * Fall;
+                const WR_REAL Wall = Q < WR_REAL(1.0) ? WR_REAL(2.0) * WR_CRATER_DEPTH * Q
+                                                      : WR_REAL(-4.0) * WR_CRATER_DEPTH * WR_CRATER_RIM * Fall;
+                const WR_REAL Apart = WR_max(Dist, WR_REAL(1.0e-4));
+                Sum.H += WR_CRATER_RADIUS * Profile;
+                Sum.GX += Wall * AX / Apart;
+                Sum.GY += Wall * AY / Apart;
+                Sum.GZ += Wall * AZ / Apart;
+                Sum.Albedo += Q < WR_REAL(1.0) ? -(WR_REAL(1.0) - Q * Q) * WR_CRATER_FLOOR_DARK
+                                               : WR_saturate(Fall) * WR_CRATER_RIM_BRIGHT;
+            }
+        }
+    }
+    return Sum;
+}
+
+// Every crater band at a footprint (radius units). The height and the albedo
+// fade with the footprint as every band does; the slope is also shared out
+// with a tile's vertices: it keeps only what the vertices at VertexBandLimit
+// do not carry, max(0, fade - carried), which at the orbit (VertexBandLimit
+// 1) is the fade alone and on ground finer than its pixels is exactly the
+// orbit's total -- nothing counted twice (landing decision 9).
+WR_CraterTerm WR_CraterSum(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL OX, WR_REAL OY, WR_REAL OZ,
+                           WR_REAL FootprintRadius, WR_REAL VertexBandLimit)
+{
+    WR_CraterTerm Sum = WR_CraterZero();
+    for (int Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
+    {
+        const WR_REAL F = WR_CRATER_FREQUENCY[Crater];
+        const int Index = WR_CRATER_INDEX[Crater];
+        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - FootprintRadius * F);
+        if (Fade > WR_REAL(0.0))
+        {
+            const WR_Offset O = WR_SplitOffset(OX, OY, OZ, Index);
+            const WR_CraterTerm T = WR_CraterKernelBand(DX * F + O.FX, DY * F + O.FY, DZ * F + O.FZ, O.IX, O.IY, O.IZ);
+            const WR_REAL Slope = WR_max(WR_REAL(0.0), Fade - WR_VertexCarries(VertexBandLimit, F));
+            Sum.H += Fade * T.H / F;
+            Sum.GX += Slope * T.GX;
+            Sum.GY += Slope * T.GY;
+            Sum.GZ += Slope * T.GZ;
+            Sum.Albedo += Fade * T.Albedo;
+        }
+    }
+    return Sum;
+}
+
 // -- The entry point --------------------------------------------------------
-// Every raw term of M_SkyBody's face at D, for footprint Footprint (D units a
+// Every raw term of a world's face at D, for footprint Footprint (D units a
 // pixel, times filter_pixels), seed offset O, and Stretch (1 for ground,
-// belt_stretch for a giant's detail).
+// belt_stretch for a giant's detail). The slopes keep only what a tile's
+// vertices at VertexBandLimit (radius units) do not carry: 1.0 is the orbit,
+// with no vertices, and every slope whole (landing decision 9). The craters
+// are the summed kernels (decision 3).
 WR_Terms WR_SurfaceTerms(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint,
-                         WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Stretch)
+                         WR_REAL OX, WR_REAL OY, WR_REAL OZ, WR_REAL Stretch, WR_REAL VertexBandLimit)
 {
     const WR_REAL PX = DX;
     const WR_REAL PY = DY;
     const WR_REAL PZ = DZ * Stretch;
     WR_Terms T;
-    T.Continent = WR_Continent(PX * WR_CONTINENT_FREQUENCY + OX, PY * WR_CONTINENT_FREQUENCY + OY,
-                               PZ * WR_CONTINENT_FREQUENCY + OZ, Footprint * WR_CONTINENT_FREQUENCY * Stretch);
+    const WR_Offset Coarse = WR_SplitOffset(OX, OY, OZ, 0);
+    T.Continent = WR_Continent(PX * WR_CONTINENT_FREQUENCY + Coarse.FX, PY * WR_CONTINENT_FREQUENCY + Coarse.FY,
+                               PZ * WR_CONTINENT_FREQUENCY + Coarse.FZ, Coarse.IX, Coarse.IY, Coarse.IZ,
+                               Footprint * WR_CONTINENT_FREQUENCY * Stretch);
     const WR_REAL Width = Footprint * Stretch;
     T.Detail = WR_REAL(0.0);
     T.DetailSlopeX = WR_REAL(0.0);
@@ -430,26 +683,147 @@ WR_Terms WR_SurfaceTerms(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL Footprint,
     for (int Band = 0; Band < WR_DETAIL_BANDS; ++Band)
     {
         const int Index = WR_DETAIL_INDEX[Band];
-        const WR_Noise4 N = WR_DetailBand(PX, PY, PZ, WR_DETAIL_FREQUENCY[Band],
-            OX + WR_REAL(37 * Index), OY + WR_REAL(59 * Index), OZ + WR_REAL(83 * Index), Width, WR_DETAIL_WEIGHT[Band]);
-        T.DetailSlopeX += N.GX;
-        T.DetailSlopeY += N.GY;
-        T.DetailSlopeZ += N.GZ;
+        const WR_REAL F = WR_DETAIL_FREQUENCY[Band];
+        const WR_Noise4 N = WR_DetailBand(PX, PY, PZ, F,
+            WR_SplitOffset(OX, OY, OZ, Index), Width, WR_DETAIL_WEIGHT[Band]);
+        // N is already faded by Fade; its slope keeps max(0, Fade - carried) of the whole.
+        const WR_REAL Fade = WR_saturate(WR_REAL(1.0) - Width * F);
+        const WR_REAL Share = Fade > WR_REAL(0.0)
+            ? WR_max(WR_REAL(0.0), Fade - WR_VertexCarries(VertexBandLimit, F)) / Fade
+            : WR_REAL(0.0);
+        T.DetailSlopeX += N.GX * Share;
+        T.DetailSlopeY += N.GY * Share;
+        T.DetailSlopeZ += N.GZ * Share;
         T.Detail += N.Value;
     }
-    T.CraterAlbedo = WR_REAL(0.0);
-    T.CraterSlopeX = WR_REAL(0.0);
-    T.CraterSlopeY = WR_REAL(0.0);
-    T.CraterSlopeZ = WR_REAL(0.0);
-    for (int Crater = 0; Crater < WR_CRATER_BANDS; ++Crater)
-    {
-        const int Index = WR_CRATER_INDEX[Crater];
-        const WR_Crater C = WR_CraterBand(DX, DY, DZ, WR_CRATER_FREQUENCY[Crater],
-            OX + WR_REAL(37 * Index), OY + WR_REAL(59 * Index), OZ + WR_REAL(83 * Index), Footprint);
-        T.CraterAlbedo += C.Albedo;
-        T.CraterSlopeX += C.SX;
-        T.CraterSlopeY += C.SY;
-        T.CraterSlopeZ += C.SZ;
-    }
+    const WR_CraterTerm Craters = WR_CraterSum(DX, DY, DZ, OX, OY, OZ, Footprint, VertexBandLimit);
+    T.CraterAlbedo = Craters.Albedo;
+    T.CraterSlopeX = Craters.GX;
+    T.CraterSlopeY = Craters.GY;
+    T.CraterSlopeZ = Craters.GZ;
     return T;
+}
+
+// -- The ground's per-pixel normal (landing decision 9) ----------------------
+// Composed exactly as the orbit's is, normalize(D - s_t), from two parts: the
+// slope a tile's vertex normal carries, recovered from that normal (it was
+// built as normalize(D - s_v,t), so s_v,t = D - Nv / (Nv . D)), and the
+// pixel's own slope S -- which the material formed from only the bands the
+// vertices do not carry -- taken along the ground.
+struct WR_GroundNormalOut
+{
+    WR_REAL NX;
+    WR_REAL NY;
+    WR_REAL NZ;
+};
+
+WR_GroundNormalOut WR_GroundNormal(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL VX, WR_REAL VY, WR_REAL VZ,
+                                   WR_REAL SX, WR_REAL SY, WR_REAL SZ)
+{
+    const WR_REAL VD = WR_max(VX * DX + VY * DY + VZ * DZ, WR_REAL(1.0e-3));
+    const WR_REAL CarriedX = DX - VX / VD;
+    const WR_REAL CarriedY = DY - VY / VD;
+    const WR_REAL CarriedZ = DZ - VZ / VD;
+    const WR_REAL PD = SX * DX + SY * DY + SZ * DZ;
+    const WR_REAL NX = DX - CarriedX - (SX - PD * DX);
+    const WR_REAL NY = DY - CarriedY - (SY - PD * DY);
+    const WR_REAL NZ = DZ - CarriedZ - (SZ - PD * DZ);
+    const WR_REAL NL = WR_sqrt(NX * NX + NY * NY + NZ * NZ);
+    WR_GroundNormalOut Out;
+    Out.NX = NX / NL;
+    Out.NY = NY / NL;
+    Out.NZ = NZ / NL;
+    return Out;
+}
+
+// -- The cast shadow's map (the developer's ruling on slice (b)'s build,
+// 2026-09-28: baked, not marched) --------------------------------------------
+// The orbit reads each solid world's shadow from one texture, baked in C++
+// when the system loads (SunShadowMap::Bake). It is an equirectangular map in
+// the star's own frame -- Z the light, as the sky lights the world, X and Y
+// square to it -- its columns the azimuth about the light from -pi, its rows
+// the star's elevation from PsiLo, the lowest at which any point of the world
+// can see any of it, up to the point under the star. Each texel is Step
+// square at the terminator, where the shadows are. M_SkyBody and M_SkyGround
+// read it through these three functions and eight texel loads, and
+// SunShadowMap::Sample is their C++ mirror.
+static const WR_REAL WR_PI = WR_REAL(3.14159265358979323846);
+
+struct WR_ShadowCoord
+{
+    WR_REAL U;       // the column coordinate, texel centres at whole numbers
+    WR_REAL V;       // the row coordinate, the same
+    int Level0;      // the finer of the two levels read
+    int Level1;      // the coarser
+    WR_REAL Blend;   // how far toward Level1
+    int Night;       // 1 under PsiLo, where the lookup is 0: no point sees any of the star
+};
+
+// D in the body's axes; the frame's X and Z; PsiLo and Step, rad; Footprint
+// one pixel's width, D units (the faces' filtered footprint divided by
+// filter_pixels, which M_SkyBody and M_SkyGround do before the node); Levels
+// the map's.
+WR_ShadowCoord WR_ShadowMapCoord(WR_REAL DX, WR_REAL DY, WR_REAL DZ, WR_REAL XX, WR_REAL XY, WR_REAL XZ,
+                                 WR_REAL ZX, WR_REAL ZY, WR_REAL ZZ, WR_REAL PsiLo, WR_REAL Step, WR_REAL Footprint, int Levels)
+{
+    const WR_REAL YX = ZY * XZ - ZZ * XY;
+    const WR_REAL YY = ZZ * XX - ZX * XZ;
+    const WR_REAL YZ = ZX * XY - ZY * XX;
+    const WR_REAL S = WR_min(WR_REAL(1.0), WR_max(WR_REAL(-1.0), DX * ZX + DY * ZY + DZ * ZZ));
+    const WR_REAL Psi = WR_asin(S);
+    const WR_REAL Phi = WR_atan2(DX * YX + DY * YY + DZ * YZ, DX * XX + DY * XY + DZ * XZ);
+    WR_ShadowCoord Out;
+    Out.U = (Phi + WR_PI) / Step - WR_REAL(0.5);
+    Out.V = (Psi - PsiLo) / Step - WR_REAL(0.5);
+    Out.Night = Psi < PsiLo ? 1 : 0;
+    // The pixel's footprint in texels along a texel's narrower side: along
+    // the rows a texel is Step cos(psi) across, so toward the point under
+    // the star the map is read coarser; a map coarser than the pixel is read
+    // at its finest.
+    const WR_REAL Across = Step * WR_max(WR_sqrt(WR_max(WR_REAL(0.0), WR_REAL(1.0) - S * S)), WR_REAL(1.0e-4));
+    const WR_REAL Level = WR_min(WR_log2(WR_max(Footprint / Across, WR_REAL(1.0))), WR_REAL(Levels - 1));
+    Out.Level0 = int(WR_floor(Level));
+    Out.Level1 = Out.Level0 + 1 < Levels ? Out.Level0 + 1 : Levels - 1;
+    Out.Blend = Level - WR_floor(Level);
+    return Out;
+}
+
+struct WR_ShadowTaps
+{
+    int X0;
+    int X1;
+    int Y0;
+    int Y1;
+    WR_REAL FX;
+    WR_REAL FY;
+};
+
+// The four texels around (U, V) at Level of a map Width x Rows at level 0:
+// columns wrap, rows clamp, and a level's texel is level 0's halved per
+// level about the texel centres, the GPU's own mip sizes (Width >> Level).
+WR_ShadowTaps WR_ShadowTapsAt(WR_REAL U, WR_REAL V, int Width, int Rows, int Level)
+{
+    const int W = (Width >> Level) > 1 ? (Width >> Level) : 1;
+    const int H = (Rows >> Level) > 1 ? (Rows >> Level) : 1;
+    const WR_REAL Scale = WR_REAL(1 << Level);
+    const WR_REAL UL = (U + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL VL = (V + WR_REAL(0.5)) / Scale - WR_REAL(0.5);
+    const WR_REAL FloorU = WR_floor(UL);
+    const WR_REAL FloorV = WR_floor(VL);
+    const int X = int(FloorU);
+    const int Y = int(FloorV);
+    WR_ShadowTaps Out;
+    // X lies in [-1, W - 1]: one wrap either way is all it can need.
+    Out.X0 = X < 0 ? X + W : (X >= W ? X - W : X);
+    Out.X1 = X + 1 < 0 ? X + 1 + W : (X + 1 >= W ? X + 1 - W : X + 1);
+    Out.Y0 = Y < 0 ? 0 : (Y > H - 1 ? H - 1 : Y);
+    Out.Y1 = Y + 1 < 0 ? 0 : (Y + 1 > H - 1 ? H - 1 : Y + 1);
+    Out.FX = UL - FloorU;
+    Out.FY = VL - FloorV;
+    return Out;
+}
+
+WR_REAL WR_Bilinear(WR_REAL A, WR_REAL B, WR_REAL C, WR_REAL D, WR_REAL FX, WR_REAL FY)
+{
+    return WR_Lerp(WR_Lerp(A, B, FX), WR_Lerp(C, D, FX), FY);
 }

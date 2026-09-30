@@ -7,13 +7,14 @@ lights and mounts.
 """
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hauler_layout as L
 import props as P
 from floorplan import FloorPlan, PlanError, Room
-from placement import (GLASS_TAG, KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
+from placement import (GLASS_TAG, GROUND_TAG, KEEP_OUT_TAG, LAMPS_TAG, LIGHTS_TAG, PIECE_TAG_PREFIX, SKY_DIRECTORY,
                        SURFACE_TAG, WEAR_TAG, Mood, Mount, Place, Practical, kelvin_to_rgb,
                        lamp_emissive, lamp_role, piece_of, resolve_lights, resolve_mount,
                        resolve_point, resolve_practicals, resolve_props, resolve_surfaces,
@@ -653,6 +654,12 @@ def test_the_glass_tag_is_the_one_the_cpp_traces_for():
     assert 'Glass(TEXT("%s"))' % GLASS_TAG in cpp, GLASS_TAG
 
 
+def test_the_ground_tag_is_the_one_the_cpp_sets():
+    with open(os.path.join(ROOT, "Source/DeepSpace/Surface/WorldGround.cpp")) as f:
+        cpp = f.read()
+    assert 'GroundTag(TEXT("%s"))' % GROUND_TAG in cpp, GROUND_TAG
+
+
 def test_the_ship_has_glass_for_the_tag_to_mark():
     # Every pane in every window is a glass box, which build_hauler tags; a
     # window whose pane were some other role would hide the target behind it.
@@ -921,6 +928,50 @@ def test_every_room_has_its_air_under_its_own_ceiling():
         x, y, z = air["hum_" + r.name]
         assert r.x < x < r.x + r.w and r.y < y < r.y + r.d, r.name
         assert 0 < z < r.height and r.height - z <= 30, (r.name, z)
+
+
+# -- the footprint (landing decision 11) --------------------------------------
+
+def _landing_table(name, width):
+    with open(os.path.join(ROOT, "Source/DeepSpace/Ship/ShipLanding.h")) as f:
+        header = f.read()
+    found = re.search(name + r"\[4\]\[%d\]\s*=\s*\{(.*?)\};" % width, header, re.S)
+    assert found, "no %s in ShipLanding.h" % name
+    numbers = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", found.group(1))]
+    assert len(numbers) == 4 * width, numbers
+    return [tuple(numbers[i:i + width]) for i in range(0, len(numbers), width)]
+
+
+def _hull_bounds():
+    ship = L.generate()
+    lo = [min(b.centre[i] - b.size[i] / 2.0 for b in ship.boxes) for i in range(3)]
+    hi = [max(b.centre[i] + b.size[i] / 2.0 for b in ship.boxes) for i in range(3)]
+    return lo, hi
+
+
+def test_the_gear_feet_are_the_ones_the_cpp_lands_on():
+    assert _landing_table("GearFeetXY", 2) == [tuple(float(v) for v in foot) for foot in L.GEAR]
+
+
+def test_the_belly_corners_are_the_ones_the_cpp_lands_on():
+    assert _landing_table("BellyCorners", 3) == [tuple(float(v) for v in corner) for corner in L.BELLY]
+
+
+def test_the_belly_is_the_hull_s_plan_at_its_underside():
+    lo, hi = _hull_bounds()
+    xs = sorted({corner[0] for corner in L.BELLY})
+    ys = sorted({corner[1] for corner in L.BELLY})
+    assert xs == [lo[0], hi[0]] and ys == [lo[1], hi[1]], (xs, ys, lo, hi)
+    assert all(corner[2] == lo[2] for corner in L.BELLY), (L.BELLY, lo[2])
+
+
+def test_the_gear_stands_under_the_hull_wide_enough_to_rest_on():
+    lo, hi = _hull_bounds()
+    for x, y in L.GEAR:
+        assert lo[0] < x < hi[0] and lo[1] < y < hi[1], (x, y, lo, hi)
+    xs = [x for x, _ in L.GEAR]
+    ys = [y for _, y in L.GEAR]
+    assert max(xs) - min(xs) >= 2000 and max(ys) - min(ys) >= 300, L.GEAR
 
 
 def main():

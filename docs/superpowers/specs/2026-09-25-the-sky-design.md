@@ -1312,6 +1312,8 @@ Play.
 - **The rendered-altitude floor at 10 km.** Fly lower and the planet stops
   growing. Cost: landing replaces the proxy with real terrain in the ship's
   frame. This spec's code stops being used below orbit, which is correct.
+  -- as built in landing slice (b): below 50 km over a solid world, with the
+  relief grown in between 50 km and the drive floor.
 - **`FSkySystem` doubles as the drive's view of what is near**, which puts a
   `Sky/` include in `UShipSubsystem.cpp`. Cost: a rename to something like
   `FLocalBodies` the day anything other than the sky and the drive reads it.

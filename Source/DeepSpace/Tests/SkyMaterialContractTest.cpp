@@ -24,8 +24,10 @@
 #include "Materials/MaterialExpressionObjectPositionWS.h"
 #include "Materials/MaterialExpressionParameter.h"
 #include "Materials/MaterialExpressionPixelDepth.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionScreenPosition.h"
 #include "Materials/MaterialExpressionTextureBase.h"
+#include "Materials/MaterialExpressionTextureObjectParameter.h"
 #include "Materials/MaterialExpressionViewSize.h"
 #include "Materials/MaterialExpressionWorldPosition.h"
 #include "MaterialShared.h"
@@ -70,7 +72,7 @@ namespace
             { TEXT("mottle"), SkyMaterial::Mottle, TEXT("scalar") },
             { TEXT("detail"), SkyMaterial::Detail, TEXT("scalar") },
             { TEXT("banding"), SkyMaterial::Banding, TEXT("scalar") },
-            { TEXT("relief"), SkyMaterial::Relief, TEXT("scalar") },
+            { TEXT("relief_scale"), SkyMaterial::ReliefScale, TEXT("scalar") },
             { TEXT("cratering"), SkyMaterial::Cratering, TEXT("scalar") },
             { TEXT("surface_seed"), SkyMaterial::SurfaceSeed, TEXT("vector") },
             { TEXT("body_axis_x"), SkyMaterial::BodyAxisX, TEXT("vector") },
@@ -80,6 +82,15 @@ namespace
             { TEXT("probe_bias"), SkyMaterial::ProbeBias, TEXT("vector") },
             { TEXT("interior_light"), SkyMaterial::InteriorLight, TEXT("scalar") },
             { TEXT("veil"), SkyMaterial::Veil, TEXT("scalar") },
+            { TEXT("morph"), SkyMaterial::Morph, TEXT("scalar") },
+            { TEXT("band_limit"), SkyMaterial::BandLimit, TEXT("scalar") },
+            { TEXT("tile_pivot"), SkyMaterial::TilePivot, TEXT("vector") },
+            { TEXT("vertex_band_limit"), SkyMaterial::VertexBandLimit, TEXT("scalar") },
+            { TEXT("shadows"), SkyMaterial::Shadows, TEXT("scalar") },
+            { TEXT("shadow_map_fade"), SkyMaterial::ShadowMapFade, TEXT("scalar") },
+            { TEXT("shadow_map"), SkyMaterial::ShadowMap, TEXT("texture") },
+            { TEXT("shadow_frame_x"), SkyMaterial::ShadowFrameX, TEXT("vector") },
+            { TEXT("shadow_frame_z"), SkyMaterial::ShadowFrameZ, TEXT("vector") },
         };
     }
 
@@ -101,14 +112,15 @@ namespace
 
     /** One asset's parameters from the JSON, split by type. */
     void JsonNames(const TSharedPtr<FJsonObject>& Contract, const TSharedPtr<FJsonObject>& Entry,
-                   TSet<FName>& OutScalars, TSet<FName>& OutVectors)
+                   TSet<FName>& OutScalars, TSet<FName>& OutVectors, TSet<FName>& OutTextures)
     {
         const TSharedPtr<FJsonObject> Parameters = Contract->GetObjectField(TEXT("parameters"));
         for (const TSharedPtr<FJsonValue>& Role : Entry->GetArrayField(TEXT("parameters")))
         {
             const TSharedPtr<FJsonObject> Parameter = Parameters->GetObjectField(Role->AsString());
             const FName Name(*Parameter->GetStringField(TEXT("name")));
-            (Parameter->GetStringField(TEXT("type")) == TEXT("scalar") ? OutScalars : OutVectors).Add(Name);
+            const FString Type = Parameter->GetStringField(TEXT("type"));
+            (Type == TEXT("scalar") ? OutScalars : (Type == TEXT("texture") ? OutTextures : OutVectors)).Add(Name);
         }
     }
 
@@ -190,7 +202,10 @@ namespace
         TArray<const UMaterialExpressionCustom*> Customs;
         for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
         {
-            if (const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get()))
+            // The cast shadow's node includes the same file for its map's
+            // lookup (CheckShadowNode holds it); the face's is the other.
+            const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression.Get());
+            if (Custom && !Custom->Code.Contains(SkyMaterial::ShadowCoordEntry))
             {
                 Customs.Add(Custom);
             }
@@ -570,8 +585,12 @@ namespace
                 || Cast<UMaterialExpressionPixelDepth>(Node) || Cast<UMaterialExpressionCameraPositionWS>(Node)
                 || Cast<UMaterialExpressionObjectPositionWS>(Node) || Cast<UMaterialExpressionViewSize>(Node);
             Test.TestFalse(FString::Printf(TEXT("M_SkyBody's face reads no world, screen or camera position (%s)"), *Node->GetName()), bSwims);
-            Test.TestFalse(FString::Printf(TEXT("M_SkyBody samples no texture (%s)"), *Node->GetName()),
-                Cast<UMaterialExpressionTextureBase>(Node) != nullptr);
+            // The one texture M_SkyBody reads is its cast-shadow map, as an
+            // object, and only the shadow's node takes it (CheckShadowNode);
+            // nothing samples one into the face.
+            const UMaterialExpressionTextureObjectParameter* Object = Cast<UMaterialExpressionTextureObjectParameter>(Node);
+            Test.TestTrue(FString::Printf(TEXT("M_SkyBody reads no texture but its shadow map (%s)"), *Node->GetName()),
+                Cast<UMaterialExpressionTextureBase>(Node) == nullptr || (Object && Object->ParameterName == SkyMaterial::ShadowMap));
         }
         Test.TestEqual(TEXT("M_SkyBody's face is taken from the mesh's own position, once"), LocalPositions, 1);
 
@@ -722,13 +741,13 @@ namespace
             Test.TestTrue(FString::Printf(TEXT("%s shapes the face behind the guard"), *Knob.ToString()),
                 Parameter && Guarded.Contains(*Parameter));
         }
-        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::Relief, SkyMaterial::Cratering })
+        for (const FName Knob : { SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering })
         {
             const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
             Test.TestTrue(FString::Printf(TEXT("and %s reaches the pixel only through the guard or the unit normal"), *Knob.ToString()),
                 Parameter && !Unguarded.Contains(*Parameter));
         }
-        for (const FName Knob : { SkyMaterial::Relief, SkyMaterial::Cratering })
+        for (const FName Knob : { SkyMaterial::ReliefScale, SkyMaterial::Cratering })
         {
             const UMaterialExpression* const* Parameter = Parameters.Find(Knob);
             Test.TestTrue(FString::Printf(TEXT("%s tilts the normal"), *Knob.ToString()), Parameter && Turning.Contains(*Parameter));
@@ -739,17 +758,81 @@ namespace
         }
     }
 
-    TSet<FName> AssetNames(const UMaterialInterface* Material, bool bScalars)
+    /**
+     * The cast shadow's node, in a material that reads the map: exactly one
+     * Custom node calls WR_ShadowMapCoord, through the shared file's include,
+     * with the contract's pins in order; it alone takes the ShadowMap object;
+     * the object's default is the white texture, so a world without a map
+     * reads 1; and a face hands it one pixel's footprint.
+     */
+    void CheckShadowNode(FAutomationTestBase& Test, UMaterial& Material, const TSharedPtr<FJsonObject>& Contract)
+    {
+        const TSharedPtr<FJsonObject> Block = Contract->GetObjectField(TEXT("shadow"));
+        Test.TestEqual(TEXT("the JSON's shadow entry is the header's"), Block->GetStringField(TEXT("entry")), FString(SkyMaterial::ShadowCoordEntry));
+        Test.TestEqual(TEXT("and its default texture"), Block->GetStringField(TEXT("default_texture")), FString(SkyMaterial::ShadowDefaultTexturePath));
+        TArray<FName> JsonInputs;
+        for (const TSharedPtr<FJsonValue>& Value : Block->GetArrayField(TEXT("inputs")))
+        {
+            JsonInputs.Add(FName(*Value->AsString()));
+        }
+        Test.TestTrue(TEXT("and its pins"), JsonInputs == SkyMaterial::ShadowInputs());
+        int32 Nodes = 0;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material.GetExpressions())
+        {
+            if (const UMaterialExpressionTextureObjectParameter* Object = Cast<UMaterialExpressionTextureObjectParameter>(Expression))
+            {
+                Test.TestTrue(FString::Printf(TEXT("%s: the map's default is the white texture"), *Material.GetName()),
+                    Object->Texture && Object->Texture->GetPathName() == SkyMaterial::ShadowDefaultTexturePath);
+            }
+            const UMaterialExpressionCustom* Custom = Cast<UMaterialExpressionCustom>(Expression);
+            if (!Custom)
+            {
+                continue;
+            }
+            bool bTakesMap = false;
+            for (const FCustomInput& Input : Custom->Inputs)
+            {
+                bTakesMap = bTakesMap || Cast<UMaterialExpressionTextureObjectParameter>(Input.Input.Expression) != nullptr;
+            }
+            if (!Custom->Code.Contains(SkyMaterial::ShadowCoordEntry))
+            {
+                Test.TestFalse(FString::Printf(TEXT("%s: only the shadow's node takes the map (%s)"), *Material.GetName(), *Custom->GetName()), bTakesMap);
+                continue;
+            }
+            ++Nodes;
+            TArray<FName> Pins;
+            for (const FCustomInput& Input : Custom->Inputs)
+            {
+                Pins.Add(Input.InputName);
+            }
+            Test.TestTrue(FString::Printf(TEXT("%s: the shadow's pins are the contract's"), *Material.GetName()), Pins == SkyMaterial::ShadowInputs());
+            Test.TestTrue(FString::Printf(TEXT("%s: through the shared file"), *Material.GetName()),
+                Custom->IncludeFilePaths.Contains(FString(SkyMaterial::WorldReliefInclude)));
+            Test.TestTrue(FString::Printf(TEXT("%s: and it takes the map"), *Material.GetName()), bTakesMap);
+            // The faces hand the node one pixel's footprint: theirs over
+            // filter_pixels (face_footprint). Handed the filtered one, the
+            // map would be read a level coarser than planned everywhere.
+            if (Material.GetFName() != TEXT("M_SkyShadowProbe") && Custom->Inputs.Num() > 1)
+            {
+                const UMaterialExpressionMultiply* Over = Cast<UMaterialExpressionMultiply>(Custom->Inputs[1].Input.Expression);
+                const UMaterialExpressionConstant* By = Over ? Cast<UMaterialExpressionConstant>(Over->B.Expression) : nullptr;
+                const double FilterPixels = Contract->GetObjectField(TEXT("constants"))->GetNumberField(TEXT("filter_pixels"));
+                Test.TestTrue(FString::Printf(TEXT("%s: the shadow's footprint is the face's over filter_pixels"), *Material.GetName()),
+                    By && FMath::IsNearlyEqual(static_cast<double>(By->R), 1.0 / FilterPixels, 1e-6));
+            }
+        }
+        Test.TestEqual(FString::Printf(TEXT("%s has one shadow node"), *Material.GetName()), Nodes, 1);
+    }
+
+    TSet<FName> AssetNames(const UMaterialInterface* Material, EMaterialParameterType Type)
     {
         TArray<FMaterialParameterInfo> Infos;
         TArray<FGuid> Ids;
-        if (bScalars)
+        switch (Type)
         {
-            Material->GetAllScalarParameterInfo(Infos, Ids);
-        }
-        else
-        {
-            Material->GetAllVectorParameterInfo(Infos, Ids);
+        case EMaterialParameterType::Scalar: Material->GetAllScalarParameterInfo(Infos, Ids); break;
+        case EMaterialParameterType::Vector: Material->GetAllVectorParameterInfo(Infos, Ids); break;
+        default: Material->GetAllTextureParameterInfo(Infos, Ids); break;
         }
         TSet<FName> Names;
         for (const FMaterialParameterInfo& Info : Infos)
@@ -803,13 +886,17 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         const TCHAR* ObjectPath;
         TArray<FName> Scalars;
         TArray<FName> Vectors;
+        TArray<FName> Textures;
     };
     const TArray<FExpected> Materials = {
-        { TEXT("M_SkyBody"), SkyMaterial::BodyPath, SkyMaterial::BodyScalars(), SkyMaterial::BodyVectors() },
-        { TEXT("M_SkyStar"), SkyMaterial::StarPath, SkyMaterial::StarScalars(), SkyMaterial::StarVectors() },
-        { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {} },
-        { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {} },
-        { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors() },
+        { TEXT("M_SkyBody"), SkyMaterial::BodyPath, SkyMaterial::BodyScalars(), SkyMaterial::BodyVectors(), SkyMaterial::BodyTextures() },
+        { TEXT("M_SkyStar"), SkyMaterial::StarPath, SkyMaterial::StarScalars(), SkyMaterial::StarVectors(), {} },
+        { TEXT("M_SkyStarfield"), SkyMaterial::StarfieldPath, {}, {}, {} },
+        { TEXT("M_SkyGlass"), SkyMaterial::GlassPath, {}, {}, {} },
+        { TEXT("M_SkyReliefProbe"), SkyMaterial::ReliefProbePath, SkyMaterial::ProbeScalars(), SkyMaterial::ProbeVectors(), {} },
+        { TEXT("M_SkyGround"), SkyMaterial::GroundPath, SkyMaterial::GroundScalars(), SkyMaterial::GroundVectors(), SkyMaterial::GroundTextures() },
+        { TEXT("M_SkyGroundProbe"), SkyMaterial::GroundProbePath, SkyMaterial::GroundProbeScalars(), SkyMaterial::GroundProbeVectors(), {} },
+        { TEXT("M_SkyShadowProbe"), SkyMaterial::ShadowProbePath, SkyMaterial::ShadowProbeScalars(), SkyMaterial::ShadowProbeVectors(), SkyMaterial::ShadowProbeTextures() },
     };
 
     const TSharedPtr<FJsonObject> JsonMaterials = Contract->GetObjectField(TEXT("materials"));
@@ -828,11 +915,14 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         }
         TSet<FName> JsonScalars;
         TSet<FName> JsonVectors;
-        JsonNames(Contract, *Entry, JsonScalars, JsonVectors);
+        TSet<FName> JsonTextures;
+        JsonNames(Contract, *Entry, JsonScalars, JsonVectors, JsonTextures);
         TestTrue(FString::Printf(TEXT("%s: the JSON's scalars %s are the header's"), Expected.Asset, *Describe(JsonScalars)),
             SameSet(JsonScalars, TSet<FName>(Expected.Scalars)));
         TestTrue(FString::Printf(TEXT("%s: the JSON's vectors %s are the header's"), Expected.Asset, *Describe(JsonVectors)),
             SameSet(JsonVectors, TSet<FName>(Expected.Vectors)));
+        TestTrue(FString::Printf(TEXT("%s: the JSON's textures %s are the header's"), Expected.Asset, *Describe(JsonTextures)),
+            SameSet(JsonTextures, TSet<FName>(Expected.Textures)));
 
         // The built asset exposes exactly those. A misspelt parameter is a
         // silent no-op at runtime; here it is a red test.
@@ -841,12 +931,21 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         {
             continue;
         }
-        const TSet<FName> Scalars = AssetNames(Material, true);
-        const TSet<FName> Vectors = AssetNames(Material, false);
+        const TSet<FName> Scalars = AssetNames(Material, EMaterialParameterType::Scalar);
+        const TSet<FName> Vectors = AssetNames(Material, EMaterialParameterType::Vector);
         TestTrue(FString::Printf(TEXT("%s exposes exactly the contract's scalars; has %s"), Expected.Asset, *Describe(Scalars)),
             SameSet(Scalars, JsonScalars));
         TestTrue(FString::Printf(TEXT("%s exposes exactly the contract's vectors; has %s"), Expected.Asset, *Describe(Vectors)),
             SameSet(Vectors, JsonVectors));
+        const TSet<FName> Textures = AssetNames(Material, EMaterialParameterType::Texture);
+        TestTrue(FString::Printf(TEXT("%s exposes exactly the contract's textures; has %s"), Expected.Asset, *Describe(Textures)),
+            SameSet(Textures, JsonTextures));
+        int32 TextureNodes = 0;
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material->GetExpressions())
+        {
+            TextureNodes += Cast<UMaterialExpressionTextureObjectParameter>(Expression) ? 1 : 0;
+        }
+        TestEqual(FString::Printf(TEXT("%s has one node per texture"), Expected.Asset), TextureNodes, JsonTextures.Num());
         // One node per parameter. Two nodes can share a name and the name
         // lists above cannot tell; a stale one left by a rebuild is how that
         // happens, and whichever the compiler picks is a guess.
@@ -858,6 +957,52 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         TestEqual(FString::Printf(TEXT("%s has one node per parameter"), Expected.Asset),
             ParameterNodes, JsonScalars.Num() + JsonVectors.Num());
 
+        // Custom primitive data: the index is contract as much as the name.
+        for (const TObjectPtr<UMaterialExpression>& Expression : Material->GetExpressions())
+        {
+            bool bPrimitive = false;
+            int32 Index = -1;
+            FName Name;
+            if (const UMaterialExpressionScalarParameter* Scalar = Cast<UMaterialExpressionScalarParameter>(Expression))
+            {
+                bPrimitive = Scalar->bUseCustomPrimitiveData;
+                Index = Scalar->PrimitiveDataIndex;
+                Name = Scalar->ParameterName;
+            }
+            else if (const UMaterialExpressionVectorParameter* Vector = Cast<UMaterialExpressionVectorParameter>(Expression))
+            {
+                bPrimitive = Vector->bUseCustomPrimitiveData;
+                Index = Vector->PrimitiveDataIndex;
+                Name = Vector->ParameterName;
+            }
+            if (!bPrimitive)
+            {
+                continue;
+            }
+            int32 JsonIndex = -1;
+            for (const auto& Role : JsonParameters->Values)
+            {
+                const TSharedPtr<FJsonObject> Parameter = Role.Value->AsObject();
+                if (FName(*Parameter->GetStringField(TEXT("name"))) == Name && Parameter->HasField(TEXT("custom_primitive_data")))
+                {
+                    JsonIndex = static_cast<int32>(Parameter->GetNumberField(TEXT("custom_primitive_data")));
+                }
+            }
+            TestEqual(FString::Printf(TEXT("%s: %s reads the custom primitive data the JSON says"), Expected.Asset, *Name.ToString()), Index, JsonIndex);
+            if (Name == SkyMaterial::BandLimit)
+            {
+                TestEqual(TEXT("BandLimit's index is the header's, which WorldGround writes"), Index, SkyMaterial::BandLimitPrimitiveIndex);
+            }
+            else if (Name == SkyMaterial::TilePivot)
+            {
+                TestEqual(TEXT("TilePivot's index is the header's, which WorldGround writes"), Index, SkyMaterial::TilePivotPrimitiveIndex);
+            }
+            else
+            {
+                AddError(FString::Printf(TEXT("%s: %s reads custom primitive data the header names no index for"), Expected.Asset, *Name.ToString()));
+            }
+        }
+
         const TArray<FString> Errors = TranslationErrors(const_cast<UMaterial*>(Material));
         TestTrue(FString::Printf(TEXT("%s translates: %s"), Expected.Asset, *FString::Join(Errors, TEXT("; "))), Errors.IsEmpty());
         TestTrue(FString::Printf(TEXT("%s is unlit: its emissive is the final pixel"), Expected.Asset),
@@ -867,6 +1012,10 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         {
             CheckSurfaceFace(*this, *const_cast<UMaterial*>(Material), Contract->GetObjectField(TEXT("constants")));
             CheckBodyTurn(*this, *const_cast<UMaterial*>(Material));
+        }
+        if (Material->GetFName() == TEXT("M_SkyBody") || Material->GetFName() == TEXT("M_SkyGround") || Material->GetFName() == TEXT("M_SkyShadowProbe"))
+        {
+            CheckShadowNode(*this, *const_cast<UMaterial*>(Material), Contract);
         }
         if (Material->GetFName() == TEXT("M_SkyGlass"))
         {
@@ -911,7 +1060,9 @@ bool FSkyMaterialContractTest::RunTest(const FString& Parameters)
         const TSharedPtr<FJsonObject> Collection = Contract->GetObjectField(TEXT("collections"))->GetObjectField(TEXT("MPC_Sky"));
         TSet<FName> JsonScalars;
         TSet<FName> JsonVectors;
-        JsonNames(Contract, Collection, JsonScalars, JsonVectors);
+        TSet<FName> JsonTextures;
+        JsonNames(Contract, Collection, JsonScalars, JsonVectors, JsonTextures);
+        TestEqual(TEXT("MPC_Sky has no textures"), JsonTextures.Num(), 0);
         TestTrue(TEXT("MPC_Sky: the JSON's scalars are the header's"), SameSet(JsonScalars, TSet<FName>(SkyMaterial::ParameterScalars())));
         TestEqual(TEXT("MPC_Sky has no vectors"), JsonVectors.Num(), 0);
         TestEqual(TEXT("MPC_Sky lives where the JSON says"), FString(SkyMaterial::ParametersPath),

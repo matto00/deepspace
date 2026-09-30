@@ -21,7 +21,7 @@ struct FFaceTerms
     double Detail = 0.0;
 
     /** Their gradient in noise space per unit of the stretched direction:
-     *  the relief's slope before ds.Sky.Relief. */
+     *  the relief's slope before ReliefScale. */
     FVector3d DetailSlope = FVector3d::ZeroVector;
 
     /** The crater bands' albedo: darker floors, brighter rims. */
@@ -67,9 +67,13 @@ namespace WorldReliefNoise
 
     /** Every raw term at D, for a footprint in D units, a seed offset and a
      *  stretch: the file's entry point in double, and in float -- the
-     *  float build performs the GPU's operations in the GPU's precision. */
-    DEEPSPACE_API FFaceTerms FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch);
-    DEEPSPACE_API FFaceTerms FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch);
+     *  float build performs the GPU's operations in the GPU's precision.
+     *  VertexBandLimit is what a tile's vertices carry (radius units): the
+     *  slopes keep only the rest; 1.0, the default, is the orbit's. */
+    DEEPSPACE_API FFaceTerms FaceF64(const FVector3d& D, double FootprintD, const FVector3d& Offset, double Stretch,
+                                     double VertexBandLimit = 1.0);
+    DEEPSPACE_API FFaceTerms FaceF32(const FVector3f& D, float FootprintD, const FVector3f& Offset, float Stretch,
+                                     float VertexBandLimit = 1.0f);
 
     /** How near D lies to a crater's step, in cells, across every crater
      *  band the footprint has not faded: the least of the rim's distance
@@ -87,6 +91,39 @@ namespace WorldReliefNoise
      *  so a test can cap the samples each band's steps leave out (the
      *  developer's ruling at R2: 1% per crater band). */
     DEEPSPACE_API double CraterBandMargin(const FVector3d& D, double FootprintD, const FVector3d& Offset, int32 Band);
+
+    /** The cast shadow's map lookup, from the shared file (WR_ShadowMapCoord,
+     *  WR_ShadowTapsAt, WR_Bilinear, WR_Lerp), in double and in float: the GPU's
+     *  operations in the GPU's precision, for SunShadowMap::Sample and the
+     *  parity test. */
+    struct FShadowCoord
+    {
+        double U = 0.0;
+        double V = 0.0;
+        int32 Level0 = 0;
+        int32 Level1 = 0;
+        double Blend = 0.0;
+        int32 Night = 0;   // under PsiLo: the lookup is 0
+    };
+    struct FShadowTaps
+    {
+        int32 X0 = 0;
+        int32 X1 = 0;
+        int32 Y0 = 0;
+        int32 Y1 = 0;
+        double FX = 0.0;
+        double FY = 0.0;
+    };
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF64(const FVector3d& D, const FVector3d& X, const FVector3d& Z, double PsiLo, double Step,
+                                                 double Footprint, int32 Levels);
+    DEEPSPACE_API FShadowCoord ShadowMapCoordF32(const FVector3f& D, const FVector3f& X, const FVector3f& Z, float PsiLo, float Step,
+                                                 float Footprint, int32 Levels);
+    DEEPSPACE_API FShadowTaps ShadowTapsF64(double U, double V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API FShadowTaps ShadowTapsF32(float U, float V, int32 Width, int32 Rows, int32 Level);
+    DEEPSPACE_API double BilinearF64(double A, double B, double C, double D, double FX, double FY);
+    DEEPSPACE_API float BilinearF32(float A, float B, float C, float D, float FX, float FY);
+    DEEPSPACE_API double LerpF64(double A, double B, double T);
+    DEEPSPACE_API float LerpF32(float A, float B, float T);
 
     /** The file's tables and constants, for DeepSpace.Sky.MaterialContract. */
     struct FBands
@@ -126,9 +163,12 @@ namespace WorldReliefNoise
  * exactly PeakCm, by construction. The bands
  * are the GPU's twelve and, in C++ only, finer octaves down to BandLimitCm:
  * the GPU's float cannot hold them, and nothing finer than 5 m exists, so
- * the finest tiles' 0.6 m vertices never alias it. Slice (a): the detail
- * bands only; the craters are the material's (Face) until slice (b) makes
- * them continuous (decision 3).
+ * the finest tiles' 0.6 m vertices never alias it. Since slice (b) S also
+ * carries Cratering x the crater bands, each a sum of compact kernels so a
+ * crater is a continuous height (decision 3; the shared file's
+ * WR_CraterSum). S_max stays the detail bands' measured maximum: craters
+ * carve into the ground the detail raised, and the cap takes what they add
+ * past it.
  *
  * Every evaluation takes a footprint, cm: the material's own fade,
  * saturate(1 - footprint x frequency) per band, made explicit. 0 is every
@@ -181,12 +221,13 @@ public:
      *  from the bound on what each band's fade removed. */
     double OmittedBoundCm(double FootprintCm) const;
 
-    double MaxHeightCm() const { return Params.PeakCm; }
-    double MinHeightCm() const { return -Params.PeakCm; }
+    /** PeakCm on solid ground, 0 on a world with none. */
+    double MaxHeightCm() const;
+    double MinHeightCm() const;
 
     /** A Lipschitz bound on the ground's slope, cm of height per cm along
      *  it: for the ray march (slice b). Proven -- PeakCap's slope is at most
-     *  1 -- and loose (the bounds above). */
+     *  1 -- and loose (the bounds above), craters in. */
     double MaxSlope() const;
 
     /** The finest band's wavelength, cm: RadiusCm over its frequency. */
@@ -198,8 +239,7 @@ public:
     /** The detail bands' sum S at D, radius units (each band its value over
      *  its frequency), before any PeakCm scaling, at a footprint in D units
      *  (radius units); its gradient with respect to D into Grad if given.
-     *  Height is PeakCm x PeakCap(S / SMax()); slice (b)'s craters add to
-     *  S (Task T1). */
+     *  Height is PeakCm x PeakCap((DetailSum + Cratering x CraterSum) / SMax()). */
     double DetailSum(const FVector3d& D, double FootprintRadius, FVector3d* Grad = nullptr) const;
 
     /** S's proven bound, radius units: |DetailSum| never exceeds it. */
@@ -214,8 +254,33 @@ public:
     /** The most a footprint (D units) can have removed from S, radius units. */
     double DetailOmittedBound(double FootprintRadius) const;
 
+    /** The crater bands' sum at D, radius units, every kept crater whole
+     *  (Cratering is the caller's), at a footprint in D units; its gradient
+     *  with respect to D into Grad if given. The shared file's WR_CraterSum
+     *  at the orbit's VertexBandLimit, 1: no vertices carry any of it. */
+    double CraterSum(const FVector3d& D, double FootprintRadius, FVector3d* Grad = nullptr) const;
+
+    /** The crater bands' bound, slope bound and omitted bound, radius units:
+     *  WR_CRATER_BOUND_COUNT kernels at the profile's largest magnitude (or
+     *  its steepest wall), per band. Proven, like the detail's. */
+    static double CraterBound();
+    static double CraterSlopeBound();
+    static double CraterOmittedBound(double FootprintRadius);
+
+    /** PeakCm / (RadiusCm x SMax): the band sum's gradient times this is the
+     *  height's slope in radius units under the cap's knee -- what
+     *  M_SkyBody's ReliefScale becomes, so the orbit's relief shading is the
+     *  ground's own slope (decision 3). 0 on a world with no ground. */
+    double SlopeScale() const;
+
 private:
     double FootprintOf(double FootprintCm) const;
+
+    /** Whether this world has a ground to draw: solid, a peak, a radius. */
+    bool HasGround() const;
+
+    /** Cratering, never below 0. */
+    double Kept() const;
 
     FWorldReliefParams Params;
     TArray<double> Frequencies;
@@ -223,3 +288,33 @@ private:
     TArray<int32> Indices;
     double SumBound = 0.0;
 };
+
+/** What M_SkyBody and M_SkyGround shade a rocky world with, computed by the
+ *  same shared file on the CPU, for the tests that hold them equal: the raw
+ *  face terms (both materials compose the face from them with one graph,
+ *  surface() in setup_sky_materials.py, so equal terms are an equal face),
+ *  the slope that graph forms, ReliefScale x (detail + Cratering x craters),
+ *  and the unit normal. */
+namespace WorldReliefShading
+{
+    struct FSurface
+    {
+        FFaceTerms Terms;
+        FVector3d Slope = FVector3d::ZeroVector;
+        FVector3d Normal = FVector3d::UnitZ();
+    };
+
+    /** M_SkyBody's: every slope the footprint keeps. */
+    DEEPSPACE_API FSurface Orbit(const FWorldReliefParams& Params, const FVector3d& D, double FootprintRadius);
+
+    /** M_SkyGround's: the tile's VertexNormal, and the pixel's slope of the
+     *  bands the vertices at VertexBandLimit (radius units) do not carry --
+     *  split as the relief grows in: the pixel's share taken at
+     *  lerp(1, VertexBandLimit, Morph) and the vertex normal lerp(D,
+     *  VertexNormal, Morph). At the handover (Morph 0) that is the orbit's
+     *  normal whatever the vertex holds, so a normal interpolated across a
+     *  triangle cannot step the brightness there; at the drive floor (Morph
+     *  1) it is the tile's plus the pixel's. */
+    DEEPSPACE_API FSurface Ground(const FWorldReliefParams& Params, const FVector3d& D, const FVector3d& VertexNormal,
+                                  double FootprintRadius, double VertexBandLimit, double Morph = 1.0);
+}

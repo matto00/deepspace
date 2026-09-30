@@ -1,5 +1,6 @@
 #include <limits>
 
+#include "Engine/Texture2DDynamic.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "HAL/FileManager.h"
 #include "Kismet/KismetRenderingLibrary.h"
@@ -13,8 +14,13 @@
 #include "ShaderCompiler.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
 #include "Universe/UniverseSubsystem.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/SunShadowMap.h"
+#include "Surface/TerrainQuadtree.h"
 #include "Surface/WorldRelief.h"
 #include "Tests/SkyTestWorld.h"
 
@@ -58,8 +64,13 @@
  * values): an error in the shared text reaches both compilers, and moves
  * double and the GPU together.
  *
- * Slice (b) tightens it at the root (the lattice offset split into
- * integer and fraction). A
+ * Slice (b) tightened it at the root (Task 31b): the shared file keeps each
+ * band's lattice offset as an exact integer part apart from its fraction,
+ * so the GPU's float sees only D x frequency and a fraction, and every term
+ * is now held to 1.25 x what the GPU then measured from double
+ * (SplitHeld, GiantSplitHeld), each never looser than the rule above, which
+ * is still computed and printed. What is left at the finest footprints is
+ * D x frequency's own rounding in float, which no offset split reaches. A
  * crater band's albedo and slope step at a held crater's rim and at the
  * bisector beside one, where any rounding at all can change the side a
  * sample lands on: samples within 2e-3 cells of such a step are left out,
@@ -100,7 +111,12 @@
  *
  * R5, the legacy probe retired, FWorldRelief against the GPU at the recorded floor: PASS -- every term as at R4 (1/768 detail slope 1.27e-03 held to 1.6e-03); SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.444% in one crater band
  *
+ * Task 31b, the lattice offsets split (landing slice (b)): PASS, both worlds, held to the split's own measure -- C++ vs GPU at 1/96 crater slope 5.67e-06 (was 2.16e-03), crater albedo 1.18e-06 (3.87e-04), continent 1.15e-06 (5.18e-05); at 1/12288 crater slope 5.26e-04 (4.30e-03), crater albedo 1.13e-04 (8.37e-04), detail 1.06e-03 (1.28e-03), detail slope 5.71e-03 (7.42e-03); the giant alike; SUMMARY C++-vs-GPU 6.10e-03 (7.42e-03), float-C++-vs-GPU 5.95e-03, left out at most 0.462% in one crater band. The orbital look unchanged: Baemsekai III, IV and V at 30 km and 12 km, dusk included, rendered before and after and diffed pixel for pixel (Task 31b's note in the plan).
+ *
  * R5 after review, the giant restored (stretch 6, held to the file in double at its recorded floor) and every pixel held finite: PASS, both worlds -- the giant's every gap identical to R4's (1/3072 detail 3.69e-04, 1/12288 detail slope 7.21e-03 held to 8.8e-03); 0 pixels not finite; SUMMARY C++-vs-GPU 7.42e-03, float-C++-vs-GPU 9.36e-03, left out at most 0.462% in one crater band
+ *
+ * Task T2, the craters summed (WR_CraterSum) and the relief the ground's own slope: PASS, both worlds, the crater columns held to the summed kernels' own measure (1.25x, re-measured: 1/12288 crater albedo 1.79e-04, slope 6.76e-04 on Baemsekai IV; 2.11e-04 and 7.17e-04 on the giant) and every other term to Task 31b's; SUMMARY C++-vs-GPU 6.10e-03, float-C++-vs-GPU 5.95e-03, left out at most 2.142% in all (0.462% in one crater band) *
+ * Cast shadow's map (the developer's ruling on slice (b)'s build, baked, 2026-09-28): PASS -- Baemsekai IV's map at 1,024 columns across the terminator (the star 3 degrees over the patch) and across the seam (75 degrees: no lower light puts this patch's centre at +-pi, and there the map is whole, so the seam is held on lit texels only), SunShadowMap::Sample vs the GPU 2.14e-03 against the float mirror's 1.79e-03 from double (held to 2.2e-03, at the seam, footprint 1.5e-03; every other footprint under 1.7e-04), at five footprints to level 2; SUMMARY shadow map C++-vs-GPU 2.14e-03, float-vs-double 1.79e-03
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FWorldReliefParityTest,
@@ -157,6 +173,34 @@ namespace WorldReliefParityLocal
         { 1.0 / 12288.0, 4.65e-5, 1.18e-3, 1.38e-3, 7.01e-3, 4.97e-3 },
     };
     static_assert(UE_ARRAY_COUNT(GiantEngineFloor) == UE_ARRAY_COUNT(Footprints), "a giant floor per footprint");
+
+    /** What each term is held to since the lattice offsets were split (Task
+     *  31b): 1.25 x the GPU's distance from double that the split's first run
+     *  measured, per footprint and per term, rounded up and never under 1e-7
+     *  (a term every band of which has faded is exactly 0 on both sides).
+     *  Baemsekai IV through FWorldRelief, then the giant against the file in
+     *  double. The crater columns were measured again, by the same rule,
+     *  when Task T2 made the craters the summed kernels (WR_CraterSum): at
+     *  1/96 to 1/12288, Baemsekai IV's crater albedo 1.82e-6, 1.01e-5,
+     *  4.78e-5, 1.79e-4 and slope 6.00e-6, 4.65e-5, 1.77e-4, 6.76e-4; the
+     *  giant's albedo 1.83e-6, 1.08e-5, 4.90e-5, 2.11e-4 and slope 6.89e-6,
+     *  4.08e-5, 1.86e-4, 7.17e-4. */
+    const FTolerance SplitHeld[] = {
+        { 1.0 / 12.0,    1.2e-6, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
+        { 1.0 / 96.0,    1.5e-6, 1.1e-5, 2.3e-6, 5.8e-5, 7.5e-6 },
+        { 1.0 / 768.0,   1.5e-6, 8.9e-5, 1.3e-5, 5.7e-4, 5.9e-5 },
+        { 1.0 / 3072.0,  1.5e-6, 3.4e-4, 6.0e-5, 2.5e-3, 2.3e-4 },
+        { 1.0 / 12288.0, 1.5e-6, 1.4e-3, 2.3e-4, 7.2e-3, 8.5e-4 },
+    };
+    const FTolerance GiantSplitHeld[] = {
+        { 1.0 / 12.0,    2.7e-7, 1.0e-7, 1.0e-7, 1.0e-7, 1.0e-7 },
+        { 1.0 / 96.0,    1.9e-6, 1.0e-7, 2.3e-6, 1.0e-7, 8.7e-6 },
+        { 1.0 / 768.0,   3.4e-6, 5.8e-5, 1.4e-5, 3.8e-4, 5.1e-5 },
+        { 1.0 / 3072.0,  3.6e-6, 2.9e-4, 6.2e-5, 1.7e-3, 2.4e-4 },
+        { 1.0 / 12288.0, 3.7e-6, 1.3e-3, 2.7e-4, 7.7e-3, 9.0e-4 },
+    };
+    static_assert(UE_ARRAY_COUNT(SplitHeld) == UE_ARRAY_COUNT(Footprints), "a split tolerance per footprint");
+    static_assert(UE_ARRAY_COUNT(GiantSplitHeld) == UE_ARRAY_COUNT(Footprints), "a giant split tolerance per footprint");
 
     /** The giant's seed offset: a made one, multiples of 1/256 as every real
      *  one is. The barren world is Baemsekai IV, with its own. */
@@ -468,8 +512,13 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             const double LeftOutShare = static_cast<double>(LeftOut) / (Side * Side);
             const FString At = FString::Printf(TEXT("%s, footprint 1/%.0f"), World.Name, 1.0 / FootprintD);
             FString SetBy;
-            const FTolerance HeldTo = HeldToByTheFloor(To, EngineFloor, SetBy);
+            const FTolerance Rule = HeldToByTheFloor(To, EngineFloor, SetBy);
+            const FTolerance& HeldTo = World.Relief ? SplitHeld[Row] : GiantSplitHeld[Row];
             const FString HeldText = DescribeTolerance(HeldTo);
+            TestTrue(FString::Printf(TEXT("%s: the split's tolerances are never looser than the rule they tighten (%s against %s)"),
+                *At, *HeldText, *DescribeTolerance(Rule)),
+                HeldTo.Continent <= Rule.Continent && HeldTo.Detail <= Rule.Detail && HeldTo.CraterAlbedo <= Rule.CraterAlbedo
+                    && HeldTo.DetailSlope <= Rule.DetailSlope && HeldTo.CraterSlope <= Rule.CraterSlope);
             FString ByBand;
             double MostInABand = 0.0;
             for (int32 Band = 0; Band < CraterBands; ++Band)
@@ -481,7 +530,7 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
             TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%s)"), *At, *ByBand),
                 MostInABand <= MaxLeftOutPerBand);
-            TestTrue(FString::Printf(TEXT("%s: %s computes what the GPU drew, held to %s by the measured floor as a rule (%s)"),
+            TestTrue(FString::Printf(TEXT("%s: %s computes what the GPU drew, held to %s, the split's own measure (%s)"),
                 *At, World.Relief ? TEXT("FWorldRelief") : TEXT("the file in double"), *HeldText, *HeldGap.Describe()), HeldGap.Within(HeldTo));
             WorstReliefShared = FMath::Max(WorstReliefShared, HeldGap.Worst());
             WorstFloatShared = FMath::Max(WorstFloatShared, FloatVsShared.Worst());
@@ -489,7 +538,8 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
             MostLeftOutInABand = FMath::Max(MostLeftOutInABand, MostInABand);
             Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out (by crater band: %s), %d not finite"),
                 *At, Side * Side - LeftOut - NotFinite, LeftOut, *ByBand, NotFinite));
-            Report.Add(TEXT("  held to (the rule):                 ") + HeldText);
+            Report.Add(TEXT("  held to (the split, Task 31b):      ") + HeldText);
+            Report.Add(TEXT("  the rule it tightens:               ") + DescribeTolerance(Rule));
             Report.Add(TEXT("    set by:                           ") + SetBy);
             Report.Add(TEXT("  engine floor (recorded, R4):        ") + DescribeTolerance(EngineFloor));
             Report.Add((World.Relief ? TEXT("  C++ (double) vs GPU (asserted):     ") : TEXT("  file (double) vs GPU (asserted):    ")) + HeldGap.Describe());
@@ -497,6 +547,237 @@ bool FWorldReliefParityTest::RunTest(const FString& Parameters)
         }
     }
 
+    // -- The ground's normal (landing decision 9, Task T7) -------------------
+    // M_SkyGroundProbe draws M_SkyGround's per-pixel normal over the same
+    // patch, for a flat vertex (its normal D itself) carrying the bands of
+    // the tile level the cut uses at 50 km over Baemsekai IV; the C++ is
+    // WorldReliefShading::Ground on the same D. With
+    // DeepSpace.Surface.GroundShadesAsOrbit (the ground's normal is the
+    // orbit's on the CPU) this holds the ground's normal on the GPU.
+    double WorstGroundNormal = 0.0;
+    {
+        UMaterial* GroundShared = LoadObject<UMaterial>(nullptr, SkyMaterial::GroundProbePath);
+        if (!TestNotNull(TEXT("M_SkyGroundProbe is built (Tools/setup_sky_materials.py)"), GroundShared))
+        {
+            return false;
+        }
+        UMaterialInstanceDynamic* GroundProbe = UMaterialInstanceDynamic::Create(GroundShared, Test.World);
+        const double VertexBandLimit = TerrainQuadtree::SpacingCm(9, Fourth.Relief.RadiusCm) / Fourth.Relief.RadiusCm;
+        GroundProbe->SetVectorParameterValue(SkyMaterial::SurfaceSeed, ShipSky::SurfaceSeed(Fourth.SurfaceSeed, Fourth.BeltPairs));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::Cratering, static_cast<float>(Fourth.Relief.Cratering));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::ReliefScale, static_cast<float>(Ground.SlopeScale()));
+        GroundProbe->SetScalarParameterValue(SkyMaterial::VertexBandLimit, static_cast<float>(VertexBandLimit));
+        const FLinearColor NoBias(0.0f, 0.0f, 0.0f, 0.0f);
+        // Both probes draw probe_direction's patch: the relief probe's
+        // Direction pass is the D each ground pixel was shaded at.
+        const TArray<FVector3d> Directions = Draw(Test.World, Target, Probe, Selecting(EPass::Direction), NoBias);
+        const FVector3d& Offset = Fourth.Relief.SeedOffset;
+        const int32 CraterBands = WorldReliefNoise::Bands().CraterIndices.Num();
+        for (int32 Row = 0; Row < static_cast<int32>(UE_ARRAY_COUNT(Footprints)); ++Row)
+        {
+            const double FootprintD = Footprints[Row].Table.Footprint;
+            const float Footprint = static_cast<float>(FootprintD);
+            GroundProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
+            const TArray<FVector3d> GroundNormals = Draw(Test.World, Target, GroundProbe, NoBias, NoBias);
+            double Gap = 0.0;
+            int32 LeftOut = 0;
+            int32 NotFinite = 0;
+            TArray<int32> LeftOutByBand;
+            LeftOutByBand.Init(0, CraterBands);
+            for (int32 Index = 0; Index < Side * Side; ++Index)
+            {
+                const FVector3d& D = Directions[Index];
+                if (!IsFinite(D) || !IsFinite(GroundNormals[Index]))
+                {
+                    ++NotFinite;
+                    continue;
+                }
+                bool bOnStep = false;
+                for (int32 Band = 0; Band < CraterBands; ++Band)
+                {
+                    if (WorldReliefNoise::CraterBandMargin(D, Footprint, Offset, Band) < StepMarginCells)
+                    {
+                        ++LeftOutByBand[Band];
+                        bOnStep = true;
+                    }
+                }
+                if (bOnStep)
+                {
+                    ++LeftOut;
+                    continue;
+                }
+                const FVector3d Held = WorldReliefShading::Ground(Fourth.Relief, D, D, static_cast<double>(Footprint), VertexBandLimit).Normal;
+                Gap = FGap::Wider(Gap, FGap::AbsMax(Held - GroundNormals[Index]));
+            }
+            double MostInABand = 0.0;
+            for (int32 Band = 0; Band < CraterBands; ++Band)
+            {
+                MostInABand = FMath::Max(MostInABand, static_cast<double>(LeftOutByBand[Band]) / (Side * Side));
+            }
+            const FString At = FString::Printf(TEXT("Baemsekai IV's ground normal, footprint 1/%.0f"), 1.0 / FootprintD);
+            TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
+            TestTrue(FString::Printf(TEXT("%s: at most 1%% of samples lie on any one crater band's steps (%.3f%%)"), *At, 100.0 * MostInABand),
+                MostInABand <= MaxLeftOutPerBand);
+            TestTrue(FString::Printf(TEXT("%s: WorldReliefShading::Ground computes what the GPU drew, to 1e-3 a component (%.2e)"), *At, Gap),
+                Gap <= 1.0e-3);
+            WorstGroundNormal = FMath::Max(WorstGroundNormal, Gap);
+            Report.Add(FString::Printf(TEXT("%s: %d compared, %d left out, %d not finite"), *At, Side * Side - LeftOut - NotFinite, LeftOut, NotFinite));
+            Report.Add(FString::Printf(TEXT("  ground normal C++ vs GPU:          %.2e"), Gap));
+        }
+    }
+
+    // -- The cast shadow's map (the developer's ruling on slice (b)'s build:
+    // baked, not marched) ------------------------------------------------------
+    // M_SkyShadowProbe draws the map's lookup -- the shared file's
+    // WR_ShadowMapCoord, WR_ShadowTapsAt and WR_Bilinear over the texture's own
+    // texels -- over the probe patch. The map is Baemsekai IV's, baked here at
+    // 1,024 columns under two lights 3 degrees over the patch's centre: one
+    // turned so the map's frame puts the centre at azimuth 0 (the patch across
+    // the terminator), one at +-pi (the patch across the map's seam). The C++
+    // is SunShadowMap::Sample at the very D the GPU drew, at five footprints
+    // from far finer than a texel (6.1e-3 rad) to one that reads level 2.
+    // Held by the measured floor as a rule: 1e-3, or 1.25 x the float
+    // mirror's distance from double at that footprint, whichever is larger.
+    double WorstShadow = 0.0;
+    double WorstShadowFloat = 0.0;
+    {
+        UMaterial* ShadowShared = LoadObject<UMaterial>(nullptr, SkyMaterial::ShadowProbePath);
+        if (!TestNotNull(TEXT("M_SkyShadowProbe is built (Tools/setup_sky_materials.py)"), ShadowShared))
+        {
+            return false;
+        }
+        UMaterialInstanceDynamic* ShadowProbe = UMaterialInstanceDynamic::Create(ShadowShared, Test.World);
+        const FLinearColor NoBias(0.0f, 0.0f, 0.0f, 0.0f);
+        const TArray<FVector3d> Directions = Draw(Test.World, Target, Probe, Selecting(EPass::Direction), NoBias);
+        const FVector3d Centre = Directions[(Side / 2) * Side + Side / 2].GetSafeNormal();
+        const FVector3d East = FVector3d::CrossProduct(FVector3d::UnitZ(), Centre).GetSafeNormal();
+        const FVector3d North = FVector3d::CrossProduct(Centre, East);
+        const FReliefGround Relief(Fourth.Relief);
+        const SunShadow::FSunLight HomeLight = SkyProjection::SunLightOf(HomeSky, 4);
+        const double Steepest = SunShadow::SteepestSlope(Fourth.Relief);
+        struct FPlace
+        {
+            const TCHAR* Name;
+            double Azimuth;
+        };
+        for (const FPlace& Place : { FPlace{ TEXT("across the terminator"), 0.0 }, FPlace{ TEXT("across the seam"), UE_DOUBLE_PI } })
+        {
+            // Turn the light about the centre until the map's frame puts the
+            // centre at the azimuth asked. Across the terminator the star
+            // stands 3 degrees over the centre, whatever the azimuth: the
+            // frame's X is square to the world's Z, so with this patch one
+            // turn of a 3-degree light only sweeps the centre's azimuth
+            // through about 100 degrees, and neither 0 nor pi is in it (the
+            // first run: 39.7 degrees off both). The seam needs the azimuth,
+            // so its light is also raised, 3 to 75 degrees, until one puts
+            // the centre at pi.
+            SunShadow::FSunLight Sun = HomeLight;
+            double Nearest = TNumericLimits<double>::Max();
+            double Raised = 3.0;
+            const bool bSeam = Place.Azimuth != 0.0;
+            for (const double Degrees : { 3.0, 6.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 75.0 })
+            {
+                if (!bSeam && Degrees != 3.0)
+                {
+                    break;
+                }
+                const double Elevation = FMath::DegreesToRadians(Degrees);
+                for (int32 Turn = 0; Turn < 3600; ++Turn)
+                {
+                    const double Around = Turn * 2.0 * UE_DOUBLE_PI / 3600.0;
+                    SunShadow::FSunLight Trial = HomeLight;
+                    Trial.Direction = (Centre * FMath::Sin(Elevation)
+                        + (East * FMath::Cos(Around) + North * FMath::Sin(Around)) * FMath::Cos(Elevation)).GetSafeNormal();
+                    const FSunShadowMap Shape = SunShadowMap::Shape(Relief, Trial, 1024);
+                    const double Phi = FMath::Atan2(FVector3d::DotProduct(Centre, Shape.FrameY), FVector3d::DotProduct(Centre, Shape.FrameX));
+                    const double Off = bSeam ? FMath::Abs(FMath::Fmod(Phi - Place.Azimuth + 3.0 * UE_DOUBLE_PI, 2.0 * UE_DOUBLE_PI) - UE_DOUBLE_PI) : 0.0;
+                    if (Off < Nearest)
+                    {
+                        Nearest = Off;
+                        Sun = Trial;
+                        Raised = Degrees;
+                    }
+                }
+            }
+            TestTrue(FString::Printf(TEXT("a light puts the patch %s (%.3f deg off, the star %.0f deg over the centre)"), Place.Name,
+                FMath::RadiansToDegrees(Nearest), Raised), Nearest < FMath::DegreesToRadians(0.5));
+            Report.Add(FString::Printf(TEXT("Baemsekai IV's shadow map, %s: the star %.0f deg over the patch's centre, the centre %.3f deg from the azimuth asked"),
+                Place.Name, Raised, FMath::RadiansToDegrees(Nearest)));
+            const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe> Baked =
+                MakeShared<const FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Relief, Sun, Steepest, 1024));
+            const FSunShadowMap& Map = *Baked;
+            UTexture2DDynamic* Texture = ShipSky::MakeShadowTextureNow(Baked, TEXT("Parity"));
+            if (!TestNotNull(TEXT("the map uploads"), Texture))
+            {
+                return false;
+            }
+            FlushRenderingCommands();
+            ShadowProbe->SetTextureParameterValue(SkyMaterial::ShadowMap, Texture);
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameX, ShipSky::ShadowFrameX(Map));
+            ShadowProbe->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, ShipSky::ShadowFrameZ(Map));
+            // The float mirror's own distance from double, as this leg's
+            // first passing run measured it, place by place and footprint by
+            // footprint; held to 1.25x that (never under 1e-4). The GPU's
+            // tolerance is taken from the float mirror's distance, so a
+            // double mirror gone wrong would widen its own tolerance with
+            // it; this is what catches that.
+            // Each footprint carries its own recorded distances, so a list
+            // reordered or extended cannot hold one footprint to another's.
+            struct FShadowFootprint
+            {
+                double Footprint;
+                double FloatRecorded[2];   // [terminator, seam]
+            };
+            const FShadowFootprint ShadowFootprints[] = {
+                { 1.0e-5, { 5.75e-5, 0.0     } },
+                { 1.0e-4, { 5.75e-5, 0.0     } },
+                { 1.5e-3, { 5.75e-5, 1.79e-3 } },
+                { 6.0e-3, { 5.75e-5, 2.48e-4 } },
+                { 2.4e-2, { 6.76e-6, 2.61e-5 } },
+            };
+            for (const FShadowFootprint& Row : ShadowFootprints)
+            {
+                const double FootprintD = Row.Footprint;
+                const float Footprint = static_cast<float>(FootprintD);
+                ShadowProbe->SetScalarParameterValue(SkyMaterial::ProbeFootprint, Footprint);
+                const TArray<FVector3d> Drawn = Draw(Test.World, Target, ShadowProbe, NoBias, NoBias);
+                double Gap = 0.0;
+                double FloatGap = 0.0;
+                int32 NotFinite = 0;
+                int32 Shaded = 0;
+                for (int32 Index = 0; Index < Side * Side; ++Index)
+                {
+                    const FVector3d& D = Directions[Index];
+                    const FVector3d& Pixel = Drawn[Index];
+                    if (!IsFinite(D) || !IsFinite(Pixel))
+                    {
+                        ++NotFinite;
+                        continue;
+                    }
+                    const double Held = SunShadowMap::Sample(Map, D, static_cast<double>(Footprint));
+                    const double Float = SunShadowMap::SampleF32(Map, FVector3f(D), Footprint);
+                    Gap = FGap::Wider(Gap, FMath::Abs(Held - Pixel.X));
+                    FloatGap = FGap::Wider(FloatGap, FMath::Abs(Held - Float));
+                    Shaded += Held < 0.5 ? 1 : 0;
+                }
+                const double HeldTo = FMath::Max(1.0e-3, FloorRuleFactor * FloatGap);
+                const double FloatHeldTo = FMath::Max(1.0e-4, FloorRuleFactor * Row.FloatRecorded[bSeam ? 1 : 0]);
+                const FString At = FString::Printf(TEXT("Baemsekai IV's shadow map, %s, footprint %.1e"), Place.Name, FootprintD);
+                TestEqual(At + TEXT(": every pixel the GPU drew is finite"), NotFinite, 0);
+                TestTrue(FString::Printf(TEXT("%s: SunShadowMap::Sample computes what the GPU drew, held to %.1e (the float mirror %.2e from double): %.2e"),
+                    *At, HeldTo, FloatGap, Gap), Gap <= HeldTo);
+                TestTrue(FString::Printf(TEXT("%s: the float mirror is as far from double as it was measured, held to %.1e: %.2e"),
+                    *At, FloatHeldTo, FloatGap), FloatGap <= FloatHeldTo);
+                WorstShadow = FMath::Max(WorstShadow, Gap);
+                WorstShadowFloat = FMath::Max(WorstShadowFloat, FloatGap);
+                Report.Add(FString::Printf(TEXT("%s: %d compared, %.1f%% under half, %d not finite"), *At, Side * Side - NotFinite,
+                    100.0 * Shaded / (Side * Side), NotFinite));
+                Report.Add(FString::Printf(TEXT("  shadow map C++ vs GPU %.2e, held to %.1e; float mirror vs double %.2e"), Gap, HeldTo, FloatGap));
+            }
+        }
+    }
+    Report.Add(FString::Printf(TEXT("SUMMARY shadow map C++-vs-GPU %.2e, float-vs-double %.2e"), WorstShadow, WorstShadowFloat));
+    Report.Add(FString::Printf(TEXT("SUMMARY ground normal C++-vs-GPU %.2e"), WorstGroundNormal));
     Report.Add(FString::Printf(TEXT("SUMMARY C++-vs-GPU %.2e, float-C++-vs-GPU %.2e, left out at most %.3f%% (%.3f%% in one crater band)"),
         WorstReliefShared, WorstFloatShared, 100.0 * MostLeftOut, 100.0 * MostLeftOutInABand));
     const FString Dir = FPaths::ProjectSavedDir() / TEXT("Eyes") / TEXT("WorldReliefParity");

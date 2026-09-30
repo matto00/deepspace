@@ -7,7 +7,7 @@
  * facts FWorldRelief is built from. Plain data and nothing else, so FSkyBody
  * can carry it before FWorldRelief exists, and so the sky, the flight and the
  * terrain are handed one set of numbers by one adapter
- * (FSkySystem::FromSystem). Pure: no UObject, no functions.
+ * (FSkySystem::FromSystem). Pure: no UObject, and one comparison.
  */
 
 /** Whether a body has ground a ship can set down on (landing decision 13):
@@ -40,3 +40,12 @@ struct FWorldReliefParams
 
     EGround Ground = EGround::None;
 };
+
+/** The same ground: every fact FWorldRelief is built from is equal. The
+ *  ground restarts on a change (AWorldGround), and the sky re-bakes that
+ *  world's shadow map (AShipSky's map keys). */
+inline bool SameRelief(const FWorldReliefParams& A, const FWorldReliefParams& B)
+{
+    return A.SeedOffset == B.SeedOffset && A.RadiusCm == B.RadiusCm && A.PeakCm == B.PeakCm
+        && A.Cratering == B.Cratering && A.Ground == B.Ground;
+}

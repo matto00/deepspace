@@ -96,8 +96,11 @@ green merged.
 **Prove a test can fail with `Tools/mutate.sh`** before trusting it. A rendered check is proven the same way with
 `MUTATE_RUNNER=Tools/eyes.sh`. It
 checks everything that has made a mutation silently prove nothing here -- the
-text not found, the mutant not compiling, the library not rebuilt -- before
-reading a verdict, and restores the file. Rebuild afterwards: its last build
+text not found, the mutant not compiling, the library not rebuilt, the test
+already red before the mutant -- before reading a verdict, and restores the
+file. It runs the baseline first: a red test goes red under any mutant. For
+a check red on something else, `MUTATE_EXPECT='<assertion text>'` counts
+only that assertion failing as a kill. Rebuild afterwards: its last build
 held the mutant. `./test.sh` itself exits non-zero if no tests ran, or if
 the log shows a world torn down without `EndPlay` or a console variable
 looked up by name every frame -- both have been left by runs whose every
@@ -153,6 +156,13 @@ been abandoned. Say so.
   height function, from `Shaders/Private/WorldRelief.ush`, which `M_SkyBody`
   compiles too (the engine maps `/Project` to `Shaders/` by itself);
   `WorldReliefParams.h` is the plain data `FSkyBody::Relief` carries.
+  Landing slice b adds `IGroundField` (`GroundField.*`, WorldRelief behind
+  the flight's interface), the pure quadtree and tile builder
+  (`TerrainQuadtree.*`, `TerrainTile.*`), and `AWorldGround`, which streams
+  the nearest solid world's tiles off the game thread into one primitive,
+  `UTerrainGroundComponent`, on the counter-frame (*The ground*). `SunShadow.*` (the cast shadow's pure
+  horizon march) and `SunShadowMap.*` (each world's baked map for the
+  orbit) are the shadow, baked, never marched per pixel.
 - `Source/DeepSpace/Sky/` — pure projection arithmetic behind `AShipSky`,
   which polls and stores nothing (*The sky*).
 - `Ship/ShipFlightState.*`, `Ship/ShipNavState.*` — pure: the flight model
@@ -228,7 +238,19 @@ proportion to a weight the player sets, capped at each one's want with the
 surplus redistributed. Consumers degrade and never fail: lights dim and brown
 out, boosters push down to a quarter thrust, the jump drive charges slower.
 **There is deliberately no cutoff, no alarm, no timer and no failure state**,
-and nothing in the model changes on its own with time. If a change here
+and nothing in the model changes on its own with time -- with one sanctioned,
+bounded exception, the **starved sink** (landing decision 5): under a solid
+world's drive floor, airborne, the boosters want to hold the ship against
+gravity (`ds.Boosters.HoldWatts`, 150 W a g to 3 g, paid first inside their
+share, `ShipPower::SplitBoosters`), and a hold short of watts becomes a sink
+of at most `ds.Boosters.StarvedSink` (2 m/s), never while the vertical lever
+asks a climb, ending at rest on the ground. That want exists only there,
+so **staying put is never taxed** anywhere a ship can be parked: at any
+floor or between worlds. Until slice (c)'s LANDED, a ship at rest on the
+ground is still airborne to the hold (`ApplyAllocation` passes `bAirborne`
+true): it keeps paying the hold, and starved it keeps asking the sink the
+ground holds it against. Touchdown (slice c) is what makes resting on the
+ground free. If a change here
 introduces a rate the player must keep up with, it has broken the anti-chore
 principle -- say so rather than tuning it.
 
@@ -315,6 +337,7 @@ head turns independently of the ship and a turn reads as *the ship* turning.
 | Shift / Ctrl | the live lever up / down | `IA_LeverUp`, `IA_LeverDown` |
 | F | which lever is live: the drive's or cruise's | `IA_Drive` |
 | X | all stop: both levers to STOP | `IA_Stop` |
+| Space / C | the vertical lever: climb / sink, HOVER at zero (near a world) | `IA_VerticalUp`, `IA_VerticalDown` |
 | Tab | the next world as the target, only on the zoomed map | `IA_CycleTarget` |
 | E | sit, stand, and at the chart chair zoom the chart or the map | `IA_Interact` |
 
@@ -508,6 +531,18 @@ on a dome at 250,000 km (`AShipSky::DomeRadius`), behind every body. A
 body is a point until it resolves, and the resolve is a blend in the material,
 so there is no moment of change.
 
+**Below 50 km over a solid world the ground draws the body** (landing
+decision 7). At 50 km the projection's magnification is exactly 1 -- the
+proxy is the true sphere at its true place -- so the ground (`AWorldGround`,
+*The ground*) takes the body there once its coarse cut is resident, gives it
+back over 55 km, and always has it under the drive floor, where the proxy is
+never drawn. The relief grows in: every tile's heights are scaled by one
+morph fraction, 0 at 50 km to 1 at the drive floor, while the flight always
+has the whole relief. The sky still projects the hidden proxy with its
+rendered floor, so the depth stack is unchanged, and it copies that body's
+look into the ground's material (`ShipSky::CopyBodyLook`), so the handover
+has no brightness step.
+
 **The sky polls and stores nothing** (conflict 2). `AShipSky` has no
 `SetSystem` and no `SetInTransit`: nothing calls into it, and nothing needs to
 find it. Every frame it asks `LocalSystem` (`Current`, `Serial`,
@@ -617,11 +652,19 @@ arithmetic. The counter-frame's points stay on the engine Sphere.
 simplex noise with its gradient: the value brightens the face (behind the
 `surface_max_swing` clamp, the half-float guard) and the gradient tilts a
 per-pixel normal -- the sphere's own, from object space, so no mesh facet
-shows in the shading. Each band's height goes with its wavelength, so every
-scale the screen holds has the same slope. Rocky worlds add Voronoi craters
-in bands stepping by four (the count wider than D goes as D^-2), fewer in the
-basins, scaled by the look's `Cratering` (bare rock 1, ice 0.5, terrestrial
-0.15, ocean and giants 0). A giant's belts come from its day
+shows in the shading. Each band's height goes with its wavelength, so every scale the screen holds
+has the same slope, and **the amplitude is the ground's** (landing decision
+3): `ReliefScale` is `FWorldRelief::SlopeScale`, the world's drawn peak over
+its radius and the sum's bound, so the orbit shades exactly the heights a ship
+lands on -- Earth-like, 1/g, capped at 10 km -- and relief is data (the
+priors), not a knob: `ds.Sky.Relief` and `ds.Sky.Craters` are retired, because
+a knob that moved the height would move the ground under a landed ship.
+Craters are summed compact kernels (`WR_CraterSum`), one per kept site, in
+bands stepping by four (the count wider than D goes as D^-2); their albedo is
+fewer in the basins, their height the same everywhere, scaled by the world's
+`Cratering` (bare rock 1, ice 0.5, terrestrial 0.15, ocean and giants 0).
+Giants keep a fixed cloud billow (`ShipSky::GiantReliefScale`); oceans are
+flat. A giant's belts come from its day
 (`FPlanet::DayHours`, log-normal about 12 h, drawn by the generator), by the
 Rhines scale (`SkyLook::BeltPairs`). Relief shows where the light is low, as
 real relief does: a world under a high sun still looks smooth.
@@ -693,9 +736,12 @@ so nothing can be tunnelled through.
 **The floor is where the sky stops being honest** (decision 6):
 `UShipSubsystem::FloorFor`, the one function that answers it -- over a world
 the larger of `ds.Flight.Floor` (10 km) and `SkyProjection::RenderedFloor`,
-10.2 km over an Earth and 112 km over a Jupiter; over a star
-`ds.Flight.StarFloorRadii` of its radius. Landing, when it comes, takes over
-there. **The system's edge is a surface** too (conflict 10): an inside-out
+10.2 km over an Earth and 112 km over a Jupiter; over a **solid** world that
+is taken **above its highest peak** (`FWorldRelief::MaxHeightCm`, landing
+decision 10), so the drive never meets a summit; over a star
+`ds.Flight.StarFloorRadii` of its radius. It is **the drive's** floor. Over
+a solid world cruise and the vertical lever read the ground instead (*Landing*).
+**The system's edge is a surface** too (conflict 10): an inside-out
 floor sphere `ds.Flight.Floor` inside `InSystemRadiusLy`, so the drive
 settles into it and never flies the ship out of its system, where
 `GetSystemAt` would go empty under a sky still drawing the old one. You
@@ -754,6 +800,170 @@ wants one eventually, and the map spec's *Open questions* records why any
 design must start from its tension with the anti-chore principle -- it is a
 wait imposed on the player.
 
+## Landing (slice b: fly down, hover over real ground)
+
+**Two floors.** Over a solid world (`EGround::Solid`: barren, ice,
+terrestrial; oceans and giants keep the floor sphere) the **drive's** floor
+is 10 km above the highest peak (`FloorFor`), and **cruise and the vertical
+lever read the ground** -- `FFlightSurface::Ground`, an `IGroundField` over
+WorldRelief, the one height function -- at every altitude, never the sphere.
+`ShipFlight::RayToGround` marches the ground by its slope bound, once a frame
+per direction; an exhausted march is a hit.
+
+**Gravity is held, never flown** (ADR 0005, amended): `ShipFlight::GravityAt`
+sums every body; the velocity never gets g dt. It is felt only under a solid
+world's drive floor, airborne: the boosters' hold (`ds.Boosters.HoldWatts`,
+paid first in their share), the hold's hiss, slower climbs on heavy worlds
+(`ds.Vertical.HeavyFloor`, by gravity alone), and the starved sink
+(`ds.Boosters.StarvedSink`), which the ground always catches.
+
+**The vertical lever** (Space up, C down) is ship state like the other two:
+a log rate 0.1-200 m/s, HOVER at zero, a detent, X and every fold set HOVER,
+and after X a press the way the ship is moving catches it. It is live within
+`ds.Land.Regime` (50 km, leaving over 55) of a world's cruise floor, where
+cruise flies the nose's horizontal projection -- looking down never dives the
+ship -- and across 40-50 km both blend out. Under a solid world's drive floor
+F gives **DriveBelowFloor**: the ship flies cruise, Shift/Ctrl move cruise,
+and the drive takes over 500 m above the floor with the nose clear of it.
+
+**The ground always catches.** In the regime horizontal speed is held to the
+**skim cap**, max(20 m/s, AGL / 2.5 s); a ridge ahead slows the ship to rest
+against it; and the descent is held to the **approach law**, an exponential
+ease (`ds.Land.ApproachSeconds`, 4 s) with a knee the boosters can follow, to
+contact at `ds.Land.TouchdownSpeed` (0.5 m/s), measured on the **footprint**
+-- four gear feet 1.5 m under the origin and the belly's four corners
+(`GEAR`, `BELLY` in `hauler_layout.py`, `ShipLanding` in C++). If a point is
+ever under the ground the **ground's hard stop lifts** the ship (sphere
+floors still never lift). `DeepSpace.Ship.Landing.GroundAlwaysCatches*` is
+the invariant. LANDED is slice (c).
+
+**The ground** (`AWorldGround`, `hauler_ground`): the nearest solid world's
+cube-sphere quadtree, CDLOD from the ship, 2:1, tiles 33 x 33 with skirts,
+built on three workers (ruled 2026-09-28), uploaded four a frame, on the counter-frame, shaded by
+`M_SkyGround` exactly as the orbit shades (each tile's vertices carrying the cast shadow, which draws whether or not the orbit's map has landed) (the vertex normal carries what the
+tile resolves, the pixel the rest -- a split that grows in with the relief:
+at the handover, Morph 0, every band is the pixel's and the normal is the
+orbit's, since a vertex normal interpolated across a triangle is smoother
+than the orbit's and under a grazing sun that was a 2.2% darker frame). The tiles are a custom primitive,
+not `ProceduralMeshComponent`: PMC failed the first-day gate
+(`Eyes.TerrainBudget`, the verdict in landing decision 6). **Every tile is
+drawn through one transform** (slice (b)'s last open items, 2026-09-29):
+the ship is the origin, so a ship under way moves every tile every frame,
+and as a component per tile that was a transform update per tile, +7.7 ms
+of a 4K capture for 2,200 tiles -- and moving their one parent instead
++8.2, since the engine still updates every child. `UTerrainGroundComponent`
+holds every tile in one scene proxy; `AWorldGround` sets its one transform
+to minus the ship's position from the world's centre, and adds, removes and
+shows tiles by render command, never rebuilding the proxy (only a clear,
+on a new world or a fold, rebuilds it empty). Each shown tile
+is its own mesh element with its own GPU Scene primitive data -- its pivot
+composed with the component's transform in doubles on the render thread,
+its band limit and pivot as custom primitive data -- so `M_SkyGround` reads
+`LocalPosition` and `TilePivot` as it always did, and the float budget is
+unchanged: a vertex is a float offset from its own tile's pivot, and the
+pivot's place relative to the ship is subtracted in doubles. Each tile is
+culled against the view's frustum; the one primitive is never
+occlusion-queried. Moving every tile now costs nothing measurable (-0.60 ms
+of the capture, 0.03 ms of game thread). It takes the body
+from the sky under 50 km and grows the relief in to the drive floor.
+Residency never gates motion. `ds.Terrain.Describe` prints the cut.
+**Every key the cut needs is built, the leaves' ancestors too**, and a
+child's bounds, read from its resident parent, are remembered while the cut
+is within three levels of it (`ForgetBoundsFarFrom`; less, and the cut
+changed with residency again -- `GroundKeepsUp` drew 790 m off -- and for
+the ground's life they grew with the ground flown). The resident cut and
+the tiles' component hold **one** copy of each tile between them. `Balance` turns a leaf the ship has just reached into an
+ancestor the frame it enters the cut, and an ancestor never built sent
+`Resolve` back to draw a level-2 tile over the ship, 792 m off the ground
+(`GroundKeepsUp`, found on three workers).
+
+**Cast shadows are baked, never marched** (the developer's ruling on slice
+(b)'s build, 2026-09-28). Under a low sun the unlit law read flat, and a
+per-pixel march cost +4 to +27 ms against a 1 ms budget. Worlds do not spin
+and nothing orbits, so the star stands still over every surface and the
+shadow is a fixed function of where a point is: `SunShadow` (pure) marches
+the height function toward the star's disc and gives the share of it seen,
+with no fill light. A ground tile's vertices carry theirs, computed as the
+tile is built, off the game thread (`ds.Terrain.Shadows`,
+`.ShadowSamples`); the orbital proxy reads `SunShadowMap`, a per-world G16
+texture in the star's own frame (the night side not stored), baked by
+`AShipSky` when the system loads, nearest world first, at most
+`ds.Sky.ShadowBakeTasks` at once, re-baked only when the relief, the light
+or `ds.Sky.ShadowMapWidth` changes, and faded in over 1 s as it lands.
+A landed map goes to the GPU **in pieces over several frames** (ruled
+2026-09-28): its texture is a `UTexture2DDynamic` made empty, each frame
+hands the render thread `ds.Sky.ShadowUploadKB` of its rows, and no world
+reads it before its last piece. A system's maps together stay under
+**128 MB of GPU memory** (ruled): the map whose texel is finest is halved
+until they fit (`ShipSky::CappedShadowWidths`, sized by the RHI's own
+`RHICalcTexturePlatformSize` -- a texture takes 10-15% over its levels).
+`M_SkyBody` and `M_SkyGround` read both through one Custom node over the
+shared file's `WR_ShadowMapCoord`, blended by `Morph`, so the handover
+carries the shadow with the relief; `ds.Sky.Shadows 0` draws the
+unshadowed look. The lookup runs whether the switch is on or not, and costs
+nothing measurable per frame: `Eyes.LandingFrame` against the same build
+with materials that never read the map, -0.10..+0.12 ms, every case within
+its band (2026-09-29). **If worlds ever spin, the bake is redone as the sun
+moves.** `Eyes.ShadowBakeCost` measures the bake's cost per tile, per world,
+per system and in flight against its budgets and prints each (a timing is
+never asserted), and asserts its memory: every solid world's map landed,
+each system under the cap as the RHI sizes it, the vertex shadows under
+12 MB. A system over the cap shares its widths among its worlds, so a reload
+that moves one world's radius or peak may re-bake another. **The dusk
+handover is held to 5e-3** under a sun below 5 degrees, 1e-3 otherwise
+(`Eyes.HandoverParity`; ruled 2026-09-29): at a 3-degree dusk the frames
+are 3.1e-3 apart without the shadow and 2.9e-3 with it, on the face's
+Detail term alone, 4.5e-5 of absolute brightness. **An Eyes test that
+uploads must land over engine frames**: the Vulkan RHI recycles an upload's
+staging buffer only at a frame's end, so `Eyes.ShadowBakeCost` landing
+Trabo's maps inside one `RunTest` grew the staging pool a page at a time,
+and a new page stalled one piece 4.3-5.2 ms about every 35 MB, whatever the
+pieces' size (512 KB or 128 KB). Landed a frame's pieces an engine frame
+(`PumpShadowBakesForTest`), the slowest is 0.11 ms, and
+`ds.Sky.ShadowUploadKB` stays 512 (the spec's ruling said smaller pieces;
+built otherwise, and on the sign-off list). That 4 ms is the one timing
+`Eyes.ShadowBakeCost` asserts: 0.11 against 4 is out of any load's reach,
+and a map landed inside one frame breaks it. Look with `ds.Sky.Goto 4 10 dusk` (and
+200 km).
+
+**The frame is profiled, not assumed** (the frame ruling: profile first,
+with the shadows in, and fix the real cost; the split factor last).
+`Eyes.LandingFrame` times twelve 4K captures, ABBA with `ds.Sky.Shadows` 0
+and 1: six still (50 km and 1.5 m at the start's sun, and 50 km, 1.5 m and
+200 km at a 10-degree dusk and 1.5 m at 3) and six **in motion**, noon and
+the 10-degree dusk -- at the skim cap at 1.5 m (carried along the ground
+each frame: on the gear the flight law holds the ship at rest against the
+first rise) and at 500 m (HOVER, cruise full ahead), and on the drive's
+first notch at 50 km, nose 10 degrees down. **Every case, still or moving,
+is asserted within 16.6 ms** (ruled 2026-09-29); each case under the flight
+law (the skims at 500 m, the drive) that it kept at least half the speed it
+was set to, the drive half its first notch, 20 km/s; and each carried
+1.5 m case, whose speed is the test's own, that the ground was drawn under
+it every frame within GearClearance / 10 of the analytic ground. `EYES_PROFILE=1` profiles a moving case before stopping it,
+every variant still under way. Read the `on_ms` of each line in
+`Saved/Eyes/LandingFrame/<EYES_TAG>/report.txt`, and compare two runs with
+`Tools/landing_frame_gate.py` (which leaves out a moving case only when the
+baseline predates it: a run under test missing one is UNDECIDED). Before the one transform the moving cases read 12.7-23.7 ms,
+and 43.4 at the drive's dusk; after, 9.2-15.4, the worst 1.5 m skimming at
+noon. `EYES_PROFILE=1` breaks each case down. Two
+things it found: **an Eyes test must end engine frames** (it is latent, a
+step per frame, four apart) -- inside one `RunTest` the Vulkan RHI never
+retires freed resources and a Development build rescans that queue on
+every enqueue, so each capture cost more than the last (4 ms, then 32); and
+**the ground's cost is its pixel shader**, not its geometry (BasePass 0.24
+ms with a plain material on the same tiles, 9.2 with `M_SkyGround`). The
+crater kernel now visits the 2 x 2 x 2 corners that can reach, not 27, bit
+for bit the same sums (`DeepSpace.Surface.CraterKernelCorners` counts the
+corners through the `WR_CRATER_CORNER_VISITED()` hook), and the worst case,
+1.5 m, went from 18.1 to 13.9 ms. The capture has no TSR and runs game,
+render and GPU in series; the game's own `stat unit` is the developer's
+reading.
+
+**The HUD below the floor:** `840 M ABOVE GROUND · SINKING 3 M/S`, the
+vertical lever in the motion line (`HOVER`, `CLIMB 5 M/S`, `SINK 3 M/S`, `ABOVE
+THE GROUND'S REACH`), `DRIVE ABOVE THE FLOOR`; the target's ETA in cruise over
+a solid world counts to the ground.
+
 ## The hum and the lamps
 
 **The hum** is synthesised, not sampled. `FShipHumVoice` is the pure
@@ -768,7 +978,11 @@ ds.Nav.WindingWant, 0, 1)`**: watts delivered, never satisfaction (conflict
 hum on satisfaction would sit at full whenever the ship is idle. On watts, it
 idles low, rises and brightens as the jump winds, and settles when charged,
 which makes it the jump's wind-up cue. The hiss follows the boosters
-(`ds.Hum.CruiseHiss`). `ds.Hum.Volume` is the first knob if it wears. Each air
+(`ds.Hum.CruiseHiss`). Under a solid world's drive floor the hiss also
+follows the boosters' **hold**, in watts delivered (`ds.Hum.HoldHiss` x
+watts / (3 x `ds.Boosters.HoldWatts`), never above cruise's hiss), so it is
+silent wherever a ship can be parked. `ds.Hum.Volume` is the first knob if
+it wears. Each air
 source seeds its noise from where it stands: two at one point would hiss the
 same noise and comb into a whistle, and `test_placement.py` forbids it.
 Headless, the mixer is real, so `DeepSpace.Ship.HumComponent` proves samples
@@ -958,7 +1172,14 @@ distance at the present speed under the cap's own law (its braking part on
 the continuous curve, which the cap's stepped one undercuts by under 7 m/s,
 about half a substep) -- so it counts down a
 second a second and names the moment the ship arrives
-(`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). On a path that
+(`DeepSpace.Playtest.EtaCountsDown`, `DeepSpace.Ship.Target`). In cruise over
+a solid world -- and in DriveBelowFloor, which flies cruise -- it counts to
+**the ground**, at every altitude, under the law the ship flies: inside the
+near regime `ShipFlight::SecondsToGround` (the approach law and the skim
+cap), above it the braking curve to where cruise stops, the hull's reach
+short of the ray (`DeepSpace.UI.TargetMarker.GroundEta`). A cruising ship
+now passes through the drive floor with nothing happening there, so
+`FloorFor`'s floor is the ETA's only under the drive and its spool-down. On a path that
 misses it says `PASSING <altitude> UP`; at rest, nothing. While the lever is
 still spooling up it overstates. The bottom-left corner shows no time: it has
 no destination.
@@ -1184,6 +1405,15 @@ tests that assert it.
 | `ds.Drive.HoldSeconds` | 4 s; 0 or less is the braking curve alone | `ShipSubsystem.cpp`, from `ShipFlight::DefaultHoldSeconds` (`ShipFlightSurface.h`) |
 | `ds.Flight.Floor` | 10 km (never under the sky's rendered floor) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultFloorCm` |
 | `ds.Flight.StarFloorRadii` | 1 | `ShipSubsystem.cpp`, from `ShipFlight::DefaultStarFloorRadii` |
+| `ds.Land.GearClearance` | 150 cm | `ShipSubsystem.cpp`, from `ShipLanding::DefaultGearClearanceCm` (`ShipLanding.h`) |
+| `ds.Land.TouchdownSpeed` | 0.5 m/s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultTouchdownSpeed` |
+| `ds.Land.ApproachSeconds` | 4 s, clamped to at least 0.5 s | `ShipSubsystem.cpp`, from `ShipFlight::DefaultApproachSeconds` |
+| `ds.Land.SkimSeconds`, `.SkimFloor` | 2.5 s, 20 m/s | `ShipSubsystem.cpp`, from `ShipFlight` |
+| `ds.Land.Regime` | 50 km (leaves over 55 km) | `ShipSubsystem.cpp`, from `ShipFlight::DefaultRegimeCm` |
+| `ds.Land.DriveHandback` | 500 m | `ShipSubsystem.cpp`, from `ShipFlight::DefaultDriveHandbackCm` |
+| `ds.Vertical.Top`, `.Sweep`, `.HeavyFloor` | 200 m/s, 0.25/s, 0.25 | `ShipSubsystem.cpp`, from `ShipVerticalLever` |
+| `ds.Boosters.HoldWatts`, `.StarvedSink` | 150 W per g, counted to 3 g and ramped in over the first km under the floor; 2 m/s; both only under a solid world's drive floor | `ShipSubsystem.cpp`, from `ShipPower::DefaultHoldWattsPerG` and `DefaultStarvedSinkMetresPerSecond` (`ShipPowerState.h`), beside the named constants `HoldGCap` (3 g) and `HoldRampCm` (1 km) |
+| `ds.Terrain.SplitFactor`, `.MaxTiles`, `.BuildTasks`, `.UploadsPerFrame`, `.Show` | 2.0, 2,500, 3 (ruled 2026-09-28), 4, 1 | `WorldGround.cpp`: the first two from `TerrainQuadtree::DefaultSplitFactor` and `DefaultMaxTiles` (`TerrainQuadtree.h`), the other three literals in their declarations |
 | `ds.HUD.TargetMinPixels`, `.TargetEdgeInset` | 28, 48 (slate units) | `ShipTargetOverlay.cpp`, from `TargetMarker` (`TargetMarker.h`) |
 | `ds.Nav.MarkerPixels`, `.StreakLength`, `.StreakSweep` | 6 px, 40, 5 | `ShipCounterFrame.cpp` |
 | `ds.Sky.DustKnee`, `.DustTop`, `.DustStretch` | 2 km/s, 3 km/s, 8 | `ShipCounterFrame.cpp`, from `ShipDust` (`ShipCounterFrame.h`) -- a playtest gate: candidates knee {1, 2}, top {2.5, 3, 3.5}, stretch {4, 8, 16} |
@@ -1192,8 +1422,12 @@ tests that assert it.
 | `ds.Sky.Radiance`, `.SunLux` | 3.0, 9.4 lux | `ShipSky.cpp` -- keep SunLux at pi x Radiance |
 | `ds.Sky.FluxGamma`, `.PointPixels`, `.StarSurface` | 0.5, 2 px, 1000 | `ShipSky.cpp` |
 | `ds.Sky.StarfieldFaint`, `.Mottle`, `.Veil`, `.Bloom` | 0.01, 0.35, 1.0, 0.675 | `ShipSky.cpp` |
-| `ds.Sky.SurfaceDetail`, `.Relief`, `.Craters` | 0.3, 0.2, 1 | `ShipSky.cpp` |
-| `ds.Hum.Volume`, `ds.Hum.CruiseHiss` | 1.0, 0.35 | `ShipHumComponent.cpp` |
+| `ds.Sky.SurfaceDetail` | 0.3 | `ShipSky.cpp` |
+| `ds.Sky.Shadows` | 1 (0 draws the unshadowed look) | `ShipSky.cpp` |
+| `ds.Sky.ShadowUploadKB` | 512 KB of a landed map's rows to the render thread a frame, every map together | `ShipSky.cpp` |
+| `ds.Sky.ShadowMaps`, `.ShadowMapWidth`, `.ShadowBakeTasks` | 1, 4096 columns (a power of two, 256-8192), 2 at low priority; a change to the width re-bakes every map; 0 maps leaves the tiles' own shadow drawn | `ShipSky.cpp`, the width from `SunShadowMap::DefaultWidth` (`SunShadowMap.h`) |
+| `ds.Terrain.Shadows`, `.ShadowSamples` | 1, 12 (2-64); changing either rebuilds the ground | `WorldGround.cpp`, the samples from `SunShadow::DefaultSamples` (`SunShadow.h`) |
+| `ds.Hum.Volume`, `ds.Hum.CruiseHiss`, `ds.Hum.HoldHiss` | 1.0, 0.35, 0.35 | `ShipHumComponent.cpp` |
 | `ds.HUD` | 1 | `ShipHUDWidget.cpp` |
 | `ds.Screen.FrameMargin` | 0.02 | `ShipScreen.cpp` |
 | `ds.Dress.LivedIn`, `ds.Dress.Seed` | 1, -1 (the world's own) | `ShipDressingSubsystem.cpp` |
@@ -1217,7 +1451,11 @@ braking margin
 px) and its 600 x 424 draw size; the chart's layout and 816 x 576
 (`NavigationWidget.cpp`, held by `DeepSpace.UI.ChartLayout`); `TargetMarker::AheadFloor`, `NightSideLit`
 and `MinSpeed`; `NavStart::WorldReachFactor` (2); the turn rates
-(`FShipFlightLimits`, a header change).
+(`FShipFlightLimits`, a header change); the cast shadow's
+`SunShadow::SteepestMargin` (1.5) and sampled gradients
+(`DetailGradientSampled`, `CraterGradientSampled`, re-measured by
+`DeepSpace.Surface.SunShadow.SteepestSlope`), and its maps' fade-in,
+`ShipSky::ShadowFadeSeconds` (1 s).
 
 ## The player's body
 

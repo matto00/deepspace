@@ -63,6 +63,9 @@ LAMPS_TAG = "Power.Lamps"
 # the bracket; anything else with it would show the bracket through a wall.
 GLASS_TAG = "Sky.Glass"
 
+# AWorldGround::GroundTag: how verify_level finds hauler_ground.
+GROUND_TAG = "Sky.Ground"
+
 # The sky's assets, as the level build assigns them and the verifier checks
 # them. Named from Tools/sky_material_contract.json, the list the materials
 # are authored from and SkyMaterialContract.h mirrors, so no path is typed

@@ -174,9 +174,8 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
         }
         else if (Star)
         {
-            const FVector ToStar = Star->Position - Body.Position;
-            const double StarDistance = ToStar.Size();
-            View.LightDirection = StarDistance > 0.0 ? ToStar / StarDistance : FVector::ZeroVector;
+            const double StarDistance = (Star->Position - Body.Position).Size();
+            View.LightDirection = LightDirection(Body, *Star);
             View.SurfaceBrightness = Body.Albedo * Compress(IrradianceRatio(*Star, StarDistance), Params.FluxGamma);
 
             // Phase angle: star and ship, as seen from the body.
@@ -274,4 +273,30 @@ FSkyFrame SkyProjection::Project(const FSkySystem& System, const FUniversePositi
         Frame.SunVisibleFraction = FMath::Clamp(1.0 - Covered, 0.0, 1.0);
     }
     return Frame;
+}
+
+FVector SkyProjection::LightDirection(const FSkyBody& Body, const FSkyBody& Star)
+{
+    const FVector ToStar = Star.Position - Body.Position;
+    const double Distance = ToStar.Size();
+    return Distance > 0.0 ? ToStar / Distance : FVector::ZeroVector;
+}
+
+double SkyProjection::StarAngularRadius(const FSkyBody& Body, const FSkyBody& Star)
+{
+    const double Distance = (Star.Position - Body.Position).Size();
+    return Distance > Star.Radius ? FMath::Asin(Star.Radius / Distance) : 0.5 * UE_DOUBLE_PI;
+}
+
+SunShadow::FSunLight SkyProjection::SunLightOf(const FSkySystem& System, int32 Body)
+{
+    SunShadow::FSunLight Sun;
+    const int32 Star = FindStar(System);
+    if (Star == INDEX_NONE || !System.Bodies.IsValidIndex(Body) || System.Bodies[Body].Kind == ESkyBodyKind::Star)
+    {
+        return Sun;
+    }
+    Sun.Direction = LightDirection(System.Bodies[Body], System.Bodies[Star]);
+    Sun.AngularRadius = StarAngularRadius(System.Bodies[Body], System.Bodies[Star]);
+    return Sun;
 }

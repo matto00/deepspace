@@ -35,6 +35,16 @@ struct DEEPSPACE_API FHelmInput
      *  the fresh press cruise's detent at zero asks for. */
     int32 UpPresses = 0;
     int32 DownPresses = 0;
+
+    /** Space and C held: the vertical lever's up and down (landing decision
+     *  8). Always the vertical lever's, never switched by F. */
+    bool bVerticalUpHeld = false;
+    bool bVerticalDownHeld = false;
+
+    /** Their presses since the last hand-over: the fresh press that leaves
+     *  HOVER, and after X the press that catches the ship where it is. */
+    int32 VerticalUpPresses = 0;
+    int32 VerticalDownPresses = 0;
 };
 
 /**
@@ -225,6 +235,26 @@ public:
     UFUNCTION(BlueprintPure, Category = "Flight")
     float GetLinearAcceleration() const;
 
+    /** Watts the boosters want to hold the ship against gravity: 150 W a g
+     *  under a solid world's drive floor, airborne, and nothing at any floor
+     *  or between worlds (landing decision 5). Until slice (c)'s LANDED the
+     *  ship is always airborne here, so a ship resting on the ground under
+     *  the floor still wants it. */
+    float GetHoldWant() const;
+
+    /** Watts actually reaching the hold, paid first inside the boosters'
+     *  share: what the hum's hold term reads, never satisfaction. */
+    float GetHoldWatts() const;
+
+    /** ds.Boosters.HoldWatts as read now, never below 0: watts per g of the
+     *  hold's want. The hum's hold term divides by it. */
+    static float GetHoldWattsPerG();
+
+    /** Tests only: a pull added to every body's, every frame, in
+     *  UpdateSurfaces -- a synthetic world's gravity where procgen made none
+     *  that heavy (HeavyWorldStillClimbs' 3.3 g). Nothing in the game calls it. */
+    void AddWellForTest(const FGravityWell& Well) { TestWells.Add(Well); }
+
     /**
      * Pilot mode. The pilot seat reports who sits at the helm; anything that
      * cares whether the ship is being flown asks here rather than reaching
@@ -285,6 +315,10 @@ public:
      *  transit. */
     bool SetDriveLever(APawn* Commander, int32 Notch);
 
+    /** The vertical lever to Lever, -1..1, absolute: for tests and tools, as
+     *  SetDriveLever is. Pilot-gated; refused in transit. */
+    bool SetVerticalLever(APawn* Commander, double Lever);
+
     /**
      * How low the ship may go over Body, cm (flight-feel decision 6): over a
      * planet or moon the larger of ds.Flight.Floor and the sky's own rendered
@@ -293,14 +327,23 @@ public:
      * a Jupiter; over a star ds.Flight.StarFloorRadii of its radius, where
      * its disc fills 60 degrees and the rest of the sky is still there.
      *
-     * The one function that answers it. Landing, when it comes, replaces or
-     * lowers this as it takes over drawing the ground; the in-system jump
-     * asks it for its guard. Read at use, like every tunable here.
+     * The one function that answers it; the in-system jump asks it for its
+     * guard. Read at use, like every tunable here.
+     *
+     * Over a solid world (landing decision 10) that floor is taken above the
+     * world's highest peak, WorldRelief's MaxHeightCm: 10.2 km over a flat
+     * Earth, up to about 20 km over one at the 10 km cap, so no summit is
+     * ever within 10 km of the drive. It is the drive's floor only: cruise
+     * and the vertical lever read the ground below it (FFlightSurface::Ground).
      */
     static double FloorFor(const FSkyBody& Body);
 
     /** How far inside the system's edge the ship stops, cm: ds.Flight.Floor. */
     static double EdgeFloor();
+
+    /** The ship's origin over flat ground at rest, cm: ds.Land.GearClearance,
+     *  read at use. Cruise's floor over a solid world is the ground plus this. */
+    static double GearClearance();
 
     UFUNCTION(BlueprintPure, Category = "Flight")
     FVector GetShipVelocity() const;
@@ -321,7 +364,7 @@ public:
 
     /** Read-only. There is no non-const accessor: the only write paths are
      *  SetFlightCommand, SetHelmInput, AllStop, SetDriveLever,
-     *  SetDriveEngaged, ClearPilot and this subsystem's own tick -- which is
+     *  SetVerticalLever, SetDriveEngaged, ClearPilot and this subsystem's own tick -- which is
      *  where the jump's JumpTo happens -- and that is what makes the state
      *  trustworthy. */
     const FShipFlightState& GetFlightState() const;
@@ -575,6 +618,11 @@ private:
     bool bUpHoldSpent = false;
     bool bDownHoldSpent = false;
 
+    /** Space and C held through an all stop or from before sitting down:
+     *  spent until let go, as Shift and Ctrl are. */
+    bool bVerticalUpHoldSpent = false;
+    bool bVerticalDownHoldSpent = false;
+
     /** Set by SetPilot for a new pilot; the first hands it hands over mark
      *  whatever they already hold as spent. Shift is sprint as well as the
      *  lever, so a player who runs to the helm sits down holding it, and a
@@ -591,8 +639,24 @@ private:
         FUniversePosition Centre;
         double Radius = 0.0;
         double Floor = 0.0;
+        EGround Ground = EGround::None;
+        FWorldReliefParams Relief;
         TArray<FFlightSurface> Others;
     };
+
+    /** A solid body's ground for the flight, shared and kept while its relief
+     *  is unchanged, so a frame does not allocate one per body. */
+    FGroundFieldRef GroundFor(const FSkyBody& Body);
+
+    struct FGroundCacheEntry
+    {
+        FWorldReliefParams Params;
+        FGroundFieldRef Ground;
+    };
+    TMap<FName, FGroundCacheEntry> GroundCache;
+
+    /** AddWellForTest's pulls; empty in the game. */
+    TArray<FGravityWell> TestWells;
 
     /** World, resolved in Here; empty for an id that names nothing there. */
     static TOptional<FWorldFix> FixWorld(const FStarSystem& Here, const FBodyId& World);
@@ -621,6 +685,13 @@ private:
 
     /** What SetFoldDraw last put on the reactor; 0 is none. */
     float FoldDrawWatts = 0.0f;
+
+    /** The hold's want, W: rewritten by ApplyAllocation only when it moves by
+     *  more than a watt (landing decision 5). */
+    float HoldWant = 0.0f;
+
+    /** The boosters' split between the hold and the manoeuvre, this frame's. */
+    ShipPower::FBoosterSplit LastSplit;
 
     bool bLightsOn = true;
 

@@ -1,16 +1,23 @@
 #pragma once
 
+#include <atomic>
+
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "RenderCommandFence.h"
 #include "Ship/NavStart.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkySystem.h"
+#include "Surface/SunShadowMap.h"
+#include "Surface/WorldReliefParams.h"
+#include "Tasks/Task.h"
 #include "Universe/UniversePosition.h"
 #include "ShipSky.generated.h"
 
 class FOutputDevice;
 class UDirectionalLightComponent;
 class UInstancedStaticMeshComponent;
+class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UMaterialParameterCollection;
 class UPostProcessComponent;
@@ -18,6 +25,41 @@ class UShipSubsystem;
 class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
+class UTexture2DDynamic;
+
+/** What a world's cast-shadow map is made from (AShipSky's keys). */
+namespace ShipSky
+{
+    /** What a world's map is made from. A map is re-baked exactly when this
+     *  changes -- never on a jump that moves none of it. */
+    struct FShadowKey
+    {
+        FWorldReliefParams Relief;
+        SunShadow::FSunLight Sun;
+        double SteepestSlope = 0.0;
+        int32 Width = 0;
+    };
+    DEEPSPACE_API bool SameShadowKey(const FShadowKey& A, const FShadowKey& B);
+
+    /** Rows FirstRow..FirstRow + Rows - 1 of one level of a map: what one
+     *  copy into its texture on the render thread takes. */
+    struct FShadowPiece
+    {
+        int32 Level = 0;
+        int32 FirstRow = 0;
+        int32 Rows = 0;
+        int64 Bytes = 0;
+    };
+
+    /** A solid world as the per-system cap sees it: its datum radius, and
+     *  its map's lowest row, PsiLo (SunShadowMap::Shape), which with the
+     *  width sets its rows. */
+    struct FShadowWorld
+    {
+        double RadiusCm = 0.0;
+        double PsiLo = 0.0;
+    };
+}
 
 /**
  * Everything outside the glass that is *somewhere*: the local star, its
@@ -114,6 +156,61 @@ public:
     UPostProcessComponent* GetExposure() const;
     UInstancedStaticMeshComponent* GetNeighbourStars() const;
 
+    /** Launch every waiting shadow bake, wait for them all (and for any let
+     *  go), upload them piece by piece as play does, and let go of their CPU
+     *  copies: for tests, which must see a world's map rather than a frame
+     *  without. Maps landed this way are already faded in, so a judged frame
+     *  never catches a fade. */
+    void FlushShadowBakesForTest();
+
+    /** One frame's shadow work as play does it -- land what has finished,
+     *  hand the render thread this frame's pieces -- but waiting for the
+     *  bakes in flight: for a test that lands a system over engine frames.
+     *  The Vulkan RHI recycles an upload's staging buffer only at a frame's
+     *  end, so a whole system landed inside one (FlushShadowBakesForTest)
+     *  grows the staging pool by every piece, and a new page of it stalled
+     *  the render thread 4.3-5.2 ms about every 35 MB -- whatever the
+     *  pieces' size (Eyes.ShadowBakeCost, 2026-09-29). */
+    void PumpShadowBakesForTest() { PumpShadowBakes(true); }
+
+    /** The body's cast-shadow texture once its bake has landed and every
+     *  piece of it has gone to the render thread; null before, for a body
+     *  with no ground, and with ds.Sky.ShadowMaps 0. */
+    UTexture2DDynamic* GetShadowTexture(FName Body) const;
+
+    /** The map the texture was made from, kept only while
+     *  bKeepShadowMapsForTest: a map is otherwise dropped once uploaded. */
+    const FSunShadowMap* GetShadowMapForTest(FName Body) const;
+    bool bKeepShadowMapsForTest = false;
+
+    /** Bakes waiting, in flight or still uploading (not those let go). */
+    int32 GetShadowBakesPending() const;
+
+    /** The bytes of baked maps the sky still holds on the CPU for their
+     *  uploads: 0 once the render thread has every piece (maps kept for a
+     *  test are the test's, not counted). */
+    int64 GetShadowUploadCpuBytes() const;
+
+    /** Every bake ever launched: a jump that re-baked nothing leaves it where it was. */
+    int32 GetShadowBakesStarted() const { return ShadowBakesStarted; }
+
+    /** The game-thread seconds of the slowest frame's landing work -- a
+     *  texture's creation and that frame's pieces handed to the render
+     *  thread -- since play began, for Eyes.ShadowBakeCost. */
+    double GetSlowestShadowLandSeconds() const { return SlowestShadowLandSeconds; }
+
+    /** The render thread's seconds on the slowest frame's pieces (the copies
+     *  into the texture), since play began; 0 until one has run. */
+    double GetSlowestShadowUploadRenderSeconds() const;
+
+    /** The width each solid world's map is baked at now, after the
+     *  per-system cap (ShipSky::CappedShadowWidths); 0 for a body with none. */
+    int32 GetShadowWidth(FName Body) const;
+
+    /** The pieces of the body's landed map not yet handed to the render
+     *  thread: 0 before it lands and once it is whole. */
+    int32 GetShadowPiecesLeft(FName Body) const;
+
     /**
      * The dome, 250,000 km: twice FSkyViewParams::FarProxy, so every body's
      * proxy draws in front of every point at infinity. At this distance a
@@ -177,6 +274,7 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void Tick(float DeltaSeconds) override;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sky")
@@ -221,12 +319,186 @@ private:
     FUniversePosition BuiltForStar;
 
     FSkyFrame LastFrame;
+
+    /**
+     * The cast shadow's maps (the developer's ruling on slice (b)'s build:
+     * baked in C++, off the game thread). A cache of this actor's drawing,
+     * keyed -- unlike the proxies -- not by the jump serial but by what each
+     * map is made from (ShipSky::FShadowKey): the body's relief, the sky's
+     * light for it and the width. SyncShadowMaps checks every solid world's
+     * key each frame outside transit and re-bakes only a map whose key
+     * changed, so a jump re-bakes nothing that did not change. One bake a
+     * world, nearest first, at most ds.Sky.ShadowBakeTasks at once, at
+     * BackgroundLow (the terrain's builds go first), each with its own cancel
+     * flag, polled once a column. A map dropped mid-bake is cancelled and let
+     * go (ShadowDraining), never waited on, and counted against the cap until
+     * it stops.
+     */
+    struct FShadowFrame
+    {
+        FLinearColor X;
+        FLinearColor Z;
+    };
+    struct FShadowEntry
+    {
+        ShipSky::FShadowKey Key;
+        TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel;
+        UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> Task;   // valid while in flight
+        FShadowFrame Frame;
+        double LandedAt = 0.0;   // world seconds its texture landed: the fade runs from here
+    };
+    TMap<FName, FShadowEntry> ShadowEntries;
+    TArray<FName> ShadowQueue;   // waiting, nearest first
+    TArray<UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>>> ShadowDraining;
+    /**
+     * A landed map on its way to the GPU (the developer's ruling, 2026-09-28:
+     * uploaded in pieces on the render thread over several frames, so no
+     * frame hitches). Its texture is created empty; each frame hands the
+     * render thread at most ds.Sky.ShadowUploadKB of its pieces; the world
+     * reads it only once the last piece has gone, and the CPU copy is let go
+     * once the render thread has run them all (Fence).
+     */
+    struct FShadowUpload
+    {
+        FName Body;
+        TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe> Map;
+        TArray<ShipSky::FShadowPiece> Pieces;
+        int32 Next = 0;
+        TUniquePtr<FRenderCommandFence> Fence;   // set once the last piece is handed over
+    };
+    TArray<FShadowUpload> ShadowUploads;
+    int32 ShadowBakesStarted = 0;
+    double SlowestShadowLandSeconds = 0.0;
+    TSharedPtr<std::atomic<int64>, ESPMode::ThreadSafe> SlowestShadowUploadNs = MakeShared<std::atomic<int64>, ESPMode::ThreadSafe>(0);
+
+    /** Every texture the sky has made, landed or still uploading: held for
+     *  the collector. A world reads only those in ShadowTextures. */
+    UPROPERTY(Transient)
+    TMap<FName, TObjectPtr<UTexture2DDynamic>> ShadowTexturesMade;
+
+    TMap<FName, TObjectPtr<UTexture2DDynamic>> ShadowTextures;
+
+    TMap<FName, TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>> KeptShadowMaps;
+
+    /** Every solid world's key against the map held for it: a changed one is
+     *  dropped and queued again, a world no longer here dropped. */
+    void SyncShadowMaps(const FSkySystem& System);
+    /** Cancel and let go of the body's bake, and drop its map. */
+    void DropShadowMap(FName Body);
+    /** Land what has finished, hand the render thread this frame's pieces,
+     *  let go of the CPU copies it has, and launch what the cap allows; with
+     *  bWait, wait for those in flight first. */
+    void PumpShadowBakes(bool bWait);
 };
 
 /** The pure arithmetic AShipSky does beyond SkyProjection's, testable with no
  *  world. */
 namespace ShipSky
 {
+    /** A giant's cloud tops, which have no ground: the fixed billow the orbit
+     *  had before landing (the retired ds.Sky.Relief's 0.2 x the retired
+     *  relief_giant's 0.33), kept as a look, not a height, and set here
+     *  alone: no contract constant feeds it. Oceans draw none: water is flat. */
+    inline constexpr double GiantReliefScale = 0.066;
+
+    /** The relief a body's face is shaded with: its ground's own slope scale
+     *  (FWorldRelief::SlopeScale) over a solid world, the giant billow over a
+     *  banded one, none otherwise. */
+    DEEPSPACE_API double ReliefScaleOf(const FSkyBody& Body);
+
+    /** The body's look, copied from its proxy's instance into the ground's:
+     *  the light, colour and seed, and the brightness, mottle, detail, relief
+     *  and craters, and the cast shadow's map, frame and strength -- one
+     *  writer of the look, so the handover can have no step in it (landing
+     *  decision 9). */
+    DEEPSPACE_API void CopyBodyLook(UMaterialInstanceDynamic& From, UMaterialInstanceDynamic& To);
+
+    /** ds.Sky.Shadows, clamped to 0..1: the cast shadow's strength in both
+     *  materials, lerp(1, shadow, strength). 0 draws the unshadowed look. */
+    DEEPSPACE_API float ShadowStrength();
+
+    /** How long a landed map takes to fade its world's shadow in: the sky's
+     *  rule that nothing changes in one frame. */
+    inline constexpr double ShadowFadeSeconds = 1.0;
+
+    /** The fade SecondsSinceLanded after a map landed, 0..1, linear. */
+    DEEPSPACE_API float ShadowFade(double SecondsSinceLanded);
+
+    /** ds.Sky.ShadowMapWidth as baked: a power of two, 256..8192. */
+    DEEPSPACE_API int32 ShadowMapWidth();
+
+    /** The bodies whose shadow maps are baked -- the solid worlds -- nearest
+     *  to Ship's surface first. */
+    DEEPSPACE_API TArray<int32> ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship);
+
+    /** The map's frame as the materials take it: X with PsiLo in w, and Z,
+     *  the light, with Step in w. */
+    DEEPSPACE_API FLinearColor ShadowFrameX(const FSunShadowMap& Map);
+    DEEPSPACE_API FLinearColor ShadowFrameZ(const FSunShadowMap& Map);
+
+    /** The per-system GPU cap on the orbit's shadow maps (the developer's
+     *  ruling, 2026-09-28): 128 MB for every solid world's map together. */
+    inline constexpr int64 ShadowSystemCapBytes = int64(128) << 20;
+
+    /** The narrowest a map is made to fit the cap: ds.Sky.ShadowMapWidth's
+     *  own floor. */
+    inline constexpr int32 ShadowMinWidth = 256;
+
+    /** The bytes of a map's levels, Width x Rows and every mip down to one
+     *  texel, as SunShadowMap::BuildLevels makes them: what its texture
+     *  holds on the GPU before the driver's own alignment. */
+    DEEPSPACE_API int64 ShadowLevelsBytes(int32 Width, int32 Rows);
+
+    /** What the texture for a map of Width x Rows takes on the GPU, as the
+     *  RHI would make it (RHICalcTexturePlatformSize: its alignment and mip
+     *  tail included, about 10-15% over the levels' own bytes on Vulkan),
+     *  memoised; the levels' bytes where there is no RHI to ask. */
+    DEEPSPACE_API int64 ShadowTextureBytes(int32 Width, int32 Rows);
+
+    /**
+     * Each world's map width under the per-system cap. Every world starts at
+     * Width; while the maps together hold more than CapBytes, the map whose
+     * texel is finest on its ground (2 pi R / width) is halved, never under
+     * ShadowMinWidth -- so a system with many worlds coarsens its maps
+     * toward one texel size, and a system under the cap keeps Width
+     * everywhere. The first of equals is halved first. Pure, and made only
+     * of what each map's key is made of, so a jump moves no width.
+     */
+    DEEPSPACE_API TArray<int32> CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width,
+                                                   int64 CapBytes = ShadowSystemCapBytes);
+    /** The same, each map's bytes as BytesOf(width, rows) says: the sky
+     *  passes ShadowTextureBytes, so the cap is on what the GPU holds. */
+    DEEPSPACE_API TArray<int32> CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes,
+                                                   TFunctionRef<int64(int32, int32)> BytesOf);
+
+    /** An empty texture for the map, created on the render thread with no
+     *  data: G16, linear, a mip per level, never streamed and never
+     *  LOD-biased (a dropped mip 0 would put every lookup, whose U is in
+     *  level-0 texels, in the wrong place), no CPU copy of its own. Its
+     *  texels are what UploadShadowPieces copies in. Null for a map with no
+     *  levels. */
+    DEEPSPACE_API UTexture2DDynamic* MakeShadowTexture(const FSunShadowMap& Map, FName Name);
+
+    /** The map's levels cut into pieces of whole rows, each at most
+     *  PieceBytes (or one row, where a row is wider), level 0 first, every
+     *  row of every level exactly once. */
+    DEEPSPACE_API TArray<FShadowPiece> ShadowUploadPieces(const FSunShadowMap& Map, int64 PieceBytes);
+
+    /** One render command copying Pieces of Map into Texture. It holds the
+     *  map until it has run, and records its own time into SlowestNs if it
+     *  is the slowest yet. */
+    DEEPSPACE_API void UploadShadowPieces(UTexture2DDynamic& Texture, const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map,
+                                          TArray<FShadowPiece> Pieces, TSharedPtr<std::atomic<int64>, ESPMode::ThreadSafe> SlowestNs = nullptr);
+
+    /** A whole map's texture at once, its pieces all handed over: for tests
+     *  that draw a map they baked themselves. Flush the rendering commands
+     *  before reading it. */
+    DEEPSPACE_API UTexture2DDynamic* MakeShadowTextureNow(const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map, FName Name);
+
+    /** ds.Sky.ShadowUploadKB in bytes: what one frame hands the render
+     *  thread of the maps uploading, all of them together. */
+    DEEPSPACE_API int64 ShadowUploadBytesPerFrame();
+
     /** The flux of the faintest background star, in solar luminosities at a
      *  light year squared: a Sun at 70.4 ly. The Sun is absolute magnitude
      *  4.83, and at 21.6 pc it is magnitude 6.5 -- the faint end of the
@@ -356,10 +628,14 @@ namespace ShipSky
      * asked for, facing it, the system's up kept up. A star has no day or
      * night side, so the ship stays on the side of it it is already on,
      * whichever is asked. Empty for an index the system does not have.
+     * DuskElevation is the star's height above the horizon under a dusk
+     * goto, rad; the frames of the cast-shadow plan take 3 degrees beside
+     * the goto's ten.
      */
     DEEPSPACE_API TOptional<FNavPlacement> GotoPlacement(const FSkySystem& System, int32 Body,
                                                          double AltitudeCm, const FUniversePosition& From,
-                                                         EGotoSide Side = EGotoSide::Day);
+                                                         EGotoSide Side = EGotoSide::Day,
+                                                         double DuskElevation = DuskSunElevation);
 
     /** ds.Sky.Goto's arguments, read: which body, how high, which side. */
     struct FGotoRequest

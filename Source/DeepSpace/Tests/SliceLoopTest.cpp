@@ -12,6 +12,7 @@
 #include "Sky/LocalSystem.h"
 #include "Sky/SkyProjection.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/WorldRelief.h"
 #include "Tests/HaulerDressingMarkers.h"
 #include "Tests/SkyTestWorld.h"
 #include "UI/ShipHUDWidget.h"
@@ -166,7 +167,7 @@ bool FSliceLoopJumpTest::RunTest(const FString& Parameters)
 {
     using namespace SliceLoopTestLocal;
 
-    FSkyWorld Test(TEXT("SliceLoopJumpWorld"));
+    FSkyWorld Test(TEXT("SliceLoopJumpWorld"), 8, EShadows::On);
     if (!TestNotNull(TEXT("the world has a ship"), Test.Ship) || !TestNotNull(TEXT("a universe"), Test.Universe)
         || !TestNotNull(TEXT("a counter-frame"), Test.Frame) || !TestNotNull(TEXT("and a sky"), Test.Sky))
     {
@@ -469,8 +470,9 @@ bool FSliceLoopDriveTest::RunTest(const FString& Parameters)
     const double Arrived = Approach(Opening.Orientation, true);
     TestTrue(FString::Printf(TEXT("from the opening shot at 0.1 c, on the floor within 70 s (%.2f s)"), Arrived),
              Arrived > 0.0 && Arrived <= 70.0);
-    TestTrue(FString::Printf(TEXT("the floor is the sky's rendered floor (%.1f km)"), Floor / UniverseUnits::CmPerKm),
-             Floor == FMath::Max(10.0 * UniverseUnits::CmPerKm, SkyProjection::RenderedFloor(Radius, FSkyViewParams())));
+    TestTrue(FString::Printf(TEXT("the floor is the sky's rendered floor above the world's highest peak (%.1f km)"), Floor / UniverseUnits::CmPerKm),
+             Floor == FMath::Max(10.0 * UniverseUnits::CmPerKm, SkyProjection::RenderedFloor(Radius, FSkyViewParams()))
+                          + FWorldRelief(Here.Bodies[1 + Largest].Relief).MaxHeightCm());
     TestTrue(TEXT("and at rest on it"), Ship->GetShipSpeed() < 1.0f);
     {
         const FUniversePosition Eye = Ship->GetFlightState().WorldToUniverse(PilotEye);

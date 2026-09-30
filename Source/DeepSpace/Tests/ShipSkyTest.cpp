@@ -21,6 +21,7 @@
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/WorldRelief.h"
 #include "Tests/SkyTestFixtures.h"
 #include "Tests/SkyTestWorld.h"
 #include "Universe/UniverseSubsystem.h"
@@ -387,9 +388,10 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
     // that is never written cannot match them by agreeing with the asset.
     const FScopedCVar FaceMottle(TEXT("ds.Sky.Mottle"), 0.123f);
     const FScopedCVar FaceDetail(TEXT("ds.Sky.SurfaceDetail"), 0.456f);
-    const FScopedCVar FaceRelief(TEXT("ds.Sky.Relief"), 0.321f);
-    const FScopedCVar FaceCraters(TEXT("ds.Sky.Craters"), 0.5f);
-    Fixture.Bodies[SkyTestFixtures::HomeIndex].Cratering = 0.25;
+    FSkyBody& HomeBody = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+    HomeBody.Cratering = 0.25;
+    HomeBody.Ground = EGround::Solid;
+    HomeBody.Relief = FWorldReliefParams{ FVector3d(3.0, 5.0, 7.0), HomeBody.Radius, 5.0e5, 0.25, EGround::Solid };
     Sky->DrawFrom(Fixture);
 
     {
@@ -430,9 +432,14 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("its colour"), Instance->K2_GetVectorParameterValue(SkyMaterial::Colour).Equals(True.Colour));
                 TestTrue(TEXT("its rim"), Instance->K2_GetVectorParameterValue(SkyMaterial::Rim).Equals(True.Rim));
                 TestEqual(TEXT("its fine detail, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Detail), 0.456f);
-                TestEqual(TEXT("its relief, as the knob says"), Instance->K2_GetScalarParameterValue(SkyMaterial::Relief), 0.321f);
-                TestEqual(TEXT("its craters: what the world has kept, times the knob"),
-                    Instance->K2_GetScalarParameterValue(SkyMaterial::Cratering), 0.125f);
+                TestTrue(TEXT("its relief is its ground's own slope scale, from its peak (decision 3)"),
+                         FMath::IsNearlyEqual(Instance->K2_GetScalarParameterValue(SkyMaterial::ReliefScale),
+                                              static_cast<float>(FWorldRelief(HomeBody.Relief).SlopeScale()), 1e-7f));
+                TestEqual(TEXT("and its craters its own Cratering, with no knob over it"),
+                          Instance->K2_GetScalarParameterValue(SkyMaterial::Cratering), 0.25f);
+                TestNull(TEXT("ds.Sky.Relief is retired: a knob that moves the ground under a landed ship"),
+                         IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Relief")));
+                TestNull(TEXT("and ds.Sky.Craters"), IConsoleManager::Get().FindConsoleVariable(TEXT("ds.Sky.Craters")));
                 TestTrue(TEXT("its own face, exactly"),
                     Instance->K2_GetVectorParameterValue(SkyMaterial::SurfaceSeed) == ShipSky::SurfaceSeed(True.SurfaceSeed, True.BeltPairs));
                 TestEqual(TEXT("ground, not belts"), Instance->K2_GetScalarParameterValue(SkyMaterial::Banding), 0.0f);
@@ -838,6 +845,38 @@ bool FShipSkyTest::RunTest(const FString& Parameters)
             FMath::IsNearlyEqual(Moon.Position.DistanceTo(Ship->GetFlightState().GetUniversePosition()) - Moon.Radius, 250.0 * UniverseUnits::CmPerKm, 10.0));
     }
 
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FGotoDuskElevationTest,
+    "DeepSpace.Sky.GotoDuskElevation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+/**
+ * Goto dusk at a chosen sun (the cast-shadow plan's frames): the star stands
+ * DuskElevation above the ground's horizon under the ship. The default is
+ * still DuskSunElevation, ten degrees, which DeepSpace.Sky.ShipSky holds.
+ */
+bool FGotoDuskElevationTest::RunTest(const FString& Parameters)
+{
+    const FSkySystem Fixture = SkyTestFixtures::System();
+    const FSkyBody& Home = Fixture.Bodies[SkyTestFixtures::HomeIndex];
+    const FSkyBody& Star = Fixture.Bodies[SkyTestFixtures::StarIndex];
+    const FVector Sunward = (Star.Position - Home.Position).GetSafeNormal();
+    for (const double Degrees : { 3.0, 10.0, 25.0 })
+    {
+        const TOptional<FNavPlacement> Dusk = ShipSky::GotoPlacement(Fixture, SkyTestFixtures::HomeIndex, 1.5e7,
+            SkyTestFixtures::Opening(), ShipSky::EGotoSide::Dusk, FMath::DegreesToRadians(Degrees));
+        if (!TestTrue(FString::Printf(TEXT("goto dusk at %.0f degrees places over a body"), Degrees), Dusk.IsSet()))
+        {
+            continue;
+        }
+        const FVector Zenith = (Dusk->Position - Home.Position).GetSafeNormal();
+        const double Elevation = FMath::RadiansToDegrees(FMath::Asin(FVector::DotProduct(Zenith, Sunward)));
+        TestTrue(FString::Printf(TEXT("the star stands %.0f degrees above the ground's horizon (%.6f)"), Degrees, Elevation),
+            FMath::IsNearlyEqual(Elevation, Degrees, 1e-6));
+    }
     return true;
 }
 

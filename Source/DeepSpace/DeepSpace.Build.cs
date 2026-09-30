@@ -50,6 +50,16 @@ public class DeepSpace : ModuleRules
 		// BuildSkySphere) rather than modelled -- a quarter of a million
 		// triangles that no one should have to draw.
 		PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "AssetRegistry" });
+
+		// ProceduralMeshComponent: not the terrain's tiles. Landing decision 6
+		// planned them as PMC sections, gated on the first day of slice (b) by
+		// Eyes.TerrainBudget; the gate's verdict was CUSTOM PRIMITIVE, and
+		// AWorldGround draws its tiles as one UTerrainGroundComponent. No
+		// source uses PMC any more -- Eyes.TerrainBudget measures only the
+		// ground component now, and names PMC in comments alone -- so this
+		// dependency, and DeepSpace.uproject's plugin entry, are left over and
+		// can be dropped once no asset is found to reference PMC.
+		PrivateDependencyModuleNames.Add("ProceduralMeshComponent");
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

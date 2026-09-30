@@ -8,12 +8,14 @@
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Ship/ShipCounterFrame.h"
 #include "Ship/ShipSubsystem.h"
 #include "Sky/ShipSky.h"
 #include "Sky/SkyMaterialContract.h"
+#include "Surface/WorldGround.h"
 #include "Universe/UniverseSubsystem.h"
 
 /**
@@ -45,6 +47,22 @@ namespace SkyTestWorld
      *  to this), so an idle that strayed further must fail here first. */
     inline constexpr double PilotEyeBob = 5.0;
 
+    /** Whether a test world casts shadows: Tiles marches every tile's
+     *  vertices (ds.Terrain.Shadows), Maps bakes every solid world's map
+     *  (ds.Sky.ShadowMaps), On both (the cast-shadow plan). They are the
+     *  costliest things a test world does and most tests never look at one,
+     *  so they are off unless a test asks, and put back after. Off is not
+     *  what the game ships (both switches default to 1): a test of the
+     *  ground in flight -- GroundKeepsUp, the handover, the landing
+     *  playtests, the loop -- asks for On, so its timing is play's. */
+    enum class EShadows : uint8
+    {
+        Off = 0,
+        Tiles = 1,
+        Maps = 2,
+        On = 3
+    };
+
     /** A game world with its subsystems -- the universe's and the ship's --
      *  a counter-frame and a sky, both spawned before play begins, as the
      *  level build places them. */
@@ -55,12 +73,29 @@ namespace SkyTestWorld
         UUniverseSubsystem* Universe = nullptr;
         AShipCounterFrame* Frame = nullptr;
         AShipSky* Sky = nullptr;
+        AWorldGround* Ground = nullptr;
         UStaticMesh* Sphere = nullptr;
+
+        /** The shadow switches as they were before this world set them. */
+        TMap<IConsoleVariable*, FString> ShadowSwitchesWere;
 
         /** DistantStars is kept small unless a test needs the real dome: the
          *  count is what the level has, not what a test must pay for. */
-        explicit FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8)
+        explicit FSkyWorld(const TCHAR* Name, int32 DistantStarCount = 8, EShadows Shadows = EShadows::Off)
         {
+            // Before any actor exists: the ground and the sky read these when
+            // they first build. The tiles and the maps are asked for apart,
+            // so a test of one never pays for the other in the background.
+            const TPair<const TCHAR*, EShadows> Switches[] = { { TEXT("ds.Terrain.Shadows"), EShadows::Tiles }, { TEXT("ds.Sky.ShadowMaps"), EShadows::Maps } };
+            for (const TPair<const TCHAR*, EShadows>& Switch : Switches)
+            {
+                if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Switch.Key))
+                {
+                    ShadowSwitchesWere.Add(Variable, Variable->GetString());
+                    const bool bOn = (static_cast<uint8>(Shadows) & static_cast<uint8>(Switch.Value)) != 0;
+                    Variable->Set(bOn ? 1 : 0, ECVF_SetByCode);
+                }
+            }
             World = UWorld::CreateWorld(EWorldType::Game, false, Name);
             FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
             Context.SetCurrentWorld(World);
@@ -93,6 +128,14 @@ namespace SkyTestWorld
                 Sky->PointStarMaterial = LoadObject<UMaterialInterface>(nullptr, SkyMaterial::StarfieldPath);
                 Sky->SkyParameters = LoadObject<UMaterialParameterCollection>(nullptr, SkyMaterial::ParametersPath);
             }
+            // What place_ground assigns, and all it assigns: the ground's
+            // material. Before M_SkyGround exists (Task T7), the engine's.
+            Ground = World->SpawnActor<AWorldGround>();
+            if (Ground)
+            {
+                UMaterialInterface* GroundMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/Sky/M_SkyGround.M_SkyGround"));
+                Ground->GroundMaterial = GroundMaterial ? GroundMaterial : UMaterial::GetDefaultMaterial(MD_Surface);
+            }
         }
 
         /** The subsystems' OnWorldBeginPlay -- where the opening placement
@@ -113,6 +156,10 @@ namespace SkyTestWorld
         {
             Ship->Tick(DeltaSeconds);
             Frame->SyncToShip();
+            if (Ground)
+            {
+                Ground->SyncToShip();
+            }
             Sky->SyncToShip();
         }
 
@@ -125,6 +172,10 @@ namespace SkyTestWorld
             World->EndPlay(EEndPlayReason::RemovedFromWorld);
             GEngine->DestroyWorldContext(World);
             World->DestroyWorld(false);
+            for (const TPair<IConsoleVariable*, FString>& Was : ShadowSwitchesWere)
+            {
+                Was.Key->Set(*Was.Value, ECVF_SetByCode);
+            }
         }
     };
 

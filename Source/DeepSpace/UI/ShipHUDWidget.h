@@ -176,6 +176,23 @@ public:
     static FString AltitudeLine(double AltitudeCm, const FString& Surface, bool bEdge, EFlightHold Hold);
 
     /**
+     * The corner below the regime's top over solid ground (landing decision
+     * 12): "840 M ABOVE GROUND · SINKING 3 M/S", "· HOVERING", "· CLIMBING
+     * 12 M/S", and HOLDING OFF for the soft cap against a ridge or the skim
+     * cap. The altitude is the ship's origin over the ground directly below,
+     * clearance included: "1.5 M ABOVE GROUND" at rest over flat ground. No
+     * time to the ground: this corner has no destination. Pure.
+     */
+    static FString GroundLine(double GroundAltitudeCm, double VerticalSpeedCmPerSecond, EFlightHold Hold);
+
+    /** The measured vertical speed: HOVERING under a tenth of a metre a
+     *  second, then SINKING or CLIMBING in tenths under ten, whole above. */
+    static FString VerticalWords(double CmPerSecond);
+
+    /** What the vertical lever asks: HOVER, CLIMB 5 M/S, SINK 3 M/S. */
+    static FString VerticalLeverWords(double RateCmPerSecond);
+
+    /**
      * Which of the cap's words to show, from what the flight state says it
      * did: HOLDING OFF only while the cap holds the ship more than
      * HoldingOffShown below the live lever's speed. Measured against the
@@ -200,6 +217,10 @@ public:
 
     /** The same, asking LocalSystem::Here itself. */
     static FText AltitudeLineText(const UShipSubsystem& Ship);
+
+    /** The same of a flight state out of transit: what the two above say
+     *  once the subsystem has answered that it is not folding. */
+    static FText AltitudeLineText(const FShipFlightState& Flight, const FSkySystem& Here);
 
     /**
      * The nose caret (nav decision 3): a ring on the HUD where the ship's nose

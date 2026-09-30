@@ -41,6 +41,7 @@ CONTRACT = json.load(open(os.path.join(HERE, "sky_material_contract.json")))
 DIRECTORY = CONTRACT["directory"]
 CONSTANTS = CONTRACT["constants"]
 SHARED = CONTRACT["shared_relief"]
+SHADOW = CONTRACT["shadow"]
 
 # The raw terms a face is composed from, whichever noise made them.
 Terms = collections.namedtuple("Terms", "coarse fine crater_face crater_slope")
@@ -48,11 +49,35 @@ Terms = collections.namedtuple("Terms", "coarse fine crater_face crater_slope")
 # The Custom node's body: one call into the shared file, its outputs pinned.
 # HLSL only -- the file itself is the shared part.
 SHARED_CODE = (
-    "WR_Terms T = %s(Direction.x, Direction.y, Direction.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, Stretch);\n"
+    "WR_Terms T = %s(Direction.x, Direction.y, Direction.z, Footprint, SeedOffset.x, SeedOffset.y, SeedOffset.z, Stretch, VertexBandLimit);\n"
     "Continent = T.Continent;\n"
     "CraterAlbedo = T.CraterAlbedo;\n"
     "CraterSlope = float3(T.CraterSlopeX, T.CraterSlopeY, T.CraterSlopeZ);\n"
     "return float4(T.DetailSlopeX, T.DetailSlopeY, T.DetailSlopeZ, T.Detail);\n" % SHARED["entry"])
+
+# The cast shadow's Custom node (the developer's ruling on slice (b)'s build:
+# baked, not marched): the world's map read at D -- the shared file's
+# coordinates, taps and blends, eight texel loads, trilinear -- then lerp(map,
+# Vertex, Morph). The body passes Vertex 1 and Morph 0; the ground its UV0.x
+# and its Morph, and skips the loads once the relief has grown in. Under PsiLo
+# the map is 0 (C.Night: provably dark). Footprint is one pixel's width: the
+# faces hand it their filtered footprint over filter_pixels (face_footprint).
+# HLSL only: the arithmetic is the shared file's, and SunShadowMap::Sample
+# mirrors it.
+SHADOW_CODE = (
+    "if (Morph >= 1.0) { return Vertex; }\n"
+    "uint MapWidth; uint MapRows; uint MapLevels;\n"
+    "ShadowMap.GetDimensions(0, MapWidth, MapRows, MapLevels);\n"
+    "WR_ShadowCoord C = %s(Direction.x, Direction.y, Direction.z, FrameX.x, FrameX.y, FrameX.z, FrameZ.x, FrameZ.y, FrameZ.z, "
+    "FrameX.w, FrameZ.w, Footprint, int(MapLevels));\n"
+    "if (C.Night != 0) { return WR_Lerp(0.0, Vertex, Morph); }\n"
+    "WR_ShadowTaps T0 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level0);\n"
+    "WR_ShadowTaps T1 = WR_ShadowTapsAt(C.U, C.V, int(MapWidth), int(MapRows), C.Level1);\n"
+    "float Seen0 = WR_Bilinear(ShadowMap.Load(int3(T0.X0, T0.Y0, C.Level0)).r, ShadowMap.Load(int3(T0.X1, T0.Y0, C.Level0)).r,\n"
+    "                          ShadowMap.Load(int3(T0.X0, T0.Y1, C.Level0)).r, ShadowMap.Load(int3(T0.X1, T0.Y1, C.Level0)).r, T0.FX, T0.FY);\n"
+    "float Seen1 = WR_Bilinear(ShadowMap.Load(int3(T1.X0, T1.Y0, C.Level1)).r, ShadowMap.Load(int3(T1.X1, T1.Y0, C.Level1)).r,\n"
+    "                          ShadowMap.Load(int3(T1.X0, T1.Y1, C.Level1)).r, ShadowMap.Load(int3(T1.X1, T1.Y1, C.Level1)).r, T1.FX, T1.FY);\n"
+    "return WR_Lerp(WR_Lerp(Seen0, Seen1, C.Blend), Vertex, Morph);\n" % SHADOW["entry"])
 
 REPORT = []
 
@@ -127,6 +152,10 @@ def finish(material, asset):
     if scalars != want_scalars or vectors != want_vectors:
         raise RuntimeError("%s does not match its contract: want scalars %s, vectors %s"
                            % (asset, want_scalars, want_vectors))
+    textures = sorted(str(n) for n in MEL.get_texture_parameter_names(material))
+    want_textures = sorted(name(r) for r in expected if CONTRACT["parameters"][r]["type"] == "texture")
+    if textures != want_textures:
+        raise RuntimeError("%s does not match its contract: want textures %s, has %s" % (asset, want_textures, textures))
 
 
 # -- graph helpers -------------------------------------------------------------
@@ -159,6 +188,15 @@ class Graph:
         expression = self.node(unreal.MaterialExpressionVectorParameter,
                                parameter_name=name(role),
                                default_value=unreal.LinearColor(*default))
+        self.parameters[role] = expression
+        return expression
+
+    def texture(self, role, default):
+        """A texture object parameter: handed to a Custom node whole, which
+        loads its texels itself. Grayscale, as the map and its default are."""
+        expression = self.node(unreal.MaterialExpressionTextureObjectParameter,
+                               parameter_name=name(role), texture=default,
+                               sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_GRAYSCALE)
         self.parameters[role] = expression
         return expression
 
@@ -205,7 +243,107 @@ class Graph:
             raise RuntimeError("could not connect the opacity")
 
 
+def white_png(path, size=4):
+    """A size x size 16-bit grayscale PNG, every sample 65535: the map a world
+    without one reads, so the shadow's lookup is 1."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"\xff\xff" * size for _ in range(size))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 16, 0, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def shadow_default_texture():
+    """T_SkyShadowWhite: imported from white_png, linear, grayscale (G16), no
+    mips -- what the shadow map parameters default to."""
+    path = os.path.join(unreal.Paths.project_saved_dir(), "T_SkyShadowWhite.png")
+    white_png(path)
+    task = unreal.AssetImportTask()
+    task.set_editor_property("filename", path)
+    task.set_editor_property("destination_path", DIRECTORY)
+    task.set_editor_property("destination_name", "T_SkyShadowWhite")
+    task.set_editor_property("replace_existing", True)
+    task.set_editor_property("automated", True)
+    task.set_editor_property("save", False)
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    texture = unreal.EditorAssetLibrary.load_asset(SHADOW["default_texture"])
+    if texture is None:
+        raise RuntimeError("T_SkyShadowWhite did not import")
+    texture.set_editor_property("srgb", False)
+    texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
+    texture.set_editor_property("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
+    texture.set_editor_property("filter", unreal.TextureFilter.TF_NEAREST)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture, only_if_is_dirty=False)
+    log("T_SkyShadowWhite: %s" % texture.get_path_name())
+    return texture
+
+
+def face_footprint(g, footprint):
+    """One pixel's footprint from a face's filtered one: the faces' is
+    max(|ddx D|, |ddy D|) * filter_pixels, and the shadow's lookup takes a
+    pixel's (WR_ShadowMapCoord), so level 0 is read wherever a texel covers
+    a pixel -- not only where it covers filter_pixels of them."""
+    return g.mul(footprint, g.constant(1.0 / CONSTANTS["filter_pixels"]))
+
+
+def rgba(g, vector):
+    """A vector parameter's four channels: its default output is only the three."""
+    return g.binary(unreal.MaterialExpressionAppendVector, mask(g, vector, "rgb"), mask(g, vector, "r", output_name="A"))
+
+
+def sun_shadow(g, direction, footprint, default_texture, vertex, morph):
+    """The cast shadow at D (body axes) for this footprint: the world's map,
+    blended into the vertex's own by morph (SHADOW_CODE). Makes the map's
+    three parameters -- a material has one shadow node -- and returns the
+    node, its pins in the contract's order."""
+    frame_x = g.vector("shadow_frame_x", (1.0, 0.0, 0.0, -1.5707963))
+    frame_z = g.vector("shadow_frame_z", (0.0, 0.0, 1.0, 1.0))
+    shadow_map = g.texture("shadow_map", default_texture)
+    pins = [("Direction", direction), ("Footprint", footprint), ("FrameX", rgba(g, frame_x)),
+            ("FrameZ", rgba(g, frame_z)), ("ShadowMap", shadow_map), ("Vertex", vertex), ("Morph", morph)]
+    if [pin for pin, _ in pins] != SHADOW["inputs"]:
+        raise RuntimeError("the shadow node's pins are not the contract's: %s" % SHADOW["inputs"])
+    return custom_node(g, SHADOW_CODE, pins, unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+
+
+def map_fade(g, shadow, vertex, morph):
+    """The map faded in as it lands, and the vertices' own shadow never:
+    lerp(lerp(1, vertex, morph), shadow, ShadowMapFade), which is
+    lerp(lerp(1, map, fade), vertex, morph) exactly. With no map the node
+    reads white and this is the vertices' shadow alone, whatever the fade."""
+    bare = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0)
+    g.link(vertex, bare, "B")
+    g.link(morph, bare, "Alpha")
+    faded = g.node(unreal.MaterialExpressionLinearInterpolate)
+    g.link(bare, faded, "A")
+    g.link(shadow, faded, "B")
+    g.link(g.scalar("shadow_map_fade", 1.0), faded, "Alpha")
+    return faded
+
+
+def cast(g, shaded, shadow, strength):
+    """shaded x lerp(1, shadow, Shadows): 0 draws the unshadowed look."""
+    blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0)
+    g.link(shadow, blend, "B")
+    g.link(strength, blend, "Alpha")
+    return g.mul(shaded, blend)
+
+
 # -- the materials -------------------------------------------------------------
+
+def lerp(g, a, b, alpha):
+    """lerp(a, b, alpha)."""
+    node = g.node(unreal.MaterialExpressionLinearInterpolate)
+    g.link(a, node, "A")
+    g.link(b, node, "B")
+    g.link(alpha, node, "Alpha")
+    return node
+
 
 def mask(g, source, channels, output_name=""):
     """A ComponentMask of `channels` ("rgb", "a") from source."""
@@ -283,10 +421,12 @@ def body_direction(g, axes):
     return direction, footprint
 
 
-def shared_terms(g, direction, footprint, seed, stretch):
+def shared_terms(g, direction, footprint, seed, stretch, vertex_band_limit=None):
     """The same raw terms from Shaders/Private/WorldRelief.ush -- the file the
     C++ compiles too (landing decision 1) -- through one Custom node that
-    includes it and calls its entry point. Every band the file carries."""
+    includes it and calls its entry point. Every band the file carries.
+    vertex_band_limit is what a tile's vertices carry (radius units); the
+    slopes keep only the rest. None is the orbit: no vertices, 1.0."""
     custom = g.node(unreal.MaterialExpressionCustom)
     custom.set_editor_property("description", "WorldRelief")
     custom.set_editor_property("code", SHARED_CODE)
@@ -305,7 +445,8 @@ def shared_terms(g, direction, footprint, seed, stretch):
         pin.set_editor_property("output_type", getattr(unreal.CustomMaterialOutputType, kind))
         outputs.append(pin)
     custom.set_editor_property("additional_outputs", outputs)
-    for input_name, source in zip(SHARED["inputs"], (direction, footprint, seed_offset(g, seed), stretch)):
+    limit = vertex_band_limit if vertex_band_limit is not None else g.constant(1.0)
+    for input_name, source in zip(SHARED["inputs"], (direction, footprint, seed_offset(g, seed), stretch, limit)):
         g.link(source, custom, input_name)
     return Terms(mask(g, custom, "r", output_name="Continent"), custom,
                  mask(g, custom, "r", output_name="CraterAlbedo"),
@@ -324,15 +465,17 @@ def surface(g, knobs, seed, direction, footprint, terms):
         craters   = Cratering * lerp(maria_cratering, 1, highland) * crater terms
         face      = lerp(rocky, belts, Banding) * Mottle + fine.a * Detail + craters.albedo
         factor    = 1 + clamp(face, -max_swing, max_swing)
-        slope     = Relief * lerp(1, relief_giant, Banding) * fine.rgb * (1, 1, stretch)
-                  + craters.slope
+        slope     = ReliefScale * (fine.rgb * (1, 1, stretch) + Cratering * craters.slope)
 
     terms is shared_terms: the shared file.
-    Rock gets basins and highlands with craters, fewer in the basins; a giant
-    gets belts wandered by the same coarse noise and a third of rock's relief.
+    Rock gets basins and highlands with craters, their albedo fewer in the
+    basins, their height the same everywhere; a giant gets belts wandered by
+    the same coarse noise. ReliefScale is the ground's own slope scale
+    (FWorldRelief::SlopeScale, landing decision 3), a giant's fixed billow,
+    or 0 for an ocean: ShipSky::ReliefScaleOf writes it.
     The face is centred on zero, so the disc keeps its flux on average, and
     the clamp is the half-float guard."""
-    mottle, detail, banding, relief, cratering = knobs
+    mottle, detail, banding, relief_scale, cratering = knobs
     stretch = stretch_of(g, banding)
     t = terms(g, direction, footprint, seed, stretch)
 
@@ -371,10 +514,11 @@ def surface(g, knobs, seed, direction, footprint, terms):
     g.link(face, bounded, "")
     factor = g.add(bounded, g.constant(1.0))
 
-    cloud = g.node(unreal.MaterialExpressionLinearInterpolate, const_a=1.0, const_b=float(CONSTANTS["relief_giant"]))
-    g.link(banding, cloud, "Alpha")
-    slope = g.add(g.mul(g.mul(mask(g, t.fine, "rgb"), stretch_axes(g, stretch)), g.mul(relief, cloud)),
-                  g.mul(t.crater_slope, crater_gain))
+    # The ground's own slope (landing decision 3): ReliefScale x the detail
+    # bands' gradient and x Cratering the craters', everywhere -- the maria
+    # still thin the craters' albedo, never their height.
+    slope = g.add(g.mul(g.mul(mask(g, t.fine, "rgb"), stretch_axes(g, stretch)), relief_scale),
+                  g.mul(t.crater_slope, g.mul(cratering, relief_scale)))
     return factor, slope
 
 
@@ -430,6 +574,199 @@ def relief_probe(asset, terms):
     finish(material, asset)
 
 
+def custom_node(g, code, inputs, output_type):
+    """A Custom node calling the shared file: one body of HLSL text, its
+    inputs by name. The include path is the engine's own /Project mapping
+    of Shaders/, so the text here is only the call."""
+    node = g.node(unreal.MaterialExpressionCustom)
+    node.set_editor_property("code", code)
+    node.set_editor_property("output_type", output_type)
+    node.set_editor_property("include_file_paths", [SHARED["include"]])
+    entries = []
+    for input_name, _ in inputs:
+        entry = unreal.CustomInput()
+        entry.set_editor_property("input_name", input_name)
+        entries.append(entry)
+    node.set_editor_property("inputs", entries)
+    for input_name, source in inputs:
+        g.link(source, node, input_name)
+    return node
+
+
+def primitive_parameter(node, index):
+    """A parameter read from the component's custom primitive data: per
+    tile, with one material instance for all of them."""
+    node.set_editor_property("use_custom_primitive_data", True)
+    node.set_editor_property("primitive_data_index", index)
+    return node
+
+
+# The ground's normal: the tile's vertex normal (UV1.xy, UV2.x) and the
+# pixel's slope, composed by the shared file.
+GROUND_NORMAL_CODE = (
+    "WR_GroundNormalOut N = WR_GroundNormal(D.x, D.y, D.z, NormalXY.x, NormalXY.y, NormalZH.x, Slope.x, Slope.y, Slope.z);\n"
+    "return float3(N.NX, N.NY, N.NZ);\n")
+
+# The probe's: a flat vertex, its normal D itself.
+GROUND_PROBE_CODE = (
+    "WR_GroundNormalOut N = WR_GroundNormal(D.x, D.y, D.z, D.x, D.y, D.z, Slope.x, Slope.y, Slope.z);\n"
+    "return float3(N.NX, N.NY, N.NZ);\n")
+
+
+def ground_direction(g, pivot):
+    """D, the unit direction from the world's centre to the pixel in
+    universe axes (worlds do not spin): normalize(TilePivot + LocalPosition),
+    and its footprint, max(|ddx D|, |ddy D|) * filter_pixels, as the orbit's."""
+    local = g.node(unreal.MaterialExpressionLocalPosition)
+    direction = g.unary(unreal.MaterialExpressionNormalize, g.add(mask(g, pivot, "rgb"), local))
+    ddx = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDX, direction))
+    ddy = g.unary(unreal.MaterialExpressionLength, g.unary(unreal.MaterialExpressionDDY, direction))
+    footprint = g.mul(g.binary(unreal.MaterialExpressionMax, ddx, ddy), g.constant(CONSTANTS["filter_pixels"]))
+    return local, direction, footprint
+
+
+def sky_ground(default_texture):
+    """The ground, drawn by AWorldGround's tiles (landing decision 9).
+
+        D, footprint = ground_direction(TilePivot)            (universe axes)
+        face, slope  = surface(the look, D, footprint,
+                               shared_terms(..., lerp(1, BandLimit, Morph)))  (M_SkyBody's own graph)
+        N            = WR_GroundNormal(D, lerp(D, the vertex normal, Morph), slope)
+        shaded       = gain * saturate(N.L) * smoothstep(-w, w, N.L) * lerp(1, shadow, Shadows), N in world space,
+                       shadow = lerp(the map at D, UV0.x, Morph)
+        emissive     = Colour * Brightness * shaded * face
+        WPO          = (Morph - 1) * h * D, carried to world space
+
+    M_SkyBody's own law, so the handover at 50 km has no brightness step: the
+    same light direction, colour and brightness (AShipSky copies the body's
+    look into this material's one instance), the same face, and a normal that
+    is the orbit's at the handover, where Morph is 0 and every band is the
+    pixel's -- the vertex normal, interpolated across a triangle, loses some of
+    a band its vertices barely resolve, and at a 3-degree dusk that stepped the
+    frame 2.2% darker -- and the tile's plus the pixel's by the drive floor.
+    """
+    asset = "M_SkyGround"
+    material = fresh_material(asset)
+    g = Graph(material)
+
+    colour = g.vector("colour", (1.0, 1.0, 1.0, 1.0))
+    light = g.vector("light_direction", (0.0, 0.0, 1.0, 0.0))
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
+    brightness = g.scalar("brightness", 1.0)
+    mottle = g.scalar("mottle", 0.35)
+    detail = g.scalar("detail", 0.3)
+    cratering = g.scalar("cratering", 0.0)
+    relief_scale = g.scalar("relief_scale", 0.0)
+    morph = g.scalar("morph", 1.0)
+    # The indices are the contract's, as the names are (SkyMaterialContract.h's
+    # BandLimitPrimitiveIndex and TilePivotPrimitiveIndex, which WorldGround writes).
+    parameters = CONTRACT["parameters"]
+    band_limit = primitive_parameter(g.scalar("band_limit", 1.0), parameters["band_limit"]["custom_primitive_data"])
+    pivot = primitive_parameter(g.vector("tile_pivot", (0.0, 0.0, 0.0, 0.0)), parameters["tile_pivot"]["custom_primitive_data"])
+
+    local, direction, footprint = ground_direction(g, pivot)
+    # The normal's split grows in with the relief (WorldReliefShading::
+    # Ground's Morph): the pixel's share is taken at lerp(1, BandLimit, Morph)
+    # and the vertex normal is lerp(D, the tile's, Morph). At the handover
+    # (Morph 0) that is the orbit's normal exactly, every band per pixel, so
+    # no dusk can show the step a vertex normal interpolated across a
+    # triangle makes; at the drive floor (Morph 1) it is the tile's plus the
+    # pixel's, as before.
+    limit = lerp(g, g.constant(1.0), band_limit, morph)
+    # Ground is never banded: the knobs' banding is 0, so the stretch is 1.
+    knobs = (mottle, detail, g.constant(0.0), relief_scale, cratering)
+    factor, slope = surface(g, knobs, seed, direction, footprint,
+                            lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, limit))
+    uv1 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
+    uv2 = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=2)
+    tile_normal = g.binary(unreal.MaterialExpressionAppendVector, mask(g, uv1, "rg"), mask(g, uv2, "r"))
+    vertex_normal = lerp(g, direction, tile_normal, morph)
+    normal_local = custom_node(g, GROUND_NORMAL_CODE,
+                               [("D", direction), ("NormalXY", mask(g, vertex_normal, "rg")),
+                                ("NormalZH", mask(g, vertex_normal, "b")), ("Slope", slope)],
+                               unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+
+    to_world = g.node(unreal.MaterialExpressionTransform,
+                      transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
+                      transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    g.link(normal_local, to_world)
+    normal = g.unary(unreal.MaterialExpressionNormalize, to_world)
+    n_dot_l = g.binary(unreal.MaterialExpressionDotProduct, normal, light)
+    lambert = g.unary(unreal.MaterialExpressionSaturate, n_dot_l)
+    width = float(CONSTANTS["terminator_width"])
+    soft = g.node(unreal.MaterialExpressionSmoothStep, const_min=-width, const_max=width)
+    g.link(n_dot_l, soft, "Value")
+    shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
+    # The tile's vertices carry their own shadow in UV0.x (TerrainTile::UV0Of);
+    # the map's is blended into it by the morph that grows the relief in, so at
+    # the handover the ground's shadow is the orbit's exactly.
+    vertex = mask(g, g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "r")
+    shadow = map_fade(g, sun_shadow(g, direction, face_footprint(g, footprint), default_texture, vertex, morph), vertex, morph)
+    g.emissive(g.mul(g.mul(colour, brightness), g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)))
+
+    # The morph: every vertex lowered by (1 - Morph) x its height along its
+    # own direction -- the sphere at the handover, the whole relief at the
+    # drive floor. The height rides UV2.y in km (PMC's UVs are half floats).
+    height = g.mul(mask(g, uv2, "g"), g.constant(1.0e5))
+    offset = g.mul(direction, g.mul(g.add(morph, g.constant(-1.0)), height))
+    wpo = g.node(unreal.MaterialExpressionTransform,
+                 transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
+                 transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    g.link(offset, wpo)
+    unreal.MaterialEditingLibrary.connect_material_property(wpo, "", unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+    finish(material, asset)
+
+
+def shadow_probe(default_texture):
+    """The probe for Eyes.WorldReliefParity's cast-shadow case, which holds
+    SunShadowMap::Sample to it on the GPU: the map's lookup over the probe
+    patch (probe_direction) at ProbeFootprint, untonemapped.
+
+        pixel = ProbeBias.rgb + (the map at D, 0, 0)"""
+    asset = "M_SkyShadowProbe"
+    material = fresh_material(asset)
+    material.set_editor_property("allow_negative_emissive_color", True)
+    g = Graph(material)
+    footprint = g.scalar("probe_footprint", 0.0)
+    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
+    direction = probe_direction(g)
+    shadow = sun_shadow(g, direction, footprint, default_texture, g.constant(1.0), g.constant(0.0))
+    pixel = g.binary(unreal.MaterialExpressionAppendVector,
+                     g.binary(unreal.MaterialExpressionAppendVector, shadow, g.constant(0.0)), g.constant(0.0))
+    g.emissive(g.add(mask(g, bias, "rgb"), pixel))
+    finish(material, asset)
+
+
+def sky_ground_probe():
+    """Eyes.WorldReliefParity's ground case: M_SkyGround's per-pixel normal
+    over the probe patch (probe_direction), a flat vertex carrying
+    VertexBandLimit's bands, at ProbeFootprint, untonemapped. The face is not
+    drawn: it is surface()'s composition of the terms M_SkyReliefProbe
+    already holds to the C++, and VertexBandLimit moves only the slopes.
+
+        pixel = ProbeBias.rgb + WR_GroundNormal(D, D, slope)"""
+    asset = "M_SkyGroundProbe"
+    material = fresh_material(asset)
+    # A normal is signed, and the template clamps emissive at 0 unless told
+    # otherwise -- as relief_probe found.
+    material.set_editor_property("allow_negative_emissive_color", True)
+    g = Graph(material)
+    seed = g.vector("surface_seed", (0.0, 0.0, 0.0, 0.0))
+    cratering = g.scalar("cratering", 0.0)
+    relief_scale = g.scalar("relief_scale", 0.0)
+    limit = g.scalar("vertex_band_limit", 1.0)
+    footprint = g.scalar("probe_footprint", 0.0)
+    bias = g.vector("probe_bias", (0.0, 0.0, 0.0, 0.0))
+    direction = probe_direction(g)
+    knobs = (g.constant(0.35), g.constant(0.3), g.constant(0.0), relief_scale, cratering)
+    _, slope = surface(g, knobs, seed, direction, footprint,
+                       lambda gg, d, fp, s, st: shared_terms(gg, d, fp, s, st, limit))
+    normal = custom_node(g, GROUND_PROBE_CODE, [("D", direction), ("Slope", slope)],
+                         unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    g.emissive(g.add(normal, mask(g, bias, "rgb")))
+    finish(material, asset)
+
+
 def relief_normal(g, direction, slope, axes):
     """The world-space normal of the relief: the sphere's own normal, D --
     exact at every pixel, so no facet of the mesh can show in the shading --
@@ -446,12 +783,13 @@ def relief_normal(g, direction, slope, axes):
     return g.unary(unreal.MaterialExpressionNormalize, to_world(g, axes, local))
 
 
-def sky_body():
+def sky_body(default_texture):
     """Planets and moons.
 
         N        = relief_normal                      (surface)
     (the face's every band from Shaders/Private/WorldRelief.ush, through one Custom node: landing decision 1)
-        shaded   = gain * saturate(N.L) * smoothstep(-w, w, N.L)
+        shaded   = gain * saturate(N.L) * smoothstep(-w, w, N.L) * lerp(1, shadow, Shadows),
+                   shadow = the map at D                (the cast shadow, baked)
         disc     = shaded * face                      (surface)
         emissive = Colour * Brightness * lerp(disc, 1, PointBlend)
                  + Rim * Brightness * fresnel * saturate(N.L) * (1 - PointBlend)
@@ -483,7 +821,7 @@ def sky_body():
     brightness = g.scalar("brightness", 1.0)
     point_blend = g.scalar("point_blend", 1.0)
     knobs = (g.scalar("mottle", 0.35), g.scalar("detail", 0.3), g.scalar("banding", 0.0),
-             g.scalar("relief", 0.2), g.scalar("cratering", 0.0))
+             g.scalar("relief_scale", 0.0), g.scalar("cratering", 0.0))
 
     axes = body_axes(g)
     direction, footprint = body_direction(g, axes)
@@ -497,7 +835,9 @@ def sky_body():
     g.link(n_dot_l, soft, "Value")
 
     shaded = g.mul(g.mul(lambert, soft), g.constant(CONSTANTS["lambert_disc_gain"]))
-    disc = g.mul(shaded, factor)
+    no_vertex, no_morph = g.constant(1.0), g.constant(0.0)
+    shadow = map_fade(g, sun_shadow(g, direction, face_footprint(g, footprint), default_texture, no_vertex, no_morph), no_vertex, no_morph)
+    disc = g.mul(cast(g, shaded, shadow, g.scalar("shadows", 1.0)), factor)
 
     blend = g.node(unreal.MaterialExpressionLinearInterpolate, const_b=1.0)
     g.link(disc, blend, "A")
@@ -653,11 +993,15 @@ def main():
             log("%s: pending (%s)" % (asset, entry["pending"]))
         else:
             collections[asset] = author_collection(asset, entry)
-    sky_body()
+    white = shadow_default_texture()
+    sky_body(white)
     sky_star()
     sky_starfield()
     sky_glass(collections)
     relief_probe("M_SkyReliefProbe", shared_terms)
+    sky_ground(white)
+    sky_ground_probe()
+    shadow_probe(white)
     log("ok")
 
 

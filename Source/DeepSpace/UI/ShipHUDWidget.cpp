@@ -471,6 +471,13 @@ FString UShipHUDWidget::AltitudeWords(double Cm)
     // never shows its own unit's ceiling -- "1000 M" -- before handing over.
     const double Metres = FMath::Max(Cm, 0.0) * 0.01;
     const int64 WholeMetres = FMath::RoundToInt64(Metres);
+    const int64 TenthsMetres = FMath::RoundToInt64(Metres * 10.0);
+    if (TenthsMetres < 100)
+    {
+        // Tenths under ten metres: the gear's 1.5 m is the number that says
+        // the ship is sitting just over the rock.
+        return FString::Printf(TEXT("%lld.%lld M"), static_cast<long long>(TenthsMetres / 10), static_cast<long long>(TenthsMetres % 10));
+    }
     if (WholeMetres < 1000)
     {
         return FString::Printf(TEXT("%lld M"), static_cast<long long>(WholeMetres));
@@ -531,6 +538,54 @@ EFlightHold UShipHUDWidget::ShownHold(EFlightHold Hold, double HeldFraction)
     return Hold == EFlightHold::HoldingOff && HeldFraction <= HoldingOffShown ? EFlightHold::Free : Hold;
 }
 
+namespace
+{
+    /** A vertical rate's magnitude as a person says it: tenths under ten
+     *  metres a second, zeros dropped, whole above. */
+    FString VerticalNumber(double CmPerSecond)
+    {
+        const double Metres = FMath::Abs(CmPerSecond) * 0.01;
+        const int64 Tenths = FMath::RoundToInt64(Metres * 10.0);
+        if (Tenths < 100)
+        {
+            return Tenths % 10 == 0 ? FString::Printf(TEXT("%lld M/S"), static_cast<long long>(Tenths / 10))
+                                    : FString::Printf(TEXT("%lld.%lld M/S"), static_cast<long long>(Tenths / 10), static_cast<long long>(Tenths % 10));
+        }
+        return FString::Printf(TEXT("%lld M/S"), static_cast<long long>(FMath::RoundToInt64(Metres)));
+    }
+}
+
+FString UShipHUDWidget::VerticalWords(double CmPerSecond)
+{
+    if (FMath::RoundToInt64(FMath::Abs(CmPerSecond) * 0.1) == 0)
+    {
+        return TEXT("HOVERING");
+    }
+    return (CmPerSecond < 0.0 ? FString(TEXT("SINKING ")) : FString(TEXT("CLIMBING "))) + VerticalNumber(CmPerSecond);
+}
+
+FString UShipHUDWidget::VerticalLeverWords(double RateCmPerSecond)
+{
+    if (RateCmPerSecond == 0.0)
+    {
+        return TEXT("HOVER");
+    }
+    return (RateCmPerSecond < 0.0 ? FString(TEXT("SINK ")) : FString(TEXT("CLIMB "))) + VerticalNumber(RateCmPerSecond);
+}
+
+FString UShipHUDWidget::GroundLine(double GroundAltitudeCm, double VerticalSpeedCmPerSecond, EFlightHold Hold)
+{
+    FString Line = AltitudeWords(GroundAltitudeCm) + TEXT(" ABOVE GROUND") + NavText::Separator + VerticalWords(VerticalSpeedCmPerSecond);
+    if (Hold != EFlightHold::Free)
+    {
+        // Against the ground there is no floor to be at: held against a
+        // ridge or by the skim cap, the ship is holding off.
+        Line += NavText::Separator;
+        Line += TEXT("HOLDING OFF");
+    }
+    return Line;
+}
+
 FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState)
 {
     return AltitudeLineText(ShipState, ShipState.IsInTransit() ? FSkySystem() : LocalSystem::Here(ShipState.GetWorld()));
@@ -542,7 +597,26 @@ FText UShipHUDWidget::AltitudeLineText(const UShipSubsystem& ShipState, const FS
     {
         return Blank;
     }
-    const FShipFlightState& Flight = ShipState.GetFlightState();
+    return AltitudeLineText(ShipState.GetFlightState(), Here);
+}
+
+FText UShipHUDWidget::AltitudeLineText(const FShipFlightState& Flight, const FSkySystem& Here)
+{
+    // Below the regime's top over solid ground the corner reads the rock --
+    // unless the drive flies the ship, which the ground never does: its
+    // approach ends AT THE FLOOR, and the corner keeps saying so (spec,
+    // decision 5: "at rest AT THE FLOOR, where every drive approach ends").
+    // The rock of the regime's own world: over an ocean or a giant the
+    // regime holds the floor sphere and the corner reads it, never some
+    // solid world elsewhere in the system.
+    const FFlightSurface* RegimeWorld = Flight.GetRegimeSurface();
+    if (Flight.IsInNearRegime() && Flight.GetMode() != EFlightMode::Drive && RegimeWorld && RegimeWorld->HasGround())
+    {
+        if (const TOptional<double> Agl = ShipFlight::GroundAt(*RegimeWorld, Flight.GetUniversePosition()))
+        {
+            return FText::FromString(GroundLine(*Agl, Flight.GetVerticalSpeed(), ShownHold(Flight.GetHold(), Flight.GetHeldFraction())));
+        }
+    }
     const FUniversePosition Where = Flight.GetUniversePosition();
     const FSkyNearestSurface Nearest = LocalSystem::NearestSurface(Here, Where);
     if (!Nearest.bEdge && !Here.Bodies.IsValidIndex(Nearest.Body))
@@ -704,5 +778,26 @@ UShipHUDWidget::FMotionWords UShipHUDWidget::MotionLine(const FShipFlightState& 
         Words.Ink += TEXT("SPOOLING DOWN");
     }
     Words.Dim = NavText::Separator + LeverWords(Other, Flight.GetOtherLeverSpeed());
+    if (Mode == EFlightMode::DriveBelowFloor)
+    {
+        Words.Ink += NavText::Separator;
+        Words.Ink += TEXT("DRIVE ABOVE THE FLOOR");
+    }
+    // The third lever: in ink where it moves the ship, dim where it does not,
+    // and ABOVE THE GROUND'S REACH where the regime's blend has taken it out.
+    const FString Vertical = VerticalLeverWords(Flight.GetVerticalLeverRate());
+    if (Flight.IsVerticalLive())
+    {
+        Words.Ink += NavText::Separator + Vertical;
+    }
+    else if (Flight.GetCommand().Vertical != 0.0)
+    {
+        Words.Dim += NavText::Separator + Vertical;
+        if (Flight.IsInNearRegime() && Mode != EFlightMode::Drive)
+        {
+            Words.Dim += NavText::Separator;
+            Words.Dim += TEXT("ABOVE THE GROUND'S REACH");
+        }
+    }
     return Words;
 }

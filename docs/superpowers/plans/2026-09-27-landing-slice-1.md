@@ -75,7 +75,7 @@ These are the five classes of input the spec implies that no planner's tests exe
 | b | orchestrator | 13 (B0), 39 (Z) | git; the 4K frame test; the *Landing* section of CLAUDE.md |
 | b | **F: flight**, `.worktrees/landing-b-f`, `feat/landing-b-f` | 15-22 (F1-F8) | `Ship/ShipFlightState.*`, `ShipFlightSurface.*`, `ShipVerticalLever.*`, `ShipLanding.*`, `ShipGravity.*`, `Surface/GroundField.*`, their pure tests, `Tests/GroundFixtures.h`, `Tools/hauler_layout.py` (`GEAR`, `BELLY`), `Tools/test_placement.py` |
 | b | **S: subsystem, power, input, HUD**, `.worktrees/landing-b-s`, `feat/landing-b-s` | 23-30 (S1-S8) | `ShipSubsystem.*` (including `UpdateSurfaces`), `ShipPowerState.*`, `ShipHum*`, `DeepSpaceCharacter.*`, `setup_flight_input.py`, `UI/ShipHUDWidget.*`, `UI/TargetMarker.*`, the Playtest tests |
-| b | **T: terrain and sky**, `.worktrees/landing-b-t`, `feat/landing-b-t` | 14 (B1), 31-38 (T1-T8) | `Surface/TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `DeepSpace.Build.cs`, `DeepSpace.uproject` (B1's plugin entry; R's in slice (a)), `SkyProjection.*`, `ShipSky.*`, `Tools/sky_probe.py`, `build_hauler.py`/`verify_level.py` for `hauler_ground`; in slice (b), handed over from R, `setup_sky_materials.py`, the contract and `Surface/WorldRelief.*` |
+| b | **T: terrain and sky**, `.worktrees/landing-b-t`, `feat/landing-b-t` | 14 (B1), 31-38 (T1-T8), 31b | `Surface/TerrainQuadtree.*`, `TerrainTile.*`, `WorldGround.*`, `DeepSpace.Build.cs`, `DeepSpace.uproject` (B1's plugin entry; R's in slice (a)), `SkyProjection.*`, `ShipSky.*`, `Tools/sky_probe.py`, `build_hauler.py`/`verify_level.py` for `hauler_ground`; in slice (b), handed over from R, `setup_sky_materials.py`, the contract and `Surface/WorldRelief.*` |
 | c | **one tree**, `.worktrees/landing-c`, `feat/landing-c` | 40-47 (C1-C8) | F's files for C1-C3, S's for C4-C6, docs for C7 |
 
 **Order and merge points:**
@@ -91,7 +91,7 @@ Task 1 (A0) preconditions, both slice-(a) trees
   Slice (a) done when the developer sees no change on Baemsekai III, IV and V.
 
 Task 13 (B0) the feat/landing-b branch and the three trees          (slice (a) and wear slice 1 merged)
-  T:  14 (B1, the PMC gate, first) -> 31 (T1) -> 33 (T3) -> 34 (T4) -> 32 (T2) -> 36 (T6)
+  T:  14 (B1, the PMC gate, first) -> 31 (T1) -> 31b (the offset split) -> 33 (T3) -> 34 (T4) -> 32 (T2) -> 36 (T6)
         -> [35 (T5) only on a CUSTOM PRIMITIVE verdict] -> 37 (T7) -> 38 (T8)
         (T4 and T6 wait on F2 merged into feat/landing-b; T6 also on S1; T8 also on S4)
   F:  15 (F1) -> 16 (F2) -> 17 (F3) -> 18 (F4) -> 19 (F5) -> 20 (F6) -> 21 (F7) -> 22 (F8)
@@ -258,6 +258,10 @@ namespace WorldReliefNoise { SimplexValueBound; SimplexGradientBound; Hash16; Si
   - A surviving mutant means the test is strengthened and re-committed, never the mutation weakened.
   - Run `./build.sh` after every mutation run, because its last build held the mutant.
   - Rendered tests mutate with `MUTATE_RUNNER=Tools/eyes.sh`.
+  - Unreal's `RunTests` matches a filter as a substring unless it carries `^` or `$`. A filter that
+    is a prefix of another test's name (`DeepSpace.Surface.Quadtree` of `...QuadtreeAtCubeSeams`,
+    `DeepSpace.Surface.Tile` of `...TileComponent`) is anchored, `'DeepSpace.Surface.Quadtree$'`,
+    or a mutant is judged by the wrong test.
 - **Generated actors and Blueprints.**
   - A change to a generated actor's components means rebuilding the level (`Tools/build_hauler.py`) and then `Tools/verify_level.py`. Only Task 37 (T7) does this (it adds `hauler_ground`); Task 38 (T8) changes `ShipSky`'s code, not `hauler_sky`'s components.
   - Removing a `UPROPERTY`, component or `BlueprintImplementableEvent` means `Tools/check_blueprints.py`. Task 39 (Z) runs it, and none of slice (a) or (c) removes one.
@@ -268,7 +272,7 @@ namespace WorldReliefNoise { SimplexValueBound; SimplexGradientBound; Hash16; Si
 
 ## Planning notes the executor must know
 
-**RULINGS AFTER PLANNING (2026-09-27; binding over anything below, including Global Constraints' "1e-3, never loosened"):** parity per footprint and per term at the measured float floor (spec rulings, *Ruled at R2*); the DeepSpaceShaders module removed, with a test that the engine's own `/Project` mapping finds `WorldRelief.ush`; and **slice (b) gains a task, owned by track T before T2**: the shared file's integer/fraction split of each band's lattice offset, with the parity tolerances tightened to what it then measures, the orbital look unchanged (a before/after render diff).
+**RULINGS AFTER PLANNING (2026-09-27; binding over anything below, including Global Constraints' "1e-3, never loosened"):** parity per footprint and per term at the measured float floor (spec rulings, *Ruled at R2*); the DeepSpaceShaders module removed, with a test that the engine's own `/Project` mapping finds `WorldRelief.ush`; and **slice (b) gains a task, owned by track T before T2**: the shared file's integer/fraction split of each band's lattice offset, with the parity tolerances tightened to what it then measures, the orbital look unchanged (a before/after render diff). **Cast shadows (ruled 2026-09-28: baked, not marched)** are their own plan, `2026-09-28-landing-b-cast-shadows.md`, owned by track T.
 
 
 These were raised while planning. None changes a ruling.
@@ -293,6 +297,9 @@ These were raised while planning. None changes a ruling.
    - Pressing F under the floor skips the spool-down.
    - Crater height no longer varies by basin, only crater albedo does.
    - `GroundAlwaysCatches` is split into four siblings over the whole grid.
+   - **The sweep's fixture sines are twice the real relief's steepest *measured* slope (about 45 degrees), not its `MaxSlope`** (fixed at F8, commit `535c8e6`; recorded here in the review fixes, 2026-09-28). Since `S_max` was ruled a measured maximum, the proven `MaxSlope` is about fifteen times the truth (7.9 against 0.51 on the fixture world): sines at it are 83-degree cliffs 3.6 km high, a ground no world has. The real-relief sibling flies the actual relief of Baemsekai IV and III, crater rims included. **Awaits the developer's word**: the spec's decision 10 still says "the real `MaxSlope`".
+   - **The vertical lever's catch reads `FShipFlightState::GetVerticalCatchSpeed`**, not the whole radial speed (review fixes, 2026-09-28): 0 wherever the lever is not live, and the starved sink's bias taken out, since the flight adds it again to any sink the lever asks. Read literally, "the lever position nearest its present rate" caught cruise's closing speed as a full sink, or doubled the bias. `DeepSpace.Ship.Landing.VerticalCatchSpeed`.
+   - **The along-ground ray carries a proof from frame to frame** (`ShipFlight::FGroundRayProof`, review fixes 2026-09-28). Level at the feet, it proves only Above / sqrt(1 + MaxSlope^2) a sample, about an eighth of the clearance on real relief, so 64 samples saw a few metres and a ship hovering 2-5 m up was held to 0-9 m/s over flat ground, against the skim floor's 20 m/s. Each sample is a fact about the ground (a ball clear of it), so later marches pass through old balls for nothing and spend their 64 fresh samples past them; Still an exhausted march is a hit. `DeepSpace.Ship.Landing.SkimsLowOverRealGround` pins it. What a ship that moves low exposed is held too: a foot within the contact centimetre is not let slide on the slope one normal reads (it slid into rock between samples), and a level ray from under the ground is a hit at 0 (`ShipFlight::UnderClimbSine`). The real-relief sibling is now truly pairwise-covering (three orthogonal Latin squares, checked in the test), drive floor and 5 km starts included.
 
 ---
 
@@ -6758,11 +6765,14 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-f && \
-Tools/mutate.sh Source/DeepSpace/Ship/ShipLanding.cpp 'if (Above < Out.Least)' 'if (Above > Out.Least)' DeepSpace.Ship.Landing.Footprint && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipLanding.cpp 'if (Heights[Index].Above < Out.Least)' 'if (Heights[Index].Above > Out.Least)' DeepSpace.Ship.Landing.Footprint && \
 ./build.sh
 ```
 
-Expected: `KILLED`. And by hand: change `1770.0, 510.0, -10.0` to `1770.0, 520.0, -10.0` in
+Expected: `KILLED`. (As built: F8's `f6cb190` moved the loop onto `FootprintHeights`, so the planned text
+`if (Above < Out.Least)` no longer exists; the mutant above is its successor, re-proven KILLED in the review
+fixes, 2026-09-28. The descent cap now takes its own least over `FootprintHeights`, proven separately in F8's
+Step 6.) And by hand: change `1770.0, 510.0, -10.0` to `1770.0, 520.0, -10.0` in
 `ShipLanding.h`, run `python3 Tools/test_placement.py`, see
 `test_the_belly_corners_are_the_ones_the_cpp_lands_on` fail, `git checkout -- Source/DeepSpace/Ship/ShipLanding.h`.
 
@@ -8859,7 +8869,7 @@ namespace GroundCatchesLocal
     {
         const FGroundFieldRef Real = ShipGround::FromRelief(FixtureParams());
         const FGroundFieldRef Sines = MakeShared<FCrossedSines, ESPMode::ThreadSafe>(
-            FCrossedSines::WithSlope(Real->RadiusCm(), 2.0e5, Real->MaxSlope()));
+            FCrossedSines::WithSlope(Real->RadiusCm(), 2.0e5, Real->MaxSlope()));   // as built: 2.0 * SteepestMeasured(*Real) -- Planning notes 6
         return SurfaceOver(Sines, 1.02e6 + Sines->MaxHeightCm());
     }
 
@@ -9129,6 +9139,23 @@ Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Limits.ApproachSecond
 Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'return FMath::Max(0.0, *Cache->Hit - Flown);' 'return *Cache->Hit;' DeepSpace.Ship.Landing.GroundAlwaysCatchesHigh && \
 ./build.sh
 ```
+
+As built (review fixes, 2026-09-28), each of these is also proven KILLED:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-f && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Clear = FMath::Min(Clear, Point.Above);' 'Clear = FMath::Max(Clear, Point.Above);' DeepSpace.Ship.Landing.GroundAlwaysCatchesLow && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Target -= Across * (1.0 - Keep);' 'Target -= Across * 0.0;' DeepSpace.Ship.Landing.GroundAlwaysCatchesRough && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Above < 1.0 ? Across.Size()' 'Above < 0.0 ? Across.Size()' DeepSpace.Ship.Landing.GroundAlwaysCatchesRealRelief && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp 'if (Reach > T + 1.0)' 'if (Reach > T + 1.0e30)' DeepSpace.Ship.Landing.SkimsLowOverRealGround && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp 'FMath::Square(OldRadii[K]);' 'FMath::Square(3.0 * OldRadii[K]);' DeepSpace.Ship.Landing.RayToGround && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightSurface.cpp '> UnderClimbSine ?' '> 0.0 ?' DeepSpace.Ship.Landing.RayToGround && \
+./build.sh
+```
+
+the descent cap's own least over the footprint; the along-ground (across-slope) cap of `f6cb190`, which
+landed with no test; a foot at contact held from sliding; the along-ground ray's proof (reuse off, and balls
+inflated); a level ray from under the ground.
 
 Expected: `KILLED` twice: a descent cap that allows 2 m/s at contact breaks the contact speed;
 a cached hit that is never shortened lets a skimming ship reach a ridge the cap thought farther
@@ -10067,11 +10094,21 @@ EOF
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-s && \
 Tools/mutate.sh Source/DeepSpace/Ship/ShipPowerState.cpp 'Split.HoldWatts = FMath::Min(Available, Hold);' 'Split.HoldWatts = 0.0f;' DeepSpace.Ship.Power.SplitBoosters && \
-Tools/mutate.sh Source/DeepSpace/Ship/ShipPowerState.cpp 'if (!bAirborne || !(DepthUnderFloorCm > 0.0) || !(WattsPerG > 0.0f))' 'if (!bAirborne || !(WattsPerG > 0.0f))' DeepSpace.Ship.Power.ParkedIsWhole && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp $'        if (Surface.HasGround())\n        {\n            Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' $'        if (true)\n        {\n            Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' DeepSpace.Ship.Power.ParkedIsWhole && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp 'FlightState.GetDepthUnderDriveFloor(),' 'FlightState.GetDepthUnderDriveFloor() + 1.0e5,' DeepSpace.Ship.Power.ParkedIsWhole && \
 ./build.sh
 ```
 
-Expected: `KILLED` twice.
+Expected: `KILLED` three times.
+
+*Amended after review (2026-09-28):* this step first mutated `HoldWant`'s guard,
+`!(DepthUnderFloorCm > 0.0)`, away. That mutant is equivalent: the ramp,
+`Clamp(Depth / HoldRampCm, 0, 1)`, is 0 for any depth at or under 0, and
+`GetDepthUnderDriveFloor` never returns a negative or NaN, so no test can kill
+it. And every `ParkedIsWhole` leg parked at or above a floor, where the depth is
+0 with or without the `HasGround()` filter. `ParkedIsWhole` now also parks 3 km
+under Sova V's floor sphere (an ocean) and asks for depth 0 and no hold; the
+mutants above drop that filter, and ask for a hold at every floor.
 
 ---
 
@@ -11891,6 +11928,21 @@ Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp '    Wells.Append(TestWe
 
 Expected: `KILLED` three times (the third: without the well the 3.3 g leg flies at III's 1.97 g).
 
+*Amended after review (2026-09-28):* the other three flights had no mutant.
+Each central assertion is proven here too:
+
+```bash
+cd /home/matt/Development/deepspace/.worktrees/landing-b-s && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipSubsystem.cpp '100.0 * (1.0 - LastSplit.HoldFed)' '100.0 * (1.01 - LastSplit.HoldFed)' DeepSpace.Playtest.HoverHoldsWhenPilotStands && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Depth = FMath::Max(Depth, -ShipFlight::FloorClearance(Surface, Position));' 'Depth = FMath::Max(Depth, 1.0e5 - ShipFlight::FloorClearance(Surface, Position));' DeepSpace.Playtest.ParkedShipNeverDrifts && \
+Tools/mutate.sh Source/DeepSpace/Ship/ShipFlightState.cpp 'Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);' '2.0 * Limits.ApproachSeconds, Limits.TouchdownSpeed, FixedStep);' DeepSpace.Playtest.DescendsInTime && \
+./build.sh
+```
+
+Expected: `KILLED` three times: a fed hover sinking 2 cm/s drifts a minute's
+worth; a drive floor taken 1 km high puts a parked, starved ship under it and it
+sinks; an approach law twice as long misses the descent's time by about 20 % (133.8 s against 109.9 s, measured).
+
 ---
 
 ## Task 31 (T1): craters as a height -- summed compact kernels in `WorldRelief.ush` and in `Height`
@@ -12410,6 +12462,74 @@ Tools/mutate.sh Source/DeepSpace/Surface/WorldRelief.cpp 'Bound += WR64::WR_CRAT
 Expected: `KILLED` twice (a flat-topped rim ending in a step at q = 1.5 is a cliff; a bound for
 one kernel is exceeded where craters overlap). If the second survives the 100,000 samples,
 double the sample count and say so; the bound must be shown to matter.
+
+---
+
+## Task 31b: the shared file keeps each band's lattice offset as an integer part apart from its fraction
+
+**Owner:** T. **Depends on:** T1. **Added after planning** (RULINGS AFTER PLANNING; the spec's
+*Ruled at R2*: "slice (b) then tightens it at the root"). Written and executed on
+`feat/landing-b-t`; this entry records what was done.
+
+A band's noise coordinate was `D x frequency + SeedOffset + (37, 59, 83) x band number`, summed
+in the GPU's float: about 1,250 for the detail bands and 9,000 for the craters, where a float's
+step is 1e-4 to 1e-3 of a cell. Split, the float arithmetic sees `D x frequency` and a fraction
+only, and the integer part reaches the lattice hash alone, in integer arithmetic. In exact
+arithmetic it is the same function, so double moves by rounding only (`.KnownValues` unchanged at
+1e-6) and the look is unchanged.
+
+**Files:**
+- Modify: `Shaders/Private/WorldRelief.ush` -- `WR_Offset {IX, IY, IZ, FX, FY, FZ}`,
+  `WR_SplitOffset(OX, OY, OZ, Index)`, `WR_FloorDiv3`; `WR_GradientNoiseAt`, `WR_SimplexAt`,
+  `WR_VoronoiAt`, `WR_VoronoiJitterAt` take the integer shift (the old names are the shift-0
+  wrappers, so `WorldReliefNoise::Simplex`/`GradientNoise`/`Voronoi` are unchanged);
+  `WR_Continent`, `WR_DetailBand`, `WR_CraterBand`, `WR_CraterKernelBand` take the split; the
+  entry point splits every band's offset.
+- Modify: `Source/DeepSpace/Surface/WorldRelief.cpp` (`DetailSum` passes the split offset).
+- Create: `Source/DeepSpace/Tests/WorldReliefOffsetSplitTest.cpp`
+  (`DeepSpace.Surface.WorldRelief.OffsetSplit`).
+- Modify: `Source/DeepSpace/Tests/Eyes/WorldReliefParityTest.cpp` (`SplitHeld`,
+  `GiantSplitHeld`; the verdict line).
+
+**The lattices.** The Voronoi and gradient-noise lattices are the integer lattice: `floor(P) =
+floor(P_small) + I`, `frac(P) = frac(P_small)`. The simplex lattice is the *skewed* one, and an
+integer shift in `V` is not one of its points; so the shift goes to the skewed point
+`K = I + q (1, 1, 1)`, `q = floor((Ix + Iy + Iz) / 3)`, `r = Ix + Iy + Iz - 3q`, which leaves
+`V_small = D x F + frac + r / 6` in each axis and moves every corner's hash input by
+`6 U(K) = 6 I + 3q - (Ix + Iy + Iz)`. Skewing is linear and `U(K)` skews back to `K` exactly, so
+the base corner is `V_small`'s own plus `K` and the offsets from it are `V_small`'s own.
+
+- [x] **Step 1: the failing test.** `.OffsetSplit` holds the file's float build (`FaceF32`, the
+  GPU's operations in the GPU's precision) to its double build at the parity test's five
+  footprints, at float D, 20,000 samples, a far offset and the giant, crater steps masked as
+  there. Before the split it measured, at 1/96 to 1/12288: continent 8.3e-5 to 9.2e-5, crater
+  albedo 3.9e-4 to 7.4e-4, crater slope 2.4e-3 to 3.9e-3, detail 1.5e-4 to 1.5e-3, detail slope
+  6.5e-4 to 8.7e-3 -- red against 1e-4 / 1e-3.
+- [x] **Step 2: the split** (above). `./build.sh`; `./test.sh DeepSpace.Surface`: 15 green,
+  `.KnownValues` included.
+- [x] **Step 3: pin what it measures.** `.OffsetSplit`'s table is 1.25 x its own run, rounded up,
+  never under 1e-7: at 1/96 crater slope 7.8e-6 (was 2.4e-3), at 1/12288 crater slope 6.6e-4
+  (3.9e-3), detail slope 8.9e-3 (8.7e-3: the finest detail bands' error is `D x frequency`'s own
+  rounding, which no offset split reaches).
+- [x] **Step 4: the GPU, and the parity tolerances tightened.** `Tools/eyes.sh
+  Eyes.WorldReliefParity`, then every term held to 1.25 x what the GPU then measured from double
+  (`SplitHeld`, `GiantSplitHeld`), asserted never looser than the R2-R5 rule, which is still
+  computed and printed. Baemsekai IV, C++ vs GPU, before -> after: 1/96 crater slope 2.16e-3 ->
+  5.67e-6, crater albedo 3.87e-4 -> 1.18e-6, continent 5.18e-5 -> 1.15e-6; 1/768 detail slope
+  1.27e-3 -> 4.55e-4; 1/12288 crater slope 4.30e-3 -> 5.26e-4, crater albedo 8.37e-4 -> 1.13e-4,
+  detail 1.28e-3 -> 1.06e-3, detail slope 7.42e-3 -> 5.71e-3; SUMMARY 7.42e-3 -> 6.10e-3.
+- [x] **Step 5: the orbital look unchanged, a before/after render diff.** Slice (a)'s stills test
+  (`Eyes.LandingStills`, restored from `c7aa4c3^` uncommitted, then deleted) at Baemsekai III, IV
+  and V 30 km up, IV at dusk, and 12 km up over IV and at dusk over III and V, 1920 x 1080,
+  before and after, compared pixel for pixel. Two "before" runs were identical, so any difference
+  is the split's. After against before: at most 0.06% of pixels differ by more than 8 of 255 and
+  0.56% by more than 2, mean under 0.12 of 255, as isolated speckle with no structure (the
+  pixels whose float rounding moved across a crater step or a steep face); side by side the
+  frames cannot be told apart. The stills and x20 diffs are kept outside git in the tree's
+  `Saved/landing-b-31b/`.
+- [x] **Step 6: prove them.** `Tools/mutate.sh` on the split in the entry point (the offset
+  passed whole again) KILLS `.OffsetSplit` headlessly; `MUTATE_RUNNER=Tools/eyes.sh` with the
+  same mutant KILLS `Eyes.WorldReliefParity`.
 
 ---
 
@@ -13747,12 +13867,14 @@ MSG
 Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp '                            bChanged = true;
                             break;' '                            break;' DeepSpace.Surface.QuadtreeAtCubeSeams && \
 Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' DeepSpace.Surface.QuadtreeAtCubeSeams && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' DeepSpace.Surface.Quadtree; \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainQuadtree.cpp 'return Normalised(CubePoint(Key.Face, FMath::Tan(AU), FMath::Tan(AV)));' 'return Normalised(CubePoint(Key.Face, FMath::Clamp(FMath::Tan(AU), -1.0, 1.0), FMath::Clamp(FMath::Tan(AV), -1.0, 1.0)));' 'DeepSpace.Surface.Quadtree$'; \
 ./build.sh
 ```
 
 Expected: the first two `KILLED` by `QuadtreeAtCubeSeams`; the third `SURVIVED` by
-`DeepSpace.Surface.Quadtree` (the `;` before `./build.sh` is deliberate: `mutate.sh` exits non-zero
+`DeepSpace.Surface.Quadtree` alone -- the filter is anchored with `$` because Unreal's RunTests
+matches a filter as a substring, and bare `DeepSpace.Surface.Quadtree` also runs
+`QuadtreeAtCubeSeams`, which kills this mutant, so the leg could never show `SURVIVED` (the `;` before `./build.sh` is deliberate: `mutate.sh` exits non-zero
 on a survivor). The first is the balance stopping after one pass. The second is seam-specific: a
 probe past a face's edge clamped back onto its own face, so neither `EdgeNeighbours` nor the balance
 ever looks across a seam. Within a face nothing changes -- which is why the mid-face sweep survives
@@ -14303,7 +14425,7 @@ FVector2f TerrainTile::UV2Of(const FTileBuild& Tile, int32 Vertex)
 - [ ] **Step 4: Run: PASS; record the build time and the pop**
 
 ```bash
-cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh DeepSpace.Surface.Tile; \
+cd /home/matt/Development/deepspace/.worktrees/landing-b-t && ./build.sh && ./test.sh 'DeepSpace.Surface.Tile$'; \
 grep "split pop" Saved/Logs/DeepSpace.log | tail -1
 ```
 
@@ -14338,8 +14460,8 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'const double H = Ground.HeightAndGradient(D, Grad, Tile.SpacingCm);' 'const double H = Ground.HeightAndGradient(D, Grad, 20.0 * Tile.SpacingCm);' DeepSpace.Surface.Tile && \
-Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'Out.Append({ A, C, B, B, C, D });' 'Out.Append({ A, B, C, B, D, C });' DeepSpace.Surface.Tile && \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'const double H = Ground.HeightAndGradient(D, Grad, Tile.SpacingCm);' 'const double H = Ground.HeightAndGradient(D, Grad, 20.0 * Tile.SpacingCm);' 'DeepSpace.Surface.Tile$' && \
+Tools/mutate.sh Source/DeepSpace/Surface/TerrainTile.cpp 'Out.Append({ A, C, B, B, C, D });' 'Out.Append({ A, B, C, B, D, C });' 'DeepSpace.Surface.Tile$' && \
 ./build.sh
 ```
 
@@ -16367,11 +16489,15 @@ EOF
 
 ```bash
 cd /home/matt/Development/deepspace/.worktrees/landing-b-t && \
-Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL NX = DX - CarriedX - (Pixel.SX - PD * DX);' 'const WR_REAL NX = DX - (Pixel.SX - PD * DX);' DeepSpace.Surface.GroundShadesAsOrbit && \
+Tools/mutate.sh Shaders/Private/WorldRelief.ush 'const WR_REAL NX = DX - CarriedX - (SX - PD * DX);' 'const WR_REAL NX = DX - (SX - PD * DX);' 'DeepSpace.Surface.GroundShadesAsOrbit$' && \
 ./build.sh
 ```
 
-Expected: `KILLED` (a normal that drops what the vertices carry is not the orbit's). Then the
+Expected: `KILLED` (a normal that drops what the vertices carry is not the orbit's). The mutant is
+the shipped text: `WR_GroundNormal` takes `SX`, `SY`, `SZ` as arguments, and the first draft's
+`Pixel.SX` never existed, so as first written this proof was refused text-not-found. The C++'s
+`WorldReliefShading::Ground` includes the same `.ush` (through `WR64`), so the headless test runs
+the mutated line. Then the
 index, a silent failure in play:
 
 ```bash
@@ -17010,6 +17136,201 @@ at the handover).
 ---
 
 ## Task 39 (Z): slice (b) done -- the frame at 4K, the flight the developer makes, the documentation, the merge
+
+**Amended (2026-09-28): `Eyes.LandingFrame` no longer asserts the 16.6 ms budget.** The ground
+measured 19.4 ms against it before any shadow, and the ruling on slice (b)'s build hands the frame
+to profiling ("profile first, with the cast shadows in, and fix the real cost"; the split factor is
+the last resort). The cast-shadow plan (`2026-09-28-landing-b-cast-shadows.md`, Task 1) took the
+test for that work: six cases, ABBA medians, a tagged report
+(`Saved/Eyes/LandingFrame/<tag>/report.txt`), and a frame over 16.6 ms reported as an info line,
+never failed. So a green `Eyes.LandingFrame` says nothing about the budget: read the `on_ms` of its
+`50km` and `1.5m` lines. The test code and Step 1's expectation below are the first version.
+
+**The frame, profiled and brought in (2026-09-28, the frame ruling: profile first, with the cast
+shadows in; the split factor last).** `feat/landing-b-t`, RTX 4070 Ti Super, 4K capture, the six
+`Eyes.LandingFrame` cases, `ds.Terrain.SplitFactor` and `MaxTiles` untouched.
+
+- **How it was measured.** `EYES_PROFILE=1` adds `profile` lines per case: the game step, the
+  capture's game-thread enqueue, the render thread's span, the flush and the read-back's wait, and
+  the same frame with the ground hidden, the sky hidden, both (the capture's floor), the ground's
+  material swapped for the engine's plain one (geometry and draws against pixels), and at 1080p. A
+  trace region brackets each case and variant, so a run with
+  `-trace=cpu,gpu,frame,region` is read headless by
+  `UnrealInsights -OpenTraceFile=<utrace> -NoUI -AutoQuit -nullrhi -ExecOnAnalysisCompleteCmd="TimingInsights.ExportTimingEvents <dir>/ev_{region}.csv -region=LF* -threads=GPU0-Graphics0,RenderThread*,RHIThread,GameThread -columns=ThreadName,TimerName,StartTime,EndTime,Depth"`
+  (or `ExportTimerStatistics`), which gives the GPU's own pass timings per capture. The
+  harness's frame is serial -- game step, then capture, then a one-pixel read-back -- so it sums
+  game thread, render thread and GPU, where play overlaps them.
+- **First finding: the harness, not the frame.** Every case's frame rose with the run: an empty
+  4K capture cost 4.2 ms in the first case and 32 ms in the last, 1.5m_dusk10 read 28 ms, and a
+  case's raw times climbed within it. The trace put it on the RHI thread: `DeleteRHIResources`
+  inside `RHI_SubmitClose`, 4.8 ms a capture in the second case and 24 ms in the sixth, waited on
+  by every `FlushRenderingCommands`. Inside one `RunTest` no engine frame ends; the Vulkan RHI
+  retires freed resources only at a frame's end (`GVulkanRHIDeletionFrameNumber`), and a
+  Development build scans the whole deferred-deletion queue on every enqueue
+  (`FDeferredDeletionQueue2::EnqueueGenericResource`'s double-delete check), so each capture cost
+  more than the one before. It was the order-dependent "accumulation" the test had recorded and
+  not diagnosed, and the reason a view state once made later cases 100-190 ms. **Fix:**
+  `Eyes.LandingFrame` is latent, each placement, timed round, proof and profile variant its own
+  step, four engine frames apart (19342c9). An empty capture is then 4.0 ms in all six cases and
+  the spreads 0.1-0.4 ms. It changes no frame the game draws.
+- **The breakdown, latent, cast shadows in** (`frame-before`, and the profile run `trace-1`), ms:
+
+  | case | frame | game step | GPU (SceneRender) | BasePass | ground's material (full - plain) | ground's geometry and draws (plain - no ground) | capture floor (empty) |
+  |---|---|---|---|---|---|---|---|
+  | 50km | 10.21 | 0.7 | 7.9 | 4.0 | 3.8 | 1.1 | 4.0 |
+  | 1.5m | 18.09 | 2.3-3.2 | 13.5 | 9.2 | 8.3 | 1.8 | 4.0 |
+  | 50km_dusk10 | 9.00 | 0.4 | -- | -- | 3.4 | 0.7 | 4.0 |
+  | 1.5m_dusk3 | 14.49 | 0.6 | -- | -- | 7.3 | 2.0 | 4.0 |
+  | 200km_dusk10 | 10.12 | 0.6 | 8.6 | 4.4 (the proxy, M_SkyBody) | -- | -- | 4.0 |
+  | 1.5m_dusk10 | 14.31 | 0.6 | -- | -- | 7.4 | 1.7 | 4.0 |
+
+  The render thread's span of a capture is 1.0-1.6 ms and the enqueue under 0.1 ms in every case.
+  The capture's floor (4.0 ms with nothing drawn) is mostly screen-space AO at 4K
+  (`LightCompositionTasks_PreLighting`, 1.5-1.7 ms of GPU), post-processing (0.5) and a ~1.5 ms
+  render-thread lead before the GPU starts. **The dominant cost is the ground's pixel shader**: with
+  the engine's plain material on the same 725 tiles BasePass is 0.24 ms, with `M_SkyGround` 9.2.
+  Geometry, triangle count, culling and draw count together are under 2 ms: fewer vertices on
+  distant tiles, tighter culling or merged draws could not reach the budget. Two further facts,
+  not acted on: the tiles are never in the depth prepass (`PrePass` 0.04 ms; a Movable primitive
+  with WPO is left for a velocity pass under `DDM_AllOpaqueNoVelocity`, while the proxy draws no
+  velocity), so the base pass shades overdraw at full cost; and the 1.5m case's game step is
+  2.3-3.7 ms against 0.6 in the dusk cases.
+- **Change 1: the crater kernel visits 8 corners, not 27** (fc829a7). Inside the shader, the
+  crater bands' kernel searched the 3 x 3 x 3 lattice corners round floor(P + 0.5), six bands a
+  pixel. A site within a crater's reach (0.525 cells) has its corner within 0.784 cells of P on
+  every axis, so only floor(P) and the corner after it can hold one; the kernel visits those 8, in
+  the order the 27 did, so every sum is identical to the last bit (the detail is untouched and
+  the handover's parity is exact by construction). `DeepSpace.Surface.CraterKernelCorners` holds
+  it to the old kernel over a million points in double and float (0 differ; 16,343 under two
+  craters), proven by two mutants (a dropped corner, the old base corner), both KILLED.
+  `Eyes.WorldReliefParity` reads the same SUMMARY as before (6.10e-03, float 5.95e-03),
+  `Eyes.HandoverParity` a gap of 3.07e-04. The C++ ground's heights go through the same kernel,
+  so tile builds are cheaper too. Measured, `frame-before` -> `frame-craters`, `on_ms`, the
+  gate (`landing_frame_gate.py ... 0`) GO in every case:
+
+  | case | before | after | change |
+  |---|---|---|---|
+  | 50km | 10.21 | 8.39 | -1.82 |
+  | 1.5m | 18.09 | 13.85 | -4.23 |
+  | 50km_dusk10 | 9.00 | 7.52 | -1.49 |
+  | 1.5m_dusk3 | 14.49 | 11.17 | -3.33 |
+  | 200km_dusk10 | 10.12 | 8.30 | -1.82 |
+  | 1.5m_dusk10 | 14.31 | 10.93 | -3.38 |
+
+  BasePass (traced): 1.5m 9.2 -> 5.8 ms, 50km 4.0 -> 2.6 ms. **Every case is now under 16.6 ms**,
+  the worst 1.5m at 13.85 with 2.8 ms of headroom, so the split factor is not touched. The ground's
+  material is still the largest GPU cost (5.6 ms at 1.5 m), then the capture's floor; the next
+  candidates, if the frame needs more, are the depth prepass for the tiles (their overdraw) and
+  skipping detail bands the footprint has faded whole in the shader (no gain at 1.5 m, where none
+  is).
+- **The suite after it:** 244 passed, one red, `DeepSpace.Surface.GroundKeepsUpAtDusk` at 15.03 cm
+  against 15.00 -- the cast-shadow plan's Task 7b, awaiting the developer's ruling, which recorded
+  25.22 cm there with the shadow at 2 build tasks. With the crater kernel's cheaper heights it
+  reads 15.03, the figure 7b measured with no shadow at all. That was one run, and it read too
+  much into it; repeated (after review, 2026-09-28, a quiet machine, nothing else building):
+
+  | build tasks | shadow | runs | worst gap, cm |
+  |---|---|---|---|
+  | 2 (the default) | on | 5 | 15.03 every run |
+  | 2 | off | 3 | 15.03 every run |
+  | 3 | on | 2 | 7.19, 7.19 |
+  | 4 | on | 2 | 7.19, 7.19 |
+
+  `Eyes.ShadowBakeCost`'s flight, re-run once, reads the same 15.03 (`flight_worst_cm` OVER by
+  0.03). What this shows, and no more: on a quiet machine the flight with the shadow lands on the
+  same worst gap as the flight without, every run, and one more build task now reaches 7.19 (it
+  was 15.03 at 3 before the kernel). The metric is not a continuous lag: every value it has ever
+  read is one of 7.19, 9.52, 14.40, 15.03 and 25.22, steps of which tile is late where, so 15.03
+  against 15.00 is a step that happens to sit over the line, not a 0.03 cm margin to shave. And
+  the flight is paced to the wall clock (`GroundKeepsUpScenario.h`), so its builds race it on real
+  workers: a loaded machine can land a step higher, which no run here measured. It does not show
+  that the shadow's build cost is zero, only that at 2 tasks it no longer moves the gap a step.
+  `feat/landing-b-t` still does not merge while the test is red; the cast-shadow plan's Task 7b
+  carries these numbers to the ruling.
+- **Held since review:** `CraterKernelCorners` also counts the corners each band visits
+  (`WR_CRATER_CORNER_VISITED()`, a hook in `WorldRelief.ush` that is empty everywhere but that
+  test) and holds it at 8. The sums could not: a corner too far to reach adds nothing, so a
+  restored 3 x 3 x 3 matched bit for bit while the frame went back over 16.6 ms. Its mutant (the
+  I loop from -1, 12 corners, every sum identical) is KILLED by the count alone. The frame itself
+  is still reported, not asserted; and note that `landing_frame_gate.py --not-rise` against
+  `Saved/Eyes/LandingFrame/baseline` cannot see such a revert either, because that baseline was
+  taken before fc829a7, with the 27 corners.
+- **What `Eyes.LandingFrame` does not show:** the game's own `stat unit` at 4K with the project's
+  AA and upscaler (Step 3, item 5): the capture has no TSR and no view state, and play overlaps
+  the game step with the GPU. That stays the developer's reading.
+
+**Close-out run (2026-09-29, `feat/landing-b-t` at 6002655, `feat/landing-b` and `main` merged in,
+nothing to merge).** `./rebuild.sh` OK. `./test.sh`: 244 passed, one red --
+`DeepSpace.Surface.GroundKeepsUpAtDusk`, 15.03 cm against 15.00, the step the cast-shadow plan's
+Task 7b carries to the developer; so `feat/landing-b-t` is **not** merged into `feat/landing-b`.
+`Eyes.LandingFrame` (`EYES_TAG=z-close`), `on_ms`: 50km 8.32, 1.5m 13.79 (732 tiles drawn, 951
+resident), 50km_dusk10 7.52, 1.5m_dusk3 11.13, 200km_dusk10 8.34, 1.5m_dusk10 10.96 -- every case
+under 16.6; against `frame-craters` every case within 0.07 ms (`landing_frame_gate.py`: too close
+to call). `Eyes.WorldReliefParity` green (SUMMARY 6.10e-03, float 5.95e-03, at most 2.142% left
+out). `Eyes.HandoverParity` green (relative gap 3.07e-04, p99 4.31e-02). `Eyes.ReliefLook` ran
+(frames, not a guard) -- but its world is still `EShadows::Off`, so its `shadows1` frames carry no
+baked shadow (the cast-shadow plan's Task 10 Step 3 is not done; Tasks 8-10 wait on 7b).
+**`Eyes.TerrainBudget` is flaky at its 6 ms line**: five runs, the 2,200-tile draw over the empty
+capture +6.35, +6.79 (FAIL), +5.13, +4.95, +5.12 (pass); it draws the engine's default material,
+so no shader change here moves it, and it is not latent (the RHI deletion queue this task found in
+`Eyes.LandingFrame` is the first suspect). `validate_hauler.py` PASS, `check_blueprints.py` PASS (5,
+exit 0), `verify_level.py` PASS (within 1.0 cm). `CraterKernelCorners`' mutant (I from -1) KILLED
+again on the merged tree, library rebuilt after.
+
+**Slice (b)'s last open items (2026-09-29, `feat/landing-b-t`; the spec note of that name).**
+
+- **Tiles move through one transform.** `Eyes.LandingFrame` first gained six cases in motion,
+  noon and a 10-degree dusk: the skim cap at 1.5 m (the ship carried along the ground each frame --
+  on the gear the flight law held it at rest against the first rise, 0.0 m/s under both suns) and
+  at 500 m (HOVER, cruise full ahead; 162 and 185 m/s against a 200 m/s cap), and the drive's first
+  notch at 50 km, nose 10 degrees down (19 km/s). Each asserts it kept half its speed, and every
+  case, still or moving, is now **asserted** within 16.6 ms. The baseline (`move-before`, a
+  component per tile), `on_ms`: still 50km 8.31, 1.5m 13.23, 50km_dusk10 8.09, 1.5m_dusk3 12.54,
+  200km_dusk10 8.09, 1.5m_dusk10 12.33; moving 1.5m_skim **23.72**, 500m_skim **20.28**,
+  50km_drive 12.70, 1.5m_skim_dusk10 **21.15**, 500m_skim_dusk10 **17.94**, 50km_drive_dusk10
+  **43.37** (its rounds 3-9 at 27-52 ms). Candidates, measured on `Eyes.TerrainBudget`'s 2,200
+  tiles: moving each tile +7.72 ms of the capture and 2.01 ms of game thread; moving only their one
+  parent +8.17 and 1.67 -- the engine still updates every child, so that candidate is out. Built:
+  `UTerrainGroundComponent`, every tile in one scene proxy, each shown tile its own mesh element
+  with its own GPU Scene primitive data (the pivot composed with the component's transform in
+  doubles on the render thread; band limit and pivot as custom primitive data, so `M_SkyGround` is
+  untouched), frustum-culled per tile; `AWorldGround` moves the component once a frame and adds,
+  removes and shows tiles by render command. The float budget is unchanged: a vertex is a float
+  offset from its own tile's pivot, the pivot's place relative to the ship subtracted in doubles.
+  After: `Eyes.TerrainBudget` green -- the move -0.60 ms of the capture and 0.03 ms of game thread
+  (against 2 and 2), the draw +5.45 ms (was +5.91) against 6. `Eyes.LandingFrame` (`move-after`),
+  `on_ms`: still 8.32, 13.15, 8.06, 12.45, 8.05, 12.24; moving 1.5m_skim 15.41, 500m_skim 13.75,
+  50km_drive 9.76, 1.5m_skim_dusk10 14.06, 500m_skim_dusk10 12.34, 50km_drive_dusk10 9.24 -- every
+  case within 16.6 ms, the worst with 1.2 ms to spare. `Eyes.HandoverParity` unchanged by it (noon
+  5.57e-4, dusk 3.1e-3), `GroundKeepsUp` green. Mutants KILLED: the frame's one move dropped
+  (`DeepSpace.Surface.GroundActor`, 957 tiles misplaced), the shown set dropped (the same test),
+  and the pivot dropped from the tile's transform on the render thread (`Eyes.HandoverParity`).
+- **The dusk handover tolerance.** `Eyes.HandoverParity` reads each leg's sun at its nadir and holds
+  a sun below 5 degrees to 5e-3, otherwise 1e-3, and asserts which it got. Before: red, the
+  3-degree dusk 3.1e-3 against 1e-3. After: green -- the opening (62.59 degrees) 5.57e-4 against
+  1e-3; the dusk (2.91 degrees at the nadir) 2.87e-3 with the shadow, 3.09e-3 without, against
+  5e-3; the shadow keeps 0.8135 and 0.8137. Mutant (every sun held to 5e-3) KILLED by the
+  opening's own guard.
+- **The upload pieces.** `map_upload_rt_ms_all` 4.54 ms against 4. Instrumented: four pieces of
+  ~400, each 4.3-4.8 ms, about every 70th (~35 MB of uploads), all in one render frame. The
+  test landed Trabo's maps inside `RunTest`, where no engine frame ends, and the Vulkan RHI
+  returns an upload's staging buffer to its free list only at a frame's end
+  (`FStagingManager::ProcessPendingFree` in `RHIEndFrame_RenderThread`), so the pool grew a page
+  at a time. **Shrinking the pieces does not reach it**: at 128 KB, the same four stalls,
+  4.37-5.19 ms (5.20). So `ds.Sky.ShadowUploadKB` stays 512 and the worst systems land over
+  engine frames, as play lands them (`FLandWorstSystems`, the sky's `PumpShadowBakesForTest`):
+  `map_upload_rt_ms_all` 0.106 ms, `map_land_ms_all` 0.092, every line of the report within
+  (Trabo's twelve over 239 frames, 123.99 MB; the sixteen over 42, 120.33 MB). *Review fix:*
+  the 4 ms is now asserted -- the one timing `Eyes.ShadowBakeCost` asserts, 0.11 against 4 --
+  and the spec's ruling amended (built otherwise, on the sign-off list). Mutant (the worst
+  systems landed inside one engine frame) KILLED on that assertion, 4.576 ms.
+- **Review fixes (2026-09-29).** `landing_frame_gate.py` leaves a moving case out only when the
+  baseline lacks it; a run under test missing one is UNDECIDED (two new tests, red without the
+  fix). `Eyes.LandingFrame`: the drive's floor is half its first notch (10 km/s, was 500 m/s);
+  the carried 1.5 m cases no longer assert their own speed but that the ground kept up --
+  drawn under the ship every frame, within GearClearance / 10 (2.07 and 2.13 cm); mutant (the
+  glide carried 200 km up) KILLED; `EYES_PROFILE` profiles a moving case before it stops.
+  `review-fix` against `move-after`: GO, every case within 16.6 ms.
 
 **Owner:** orchestrator, with the developer for the eyes. **Depends on:** every task above
 merged into `feat/landing-b` (F, then T and S; conflicts in `CLAUDE.md` are resolved by keeping

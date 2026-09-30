@@ -387,7 +387,7 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
     }
     if (JumpAction)
     {
-        Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+        Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::TryJump);
         Input->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
     }
     if (InteractAction)
@@ -430,6 +430,20 @@ void ADeepSpaceCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
         Input->BindAction(LeverDownAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::HoldLeverDown);
         Input->BindAction(LeverDownAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleaseLeverDown);
         Input->BindAction(LeverDownAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleaseLeverDown);
+    }
+    if (VerticalUpAction)
+    {
+        Input->BindAction(VerticalUpAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressVerticalUp);
+        Input->BindAction(VerticalUpAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::HoldVerticalUp);
+        Input->BindAction(VerticalUpAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleaseVerticalUp);
+        Input->BindAction(VerticalUpAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleaseVerticalUp);
+    }
+    if (VerticalDownAction)
+    {
+        Input->BindAction(VerticalDownAction, ETriggerEvent::Started, this, &ADeepSpaceCharacter::PressVerticalDown);
+        Input->BindAction(VerticalDownAction, ETriggerEvent::Triggered, this, &ADeepSpaceCharacter::HoldVerticalDown);
+        Input->BindAction(VerticalDownAction, ETriggerEvent::Completed, this, &ADeepSpaceCharacter::ReleaseVerticalDown);
+        Input->BindAction(VerticalDownAction, ETriggerEvent::Canceled, this, &ADeepSpaceCharacter::ReleaseVerticalDown);
     }
     if (DriveAction)
     {
@@ -502,6 +516,36 @@ void ADeepSpaceCharacter::HoldLever(int32 Direction)
     bLeverDownHeld = Direction < 0;
 }
 
+void ADeepSpaceCharacter::TryJump()
+{
+    // Seated, Space is the vertical lever's; the movement component would
+    // refuse a jump anyway, but saying so here is what keeps the two keys'
+    // meanings from depending on that.
+    if (IsSeated() || IsInScreenChair())
+    {
+        return;
+    }
+    Jump();
+}
+
+void ADeepSpaceCharacter::TapVertical(int32 Direction)
+{
+    if (Direction > 0)
+    {
+        ++VerticalUpPresses;
+    }
+    else if (Direction < 0)
+    {
+        ++VerticalDownPresses;
+    }
+}
+
+void ADeepSpaceCharacter::HoldVertical(int32 Direction)
+{
+    bVerticalUpHeld = Direction > 0;
+    bVerticalDownHeld = Direction < 0;
+}
+
 void ADeepSpaceCharacter::SetAttitudeInput(const FInputActionValue& Value)
 {
     SetFlightInput(Value.Get<FVector>());
@@ -522,6 +566,12 @@ void ADeepSpaceCharacter::PushHelmInput()
     Input.DownPresses = LeverDownPresses;
     LeverUpPresses = 0;
     LeverDownPresses = 0;
+    Input.bVerticalUpHeld = bVerticalUpHeld;
+    Input.bVerticalDownHeld = bVerticalDownHeld;
+    Input.VerticalUpPresses = VerticalUpPresses;
+    Input.VerticalDownPresses = VerticalDownPresses;
+    VerticalUpPresses = 0;
+    VerticalDownPresses = 0;
 
     // Once a frame, whoever we are: the subsystem is the gate, and moves the
     // levers in its own tick. A pawn that is not flying hands over nothing,
@@ -561,7 +611,7 @@ void ADeepSpaceCharacter::StopSprinting()
 
 void ADeepSpaceCharacter::ToggleCrouch()
 {
-    if (IsSeated())
+    if (IsSeated() || IsInScreenChair())
     {
         return;
     }

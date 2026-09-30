@@ -114,7 +114,8 @@ double ShipFlight::MaySpeed(double D, double BrakingAccel, double HoldSeconds, d
     return Step > 0.0 ? FMath::Min(May, D / Step) : May;
 }
 
-double ShipFlight::Room(TConstArrayView<FFlightSurface> Surfaces, const FUniversePosition& From)
+double ShipFlight::Room(TConstArrayView<FFlightSurface> Surfaces, const FUniversePosition& From,
+                        double GroundClearanceCm)
 {
     if (Surfaces.IsEmpty())
     {
@@ -123,7 +124,8 @@ double ShipFlight::Room(TConstArrayView<FFlightSurface> Surfaces, const FUnivers
     double Least = Never;
     for (const FFlightSurface& Surface : Surfaces)
     {
-        Least = FMath::Min(Least, FloorClearance(Surface, From));
+        const TOptional<double> Ground = GroundAt(Surface, From);
+        Least = FMath::Min(Least, Ground ? *Ground - GroundClearanceCm : FloorClearance(Surface, From));
     }
     return FMath::Max(Least, 0.0);
 }
@@ -154,4 +156,228 @@ double ShipFlight::SecondsToFloor(double D, double Speed, double BrakingAccel, d
         return SecondsOnCap(D, Braking, N);
     }
     return (D - Binds) / Speed + SecondsOnCap(Binds, Braking, N);
+}
+
+TOptional<double> ShipFlight::GroundAt(const FFlightSurface& Surface, const FUniversePosition& From)
+{
+    if (!Surface.HasGround())
+    {
+        return {};
+    }
+    const FVector Out = From - Surface.Centre;
+    const double R = Out.Size();
+    if (!(R > 0.0))
+    {
+        return -Surface.Radius;
+    }
+    return R - Surface.Radius - Surface.Ground->Height(FVector3d(Out / R), 0.0);
+}
+
+TOptional<double> ShipFlight::RayToGround(const FFlightSurface& Surface, const FUniversePosition& From,
+                                          const FVector& Direction, double ClearanceCm, double MaxDistanceCm,
+                                          int32* OutSteps, FGroundRayProof* Proof)
+{
+    if (OutSteps)
+    {
+        *OutSteps = 0;
+    }
+    const FVector U = Direction.GetSafeNormal();
+    if (!Surface.HasGround() || U.IsZero() || !(MaxDistanceCm > 0.0))
+    {
+        return {};
+    }
+    const IGroundField& Ground = *Surface.Ground;
+    const double Clear = FMath::Max(ClearanceCm, 0.0);
+
+    // Centre-relative, in doubles: at planetary scale this keeps well under
+    // a millimetre, and nothing here is astronomical.
+    const FVector Start = From - Surface.Centre;
+    const double StartR = Start.Size();
+    if (StartR > 0.0)
+    {
+        const FVector3d D(Start / StartR);
+        if (StartR - Surface.Radius - Ground.Height(D, 0.0) - Clear <= 0.0)
+        {
+            // Under already: it may always climb, and may not descend -- nor
+            // go level: a level ray (the along-ground ray is one by
+            // construction) has a sign of U . D that is rounding, and read
+            // as a climb it let a ship whose feet were on the ground slide.
+            return FVector::DotProduct(U, FVector(D)) > UnderClimbSine ? TOptional<double>() : TOptional<double>(0.0);
+        }
+    }
+
+    // Along: how far down the ray the centre's foot lies (positive heading
+    // in, as in RayToFloor), so the shell's roots are Along -/+ Half. Miss:
+    // how far the ray passes from the centre, from a cross product rather
+    // than two planetary squares agreeing to every digit that matters.
+    const double Shell = Surface.Radius + Ground.MaxHeightCm() + Clear;
+    const double Along = -FVector::DotProduct(Start, U);
+    const double Miss2 = FVector::CrossProduct(Start, U).SizeSquared();
+    const double Half2 = Shell * Shell - Miss2;
+    if (Half2 <= 0.0)
+    {
+        return {};
+    }
+    const double Half = FMath::Sqrt(Half2);
+    const double Exit = Along + Half;
+    if (Exit <= 0.0)
+    {
+        return {};
+    }
+    const double End = FMath::Min(Exit, MaxDistanceCm);
+    const double Lipschitz = FMath::Sqrt(1.0 + FMath::Square(Ground.MaxSlope()));
+
+    // An earlier march's balls are facts about this ground only if it is the
+    // same ground, in the same place, at the same clearance.
+    TArray<FVector> OldPoints;
+    TArray<double> OldRadii;
+    if (Proof)
+    {
+        if (Proof->Ground == Surface.Ground && Proof->Centre == Surface.Centre && Proof->Radius == Surface.Radius
+            && Proof->ClearanceCm == Clear)
+        {
+            OldPoints = MoveTemp(Proof->Points);
+            OldRadii = MoveTemp(Proof->Radii);
+        }
+        Proof->Reset();
+        Proof->Ground = Surface.Ground;
+        Proof->Centre = Surface.Centre;
+        Proof->Radius = Surface.Radius;
+        Proof->ClearanceCm = Clear;
+    }
+    int32 LastKept = INDEX_NONE;
+    auto Keep = [&](const FVector& Point, double Radius)
+    {
+        if (Proof)
+        {
+            Proof->Points.Add(Point);
+            Proof->Radii.Add(Radius);
+        }
+    };
+
+    double T = FMath::Max(0.0, Along - Half);
+    double Step = 0.0;
+    int32 Fresh = 0;
+    int32 Cursor = 0;
+    while (true)
+    {
+        if (T >= End)
+        {
+            return {};
+        }
+        const FVector P = Start + U * T;
+
+        // Inside an old ball the ray is clear to the ball's far side. The
+        // balls lie in the order the old ray met them, so only the few about
+        // where this one has reached can hold it.
+        while (Cursor < OldPoints.Num() && ((OldPoints[Cursor] - Start) | U) + OldRadii[Cursor] < T)
+        {
+            ++Cursor;
+        }
+        double Reach = T;
+        int32 Ball = INDEX_NONE;
+        for (int32 K = Cursor; K < FMath::Min(Cursor + 4, OldPoints.Num()); ++K)
+        {
+            const FVector W = P - OldPoints[K];
+            const double C = W.SizeSquared() - FMath::Square(OldRadii[K]);
+            if (C < 0.0)
+            {
+                const double B = W | U;
+                const double Far = T - B + FMath::Sqrt(B * B - C);
+                if (Far > Reach)
+                {
+                    Reach = Far;
+                    Ball = K;
+                }
+            }
+        }
+        if (Reach > T + 1.0)
+        {
+            if (Ball != LastKept)
+            {
+                if (Proof && Proof->Points.Num() >= FGroundRayProof::MaxBalls)
+                {
+                    return T;
+                }
+                Keep(OldPoints[Ball], OldRadii[Ball]);
+                LastKept = Ball;
+            }
+            T = Reach;
+            continue;
+        }
+
+        if (Fresh >= GroundMarchSteps || (Proof && Proof->Points.Num() >= FGroundRayProof::MaxBalls))
+        {
+            return T; // exhausted: a hit at the last proven-clear distance, never "no hit"
+        }
+        ++Fresh;
+        if (OutSteps)
+        {
+            *OutSteps = Fresh;
+        }
+        const double R = P.Size();
+        const FVector3d D(P / R);
+        const double Footprint = 0.5 * Step;
+        const double Above = R - Surface.Radius - Ground.Height(D, Footprint) - Ground.OmittedBoundCm(Footprint) - Clear;
+        if (Above < 1.0)
+        {
+            return T;
+        }
+        Step = Above / Lipschitz;
+        Keep(P, Step);
+        LastKept = INDEX_NONE;
+        T += Step;
+    }
+}
+
+double ShipFlight::GroundApproachSpeed(double D, double BrakingAccel, double ApproachSeconds,
+                                       double TouchdownSpeed, double Step)
+{
+    if (!(D > 0.0))
+    {
+        return 0.0;
+    }
+    const double N = FMath::Max(ApproachSeconds, MinApproachSeconds);
+    const double B = BrakingMargin * FMath::Max(BrakingAccel, 0.0);
+    const double D1 = B * N * N;
+    const double Law = D <= D1 ? D / N : FMath::Sqrt(FMath::Square(D1 / N) + 2.0 * B * (D - D1));
+    const double May = FMath::Max(FMath::Max(TouchdownSpeed, 0.0), Law);
+    return Step > 0.0 ? FMath::Min(May, D / Step) : May;
+}
+
+double ShipFlight::SkimCap(double AglCm, double SkimSeconds, double SkimFloor)
+{
+    return FMath::Max(SkimFloor, FMath::Max(AglCm, 0.0) / FMath::Max(SkimSeconds, 1.0e-3));
+}
+
+double ShipFlight::SecondsToGround(double PathCm, double Speed, double PathSine, const FGroundLaw& Law)
+{
+    if (!(PathCm > 0.0))
+    {
+        return 0.0;
+    }
+    if (!(Speed > 0.0))
+    {
+        return Never;
+    }
+    const double S = FMath::Clamp(PathSine, 1.0e-6, 1.0);
+    const double C = FMath::Sqrt(FMath::Max(0.0, 1.0 - S * S));
+    const auto MayAlong = [&](double L)
+    {
+        const double Down = GroundApproachSpeed(L * S, Law.BrakingAccel, Law.ApproachSeconds, Law.TouchdownSpeed, 0.0) / S;
+        const double Skim = C > 1.0e-9 ? SkimCap(L * S, Law.SkimSeconds, Law.SkimFloor) / C : Never;
+        return FMath::Min(Speed, FMath::Min(Down, Skim));
+    };
+    constexpr int32 Steps = 512;
+    const double Last = FMath::Min(1.0, PathCm);
+    const double Ratio = FMath::Pow(Last / PathCm, 1.0 / Steps);
+    double Seconds = 0.0;
+    double L = PathCm;
+    for (int32 I = 0; I < Steps; ++I)
+    {
+        const double Next = L * Ratio;
+        Seconds += (L - Next) / MayAlong(FMath::Sqrt(L * Next));
+        L = Next;
+    }
+    return Seconds + Last / MayAlong(0.5 * Last);
 }

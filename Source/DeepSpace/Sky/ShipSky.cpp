@@ -7,10 +7,13 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "DynamicRHI.h"
+#include "Engine/Texture2DDynamic.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformTime.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
@@ -22,6 +25,12 @@
 #include "Sky/SkyColour.h"
 #include "Sky/SkyMaterialContract.h"
 #include "Sky/SkyStarfield.h"
+#include "Surface/GroundField.h"
+#include "Surface/SunShadow.h"
+#include "Surface/WorldGround.h"
+#include "Surface/WorldRelief.h"
+#include "TextureResource.h"
+#include "UObject/Package.h"
 #include "Universe/UniverseUnits.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogShipSky, Log, All);
@@ -31,6 +40,31 @@ DEFINE_LOG_CATEGORY_STATIC(LogShipSky, Log, All);
 // defaults once, at the end.
 namespace
 {
+    TAutoConsoleVariable<float> CVarShadows(
+        TEXT("ds.Sky.Shadows"), 1.0f,
+        TEXT("The cast shadow's strength in M_SkyBody and M_SkyGround, 0..1: 0 draws the unshadowed look. Baked, so it costs nothing either way."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowMaps(
+        TEXT("ds.Sky.ShadowMaps"), 1,
+        TEXT("1 bakes each solid world's cast-shadow map, off the game thread, re-baking one only when its relief, its light or the width changes; 0 bakes none and drops those held. The ground's tiles keep their own (ds.Terrain.Shadows) either way."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowMapWidth(
+        TEXT("ds.Sky.ShadowMapWidth"), SunShadowMap::DefaultWidth,
+        TEXT("Columns of each world's cast-shadow map, a power of two from 256 to 8192 (4096: 8.8 km texels on Baemsekai IV). Changing it re-bakes every map."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowBakeTasks(
+        TEXT("ds.Sky.ShadowBakeTasks"), 2,
+        TEXT("Cast-shadow maps baking at once, a world a task, on worker threads at low priority: beside the terrain's 3 tile builds, and only while a system's maps bake; never the core count."),
+        ECVF_Default);
+
+    TAutoConsoleVariable<int32> CVarShadowUploadKB(
+        TEXT("ds.Sky.ShadowUploadKB"), 512,
+        TEXT("KB of landed cast-shadow maps handed to the render thread a frame, all maps together, in pieces of whole rows: a 4096-column map goes up over about two dozen frames, so no frame hitches (ruled 2026-09-28). A world reads its map once the last piece has gone."),
+        ECVF_Default);
+
     /**
      * The galley's EV100, in the HDR visualisation's convention, which
      * manual exposure fixes for the whole game (sky decision 6). The spec's
@@ -148,24 +182,6 @@ namespace
     TAutoConsoleVariable<float> CVarSurfaceDetail(
         TEXT("ds.Sky.SurfaceDetail"), 0.3f,
         TEXT("Amplitude of the finer bands of a world's face, which fade in as the world grows on screen."));
-
-    /**
-     * The relief: how steeply the ground the detail bands draw tilts, which
-     * is what makes the terminator ragged and the ground close in read as
-     * ground rather than as fog. Every band's slope is alike, so this is
-     * the relief of whatever the screen holds at any distance; it shows
-     * where the light is low and hardly at all under a high sun, as relief
-     * does.
-     */
-    TAutoConsoleVariable<float> CVarRelief(
-        TEXT("ds.Sky.Relief"), 0.2f,
-        TEXT("Slope of a world's relief, per detail band. Shows at the terminator; 0 is a smooth sphere."));
-
-    /** Craters, times each world's own Cratering: 1 is the look's word on
-     *  how much a world has kept, 0 none anywhere. */
-    TAutoConsoleVariable<float> CVarCraters(
-        TEXT("ds.Sky.Craters"), 1.0f,
-        TEXT("Scale on every world's craters, relief and albedo alike. 0 removes them."));
 
     TAutoConsoleVariable<float> CVarVeil(
         TEXT("ds.Sky.Veil"), 1.0f,
@@ -302,6 +318,15 @@ void AShipSky::SyncToShip()
 
 void AShipSky::SyncTo(const FSkySystem& System, int32 Serial, bool bInTransit)
 {
+    // The cast shadow's maps: each world's key against the map held for it,
+    // outside transit (between stars the system reads empty, and a map baked
+    // for the system being left is still that system's), then land and
+    // launch.
+    if (!bInTransit)
+    {
+        SyncShadowMaps(System);
+    }
+    PumpShadowBakes(false);
     ApplyExposure();
     WriteParameters();
 
@@ -439,8 +464,19 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
     const float Radiance = CVarRadiance.GetValueOnGameThread();
     const float Mottle = CVarMottle.GetValueOnGameThread();
     const float Detail = CVarSurfaceDetail.GetValueOnGameThread();
-    const float Relief = CVarRelief.GetValueOnGameThread();
-    const float Craters = CVarCraters.GetValueOnGameThread();
+
+    // The ground below 50 km over a solid world (landing decision 7): it
+    // says which body it draws; that proxy is hidden, and its look copied
+    // into the ground's material. The projection still computes the hidden
+    // proxy, with its rendered floor, so the depth stack is unchanged. The
+    // ground ticks first (its tick is this actor's prerequisite), so this is
+    // the frame's own answer.
+    AWorldGround* Ground = nullptr;
+    for (TActorIterator<AWorldGround> It(GetWorld()); It && !Ground; ++It)
+    {
+        Ground = *It;
+    }
+    const FName GroundBody = Ground ? Ground->GetDrawnBody() : NAME_None;
 
     for (int32 Index = 0; Index < Proxies.Num(); ++Index)
     {
@@ -453,6 +489,13 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
         const double Scale = View.ProxyScale;
         Proxy->SetRelativeTransform(FTransform(FQuat::Identity,
             View.ProxyLocation - Universe.UnrotateVector(MeshCentre * Scale), FVector(Scale)));
+        // Every proxy's visibility is set here, never by SetSkyVisible(true),
+        // so the one the ground has is not shown and hidden again each frame.
+        const bool bGroundHasIt = GroundBody != NAME_None && System.Bodies[Index].Id == GroundBody;
+        if (Proxy->IsVisible() == bGroundHasIt)
+        {
+            Proxy->SetVisibility(!bGroundHasIt);
+        }
 
         UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Proxy->GetMaterial(0));
         if (!Instance)
@@ -468,9 +511,8 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             Instance->SetScalarParameterValue(SkyMaterial::PointBlend, static_cast<float>(View.PointBlend));
             Instance->SetScalarParameterValue(SkyMaterial::Mottle, Mottle);
             Instance->SetScalarParameterValue(SkyMaterial::Detail, Detail);
-            Instance->SetScalarParameterValue(SkyMaterial::Relief, Relief);
-            Instance->SetScalarParameterValue(SkyMaterial::Cratering,
-                static_cast<float>(System.Bodies[Index].Cratering) * Craters);
+            Instance->SetScalarParameterValue(SkyMaterial::ReliefScale, static_cast<float>(ShipSky::ReliefScaleOf(System.Bodies[Index])));
+            Instance->SetScalarParameterValue(SkyMaterial::Cratering, static_cast<float>(System.Bodies[Index].Cratering));
             // The material shades with world-space normals, and the proxy's
             // world is the counter-frame's rotation of universe axes. Asked
             // of the flight state rather than of the actor, so the phase is
@@ -483,6 +525,26 @@ void AShipSky::DrawBodies(const FSkySystem& System, const FSkyFrame& Frame, cons
             // floats: 6e-8, where the instance transform's rotation kept 3e-5.
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisX, AsParameter(Universe.GetAxisX()));
             Instance->SetVectorParameterValue(SkyMaterial::BodyAxisY, AsParameter(Universe.GetAxisY()));
+            // The cast shadow: the strength every frame; the map faded in
+            // from the frame it landed, and it and its frame once it has.
+            // The fade is the map's alone: the ground's vertices carry their
+            // own shadow, which draws whether or not a map has landed.
+            const FName Id = System.Bodies[Index].Id;
+            const FShadowEntry* Shadow = ShadowEntries.Find(Id);
+            const TObjectPtr<UTexture2DDynamic>* Map = ShadowTextures.Find(Id);
+            const float Fade = Shadow && Map ? ShipSky::ShadowFade(GetWorld()->GetTimeSeconds() - Shadow->LandedAt) : 0.0f;
+            Instance->SetScalarParameterValue(SkyMaterial::Shadows, ShipSky::ShadowStrength());
+            Instance->SetScalarParameterValue(SkyMaterial::ShadowMapFade, Fade);
+            if (Shadow && Map)
+            {
+                Instance->SetTextureParameterValue(SkyMaterial::ShadowMap, Map->Get());
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameX, Shadow->Frame.X);
+                Instance->SetVectorParameterValue(SkyMaterial::ShadowFrameZ, Shadow->Frame.Z);
+            }
+        }
+        if (bGroundHasIt && Ground->GetGroundMaterialInstance())
+        {
+            ShipSky::CopyBodyLook(*Instance, *Ground->GetGroundMaterialInstance());
         }
     }
 }
@@ -640,11 +702,13 @@ void AShipSky::WriteParameters()
 
 void AShipSky::SetSkyVisible(bool bVisible)
 {
+    // Shown, each proxy's visibility is DrawBodies', which runs next and
+    // knows which body the ground draws (landing decision 7).
     for (UStaticMeshComponent* Proxy : Proxies)
     {
-        if (Proxy && Proxy->IsVisible() != bVisible)
+        if (!bVisible && Proxy && Proxy->IsVisible())
         {
-            Proxy->SetVisibility(bVisible);
+            Proxy->SetVisibility(false);
         }
     }
     // The sun is shown by DrawSun, which alone knows whether there is one.
@@ -770,8 +834,30 @@ int32 ShipSky::FindBody(const FSkySystem& System, const FString& Which)
     return System.Bodies.IndexOfByPredicate([&Name](const FSkyBody& Body) { return Body.Id == Name; });
 }
 
+void ShipSky::CopyBodyLook(UMaterialInstanceDynamic& From, UMaterialInstanceDynamic& To)
+{
+    for (const FName Name : { SkyMaterial::Colour, SkyMaterial::LightDirection, SkyMaterial::SurfaceSeed, SkyMaterial::ShadowFrameX, SkyMaterial::ShadowFrameZ })
+    {
+        To.SetVectorParameterValue(Name, From.K2_GetVectorParameterValue(Name));
+    }
+    for (const FName Name : { SkyMaterial::Brightness, SkyMaterial::Mottle, SkyMaterial::Detail, SkyMaterial::ReliefScale, SkyMaterial::Cratering, SkyMaterial::Shadows, SkyMaterial::ShadowMapFade })
+    {
+        To.SetScalarParameterValue(Name, From.K2_GetScalarParameterValue(Name));
+    }
+    To.SetTextureParameterValue(SkyMaterial::ShadowMap, From.K2_GetTextureParameterValue(SkyMaterial::ShadowMap));
+}
+
+double ShipSky::ReliefScaleOf(const FSkyBody& Body)
+{
+    if (Body.Ground == EGround::Solid)
+    {
+        return FWorldRelief(Body.Relief).SlopeScale();
+    }
+    return Body.Surface == ESkySurface::Banded ? GiantReliefScale : 0.0;
+}
+
 TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 Body, double AltitudeCm,
-                                                const FUniversePosition& From, EGotoSide Side)
+                                                const FUniversePosition& From, EGotoSide Side, double DuskElevation)
 {
     if (!System.Bodies.IsValidIndex(Body))
     {
@@ -813,8 +899,8 @@ TOptional<FNavPlacement> ShipSky::GotoPlacement(const FSkySystem& System, int32 
             {
                 Aside = FVector::CrossProduct(FVector::ForwardVector, Sunward).GetSafeNormal();
             }
-            // The zenith DuskSunElevation short of square to the star.
-            Out = (Aside * FMath::Cos(DuskSunElevation) + Sunward * FMath::Sin(DuskSunElevation)).GetSafeNormal();
+            // The zenith DuskElevation short of square to the star.
+            Out = (Aside * FMath::Cos(DuskElevation) + Sunward * FMath::Sin(DuskElevation)).GetSafeNormal();
         }
     }
     if (Out.IsNearlyZero())
@@ -931,4 +1017,547 @@ namespace
         TEXT("stands 10 degrees high -- facing it, once; ")
         TEXT("the orientation is never held. <body> is an index or a name. Then 'ds.Nav.Target <body>' brackets it."),
         FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&Goto));
+}
+
+void AShipSky::EndPlay(const EEndPlayReason::Type Reason)
+{
+    // Cancelled and let go: the bakes hold no this, and stop within a column.
+    TArray<FName> Held;
+    ShadowEntries.GetKeys(Held);
+    for (const FName Body : Held)
+    {
+        DropShadowMap(Body);
+    }
+    ShadowDraining.Reset();
+    ShadowUploads.Reset();
+    Super::EndPlay(Reason);
+}
+
+void AShipSky::SyncShadowMaps(const FSkySystem& System)
+{
+    TSet<FName> Wanted;
+    if (CVarShadowMaps.GetValueOnGameThread() != 0)
+    {
+        const UShipSubsystem* Ship = UShipSubsystem::Get(this);
+        const FUniversePosition From = Ship ? Ship->GetFlightState().GetUniversePosition() : FUniversePosition();
+        const TArray<int32> Order = ShipSky::ShadowBakeOrder(System, From);
+        // The per-system cap: each world's width from what its key is made
+        // of, in the system's own order, never the ship's.
+        TArray<int32> BySystem = Order;
+        BySystem.Sort();
+        TArray<ShipSky::FShadowWorld> Worlds;
+        for (const int32 Index : BySystem)
+        {
+            const FSkyBody& Body = System.Bodies[Index];
+            const FSunShadowMap Shape = SunShadowMap::Shape(FReliefGround(Body.Relief), SkyProjection::SunLightOf(System, Index), 2);
+            Worlds.Add({ Body.Relief.RadiusCm, Shape.Width > 0 ? Shape.PsiLo : 0.5 * UE_DOUBLE_PI });
+        }
+        const TArray<int32> Widths = ShipSky::CappedShadowWidths(Worlds, ShipSky::ShadowMapWidth(), ShipSky::ShadowSystemCapBytes,
+            [](int32 W, int32 R) { return ShipSky::ShadowTextureBytes(W, R); });
+        for (const int32 Index : Order)
+        {
+            const FSkyBody& Body = System.Bodies[Index];
+            Wanted.Add(Body.Id);
+            ShipSky::FShadowKey Key;
+            Key.Relief = Body.Relief;
+            Key.Sun = SkyProjection::SunLightOf(System, Index);
+            Key.SteepestSlope = SunShadow::SteepestSlope(Body.Relief);
+            Key.Width = Widths[BySystem.IndexOfByKey(Index)];
+            const FShadowEntry* Held = ShadowEntries.Find(Body.Id);
+            if (Held && ShipSky::SameShadowKey(Held->Key, Key))
+            {
+                continue;   // made from the same things: nothing to bake
+            }
+            DropShadowMap(Body.Id);
+            ShadowEntries.Add(Body.Id).Key = Key;
+            ShadowQueue.Add(Body.Id);
+        }
+    }
+    TArray<FName> Gone;
+    for (const TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+    {
+        if (!Wanted.Contains(Pair.Key))
+        {
+            Gone.Add(Pair.Key);
+        }
+    }
+    for (const FName Body : Gone)
+    {
+        DropShadowMap(Body);
+    }
+}
+
+void AShipSky::DropShadowMap(FName Body)
+{
+    if (FShadowEntry* Entry = ShadowEntries.Find(Body))
+    {
+        if (Entry->Cancel.IsValid())
+        {
+            Entry->Cancel->store(true, std::memory_order_relaxed);
+        }
+        if (Entry->Task.IsValid())
+        {
+            ShadowDraining.Add(MoveTemp(Entry->Task));
+        }
+        ShadowEntries.Remove(Body);
+    }
+    ShadowQueue.Remove(Body);
+    ShadowTextures.Remove(Body);
+    ShadowTexturesMade.Remove(Body);
+    KeptShadowMaps.Remove(Body);
+    // Pieces already handed over hold the map themselves, and run before
+    // the texture's release, which the collector queues behind them.
+    ShadowUploads.RemoveAll([Body](const FShadowUpload& Upload) { return Upload.Body == Body; });
+}
+
+int32 AShipSky::GetShadowBakesPending() const
+{
+    int32 Pending = ShadowQueue.Num();
+    for (const TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+    {
+        Pending += Pair.Value.Task.IsValid() ? 1 : 0;
+    }
+    for (const FShadowUpload& Upload : ShadowUploads)
+    {
+        Pending += Upload.Next < Upload.Pieces.Num() ? 1 : 0;
+    }
+    return Pending;
+}
+
+int64 AShipSky::GetShadowUploadCpuBytes() const
+{
+    int64 Bytes = 0;
+    for (const FShadowUpload& Upload : ShadowUploads)
+    {
+        Bytes += Upload.Map.IsValid() ? Upload.Map->Bytes() : 0;
+    }
+    return Bytes;
+}
+
+double AShipSky::GetSlowestShadowUploadRenderSeconds() const
+{
+    return 1.0e-9 * static_cast<double>(SlowestShadowUploadNs->load(std::memory_order_relaxed));
+}
+
+int32 AShipSky::GetShadowPiecesLeft(FName Body) const
+{
+    const FShadowUpload* Upload = ShadowUploads.FindByPredicate([Body](const FShadowUpload& Candidate) { return Candidate.Body == Body; });
+    return Upload ? Upload->Pieces.Num() - Upload->Next : 0;
+}
+
+int32 AShipSky::GetShadowWidth(FName Body) const
+{
+    const FShadowEntry* Entry = ShadowEntries.Find(Body);
+    return Entry ? Entry->Key.Width : 0;
+}
+
+void AShipSky::PumpShadowBakes(bool bWait)
+{
+    using FBakeTask = UE::Tasks::TTask<TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>>;
+    if (bWait)
+    {
+        for (FBakeTask& Task : ShadowDraining)
+        {
+            Task.Wait();
+        }
+    }
+    ShadowDraining.RemoveAll([](const FBakeTask& Task) { return Task.IsCompleted(); });
+
+    // Launch: what was let go still holds a worker until it stops.
+    const int32 Cap = FMath::Max(1, CVarShadowBakeTasks.GetValueOnGameThread());
+    int32 Busy = ShadowDraining.Num() + (GetShadowBakesPending() - ShadowQueue.Num());
+    while (Busy < Cap && ShadowQueue.Num() > 0)
+    {
+        const FName Body = ShadowQueue[0];
+        ShadowQueue.RemoveAt(0);
+        FShadowEntry& Entry = ShadowEntries.FindChecked(Body);
+        Entry.Cancel = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
+        const ShipSky::FShadowKey Key = Entry.Key;
+        const TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> Cancel = Entry.Cancel;
+        Entry.Task = UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Key, Cancel]() -> TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>
+            {
+                const FReliefGround Ground(Key.Relief);
+                return MakeShared<FSunShadowMap, ESPMode::ThreadSafe>(SunShadowMap::Bake(Ground, Key.Sun, Key.SteepestSlope, Key.Width, Cancel.Get()));
+            }, UE::Tasks::ETaskPriority::BackgroundLow);
+        ++Busy;
+        ++ShadowBakesStarted;
+    }
+
+    // Land: an empty texture for each map that finished, and its pieces
+    // queued. Nothing reads it yet.
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    if (bWait)
+    {
+        // A test's flush waits for the bakes before the landing is timed:
+        // play never waits, and the wait is the bake's, not the landing's.
+        for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+        {
+            if (Pair.Value.Task.IsValid())
+            {
+                Pair.Value.Task.Wait();
+            }
+        }
+    }
+    const double Began = FPlatformTime::Seconds();
+    for (TPair<FName, FShadowEntry>& Pair : ShadowEntries)
+    {
+        FShadowEntry& Entry = Pair.Value;
+        if (!Entry.Task.IsValid())
+        {
+            continue;
+        }
+        if (!Entry.Task.IsCompleted())
+        {
+            continue;
+        }
+        const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe> Map = Entry.Task.GetResult();
+        Entry.Task = FBakeTask();
+        if (!Map.IsValid() || Map->LevelCount() == 0)
+        {
+            continue;
+        }
+        UTexture2DDynamic* Texture = ShipSky::MakeShadowTexture(*Map, Pair.Key);
+        if (!Texture)
+        {
+            continue;
+        }
+        ShadowTexturesMade.Add(Pair.Key, Texture);
+        Entry.Frame = { ShipSky::ShadowFrameX(*Map), ShipSky::ShadowFrameZ(*Map) };
+        FShadowUpload& Upload = ShadowUploads.AddDefaulted_GetRef();
+        Upload.Body = Pair.Key;
+        Upload.Map = Map;
+        Upload.Pieces = ShipSky::ShadowUploadPieces(*Map, ShipSky::ShadowUploadBytesPerFrame());
+        if (bKeepShadowMapsForTest)
+        {
+            KeptShadowMaps.Add(Pair.Key, Map);
+        }
+    }
+
+    // This frame's pieces, oldest map first: at most the frame's bytes, and
+    // at least one piece, so every map goes up. A map whose last piece has
+    // gone is the world's to read from now, and fades in from now.
+    int64 Left = ShipSky::ShadowUploadBytesPerFrame();
+    bool bHanded = false;
+    for (FShadowUpload& Upload : ShadowUploads)
+    {
+        if (Upload.Next >= Upload.Pieces.Num())
+        {
+            continue;
+        }
+        const TObjectPtr<UTexture2DDynamic>* Texture = ShadowTexturesMade.Find(Upload.Body);
+        TArray<ShipSky::FShadowPiece> Handed;
+        while (Upload.Next < Upload.Pieces.Num() && (!bHanded || Upload.Pieces[Upload.Next].Bytes <= Left))
+        {
+            Left -= Upload.Pieces[Upload.Next].Bytes;
+            Handed.Add(Upload.Pieces[Upload.Next++]);
+            bHanded = true;
+        }
+        if (Texture && Handed.Num() > 0)
+        {
+            ShipSky::UploadShadowPieces(*Texture->Get(), Upload.Map, MoveTemp(Handed), SlowestShadowUploadNs);
+        }
+        if (Upload.Next >= Upload.Pieces.Num() && Texture)
+        {
+            ShadowTextures.Add(Upload.Body, *Texture);
+            if (FShadowEntry* Entry = ShadowEntries.Find(Upload.Body))
+            {
+                // In play the fade starts now; a test's flush lands it whole.
+                Entry->LandedAt = bWait ? Now - ShipSky::ShadowFadeSeconds : Now;
+            }
+            Upload.Fence = MakeUnique<FRenderCommandFence>();
+            Upload.Fence->BeginFence();
+        }
+        if (Left <= 0)
+        {
+            break;
+        }
+    }
+    SlowestShadowLandSeconds = FMath::Max(SlowestShadowLandSeconds, FPlatformTime::Seconds() - Began);
+
+    // Once the render thread has run every piece, the CPU copy is dead weight.
+    for (int32 Index = ShadowUploads.Num() - 1; Index >= 0; --Index)
+    {
+        FShadowUpload& Upload = ShadowUploads[Index];
+        if (!Upload.Fence.IsValid())
+        {
+            continue;
+        }
+        if (bWait)
+        {
+            Upload.Fence->Wait();
+        }
+        if (Upload.Fence->IsFenceComplete())
+        {
+            ShadowUploads.RemoveAt(Index);
+        }
+    }
+}
+
+void AShipSky::FlushShadowBakesForTest()
+{
+    do
+    {
+        PumpShadowBakes(true);
+    }
+    while (GetShadowBakesPending() > 0 || ShadowUploads.Num() > 0);
+}
+
+UTexture2DDynamic* AShipSky::GetShadowTexture(FName Body) const
+{
+    const TObjectPtr<UTexture2DDynamic>* Found = ShadowTextures.Find(Body);
+    return Found ? Found->Get() : nullptr;
+}
+
+const FSunShadowMap* AShipSky::GetShadowMapForTest(FName Body) const
+{
+    const TSharedPtr<FSunShadowMap, ESPMode::ThreadSafe>* Found = KeptShadowMaps.Find(Body);
+    return Found && Found->IsValid() ? Found->Get() : nullptr;
+}
+
+float ShipSky::ShadowStrength()
+{
+    return FMath::Clamp(CVarShadows.GetValueOnGameThread(), 0.0f, 1.0f);
+}
+
+float ShipSky::ShadowFade(double SecondsSinceLanded)
+{
+    return static_cast<float>(FMath::Clamp(SecondsSinceLanded / ShadowFadeSeconds, 0.0, 1.0));
+}
+
+int32 ShipSky::ShadowMapWidth()
+{
+    return static_cast<int32>(FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FMath::Clamp(CVarShadowMapWidth.GetValueOnGameThread(), 256, 8192))));
+}
+
+bool ShipSky::SameShadowKey(const FShadowKey& A, const FShadowKey& B)
+{
+    return SameRelief(A.Relief, B.Relief) && A.Sun.Direction == B.Sun.Direction && A.Sun.AngularRadius == B.Sun.AngularRadius
+        && A.SteepestSlope == B.SteepestSlope && A.Width == B.Width;
+}
+
+TArray<int32> ShipSky::ShadowBakeOrder(const FSkySystem& System, const FUniversePosition& Ship)
+{
+    TArray<int32> Order;
+    for (int32 Index = 0; Index < System.Bodies.Num(); ++Index)
+    {
+        if (System.Bodies[Index].Ground == EGround::Solid && System.Bodies[Index].Kind != ESkyBodyKind::Star)
+        {
+            Order.Add(Index);
+        }
+    }
+    Order.StableSort([&](int32 A, int32 B)
+    {
+        return Ship.DistanceTo(System.Bodies[A].Position) - System.Bodies[A].Radius < Ship.DistanceTo(System.Bodies[B].Position) - System.Bodies[B].Radius;
+    });
+    return Order;
+}
+
+FLinearColor ShipSky::ShadowFrameX(const FSunShadowMap& Map)
+{
+    return FLinearColor(static_cast<float>(Map.FrameX.X), static_cast<float>(Map.FrameX.Y), static_cast<float>(Map.FrameX.Z), static_cast<float>(Map.PsiLo));
+}
+
+FLinearColor ShipSky::ShadowFrameZ(const FSunShadowMap& Map)
+{
+    return FLinearColor(static_cast<float>(Map.FrameZ.X), static_cast<float>(Map.FrameZ.Y), static_cast<float>(Map.FrameZ.Z), static_cast<float>(Map.Step));
+}
+
+int64 ShipSky::ShadowLevelsBytes(int32 Width, int32 Rows)
+{
+    if (Width <= 0 || Rows <= 0)
+    {
+        return 0;
+    }
+    FSunShadowMap Shape;
+    Shape.Width = Width;
+    Shape.Rows = Rows;
+    int64 Bytes = 0;
+    for (int32 Level = 0;; ++Level)
+    {
+        Bytes += static_cast<int64>(Shape.WidthAt(Level)) * Shape.RowsAt(Level) * static_cast<int64>(sizeof(uint16));
+        if (Shape.WidthAt(Level) <= 1 && Shape.RowsAt(Level) <= 1)
+        {
+            return Bytes;
+        }
+    }
+}
+
+int64 ShipSky::ShadowTextureBytes(int32 Width, int32 Rows)
+{
+    if (Width <= 0 || Rows <= 0)
+    {
+        return 0;
+    }
+    static TMap<FIntPoint, int64> Asked;
+    if (const int64* Known = Asked.Find(FIntPoint(Width, Rows)))
+    {
+        return *Known;
+    }
+    int64 Bytes = 0;
+    if (GDynamicRHI && FCString::Stricmp(GDynamicRHI->GetName(), TEXT("Null")) != 0)
+    {
+        FSunShadowMap Shape;
+        Shape.Width = Width;
+        Shape.Rows = Rows;
+        int32 Levels = 1;
+        while (Shape.WidthAt(Levels - 1) > 1 || Shape.RowsAt(Levels - 1) > 1)
+        {
+            ++Levels;
+        }
+        const FRHITextureDesc Desc = FRHITextureCreateDesc::Create2D(TEXT("ShadowMapSize"), Width, Rows, PF_G16).SetNumMips(Levels);
+        Bytes = static_cast<int64>(RHICalcTexturePlatformSize(Desc).Size);
+    }
+    if (Bytes <= 0)
+    {
+        Bytes = ShadowLevelsBytes(Width, Rows);
+    }
+    return Asked.Add(FIntPoint(Width, Rows), Bytes);
+}
+
+TArray<int32> ShipSky::CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes)
+{
+    return CappedShadowWidths(Worlds, Width, CapBytes, [](int32 W, int32 R) { return ShadowLevelsBytes(W, R); });
+}
+
+TArray<int32> ShipSky::CappedShadowWidths(TConstArrayView<FShadowWorld> Worlds, int32 Width, int64 CapBytes,
+                                          TFunctionRef<int64(int32, int32)> BytesOf)
+{
+    TArray<int32> Widths;
+    Widths.Init(Width, Worlds.Num());
+    const auto Bytes = [&](int32 Index)
+    {
+        return BytesOf(Widths[Index], SunShadowMap::RowsFor(Widths[Index], Worlds[Index].PsiLo));
+    };
+    int64 Total = 0;
+    for (int32 Index = 0; Index < Worlds.Num(); ++Index)
+    {
+        Total += Bytes(Index);
+    }
+    while (Total > CapBytes)
+    {
+        int32 Finest = INDEX_NONE;
+        double FinestTexel = TNumericLimits<double>::Max();
+        for (int32 Index = 0; Index < Worlds.Num(); ++Index)
+        {
+            const double Texel = 2.0 * UE_DOUBLE_PI * Worlds[Index].RadiusCm / Widths[Index];
+            if (Widths[Index] / 2 >= ShadowMinWidth && Texel < FinestTexel)
+            {
+                FinestTexel = Texel;
+                Finest = Index;
+            }
+        }
+        if (Finest == INDEX_NONE)
+        {
+            break;   // every map at the floor: the cap cannot be met
+        }
+        Total -= Bytes(Finest);
+        Widths[Finest] /= 2;
+        Total += Bytes(Finest);
+    }
+    return Widths;
+}
+
+UTexture2DDynamic* ShipSky::MakeShadowTexture(const FSunShadowMap& Map, FName Name)
+{
+    if (Map.LevelCount() == 0)
+    {
+        return nullptr;
+    }
+    const FName Unique = MakeUniqueObjectName(GetTransientPackage(), UTexture2DDynamic::StaticClass(),
+        FName(*(TEXT("ShadowMap_") + Name.ToString().Replace(TEXT(" "), TEXT("_")))));
+    UTexture2DDynamic* Texture = NewObject<UTexture2DDynamic>(GetTransientPackage(), Unique, RF_Transient);
+    Texture->SizeX = Map.Width;
+    Texture->SizeY = Map.Rows;
+    Texture->Format = PF_G16;
+    Texture->NumMips = Map.LevelCount();
+    Texture->bIsResolveTarget = false;
+    Texture->SRGB = false;
+    Texture->bNoTiling = false;
+    Texture->Filter = TF_Nearest;
+    Texture->SamplerAddressMode = AM_Clamp;
+    // Grayscale and linear, as the parameters' default is; in a group no
+    // device profile biases, and a dynamic texture is never streamed: every
+    // mip is on the GPU from its creation.
+    Texture->CompressionSettings = TC_Grayscale;
+    Texture->LODGroup = TEXTUREGROUP_Pixels2D;
+    Texture->NeverStream = true;
+    Texture->UpdateResource();
+    return Texture;
+}
+
+TArray<ShipSky::FShadowPiece> ShipSky::ShadowUploadPieces(const FSunShadowMap& Map, int64 PieceBytes)
+{
+    TArray<FShadowPiece> Pieces;
+    for (int32 Level = 0; Level < Map.LevelCount(); ++Level)
+    {
+        const int64 RowBytes = static_cast<int64>(Map.WidthAt(Level)) * static_cast<int64>(sizeof(uint16));
+        const int32 Rows = Map.RowsAt(Level);
+        const int32 Each = static_cast<int32>(FMath::Clamp<int64>(PieceBytes / RowBytes, 1, Rows));
+        for (int32 First = 0; First < Rows; First += Each)
+        {
+            FShadowPiece& Piece = Pieces.AddDefaulted_GetRef();
+            Piece.Level = Level;
+            Piece.FirstRow = First;
+            Piece.Rows = FMath::Min(Each, Rows - First);
+            Piece.Bytes = Piece.Rows * RowBytes;
+        }
+    }
+    return Pieces;
+}
+
+void ShipSky::UploadShadowPieces(UTexture2DDynamic& Texture, const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map,
+                                 TArray<FShadowPiece> Pieces, TSharedPtr<std::atomic<int64>, ESPMode::ThreadSafe> SlowestNs)
+{
+    FTextureResource* Resource = Texture.GetResource();
+    if (!Resource || !Map.IsValid() || Pieces.Num() == 0)
+    {
+        return;
+    }
+    // The resource outlives this command: a texture's release is queued
+    // behind it, since the collector's BeginDestroy enqueues later.
+    ENQUEUE_RENDER_COMMAND(ShadowMapPieces)(
+        [Resource, Map, Pieces = MoveTemp(Pieces), SlowestNs](FRHICommandListImmediate& RHICmdList)
+        {
+            const double Start = FPlatformTime::Seconds();
+            FRHITexture* Target = Resource->TextureRHI;
+            if (!Target)
+            {
+                return;
+            }
+            for (const FShadowPiece& Piece : Pieces)
+            {
+                const int32 Width = Map->WidthAt(Piece.Level);
+                const FUpdateTextureRegion2D Region(0, Piece.FirstRow, 0, 0, Width, Piece.Rows);
+                const uint16* Rows = Map->Levels[Piece.Level].GetData() + static_cast<int64>(Piece.FirstRow) * Width;
+                RHICmdList.UpdateTexture2D(Target, Piece.Level, Region, Width * sizeof(uint16), reinterpret_cast<const uint8*>(Rows));
+            }
+            if (SlowestNs.IsValid())
+            {
+                const int64 Took = static_cast<int64>(1.0e9 * (FPlatformTime::Seconds() - Start));
+                int64 Was = SlowestNs->load(std::memory_order_relaxed);
+                while (Took > Was && !SlowestNs->compare_exchange_weak(Was, Took, std::memory_order_relaxed))
+                {
+                }
+            }
+        });
+}
+
+UTexture2DDynamic* ShipSky::MakeShadowTextureNow(const TSharedPtr<const FSunShadowMap, ESPMode::ThreadSafe>& Map, FName Name)
+{
+    if (!Map.IsValid())
+    {
+        return nullptr;
+    }
+    UTexture2DDynamic* Texture = MakeShadowTexture(*Map, Name);
+    if (Texture)
+    {
+        UploadShadowPieces(*Texture, Map, ShadowUploadPieces(*Map, TNumericLimits<int64>::Max()));
+    }
+    return Texture;
+}
+
+int64 ShipSky::ShadowUploadBytesPerFrame()
+{
+    return static_cast<int64>(FMath::Max(1, CVarShadowUploadKB.GetValueOnGameThread())) * 1024;
 }

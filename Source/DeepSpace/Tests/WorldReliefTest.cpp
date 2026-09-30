@@ -170,13 +170,19 @@ bool FWorldReliefKnownValuesTest::RunTest(const FString& Parameters)
     //    -10114520.605642153), and -37499.20596158043 at R/768), then scaled
     //    by DetailBound / SMaxMeasured = 0.13266826582782978 /
     //    0.029932993600784347: S / S_max is -0.289 here, under the knee,
-    //    where PeakCap is the identity. -----------------------------------------
+    //    where PeakCap is the identity. Slice (b) adds the craters, kernels
+    //    summed (Task T1): D sits in one kept crater of band 104, and the
+    //    kernel sum, worked in double outside the engine from the profile and
+    //    the hash, is 8.589029680019878e-06 radius units (4.0226059420710356e-06
+    //    at R/768, where bands 104-106 have faded), with gradient
+    //    (0.10226657986399024, 0.02998905062128174, 0.2796032477577463) --
+    //    Voronoi's own crater slope above, as one crater must be. -------------
     const FWorldRelief Relief(Earthlike());
     FVector3d HeightGradient;
-    TestTrue(TEXT("the height at D"), FMath::Abs(Relief.HeightAndGradient(Known, HeightGradient) - (-173581.227446647)) < 1.0e-4);
+    TestTrue(TEXT("the height at D, craters in"), FMath::Abs(Relief.HeightAndGradient(Known, HeightGradient) - (-173409.06231419338)) < 1.0e-4);
     TestTrue(TEXT("and its gradient in D"),
-        (HeightGradient - FVector3d(-8280493.152775431, -5323693.679923737, -44829325.33668244)).GetAbsMax() < 1.0e-2);
-    TestTrue(TEXT("the height at D with a footprint of R/768"), FMath::Abs(Relief.Height(Known, 6.3781e8 / 768.0) - (-166203.04307662472)) < 1.0e-4);
+        (HeightGradient - FVector3d(-6230582.9855282, -4722570.029788807, -39224742.28387839)).GetAbsMax() < 1.0e-2);
+    TestTrue(TEXT("the height at D with a footprint of R/768"), FMath::Abs(Relief.Height(Known, 6.3781e8 / 768.0) - (-166122.41086197115)) < 1.0e-4);
     return true;
 }
 
@@ -386,11 +392,26 @@ bool FWorldReliefFootprintTest::RunTest(const FString& Parameters)
     int32 Left = 0;
     for (const FVector3d& D : Directions(1000, 23))
     {
-        Left += Relief.Height(D, Radius / 24.0) == 0.0 ? 0 : 1;
+        Left += Relief.Height(D, Radius / 12.0) == 0.0 ? 0 : 1;
     }
-    TestEqual(TEXT("a footprint of R/24 fades every band away, to the datum"), Left, 0);
+    // The detail bands alone are gone by R/24, their coarsest 24 cycles a
+    // radius: held apart, since the height below still carries the craters
+    // there.
+    int32 DetailLeft = 0;
+    for (const FVector3d& D : Directions(1000, 29))
+    {
+        FVector3d Gradient;
+        const double Detail = Relief.DetailSum(D, 1.0 / 24.0, &Gradient);
+        DetailLeft += Detail == 0.0 && Gradient == FVector3d::ZeroVector ? 0 : 1;
+    }
+    TestEqual(TEXT("a footprint of R/24 fades every detail band away, value and slope"), DetailLeft, 0);
+    TestTrue(TEXT("and then the detail's omitted bound is all of it"),
+        FMath::IsNearlyEqual(Relief.DetailOmittedBound(1.0 / 24.0), Relief.DetailBound(), 1.0e-12 * Relief.DetailBound()));
+    // R/12: the coarsest crater band is 12 cycles a radius, below the
+    // detail's 24 (slice (b) put the craters in the height).
+    TestEqual(TEXT("a footprint of R/12 fades every band away, craters too, to the datum"), Left, 0);
     TestTrue(TEXT("and then OmittedBoundCm is the whole peak"),
-        FMath::IsNearlyEqual(Relief.OmittedBoundCm(Radius / 24.0), Relief.MaxHeightCm(), 1.0e-9 * Relief.MaxHeightCm()));
+        FMath::IsNearlyEqual(Relief.OmittedBoundCm(Radius / 12.0), Relief.MaxHeightCm(), 1.0e-9 * Relief.MaxHeightCm()));
     return true;
 }
 

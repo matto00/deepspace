@@ -131,6 +131,8 @@ bool FSkyBodyMeshTest::RunTest(const FString& Parameters)
 
     // LOD 0 at the worst the sky ever draws: 1.6e-3 of a radius up, where a
     // giant sits at the 100 km drive floor. And an Earth at the floor itself.
+    // Solid worlds are drawn by the ground under 50 km (landing decision 7); LOD 0 at the rendered
+    // floor is still what oceans, giants and every world above 50 km need.
     const FSkyViewParams View;
     const double Floor = 1.0 + View.MinRenderedAltitudeOfRadius;
     const double AtFloor = SkySphereMesh::FacetPixels(EdgeAngles[0], Floor, Pixel);
